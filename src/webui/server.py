@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +44,44 @@ logger = logging.getLogger(__name__)
 _STATIC_DIR = Path(__file__).parent / "static"
 
 
+def _office_gateway_enabled(instance_id: str) -> bool:
+    forced = os.environ.get("CYRENE_OFFICE_FORCE_START", "").lower()
+    return bool(instance_id) or forced in {"1", "true", "yes"}
+
+
+async def _start_office_gateway(instance_id: str) -> None:
+    # Desktop hosts have an instance id. Manual web launches can opt in without
+    # making every lightweight app factory bind the fixed Office HTTPS port.
+    if not _office_gateway_enabled(instance_id):
+        return
+    try:
+        from cyrene.office.gateway import get_office_gateway_runtime
+
+        await get_office_gateway_runtime().start()
+    except Exception:
+        logger.warning("Office gateway startup failed", exc_info=True)
+
+
+async def _stop_office_gateway(instance_id: str) -> None:
+    if not _office_gateway_enabled(instance_id):
+        return
+    try:
+        from cyrene.office.gateway import get_office_gateway_runtime
+
+        await get_office_gateway_runtime().stop()
+    except Exception:
+        logger.warning("Office gateway shutdown failed", exc_info=True)
+
+
+def _configure_app(app: FastAPI, middleware: Any, register_routes: Any, bot: Any, db_path: str, instance_id: str) -> None:
+    app.add_middleware(middleware)
+    app.state.instance_id = instance_id
+    app.state.ui_mode = "workbench"
+    app.state.web_port = WEB_PORT
+    app.mount("/static", NoCacheStaticFiles(directory=str(_STATIC_DIR)), name="static")
+    register_routes(app, bot, db_path)
+
+
 class WebBot:
     """Bot adapter for the scheduler in web-only mode.
 
@@ -79,6 +118,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         if terminal_wake_bridge is not None:
             await terminal_wake_bridge.start_daemon_bridge()
         await _start_remote_control()
+        await _start_office_gateway(instance_id)
         await _start_wechat()
         await _migrate_knowledge_db()
         await _sync_knowledge_catalog()
@@ -88,18 +128,16 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         finally:
             if terminal_wake_bridge is not None:
                 await terminal_wake_bridge.stop_daemon_bridge()
+            plugin_manager = getattr(_app.state, "plugin_manager", None)
+            if plugin_manager is not None:
+                await plugin_manager.close()
+            await _stop_office_gateway(instance_id)
             await _close_browser_session()
 
     app = FastAPI(title="Cyrene", lifespan=_lifespan)
-    app.add_middleware(LocalAuthMiddleware)
-    app.state.instance_id = instance_id
     # ``ui_mode`` remains in the Python call signature for historical callers,
     # but Workbench is now the only served UI.
-    app.state.ui_mode = "workbench"
-    app.state.web_port = WEB_PORT
-    app.mount("/static", NoCacheStaticFiles(directory=str(_STATIC_DIR)), name="static")
-
-    register_routes(app, bot, db_path)
+    _configure_app(app, LocalAuthMiddleware, register_routes, bot, db_path, instance_id)
 
     async def _start_workbench_chat_runs() -> None:
         from cyrene.workbench.chat import startup_chat_runs
@@ -260,5 +298,6 @@ async def run_web(bot: Any, db_path: str, port: int = WEB_PORT, instance_id: str
     configure_model_gateway(port)
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info", loop="asyncio")
     server = uvicorn.Server(config)
+    app.state.request_shutdown = lambda: setattr(server, "should_exit", True)
     logger.info("Web UI at http://0.0.0.0:%d", port)
     await server.serve()

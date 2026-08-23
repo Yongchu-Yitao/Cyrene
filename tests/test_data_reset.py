@@ -1,4 +1,7 @@
 from pathlib import Path
+from types import SimpleNamespace
+
+from conftest import workbench_settings_source
 from unittest.mock import AsyncMock
 
 from fastapi import FastAPI
@@ -10,9 +13,13 @@ def test_reset_endpoint_requires_explicit_confirmation(monkeypatch, tmp_path: Pa
     from route.settings import general
 
     reset = AsyncMock(return_value={"ok": True})
-    monkeypatch.setattr(general, "_reset_app_data", reset)
     app = FastAPI()
-    general.register_settings_routes(app, None, str(tmp_path / "runtime.db"))
+    general.register_settings_routes(
+        app,
+        None,
+        str(tmp_path / "runtime.db"),
+        data_reset_service=SimpleNamespace(reset_app_data=reset),
+    )
 
     client = TestClient(app)
     missing = client.post("/api/settings/reset-data", json={})
@@ -194,9 +201,7 @@ def test_reset_clears_legacy_workspace_root_leftovers_but_keeps_user_folders(
 
 def test_reset_frontend_confirms_and_clears_all_client_storage():
     root = Path(__file__).resolve().parent.parent
-    settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(
-        encoding="utf-8"
-    )
+    settings = workbench_settings_source()
     electron = (root / "electron/main.js").read_text(encoding="utf-8")
 
     assert 'feedback.confirmModal({' in settings

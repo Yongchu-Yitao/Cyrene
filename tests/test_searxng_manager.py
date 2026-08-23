@@ -161,29 +161,19 @@ def test_simplexng_child_installs_windows_compat_patches(monkeypatch):
     from cyrene.tooling.backends import simplexng_child
     import multiprocessing
 
-    original_uvloop = sys.modules.pop("uvloop", None)
-    original_pwd = sys.modules.pop("pwd", None)
     fake_winloop = types.ModuleType("winloop")
-    try:
-        monkeypatch.setattr(simplexng_child.sys, "platform", "win32")
-        monkeypatch.setitem(sys.modules, "winloop", fake_winloop)
-        monkeypatch.setattr(multiprocessing, "get_context", lambda method=None: method)
+    monkeypatch.delitem(sys.modules, "uvloop", raising=False)
+    monkeypatch.delitem(sys.modules, "pwd", raising=False)
+    monkeypatch.setattr(simplexng_child.sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "winloop", fake_winloop)
+    monkeypatch.setattr(multiprocessing, "get_context", lambda method=None: method)
 
-        simplexng_child._install_windows_compat_patches()
+    simplexng_child._install_windows_compat_patches()
 
-        assert sys.modules["uvloop"] is fake_winloop
-        assert sys.modules["pwd"].getpwuid(1000).pw_uid == 1000
-        assert multiprocessing.get_context("fork") == "spawn"
-        assert multiprocessing.get_context("spawn") == "spawn"
-    finally:
-        if original_uvloop is not None:
-            sys.modules["uvloop"] = original_uvloop
-        else:
-            sys.modules.pop("uvloop", None)
-        if original_pwd is not None:
-            sys.modules["pwd"] = original_pwd
-        else:
-            sys.modules.pop("pwd", None)
+    assert sys.modules["uvloop"] is fake_winloop
+    assert sys.modules["pwd"].getpwuid(1000).pw_uid == 1000
+    assert multiprocessing.get_context("fork") == "spawn"
+    assert multiprocessing.get_context("spawn") == "spawn"
 
 
 def test_readiness_rejects_response_from_an_old_process(monkeypatch):

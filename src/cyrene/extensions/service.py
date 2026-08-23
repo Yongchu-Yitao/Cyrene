@@ -866,6 +866,33 @@ class ExtensionService:
             "python_prompt_required": next((item["observed_state"] == "missing" for item in toolchain_cards if item["id"] == "python"), False),
         }
 
+    def install_local_skill(
+        self,
+        source_path: str | Path,
+        *,
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        """Install a local Skill snapshot through the Extension service."""
+        raw_source = str(source_path or "").strip()
+        if not raw_source:
+            raise ValueError("Skill source path is required")
+        source = Path(raw_source).expanduser()
+        result = install_skill_from_path(source)
+        if not result.get("ok"):
+            raise ValueError(str(result.get("error") or "Skill installation failed"))
+        skill = result.get("skill") if isinstance(result.get("skill"), dict) else {}
+        skill_id = str(skill.get("id") or source.stem or source.name)
+        _audit(
+            actor,
+            "install.finish",
+            f"skill:{skill_id}",
+            {
+                "source": {"type": "local", "path": str(source)},
+                "already_installed": bool(result.get("already_installed")),
+            },
+        )
+        return result
+
     async def set_mcp_enabled(self, extension_id: str, enabled: bool, *, actor: str = "user") -> dict[str, Any]:
         from cyrene.tooling.backends.mcp_manager import get_mcp_servers, restart_mcp, save_mcp_servers
 

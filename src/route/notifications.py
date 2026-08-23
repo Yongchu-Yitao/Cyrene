@@ -1,15 +1,11 @@
 """Notification routes."""
 
-# ruff: noqa: F403,F405
+from typing import Any
 
-from cyrene.workbench.runtime import *
+from fastapi import APIRouter, Request
 
 
 def register_notification_routes(router: APIRouter, bot: Any, db_path: str) -> None:
-    global _bot, _db_path
-    _bot = bot
-    _db_path = db_path
-
     # ---- Notification API ----
 
     @router.post("/api/notifications/send")

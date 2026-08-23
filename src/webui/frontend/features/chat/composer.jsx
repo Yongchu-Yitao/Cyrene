@@ -1,6 +1,11 @@
+import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_BUILTIN_AGENT_ID, WBC_BUILTIN_AGENT_INSTALLATION, WBC_COMMANDS, WBC_COMMAND_ICONS, WBC_ICONS, WBC_MODES, WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAgentAvailability, wbcAgentChatFlowSnapshot, wbcAgentDisplayName, wbcAttachmentTypeLabel, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcComposerAgentRow, wbcComposerSlashCommands, wbcCreateComposerVoiceFeedback, wbcCurrentModel, wbcDefaultAgentBinding, wbcErrorText, wbcFriendlyModelName, wbcHasAgentCapabilitySnapshot, wbcIsBuiltinAgent, wbcLocalizedModelDescription, wbcModeMeta, wbcNormalizePermissionMode, wbcPublishChatModelChanged, wbcReasoningEffortForModel, wbcStartVoiceRecorder, wbcSupportedReasoningEfforts, wbcT, wbcTranscribeVoiceBlob, wbcWorkspaceDisplayName } from "../../workbench-chat.jsx"
 import { WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, WbcRemoteDeviceCatalog, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey } from "./messages.jsx"
 import { WbcFileVisual, wbcCommandMeta } from "./file-resources.jsx"
+import { useWbcComposerAttachments } from "./composer-attachments.jsx"
+import { useWbcComposerAgentFlow } from "./composer-flow.jsx"
+import { useWbcComposerAgentCatalog, useWbcComposerAgentConfig, useWbcComposerConfiguredModels } from "./composer-model-state.jsx"
+import { useWbcComposerVoice } from "./composer-voice.jsx"
 
 // Workbench chat feature module with explicit ESM dependencies.
 function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind, compact, placeholder, runningPlaceholder, topOverlay, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
@@ -13,29 +18,20 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   // window passes one so its draft/attachments never overwrite the main
   // window's for the same chat id.
   var draftNs = draftNamespace || "";
+  var agentPickerEnabled = typeof onDraftAgentChange === "function";
   var shouldClearOnSend = clearOnSend !== false;
   var workspaceContextKey = wbcWorkspaceContextKey(chatId, projectId);
   var [draft, setDraft] = useWbcState(function () { return wbcLoadDraft(chatId, draftNs); });
-  var [attachments, setAttachments] = useWbcState(function () { return wbcLoadAttachments(chatId, draftNs); });
   var [mode, setMode] = useWbcState(function () {
     return wbcNormalizePermissionMode(chat && chat.permissionMode, "auto");
   });
   var [command, setCommand] = useWbcState("");
-  var [uploading, setUploading] = useWbcState(false);
-  var [failedImagePreviews, setFailedImagePreviews] = useWbcState({});
   var [toolsOpen, setToolsOpen] = useWbcState(false);
   var [modelOpen, setModelOpen] = useWbcState(false);
   var [modelPanel, setModelPanel] = useWbcState("root");
-  var [agentOptions, setAgentOptions] = useWbcState([]);
-  var [agentOptionsLoaded, setAgentOptionsLoaded] = useWbcState(false);
-  var [configuredModels, setConfiguredModels] = useWbcState([]);
-  var [agentConfigOptions, setAgentConfigOptions] = useWbcState([]);
-  var [agentConfigValues, setAgentConfigValues] = useWbcState({});
-  var [agentConfigLoading, setAgentConfigLoading] = useWbcState(false);
-  var [selectedModelId, setSelectedModelId] = useWbcState("");
-  var [reasoningEffort, setReasoningEffort] = useWbcState(function () {
-    return String(chat && chat.reasoningEffort || "").trim().toLowerCase();
-  });
+  var agentCatalog = useWbcComposerAgentCatalog(agentPickerEnabled);
+  var agentOptions = agentCatalog.options;
+  var agentOptionsLoaded = agentCatalog.loaded;
   var [contextState, setContextState] = useWbcState(null);
   var [soulActive, setSoulActive] = useWbcState(function () {
     return chat && typeof chat.soulActive === "boolean" ? chat.soulActive : true;
@@ -51,20 +47,12 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var [remoteDeviceIds, setRemoteDeviceIds] = useWbcState(function () {
     return chat && Array.isArray(chat.remoteDeviceIds) ? chat.remoteDeviceIds.slice() : [];
   });
-  var [voiceSnapshot, setVoiceSnapshot] = useWbcState({ status: {}, activeKey: "" });
-  var [voicePhase, setVoicePhase] = useWbcState("");
-  var [agentFlowState, setAgentFlowState] = useWbcState(function () {
-    return wbcAgentChatFlowSnapshot(chatId) || { chatId: "", kind: "", expiresAt: 0 };
-  });
   var taRef = useWbcRef(null);
   var composerBoxRef = useWbcRef(null);
   var sendButtonRef = useWbcRef(null);
-  var fileRef = useWbcRef(null);
   var toolsPickerRef = useWbcRef(null);
   var modelPickerRef = useWbcRef(null);
-  var uploadCountRef = useWbcRef(0);
   var draftRef = useWbcRef(draft);
-  var attachRef = useWbcRef(attachments);
   var prevChatIdRef = useWbcRef(chatId);
   var workspaceOverrideRef = useWbcRef(workspaceOverride);
   var remoteDeviceIdsRef = useWbcRef(remoteDeviceIds);
@@ -75,15 +63,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   // Last payload snapshot for optimistic clear with restore on error
   var lastSentRef = useWbcRef(null);
   var prevRunningRef = useWbcRef(running);
-  var voiceRecorderRef = useWbcRef(null);
-  var voiceChatIdRef = useWbcRef(String(chatId || ""));
-  var voiceFeedbackRef = useWbcRef(null);
-  var agentFlowTimerRef = useWbcRef(null);
-  var ComposerBrowserIcon = window.CyreneUI.require("browser").Icon;
-  if (!voiceFeedbackRef.current) voiceFeedbackRef.current = wbcCreateComposerVoiceFeedback();
-  var agentFlow = agentFlowState.chatId === String(chatId || "")
-    ? String(agentFlowState.kind || "")
-    : "";
+  var ComposerBrowserIcon = workbenchServices.browser().Icon;
+  var agentFlow = useWbcComposerAgentFlow(chatId);
   // Effective Agent identity: an existing chat carries its locked binding; an
   // empty draft carries the composer's draft selection; otherwise the built-in
   // Cyrene Agent is the default.
@@ -120,12 +101,44 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var capCancel = wbcCapabilityEnabled(capabilitySource, "interaction", "cancel", { strictUnknown: true });
   var capReasoningEffort = wbcCapabilityEnabled(capabilitySource, "model", "reasoningEffort");
   var capSwitchModel = wbcCapabilityEnabled(capabilitySource, "model", "switchDuringSession", { strictUnknown: true });
+  var composerAttachments = useWbcComposerAttachments({
+    awaitingAnswer: awaitingAnswer,
+    canAttachFiles: capFile,
+    canAttachImages: capImage,
+    chatId: chatId,
+    draftNamespace: draftNs,
+    model: model,
+    previousChatIdRef: prevChatIdRef,
+    running: running,
+    setDraft: setDraft,
+  });
+  var attachRef = composerAttachments.attachRef;
+  var attachments = composerAttachments.attachments;
+  var failedImagePreviews = composerAttachments.failedImagePreviews;
+  var fileRef = composerAttachments.fileRef;
+  var onFilePick = composerAttachments.onFilePick;
+  var onPaste = composerAttachments.onPaste;
+  var pickFiles = composerAttachments.pickFiles;
+  var setAttachments = composerAttachments.setAttachments;
+  var setFailedImagePreviews = composerAttachments.setFailedImagePreviews;
+  var uploading = composerAttachments.uploading;
   var effectiveModelAccess = (effectiveCatalogAgent && effectiveCatalogAgent.modelAccess)
     || (draftAgent && draftAgent.modelAccess)
     || (chat && chat.modelAccess)
     || {};
   var agentManagedModels = effectiveModelAccess.mode === "agent_managed";
-  var agentPickerEnabled = typeof onDraftAgentChange === "function";
+  var configuredModelState = useWbcComposerConfiguredModels(chatId, chat, agentManagedModels);
+  var configuredModels = configuredModelState.models;
+  var reasoningEffort = configuredModelState.reasoningEffort;
+  var selectedModelId = configuredModelState.selectedId;
+  var setReasoningEffort = configuredModelState.setReasoningEffort;
+  var setSelectedModelId = configuredModelState.setSelectedId;
+  var agentConfigState = useWbcComposerAgentConfig(chatId, chat, agentManagedModels);
+  var agentConfigLoading = agentConfigState.loading;
+  var agentConfigOptions = agentConfigState.options;
+  var agentConfigValues = agentConfigState.values;
+  var setAgentConfigOptions = agentConfigState.setOptions;
+  var setAgentConfigValues = agentConfigState.setValues;
   var permissionCapability = chatCapabilitySnapshot
     ? wbcCapabilityStatus(capabilitySource, "interaction", "permission")
     : "supported";
@@ -140,102 +153,14 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var agentSlashCommands = wbcComposerSlashCommands(commandSource);
   var slashCommandsCapabilityDriven = agentSlashCommands !== null;
 
-  useWbcEffect(function () {
-    if (!agentPickerEnabled || agentOptionsLoaded || !model || !model.listAgents) return;
-    var cancelled = false;
-    model.listAgents().then(function (list) {
-      if (cancelled) return;
-      setAgentOptions(Array.isArray(list) ? list : []);
-      setAgentOptionsLoaded(true);
-    }).catch(function () {
-      if (cancelled) return;
-      setAgentOptionsLoaded(true);
-    });
-    return function () { cancelled = true; };
-  }, [agentOptionsLoaded, agentPickerEnabled]);
-
-  useWbcEffect(function () {
-    function refreshAgentOptions() {
-      if (!agentPickerEnabled) return;
-      setAgentOptionsLoaded(false);
-    }
-    window.addEventListener("cyrene:agents-changed", refreshAgentOptions);
-    return function () { window.removeEventListener("cyrene:agents-changed", refreshAgentOptions); };
-  }, [agentPickerEnabled]);
-
   useWbcEffect(function () { draftRef.current = draft; });
-  useWbcEffect(function () { attachRef.current = attachments; });
   useWbcEffect(function () { workspaceOverrideRef.current = workspaceOverride; });
   useWbcEffect(function () { remoteDeviceIdsRef.current = remoteDeviceIds; });
 
   useWbcEffect(function () {
-    return WbcVoice.subscribe(setVoiceSnapshot);
-  }, []);
-
-  useWbcEffect(function () {
-    function clearTimer() {
-      if (!agentFlowTimerRef.current) return;
-      window.clearTimeout(agentFlowTimerRef.current);
-      agentFlowTimerRef.current = null;
-    }
-    function applyFlow(detail) {
-      var next = detail && typeof detail === "object" ? detail : null;
-      if (!next || String(next.chatId || "") !== String(chatId || "")) return;
-      var expiresAt = Number(next.expiresAt || 0);
-      var remaining = Math.max(0, expiresAt - Date.now());
-      clearTimer();
-      if (!remaining) {
-        setAgentFlowState({ chatId: String(chatId || ""), kind: "", expiresAt: 0 });
-        return;
-      }
-      setAgentFlowState({
-        chatId: String(chatId || ""),
-        kind: String(next.kind || ""),
-        expiresAt: expiresAt,
-      });
-      agentFlowTimerRef.current = window.setTimeout(function () {
-        agentFlowTimerRef.current = null;
-        setAgentFlowState({ chatId: String(chatId || ""), kind: "", expiresAt: 0 });
-      }, remaining);
-    }
-    function onAgentChatFlow(event) {
-      applyFlow(event && event.detail);
-    }
-    applyFlow(wbcAgentChatFlowSnapshot(chatId));
-    window.addEventListener(WBC_AGENT_CHAT_FLOW_EVENT, onAgentChatFlow);
-    return function () {
-      window.removeEventListener(WBC_AGENT_CHAT_FLOW_EVENT, onAgentChatFlow);
-      clearTimer();
-    };
-  }, [chatId]);
-
-  useWbcEffect(function () {
-    voiceChatIdRef.current = String(chatId || "");
-    setVoicePhase("");
-    return function () {
-      var recorder = voiceRecorderRef.current;
-      voiceRecorderRef.current = null;
-      voiceFeedbackRef.current.dismiss();
-      if (recorder && typeof recorder.stop === "function") recorder.stop().catch(function () {});
-    };
-  }, [chatId]);
-
-  useWbcEffect(function () {
-    if (!awaitingAnswer) return;
-    setToolsOpen(false);
-    setModelOpen(false);
-    setModelPanel("root");
-    var recorder = voiceRecorderRef.current;
-    voiceRecorderRef.current = null;
-    setVoicePhase("");
-    voiceFeedbackRef.current.dismiss();
-    if (recorder && typeof recorder.stop === "function") recorder.stop().catch(function () {});
-  }, [awaitingAnswer]);
-
-  useWbcEffect(function () {
     if (!modelOpen) return undefined;
     var overlays;
-    try { overlays = window.CyreneUI.require("browser-overlays"); } catch (e) {}
+    try { overlays = workbenchServices.browserOverlays(); } catch (e) {}
     if (!overlays || typeof overlays.adjust !== "function") return undefined;
     overlays.adjust(1);
     return function () { overlays.adjust(-1); };
@@ -260,10 +185,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       flushPendingDraftSave();
     };
   }, []);
-
-  useWbcEffect(function () {
-    if (prevChatIdRef.current === chatId) wbcSaveAttachments(chatId, attachments, draftNs);
-  }, [attachments]);
 
   useWbcEffect(function () {
     if (prevWorkspaceContextKeyRef.current === workspaceContextKey) {
@@ -307,107 +228,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     document.addEventListener("pointerdown", closeModelPicker);
     return function () { document.removeEventListener("pointerdown", closeModelPicker); };
   }, [modelOpen]);
-
-  useWbcEffect(function () {
-    if (!agentManagedModels || !chatId || !model.getAgentConfigOptions) {
-      setAgentConfigOptions([]);
-      setAgentConfigValues({});
-      setAgentConfigLoading(false);
-      return undefined;
-    }
-    var cancelled = false;
-    setAgentConfigLoading(true);
-    model.getAgentConfigOptions(chatId).then(function (payload) {
-      if (cancelled) return;
-      setAgentConfigOptions(Array.isArray(payload.configOptions) ? payload.configOptions : []);
-      setAgentConfigValues(payload.values && typeof payload.values === "object" ? payload.values : {});
-      setAgentConfigLoading(false);
-    }).catch(function () {
-      if (cancelled) return;
-      setAgentConfigOptions([]);
-      setAgentConfigLoading(false);
-    });
-    return function () { cancelled = true; };
-  }, [chatId, agentManagedModels]);
-
-  useWbcEffect(function () {
-    if (!chat || !agentManagedModels) return;
-    if (Array.isArray(chat.agentConfigOptions) && chat.agentConfigOptions.length) {
-      setAgentConfigOptions(chat.agentConfigOptions);
-    }
-    if (chat.agentConfigValues && typeof chat.agentConfigValues === "object") {
-      setAgentConfigValues(chat.agentConfigValues);
-    }
-  }, [chat && chat.agentConfigOptions, chat && chat.agentConfigValues, agentManagedModels]);
-
-  useWbcEffect(function () {
-    if (agentManagedModels) return undefined;
-    var cancelled = false;
-    function loadConfiguredModels() {
-      return window.CyreneUI.require("api").json("/api/settings/models", { toast: false })
-      .then(function (payload) {
-        // Default routes decide automatic fallback order; manual selection is
-        // intentionally sourced from every enabled chat-capable profile.
-        var options = Array.isArray(payload.selectable_models)
-          ? payload.selectable_models
-          : (Array.isArray(payload.models) ? payload.models : []);
-        var needsCodexCatalog = options.some(function (item) {
-          return String(item.provider || "") === "codex_oauth";
-        });
-        var catalogRequest = needsCodexCatalog
-          ? window.CyreneUI.require("api").json("/api/settings/openai-oauth", { toast: false }).catch(function () { return {}; })
-          : Promise.resolve({});
-        return catalogRequest.then(function (catalog) {
-          if (cancelled) return;
-          var codexModels = Array.isArray(catalog.models) ? catalog.models : [];
-          options = options.map(function (item) {
-            if (String(item.provider || "") !== "codex_oauth") return item;
-            var match = codexModels.find(function (entry) {
-              var id = String(entry.model || entry.id || entry.slug || "").trim();
-              return id === String(item.model || "").trim();
-            });
-            return match ? Object.assign({}, item, {
-              supportedReasoningEfforts: match.supportedReasoningEfforts || match.supported_reasoning_efforts || [],
-              defaultReasoningEffort: match.defaultReasoningEffort || match.default_reasoning_effort || "",
-            }) : item;
-          });
-          setConfiguredModels(options);
-          var chatSelection = String(
-            chat && (chat.modelSelectionId || chat.model || chat.lastModel) || ""
-          ).trim();
-          var selected = options.find(function (item) {
-            return chatSelection && [
-              String(item.id || ""),
-              String(item.model || ""),
-              String(item.name || ""),
-            ].indexOf(chatSelection) >= 0;
-          }) || options.find(function (item) {
-            return String(item.id || "") === String(payload.active || "");
-          }) || options[0];
-          if (selected) {
-            setSelectedModelId(String(selected.id || selected.model || ""));
-            setReasoningEffort(wbcReasoningEffortForModel(
-              selected,
-              chat && chat.reasoningEffort
-            ));
-          } else {
-            setSelectedModelId("");
-            setReasoningEffort("");
-          }
-        });
-      })
-      .catch(function () {
-        if (!cancelled) setConfiguredModels([]);
-      });
-    }
-    function onModelConfigurationChanged() { loadConfiguredModels(); }
-    loadConfiguredModels();
-    window.addEventListener("cyrene:model-configuration-changed", onModelConfigurationChanged);
-    return function () {
-      cancelled = true;
-      window.removeEventListener("cyrene:model-configuration-changed", onModelConfigurationChanged);
-    };
-  }, [chatId, agentManagedModels]);
 
   useWbcEffect(function () {
     var prev = prevChatIdRef.current;
@@ -480,14 +300,14 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }, [projectId]);
 
   function wbcRefreshCtxState() {
-    window.CyreneUI.require("api").json("/api/context/state", { toast: false }).then(function (s) {
+    workbenchServices.api().json("/api/context/state", { toast: false }).then(function (s) {
       setContextState(s);
     }).catch(function () {});
   }
 
   useWbcEffect(function () {
     var cancelled = false;
-    window.CyreneUI.require("api").json("/api/context/state", { toast: false }).then(function (s) {
+    workbenchServices.api().json("/api/context/state", { toast: false }).then(function (s) {
       if (!cancelled) setContextState(s);
     }).catch(function () {});
     return function () { cancelled = true; };
@@ -589,8 +409,23 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     onSend(payload);
   }
 
+  var composerVoice = useWbcComposerVoice({
+    awaitingAnswer: awaitingAnswer,
+    chatId: chatId,
+    draftRef: draftRef,
+    setDraft: setDraft,
+    setModelOpen: setModelOpen,
+    setModelPanel: setModelPanel,
+    setToolsOpen: setToolsOpen,
+    submit: submit,
+    textAreaRef: taRef,
+  });
+  var voicePhase = composerVoice.voicePhase;
+  var voiceSnapshot = composerVoice.voiceSnapshot;
+  var toggleVoiceInput = composerVoice.toggleVoiceInput;
+
   function onKeyDown(event) {
-    var sc = window.CyreneUI.require("shortcuts");
+    var sc = workbenchServices.shortcuts();
     if (sc && sc.matches(event, "composer-send")) {
       if (event.nativeEvent && event.nativeEvent.isComposing) return; // IME guard
       event.preventDefault();
@@ -615,190 +450,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       setModelPanel("root");
     }
   }
-
-  function pickFiles() { if (fileRef.current) fileRef.current.click(); }
-
-  function showVoiceError(error) {
-    voiceFeedbackRef.current.error(error);
-  }
-
-  function transcribeVoiceBlob(blob) {
-    return wbcTranscribeVoiceBlob(blob)
-      .then(function (transcript) {
-        if (transcript === false) {
-          voiceFeedbackRef.current.noSpeech();
-          return false;
-        }
-        var current = String(draftRef.current || "");
-        var combined = current && !/\s$/.test(current) ? current + " " + transcript : current + transcript;
-        setDraft(combined);
-        draftRef.current = combined;
-        voiceFeedbackRef.current.complete();
-        if (voiceSnapshot.status.auto_send_after_asr === true) {
-          submit(combined);
-          return;
-        }
-        requestAnimationFrame(function () {
-          if (taRef.current) taRef.current.focus();
-        });
-      });
-  }
-
-  function finishVoiceInput(recorder) {
-    if (!recorder || voiceRecorderRef.current !== recorder) return;
-    voiceRecorderRef.current = null;
-    setVoicePhase("transcribing");
-    voiceFeedbackRef.current.transcribing();
-    recorder.stop()
-      .then(transcribeVoiceBlob)
-      .catch(showVoiceError)
-      .finally(function () { setVoicePhase(""); });
-  }
-
-  function toggleVoiceInput() {
-    if (awaitingAnswer || voicePhase === "starting" || voicePhase === "transcribing") return;
-    if (voicePhase === "recording") {
-      var recorder = voiceRecorderRef.current;
-      if (!recorder) {
-        setVoicePhase("");
-        return;
-      }
-      finishVoiceInput(recorder);
-      return;
-    }
-    // Voice input is a barge-in action. Stop current playback and discard its
-    // queued sentences before opening the microphone so TTS is not re-recorded.
-    WbcVoice.stop();
-    setVoicePhase("starting");
-    voiceFeedbackRef.current.starting();
-    var startedForChat = String(chatId || "");
-    wbcStartVoiceRecorder({
-      autoStopOnSilence: voiceSnapshot.status.auto_stop_on_silence !== false,
-      onSilence: finishVoiceInput,
-    })
-      .then(function (recorder) {
-        if (voiceChatIdRef.current !== startedForChat) {
-          recorder.stop().catch(function () {});
-          return;
-        }
-        voiceRecorderRef.current = recorder;
-        setVoicePhase("recording");
-        voiceFeedbackRef.current.listening();
-      })
-      .catch(function (error) {
-        setVoicePhase("");
-        showVoiceError(error);
-      });
-  }
-  function addFiles(files) {
-    if (awaitingAnswer) return;
-    if (!files || !files.length) return;
-    if (!capFile) {
-      var nonImageFiles = Array.prototype.filter.call(files || [], function (file) {
-        return !(file && (String(file.type || "").indexOf("image/") === 0 || String(file.kind || "") === "image"));
-      });
-      if (nonImageFiles.length) {
-        window.CyreneUI.require("feedback").showToast(
-          wbcT("workbenchChat.capability.noFile", "This Agent does not support file input"),
-          "error"
-        );
-      }
-      files = Array.prototype.filter.call(files || [], function (file) {
-        return file && (String(file.type || "").indexOf("image/") === 0 || String(file.kind || "") === "image");
-      });
-      if (!files.length) return;
-    }
-    // Capability gate: an Agent without input.image rejects image attachments
-    // with a clear notice instead of silently uploading them (handoff §13).
-    if (!capImage) {
-      var imageFiles = Array.prototype.filter.call(files || [], function (file) {
-        return file && (String(file.type || "").indexOf("image/") === 0 || String(file.kind || "") === "image");
-      });
-      if (imageFiles.length) {
-        window.CyreneUI.require("feedback").showToast(
-          wbcT("workbenchChat.capability.noImage", "This Agent does not support image input"),
-          "error"
-        );
-      }
-      files = Array.prototype.filter.call(files || [], function (file) {
-        return !(file && (String(file.type || "").indexOf("image/") === 0 || String(file.kind || "") === "image"));
-      });
-      if (!files.length) return;
-    }
-    uploadCountRef.current += 1;
-    setUploading(true);
-    model.uploadFiles(files)
-      .then(function (uploaded) { setAttachments(function (prev) { return prev.concat(uploaded); }); })
-      .catch(function (err) { window.CyreneUI.require("feedback").showToast(wbcT("workbenchChat.uploadFailed", "Upload failed: {error}", { error: wbcErrorText(err) }), "error"); })
-      .finally(function () {
-        uploadCountRef.current = Math.max(0, uploadCountRef.current - 1);
-        if (uploadCountRef.current === 0) setUploading(false);
-        if (fileRef.current) fileRef.current.value = "";
-      });
-  }
-  function onFilePick(event) {
-    addFiles(event.target.files);
-  }
-  function onPaste(event) {
-    if (running || awaitingAnswer) return;
-    var clipboard = event && (event.clipboardData || (event.nativeEvent && event.nativeEvent.clipboardData));
-    if (!clipboard) return;
-    var files = Array.prototype.slice.call(clipboard.files || []).filter(function (file) { return !!file; });
-    // Some WebViews expose pasted files only through DataTransferItemList.
-    if (!files.length) {
-      files = Array.prototype.slice.call(clipboard.items || []).map(function (item) {
-        return item && item.kind === "file" ? item.getAsFile() : null;
-      }).filter(function (file) { return !!file; });
-    }
-    if (!files.length) return; // Preserve the browser's normal text paste.
-    event.preventDefault();
-    addFiles(files);
-  }
-  useWbcEffect(function () {
-    function onDroppedFiles(event) {
-      if (awaitingAnswer) return;
-      var detail = event && event.detail || {};
-      if (detail.targetChatId && String(detail.targetChatId) !== String(chatId)) return;
-      if (detail.resource && detail.resource.kind === "file") {
-        var file = detail.resource.file || detail.resource;
-        var resourceIsImage = file
-          && (String(file.kind || "") === "image" || String(file.content_type || file.type || "").indexOf("image/") === 0);
-        if (!capImage && resourceIsImage) {
-          window.CyreneUI.require("feedback").showToast(
-            wbcT("workbenchChat.capability.noImage", "This Agent does not support image input"),
-            "error"
-          );
-          return;
-        }
-        if (!capFile && !resourceIsImage) {
-          window.CyreneUI.require("feedback").showToast(
-            wbcT("workbenchChat.capability.noFile", "This Agent does not support file input"),
-            "error"
-          );
-          return;
-        }
-        setAttachments(function (prev) {
-          var key = String(file.id || file.path || file.url || file.name || "");
-          if (key && prev.some(function (item) {
-            return String(item.id || item.path || item.url || item.name || "") === key;
-          })) return prev;
-          return prev.concat([file]);
-        });
-        return;
-      }
-      if (detail.resource && detail.resource.kind === "snippet") {
-        var quote = String(detail.resource.text || "").trim().split("\n").map(function (line) {
-          return "> " + line;
-        }).join("\n");
-        if (quote) setDraft(function (prev) { return prev ? prev + "\n\n" + quote : quote; });
-        return;
-      }
-      var files = detail.files;
-      addFiles(files);
-    }
-    window.addEventListener("cyrene:add-chat-attachments", onDroppedFiles);
-    return function () { window.removeEventListener("cyrene:add-chat-attachments", onDroppedFiles); };
-  }, [chatId, awaitingAnswer, capFile, capImage]);
 
   var slashQuery = draft.indexOf("/") === 0 ? draft.slice(1).toLowerCase() : "";
   var translatedCommands = WBC_COMMANDS.map(function (c) { return wbcCommandMeta(c.id); }).filter(Boolean);
@@ -890,7 +541,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       if (chat && nextChat) Object.assign(chat, nextChat);
     }, function (err) {
         setSoulActive(previous);
-        window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.personaFailed", "Failed to toggle persona: "));
+        workbenchServices.api().toastError(err, wbcT("workbenchChat.personaFailed", "Failed to toggle persona: "));
       }).catch(function () {});
   }
 
@@ -917,7 +568,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     }, function (err) {
       setWorkspaceOverride(previousOverride);
       setWorkspaceActive(previousActive);
-      window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.workspaceAddFailed", "Failed to add workspace: "));
+      workbenchServices.api().toastError(err, wbcT("workbenchChat.workspaceAddFailed", "Failed to add workspace: "));
     }).catch(function () {});
   }
 
@@ -930,7 +581,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
         if (chat && nextChat) Object.assign(chat, nextChat);
       }, function (err) {
         setWorkspaceActive(previous);
-        window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.workspaceRemoveFailed", "Failed to remove workspace: "));
+        workbenchServices.api().toastError(err, wbcT("workbenchChat.workspaceRemoveFailed", "Failed to remove workspace: "));
       }).catch(function () {});
   }
 
@@ -946,11 +597,11 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       }).catch(function () {});
       return;
     }
-    window.CyreneUI.require("api").fetch("/api/context/pick-directory", { method: "POST" })
+    workbenchServices.api().fetch("/api/context/pick-directory", { method: "POST" })
       .then(function (r) { return r.json().catch(function () { return {}; }); })
       .then(function (data) { if (data && data.path) wbcAddWorkspace(data.path); })
       .catch(function (err) {
-        window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.pickDirFailed", "Failed to open directory picker: "));
+        workbenchServices.api().toastError(err, wbcT("workbenchChat.pickDirFailed", "Failed to open directory picker: "));
       });
   }
 
@@ -960,7 +611,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     if (!targetChatId || String(targetChatId).indexOf("legacy:") === 0) {
       return Promise.resolve();
     }
-    return window.CyreneUI.require("api").fetch(
+    return workbenchServices.api().fetch(
       "/api/workbench/chats/" + encodeURIComponent(targetChatId) + "/remote-context",
       {
         method: "PUT",
@@ -968,7 +619,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
         body: JSON.stringify({ device_ids: normalized }),
       }
     ).then(function () {}, function (err) {
-      window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.remoteContextFailed", "Failed to update remote context: "));
+      workbenchServices.api().toastError(err, wbcT("workbenchChat.remoteContextFailed", "Failed to update remote context: "));
       throw err;
     });
   }
@@ -1011,7 +662,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   // DOM projection and always passes exact local-user delegation review.
   useWbcEffect(function () {
     if (!window.CyreneUI.has("uiSurface")) return undefined;
-    var uiSurface = window.CyreneUI.require("uiSurface");
+    var uiSurface = workbenchServices.uiSurface();
     var unregister = [];
     unregister.push(uiSurface.register({
       node_id: "chat_composer_input",
@@ -1756,7 +1407,7 @@ function wbcBranchKindLabel(kind) {
 function wbcBrowserStateForChat(chatId) {
   var id = String(chatId || "").trim();
   if (!id) return {};
-  var dataState = window.CyreneUI.require("data").state;
+  var dataState = workbenchServices.data().state;
   var byChat = dataState.browserByChat || {};
   if (byChat[id]) return byChat[id];
   var browser = dataState.browser || {};

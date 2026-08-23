@@ -1,5 +1,6 @@
 import base64
 import hashlib
+from importlib import import_module
 import io
 import json
 import logging
@@ -14,8 +15,8 @@ from PIL import Image
 from pypdf import PdfReader
 
 from cyrene.config import DATA_DIR
-from cyrene.call_llm import call_llm
 from cyrene.model_runtime.messages import assistant_text, truncate
+from cyrene.runtime.file_hashing import sha256_file
 
 logger = logging.getLogger(__name__)
 
@@ -57,19 +58,8 @@ _MULTIMODAL_MODEL_HINTS = (
 
 
 def _file_content_hash(path: Path) -> str:
-    """SHA-256 of the file's bytes, with a stat-based fallback if unreadable."""
-    h = hashlib.sha256()
-    try:
-        with path.open("rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
-    except OSError:
-        try:
-            st = path.stat()
-            h.update(f"stat:{path}:{st.st_size}:{st.st_mtime_ns}".encode())
-        except OSError:
-            h.update(f"path:{path}".encode())
-    return h.hexdigest()
+    """Return a digest derived exclusively from the file's bytes."""
+    return sha256_file(path)
 
 
 def _vision_model_fingerprint() -> str:
@@ -549,7 +539,11 @@ async def run_vision_chat(
     record_latency: bool = False,
 ) -> dict[str, Any]:
     """Run a vision-capable LLM call with image content."""
-    result = await call_llm(
+    # Vision analysis is an optional high-level execution path. Keep its model
+    # gateway dependency at this service boundary so the low-level attachment
+    # helpers remain importable by model/runtime infrastructure.
+    call_model = import_module("cyrene.call_llm").call_llm
+    result = await call_model(
         [{"role": "user", "content": content}],
         model_type="vision",
         max_tokens=max_tokens,

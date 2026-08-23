@@ -48,6 +48,8 @@ CYRENE_TOP_LEVEL_DIRECTORIES = {
     "learning",
     "model_runtime",
     "observability",
+    "office",
+    "plugins",
     "runtime",
     "terminal",
     "tool_impl",
@@ -73,39 +75,30 @@ CYRENE_TOP_LEVEL_FILES = {
 # no new module may join it.
 IMPORT_STAR_ALLOWLIST = {
     "src/route/agent/browser.py",
-    "src/route/agent/chat.py",
-    "src/route/agent/collaboration.py",
     "src/route/agent/sessions.py",
     "src/route/backup.py",
     "src/route/learning.py",
     "src/route/memory.py",
     "src/route/notifications.py",
     "src/route/search.py",
-    "src/route/settings/general.py",
-    "src/route/skills.py",
-    "src/route/system/events.py",
-    "src/route/system/logs.py",
     "src/route/system/shell.py",
     "src/route/system/updates.py",
     "src/route/tasks.py",
     "src/route/usage.py",
-    "src/route/workbench/projects.py",
-    "src/route/workbench/task_sessions.py",
 }
 
-# These three adapters predate explicit application-service seams. New dynamic
-# namespace injection is forbidden; each listed module must be migrated away.
-DYNAMIC_NAMESPACE_ALLOWLIST = {
-    "src/route/registry.py",
-    "src/route/workbench/goal_loop.py",
-    "src/route/workbench/knowledge.py",
-    "src/route/workbench/memory.py",
-}
+DYNAMIC_NAMESPACE_ALLOWLIST: set[str] = set()
 JAVASCRIPT_IMPORT_STAR_ALLOWLIST = {
     "src/webui/build-jsx.mjs",
 }
 JAVASCRIPT_DYNAMIC_NAMESPACE_ALLOWLIST = {
     "electron/agent-cursor.js",
+}
+JAVASCRIPT_SERVICE_REGISTRY_ALLOWLIST = {
+    "src/webui/frontend/entry/bootstrap.jsx",
+    "src/webui/frontend/platform/api.jsx",
+    "src/webui/frontend/platform/data-store.jsx",
+    "src/webui/frontend/shared/i18n/translations.jsx",
 }
 
 
@@ -223,6 +216,17 @@ def test_javascript_dynamic_namespace_budget_can_only_decrease() -> None:
     }
 
     assert current <= JAVASCRIPT_DYNAMIC_NAMESPACE_ALLOWLIST
+
+
+def test_javascript_service_registry_is_confined_to_composition_modules() -> None:
+    frontend_root = REPOSITORY_ROOT / "src" / "webui" / "frontend"
+    current = {
+        _relative_source(path)
+        for path in frontend_root.rglob("*.jsx")
+        if 'window.CyreneUI.require(' in path.read_text(encoding="utf-8")
+    }
+
+    assert current <= JAVASCRIPT_SERVICE_REGISTRY_ALLOWLIST
 
 
 def _large_python_functions(threshold: int) -> dict[str, int]:

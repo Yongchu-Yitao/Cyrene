@@ -14,6 +14,7 @@ const {
   AGENT_CURSOR_SIZE,
   AGENT_CURSOR_SVG,
   agentCursorCommand,
+  agentCursorCompletionCommand,
   agentCursorHideCommand,
   agentCursorRunningCommand,
   agentCursorVisualScaleForZoom,
@@ -43,14 +44,22 @@ test('agent cursor contract uses the rounded triangle with fixed interaction tim
   assert.match(command, /transform ' \+ config\.moveDurationMs/);
   assert.doesNotMatch(command, /reducedMotion \? 0/);
   const hideCommand = agentCursorHideCommand();
+  const completionCommand = agentCursorCompletionCommand(7, { press: true });
   const runningCommand = agentCursorRunningCommand(true);
   const stoppedCommand = agentCursorRunningCommand(false);
   assert.match(hideCommand, /opacity 250ms ease-in/);
+  assert.match(completionCommand, /getAnimations/);
+  assert.match(completionCommand, /animation\.finished/);
+  assert.match(completionCommand, /requestAnimationFrame/);
+  assert.doesNotMatch(completionCommand, /setTimeout|Promise\.race/);
+  assert.match(completionCommand, /"sequence":7/);
+  assert.match(completionCommand, /"press":true/);
   assert.match(runningCommand, /state\.running = true/);
   assert.doesNotMatch(runningCommand, /clearTimeout|state\.fading = false/);
   assert.doesNotMatch(stoppedCommand, /clearTimeout|3000 - elapsed/);
   assert.doesNotThrow(() => new Function(command));
   assert.doesNotThrow(() => new Function(hideCommand));
+  assert.doesNotThrow(() => new Function(completionCommand));
   assert.doesNotThrow(() => new Function(runningCommand));
   assert.doesNotThrow(() => new Function(stoppedCommand));
 });
@@ -61,6 +70,33 @@ test('browser page zoom is counter-scaled without enlarging unzoomed cursors', (
   assert.equal(agentCursorVisualScaleForZoom(0.01), 8);
   assert.equal(agentCursorVisualScaleForZoom(2), 1);
   assert.equal(agentCursorVisualScaleForZoom(0), 1);
+});
+
+test('agent cursor completion follows the renderer animation promise', async () => {
+  let finishAnimation;
+  const finished = new Promise((resolve) => { finishAnimation = resolve; });
+  const cursor = {
+    getAnimations: () => [{ finished, playState: 'running' }],
+  };
+  const context = {
+    document: { getElementById: () => cursor },
+    requestAnimationFrame: (callback) => { callback(); return 1; },
+  };
+  context.window = context;
+  context.__cyreneAgentCursorState = { sequence: 9 };
+
+  let resolved = false;
+  const completion = vm.runInNewContext(
+    agentCursorCompletionCommand(9), context
+  ).then((value) => {
+    resolved = true;
+    return value;
+  });
+  await Promise.resolve();
+  assert.equal(resolved, false);
+
+  finishAnimation();
+  assert.equal(await completion, true);
 });
 
 test('shared browser and App Use cursor fades stale positions during a run and animates every update', () => {

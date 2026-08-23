@@ -16,7 +16,6 @@ from types import ModuleType, SimpleNamespace
 import httpx
 import pytest
 from fastapi import APIRouter, FastAPI
-from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 
@@ -36,7 +35,6 @@ from cyrene.runtime.remote_commands import (
     RemoteCommandExecutor,
     RemoteControlRuntime,
     _chat_detail,
-    _json_response_payload,
     public_remote_event,
 )
 from cyrene.runtime.remote_relay import CyreneRelayServer
@@ -50,6 +48,23 @@ from cyrene.tool_impl.remote.harness import handler as remote_harness
 from cyrene.tool_impl.remote.run import handler as run_remote_cyrene
 from cyrene.tool_impl.remote.status import handler as remote_cyrene_status
 from route.remote import register_remote_routes
+
+
+def _register_remote_test_routes(router, app, db_path, *, projects=None):
+    async def list_projects():
+        return list(projects or [])
+
+    return register_remote_routes(
+        router,
+        app,
+        db_path,
+        bot=None,
+        chat=SimpleNamespace(),
+        projects=SimpleNamespace(list_projects=list_projects),
+        tasks=SimpleNamespace(),
+        goals=SimpleNamespace(),
+        utc_now=lambda: "2026-07-27T00:00:00+00:00",
+    )
 
 
 def test_remote_identity_uses_owner_only_local_file(tmp_path):
@@ -165,18 +180,6 @@ def test_default_pairing_grant_completes_remote_agent_approval_loop(
     assert peer is not None
     assert "approval:respond" in DEFAULT_REMOTE_CAPABILITIES
     assert "approval:respond" in peer["received_capabilities"]
-
-
-def test_json_response_payload_treats_accepted_as_success():
-    result = _json_response_payload(
-        JSONResponse({"run_id": "run_accepted"}, status_code=202)
-    )
-
-    assert result == {
-        "ok": True,
-        "status_code": 202,
-        "run_id": "run_accepted",
-    }
 
 
 def test_remote_tool_pack_grants_are_valid_but_remote_pack_is_not(monkeypatch, tmp_path):
@@ -861,15 +864,11 @@ def test_remote_executor_filters_projects_and_public_run_events(
     async def scenario():
         target = paired_stores["target"]
         controller = paired_stores["controller"]
-        monkeypatch.setattr(
-            "cyrene.workbench.runtime._read_workbench_store_lightweight",
-            lambda: {
-                "projects": [
-                    {"id": "project_1", "name": "Shared"},
-                    {"id": "project_private", "name": "Private"},
-                ]
-            },
-        )
+        async def list_projects():
+            return [
+                {"id": "project_1", "name": "Shared"},
+                {"id": "project_private", "name": "Private"},
+            ]
         done = asyncio.Event()
         done.set()
         run = SimpleNamespace(
@@ -935,9 +934,8 @@ def test_remote_executor_filters_projects_and_public_run_events(
         )
         executor = RemoteCommandExecutor(
             store=target,
-            chat_adapter={"get_chat": get_chat, "run_manager": run_manager},
-            project_adapter={},
-            task_adapter={},
+            chat=SimpleNamespace(get=get_chat, run_manager=run_manager),
+            projects=SimpleNamespace(list_projects=list_projects),
         )
 
         projects = await executor(
@@ -1036,7 +1034,7 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
 
         async def dispatch_task(_task_id, body):
             calls["task_dispatch"] += 1
-            modes["task"] = body.mode
+            modes["task"] = body["mode"]
             return {"session": task}
 
         async def get_chat(_chat_id):
@@ -1056,15 +1054,13 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
 
         executor = RemoteCommandExecutor(
             store=target,
-            chat_adapter={
-                "get_chat": get_chat,
-                "send_chat_detached": send_chat_detached,
-            },
-            project_adapter={"list_tasks": list_tasks},
-            task_adapter={
-                "get_task": get_task,
-                "dispatch_task": dispatch_task,
-            },
+            chat=SimpleNamespace(
+                get=get_chat,
+                send=send_chat_detached,
+                run_manager=SimpleNamespace(get=lambda _chat_id: None),
+            ),
+            projects=SimpleNamespace(list_tasks=list_tasks),
+            tasks=SimpleNamespace(get=get_task, dispatch=dispatch_task),
         )
 
         listed = await executor(
@@ -1194,9 +1190,6 @@ def test_remote_harness_filters_by_granted_tool_pack_and_uses_bound_context(
         executor = RemoteCommandExecutor(
             store=target,
             db_path=target.db_path,
-            chat_adapter={},
-            project_adapter={},
-            task_adapter={},
         )
 
         denied = await executor(
@@ -1341,9 +1334,6 @@ def test_remote_shell_is_direct_project_scoped_and_device_owned(
         executor = RemoteCommandExecutor(
             store=target,
             db_path=target.db_path,
-            chat_adapter={},
-            project_adapter={},
-            task_adapter={},
         )
 
         opened = await executor(
@@ -1578,9 +1568,7 @@ def test_remote_command_reads_only_attachment_referenced_by_shared_chat(
 
         executor = RemoteCommandExecutor(
             store=paired_stores["target"],
-            chat_adapter={"get_chat": get_chat},
-            project_adapter={},
-            task_adapter={},
+            chat=SimpleNamespace(get=get_chat),
         )
         result = await executor(
             paired_stores["controller"].identity.device_id,
@@ -1897,16 +1885,14 @@ def test_remote_settings_api_manages_identity_pairing_grants_and_audit(
     tmp_path,
 ):
     monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
-    from cyrene.workbench import runtime as workbench_runtime
-
-    monkeypatch.setattr(
-        workbench_runtime,
-        "_read_workbench_store_lightweight",
-        lambda: {"projects": [{"id": "project_1", "name": "Remote Project"}]},
-    )
     app = FastAPI()
     router = APIRouter()
-    register_remote_routes(router, app, str(tmp_path / "remote-api.sqlite3"))
+    _register_remote_test_routes(
+        router,
+        app,
+        str(tmp_path / "remote-api.sqlite3"),
+        projects=[{"id": "project_1", "name": "Remote Project"}],
+    )
     app.include_router(router)
 
     with TestClient(app) as client:
@@ -1968,23 +1954,17 @@ def test_remote_context_accepts_only_trusted_controller_grants(
     accepted = controller.accept_pairing_invitation(invitation["invitation"])
     target.complete_pairing_response(accepted["response"])
 
-    chats = {
-        "chats": [
-            {
-                "id": "chat_1",
-                "projectId": "local_project",
-                "remoteDeviceIds": [],
-            }
-        ]
-    }
-    from cyrene.workbench import chat as chat_service
+    from cyrene.workbench.chat_repository import ChatRepository
 
-    monkeypatch.setattr(chat_service, "_read_chats_store", lambda: chats)
-    monkeypatch.setattr(chat_service, "_write_chats_store", lambda payload: None)
+    chats = ChatRepository()
+    chats.configure(controller_db)
+    chats.write({"chats": [{
+        "id": "chat_1", "projectId": "local_project", "remoteDeviceIds": [],
+    }]})
 
     app = FastAPI()
     router = APIRouter()
-    register_remote_routes(router, app, controller_db)
+    _register_remote_test_routes(router, app, controller_db)
     app.include_router(router)
     with TestClient(app) as client:
         catalog = client.get("/api/remote/context-devices")
@@ -2000,7 +1980,7 @@ def test_remote_context_accepts_only_trusted_controller_grants(
         )
         assert selected.status_code == 200
         assert selected.json()["device_ids"] == [target.identity.device_id]
-        assert chats["chats"][0]["remoteDeviceIds"] == [
+        assert chats.get("chat_1")["remoteDeviceIds"] == [
             target.identity.device_id
         ]
 
@@ -2050,7 +2030,14 @@ def test_agent_status_tool_only_controls_device_selected_in_chat(
         }
         from cyrene.workbench import chat as chat_service
 
-        monkeypatch.setattr(chat_service, "_read_chats_store", lambda: chats)
+        monkeypatch.setattr(
+            chat_service,
+            "get_workbench_chat",
+            lambda chat_id: next(
+                (chat for chat in chats["chats"] if chat["id"] == chat_id),
+                None,
+            ),
+        )
         await target_gateway.start()
         await controller_gateway.start()
         register_remote_gateway(controller.db_path, controller_gateway)
@@ -2133,15 +2120,15 @@ def test_run_remote_cyrene_creates_chat_and_starts_remote_agent(
         }
 
         async def create_chat(body):
-            received.append(("create", body.project, body.title))
+            received.append(("create", body["project"], body["title"]))
             return {"ok": True, "chat": dict(remote_chat)}
 
         async def get_chat(chat_id):
             assert chat_id == remote_chat["id"]
             return {"ok": True, "chat": dict(remote_chat)}
 
-        async def send_chat_detached(chat_id, body, *, detached):
-            received.append(("send", chat_id, dict(body), detached))
+        async def send_chat_detached(chat_id, body):
+            received.append(("send", chat_id, dict(body), True))
             return {
                 "run_id": "run_remote_1",
                 "chat_id": chat_id,
@@ -2152,13 +2139,11 @@ def test_run_remote_cyrene_creates_chat_and_starts_remote_agent(
 
         target_executor = RemoteCommandExecutor(
             store=target,
-            chat_adapter={
-                "create_chat": create_chat,
-                "get_chat": get_chat,
-                "send_chat_detached": send_chat_detached,
-            },
-            project_adapter={},
-            task_adapter={},
+            chat=SimpleNamespace(
+                create=create_chat,
+                get=get_chat,
+                send=send_chat_detached,
+            ),
         )
 
         async def controller_handler(*_args):
@@ -2175,7 +2160,14 @@ def test_run_remote_cyrene_creates_chat_and_starts_remote_agent(
         }
         from cyrene.workbench import chat as chat_service
 
-        monkeypatch.setattr(chat_service, "_read_chats_store", lambda: chats)
+        monkeypatch.setattr(
+            chat_service,
+            "get_workbench_chat",
+            lambda chat_id: next(
+                (chat for chat in chats["chats"] if chat["id"] == chat_id),
+                None,
+            ),
+        )
 
         async def allow_remote_action(**_kwargs):
             return None

@@ -6,6 +6,12 @@ from pathlib import Path
 
 import pytest
 
+from conftest import (
+    workbench_i18n_source,
+    workbench_settings_source,
+    workbench_style_source,
+)
+
 
 @pytest.mark.asyncio
 async def test_cli_search_falls_back_to_aqua_standard_registry(monkeypatch):
@@ -225,6 +231,102 @@ def test_extension_skill_card_includes_full_markdown_and_file_directory(tmp_path
     assert card["preview"] == "# Instructions\n\nDo the **complete** workflow.\n"
     assert card["entrypoint_name"] == "SKILL.md"
     assert [item["path"] for item in card["files"]] == ["SKILL.md", "references/guide.md"]
+
+
+def test_extension_service_installs_local_skill_through_canonical_service(tmp_path, monkeypatch):
+    from cyrene.extensions import service
+
+    source = tmp_path / "demo-skill"
+    source.mkdir()
+    installed = []
+    audits = []
+
+    def install(path):
+        installed.append(path)
+        return {"ok": True, "skill": {"id": "demo-skill"}}
+
+    monkeypatch.setattr(service, "install_skill_from_path", install)
+    monkeypatch.setattr(service, "_audit", lambda *args, **kwargs: audits.append((args, kwargs)))
+
+    extension_service = object.__new__(service.ExtensionService)
+    result = extension_service.install_local_skill(source, actor="cli")
+
+    assert result == {"ok": True, "skill": {"id": "demo-skill"}}
+    assert installed == [source]
+    assert audits[0][0][:3] == ("cli", "install.finish", "skill:demo-skill")
+    with pytest.raises(ValueError, match="source path is required"):
+        extension_service.install_local_skill("")
+
+
+def test_extension_routes_cover_local_skill_path_upload_and_enabled_state(tmp_path, monkeypatch):
+    from cyrene.extensions.application_service import (
+        ExtensionApplicationService,
+        ExtensionInstallInputService,
+    )
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from route import extensions
+
+    calls = []
+
+    class Service:
+        def install_local_skill(self, source_path, *, actor):
+            path = Path(source_path)
+            calls.append(("install", path, actor, path.exists()))
+            return {"ok": True, "skill": {"id": "demo-skill"}}
+
+        async def set_extension_enabled(self, kind, extension_id, enabled, *, actor):
+            calls.append(("enabled", kind, extension_id, enabled, actor))
+            return {"ok": True, "enabled": enabled}
+
+    service = Service()
+    application_service = ExtensionApplicationService(
+        service,
+        ExtensionInstallInputService(service, tmp_path),
+        source_get=lambda **_kwargs: {},
+        source_update=lambda body: body,
+        audit_get=lambda _limit: [],
+    )
+    app = FastAPI()
+    router = APIRouter()
+    extensions.register_extension_routes(router, application_service)
+    app.include_router(router)
+    client = TestClient(app)
+
+    local_path = tmp_path / "local-skill"
+    local_path.mkdir()
+    response = client.post(
+        "/api/extensions/skills/install",
+        json={"path": str(local_path)},
+    )
+    assert response.status_code == 200
+    response = client.post(
+        "/api/extensions/skills/install-upload",
+        files={"file": ("SKILL.md", b"# Demo Skill", "text/markdown")},
+    )
+    assert response.status_code == 200
+    uploaded_path = calls[1][1]
+    assert calls[1][3] is True
+    assert not uploaded_path.exists()
+    response = client.post(
+        "/api/extensions/skill/demo-skill/enabled",
+        json={"enabled": False},
+    )
+    assert response.json() == {"ok": True, "enabled": False}
+    assert calls[2] == ("enabled", "skill", "demo-skill", False, "user")
+
+
+def test_legacy_skill_panel_and_api_are_removed_from_active_sources():
+    root = Path(__file__).resolve().parents[1]
+    frontend = workbench_settings_source()
+    cli = root.joinpath("src/cyrene/cli_chat.py").read_text(encoding="utf-8")
+    registry = root.joinpath("src/route/registry.py").read_text(encoding="utf-8")
+
+    assert not root.joinpath("src/route/skills.py").exists()
+    assert "LegacySkillsPanel" not in frontend
+    assert "/api/skills" not in frontend
+    assert "/api/skills" not in cli
+    assert "register_skill_routes" not in registry
 
 
 def test_skill_directory_and_archive_reject_links_and_expansion(tmp_path, monkeypatch):
@@ -583,10 +685,9 @@ async def test_agent_extension_activation_still_passes_through_the_reviewer(monk
 
 
 def test_extension_switch_is_rendered_only_in_expanded_details_and_uses_unified_endpoint():
+    frontend = workbench_settings_source()
+    styles = workbench_style_source()
     root = Path(__file__).resolve().parents[1]
-    frontend = root.joinpath("src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
-    styles = root.joinpath("src/webui/frontend/workbench.css").read_text(encoding="utf-8")
-    routes = root.joinpath("src/route/extensions.py").read_text(encoding="utf-8")
     tool_definitions = root.joinpath("src/cyrene/tooling/native_definitions.py").read_text(encoding="utf-8")
 
     details_index = frontend.index('expanded && React.createElement("div", { className: "wb-extension-details" }')
@@ -595,15 +696,13 @@ def test_extension_switch_is_rendered_only_in_expanded_details_and_uses_unified_
     assert '"/api/extensions/" + encodeURIComponent(item.kind)' in frontend
     assert 'className: "wb-extension-enabled-row"' in frontend
     assert ".wb-extension-enabled-row" in styles
-    assert '@router.post("/api/extensions/{kind}/{extension_id}/enabled")' in routes
     assert "'enable', 'disable'" in tool_definitions
     assert 'canUseLocalProgram = (item.capabilities || []).indexOf("bind_system") >= 0' in frontend
     assert '(item.kind === "toolchain" || item.kind === "cli") && item.ownership !== "builtin"' not in frontend
 
 
 def test_mcp_manual_fallback_ui_is_actionable_and_uses_structured_arguments():
-    root = Path(__file__).resolve().parents[1]
-    frontend = root.joinpath("src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
+    frontend = workbench_settings_source()
     assert 'if (item.installable === false) configureManualMcp(item); else installSearchResult(item);' in frontend
     assert 'disabled: remoteLoading || item.installable === false' not in frontend
     assert 'manualMcp.args.split(/\\r?\\n/)' in frontend
@@ -611,10 +710,9 @@ def test_mcp_manual_fallback_ui_is_actionable_and_uses_structured_arguments():
 
 
 def test_extension_install_errors_are_localized_compact_and_expire():
-    root = Path(__file__).resolve().parents[1]
-    frontend = root.joinpath("src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
-    styles = root.joinpath("src/webui/frontend/workbench.css").read_text(encoding="utf-8")
-    translations = root.joinpath("src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    frontend = workbench_settings_source()
+    styles = workbench_style_source()
+    translations = workbench_i18n_source()
 
     assert "function extensionTaskErrorContent(task, t)" in frontend
     assert "function extensionTaskIsVisible(task, now)" in frontend
@@ -632,9 +730,8 @@ def test_extension_dependency_conflicts_have_a_stable_reason_code():
 
 
 def test_mcp_details_render_discovered_tool_names_and_descriptions():
-    root = Path(__file__).resolve().parents[1]
-    frontend = root.joinpath("src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
-    translations = root.joinpath("src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    frontend = workbench_settings_source()
+    translations = workbench_i18n_source()
 
     assert 'className: "wb-extension-mcp-tools"' in frontend
     assert "item.tools.map(function (tool)" in frontend
@@ -643,10 +740,9 @@ def test_mcp_details_render_discovered_tool_names_and_descriptions():
 
 
 def test_cli_hook_integration_is_a_compact_localized_detail_action():
-    root = Path(__file__).resolve().parents[1]
-    frontend = root.joinpath("src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
-    styles = root.joinpath("src/webui/frontend/workbench.css").read_text(encoding="utf-8")
-    translations = root.joinpath("src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    frontend = workbench_settings_source()
+    styles = workbench_style_source()
+    translations = workbench_i18n_source()
 
     assert 'className: "wb-extension-hook-copy"' in frontend
     assert ".wb-extension-hook-action .wb-btn" in styles

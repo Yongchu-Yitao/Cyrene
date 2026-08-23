@@ -1,3 +1,4 @@
+import { workbenchServices } from "./shared/runtime/services.jsx"
 // Workbench welcome / get-started page.
 //
 // A full-width onboarding surface that keeps the ProjectRail (like the
@@ -20,7 +21,7 @@
   var useRef = React.useRef;
 
   function T(key, params, fallback) {
-    return window.CyreneUI.require("i18n").t(key, params, fallback);
+    return workbenchServices.i18n().t(key, params, fallback);
   }
 
   // Shared SVG wrapper — matches the stroke style used across the workbench.
@@ -154,7 +155,7 @@
       { id: "knowledge", tone: "violet", icon: ICON.knowledge, label: T("welcome.cap.knowledge", null, "Knowledge base & context"), action: function () { props.onOpenPage("knowledge"); } },
       { id: "collab", tone: "amber", icon: ICON.collab, label: T("welcome.cap.collab", null, "Projects & collaboration"), action: function () { props.onOpenPage("task"); } },
       { id: "automation", tone: "green", icon: ICON.automation, label: T("welcome.cap.automation", null, "Automation & integrations"), action: function () { props.onOpenPage("schedule"); } },
-      { id: "tutorial", tone: "cyan", icon: ICON.tutorial, label: T("welcome.cap.tutorial", null, "In-app tutorials"), action: function () { window.CyreneUI.require("tour").open(); } },
+      { id: "tutorial", tone: "cyan", icon: ICON.tutorial, label: T("welcome.cap.tutorial", null, "In-app tutorials"), action: function () { workbenchServices.tour().open(); } },
     ];
     return (
       <section className="wb-wel-card">
@@ -277,7 +278,7 @@
   // The workbench's own setup flow. Talks ONLY to the shared backend
   // (/api/onboarding/*) and refreshes the Workbench platform data store.
   function OnboardingFlow(props) {
-    window.CyreneUI.require("i18n").use();
+    workbenchServices.i18n().use();
     var ob = props.onboarding || {};
     var llm = ob.llm || {};
     var persona = ob.personality || {};
@@ -310,10 +311,10 @@
 
     function applyResponse(payload) {
       if (payload && payload.onboarding) {
-        try { window.CyreneUI.require("data").state.onboarding = payload.onboarding; } catch (e) {}
-        window.CyreneUI.require("data").bump();
+        try { workbenchServices.data().state.onboarding = payload.onboarding; } catch (e) {}
+        workbenchServices.data().bump();
       }
-      try { return window.CyreneUI.require("data").reload(); } catch (e) {}
+      try { return workbenchServices.data().reload(); } catch (e) {}
       return Promise.resolve();
     }
 
@@ -609,8 +610,8 @@
     if (props.onboarding && props.onboarding.needsOnboarding) {
       return <OnboardingFlow onboarding={props.onboarding} onComplete={props.onComplete} />;
     }
-    var i18n = window.CyreneUI.require("i18n").use();
-    var name = (window.CyreneUI.require("data").state.user || {}).name || "";
+    var i18n = workbenchServices.i18n().use();
+    var name = (workbenchServices.data().state.user || {}).name || "";
     // Greeting personalizes when we have a real (loaded) user name.
     var hasName = name && name !== "loading…" && name !== "User";
 

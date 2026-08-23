@@ -38,6 +38,9 @@
   type, upload, and inspect pages in a live view. When login, CAPTCHA, or 2FA
   needs you, take over the same browser and hand it back without losing the
   session.
+- **Live PowerPoint composition** — a local Office add-in lets Cyrene inspect,
+  batch-create, move, resize, style, render, and verify elements in the open
+  presentation while the user watches each slide change progressively.
 - **An agent that can manage itself** — through permissioned, auditable tools,
   Cyrene can inspect and operate its own UI, adjust settings, manage projects and
   chats, back up data, and handle updates.
@@ -101,6 +104,7 @@ see [Installation](docs/installation.md) and
 
 - [Installation](docs/installation.md)
 - [Usage](docs/usage.md)
+- [Live PowerPoint control (简体中文)](docs/office-live-control.zh-CN.md)
 - [Configuration](docs/configuration.md)
 - [Architecture](docs/architecture.md)
 - [Development](docs/development.md)

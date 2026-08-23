@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import aiosqlite
@@ -10,8 +11,11 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
+from conftest import workbench_shell_source, workbench_style_source
+
 from cyrene.runtime.database import init_knowledge_db
 from cyrene.knowledge import bibliography, ingest, library, store, zotero
+from cyrene.knowledge.library_services import LibraryRepository
 from route.workbench import library as library_routes
 
 
@@ -63,7 +67,24 @@ def test_library_page_hides_all_scrollbars_without_disabling_scroll():
 
 
 @pytest.fixture
-async def library_db(tmp_path):
+async def library_db(tmp_path, monkeypatch):
+    # This database backs the fixture's real project id. Route tests may
+    # replace database initialization, but the workspace dependency must still
+    # recognize p1 instead of bypassing production 400/404 behavior.
+    def resolve_fixture_workspace(value):
+        project_ref = str(value or "").strip()
+        if project_ref == "p1":
+            return "p1"
+        from cyrene.knowledge.workspace import (
+            WorkspaceNotFoundError,
+            WorkspaceRequiredError,
+        )
+
+        if not project_ref:
+            raise WorkspaceRequiredError("workspace is required")
+        raise WorkspaceNotFoundError(f"workspace not found: {project_ref}")
+
+    monkeypatch.setattr(library_routes, "resolve_workspace_id", resolve_fixture_workspace)
     path = str(tmp_path / "kb_project_one.db")
     await init_knowledge_db(path)
     return path
@@ -126,7 +147,8 @@ async def test_library_item_embedding_status_tracks_current_model_coverage(
         library_db, item["id"], {"kb_document_id": document["id"]}
     )
 
-    status = await library_routes._item_embedding_status(library_db, item["id"])
+    repository = LibraryRepository()
+    status = await repository.embedding_status(library_db, item["id"])
     assert status["state"] == "none"
     assert status["total_chunks"] == 2
 
@@ -134,7 +156,7 @@ async def test_library_item_embedding_status_tracks_current_model_coverage(
         "id": "chunk-a", "embedding": b"a", "embedding_dim": 3,
         "embedding_model": "current",
     }])
-    status = await library_routes._item_embedding_status(library_db, item["id"])
+    status = await repository.embedding_status(library_db, item["id"])
     assert status["state"] == "partial"
     assert status["compatible_chunks"] == 1
 
@@ -143,7 +165,7 @@ async def test_library_item_embedding_status_tracks_current_model_coverage(
         "embedding_model": "current",
     }])
     assert (
-        await library_routes._item_embedding_status(library_db, item["id"])
+        await repository.embedding_status(library_db, item["id"])
     )["state"] == "complete"
 
     await store.update_chunk_embeddings(library_db, [
@@ -151,8 +173,88 @@ async def test_library_item_embedding_status_tracks_current_model_coverage(
         {"id": "chunk-b", "embedding": b"b", "embedding_dim": 2, "embedding_model": "old"},
     ])
     assert (
-        await library_routes._item_embedding_status(library_db, item["id"])
+        await repository.embedding_status(library_db, item["id"])
     )["state"] == "incompatible"
+
+
+@pytest.mark.asyncio
+async def test_library_embedding_routes_report_coverage_and_run_reembedding(
+    library_db, monkeypatch
+):
+    from cyrene.knowledge import embeddings
+
+    document = await store.create_document(
+        library_db,
+        name="embedding.md",
+        path="/tmp/embedding.md",
+        kind="code",
+    )
+    await store.replace_chunks(
+        library_db,
+        document["id"],
+        [{"id": "embedding-chunk", "ordinal": 0, "content": "alpha"}],
+    )
+
+    async def ensure(_workspace):
+        return library_db
+
+    calls: list[str] = []
+
+    async def reembed_all(db_path):
+        calls.append(db_path)
+        await asyncio.sleep(0)
+        return {"updated": 1, "total": 1}
+
+    monkeypatch.setattr(library_routes, "ensure_workspace_db", ensure)
+    monkeypatch.setattr(embeddings, "is_configured", lambda: True)
+    monkeypatch.setattr(embeddings, "current_identity", lambda: ("current", 3))
+    monkeypatch.setattr(ingest, "reembed_all", reembed_all)
+
+    app = FastAPI()
+    router = APIRouter()
+    library_routes.register_workbench_library_routes(router)
+    app.include_router(router)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        status = await client.get(
+            "/api/workbench/library/embedding/status?workspace=p1"
+        )
+        assert status.status_code == 200
+        assert status.json()["configured"] is True
+        assert status.json()["retrieval_mode"] == "hybrid"
+        assert status.json()["total_chunks"] == 1
+        assert status.json()["pending_vectors"] == 1
+        assert status.json()["mismatch"] is True
+
+        started = await client.post("/api/workbench/library/reembed?workspace=p1")
+        assert started.status_code == 200
+        assert started.json()["reembed"]["running"] is True
+
+        completed = None
+        for _ in range(20):
+            await asyncio.sleep(0)
+            completed = await client.get(
+                "/api/workbench/library/embedding/status?workspace=p1"
+            )
+            if not completed.json()["reembed"]["running"]:
+                break
+
+        assert completed is not None
+        assert completed.json()["reembed"]["running"] is False
+        assert completed.json()["reembed"]["updated"] == 1
+        assert calls == [library_db]
+
+        assert (
+            await client.get(
+                "/api/workbench/knowledge/embedding/status?workspace=p1"
+            )
+        ).status_code == 404
+        assert (
+            await client.get("/api/knowledge/documents")
+        ).status_code == 404
 
 
 @pytest.mark.asyncio
@@ -559,6 +661,61 @@ async def test_zotero_import_is_idempotent_and_maps_children(library_db):
 
 
 @pytest.mark.asyncio
+async def test_zotero_copy_hashes_bytes_during_copy_without_rescanning(
+    library_db,
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"zotero attachment bytes")
+    uploads = tmp_path / "uploads"
+
+    class LocalClient:
+        async def attachment_path(self, *_args, **_kwargs):
+            return source
+
+    async def no_index(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("cyrene.runtime.attachments.UPLOADS_DIR", uploads)
+    monkeypatch.setattr(ingest, "index_document", no_index)
+    monkeypatch.setattr(
+        store,
+        "content_hash_file",
+        lambda _path: pytest.fail("new Zotero copies must reuse the streaming copy digest"),
+    )
+
+    parent = {
+        "key": "ITEM-COPY",
+        "version": 1,
+        "data": {"key": "ITEM-COPY", "itemType": "journalArticle", "title": "Copied"},
+    }
+    attachment = {
+        "key": "ATT-COPY",
+        "version": 1,
+        "data": {
+            "key": "ATT-COPY",
+            "itemType": "attachment",
+            "parentItem": "ITEM-COPY",
+            "filename": "source.pdf",
+            "contentType": "application/pdf",
+            "path": str(source),
+        },
+    }
+
+    await zotero.import_records(
+        library_db,
+        [parent, attachment],
+        client=LocalClient(),
+        library_id="42",
+        copy_attachments=True,
+    )
+
+    copied = uploads / "zotero" / Path(library_db).stem / "ATT-COPY_source.pdf"
+    assert copied.read_bytes() == source.read_bytes()
+
+
+@pytest.mark.asyncio
 async def test_zotero_client_paginates_tracks_version_and_resolves_file(tmp_path):
     attachment_file = tmp_path / "paper.pdf"
     attachment_file.write_bytes(b"%PDF-test")
@@ -579,12 +736,36 @@ async def test_zotero_client_paginates_tracks_version_and_resolves_file(tmp_path
     assert await client.attachment_path("ATT1") == attachment_file
 
 
+def test_library_http_rejects_missing_and_unknown_workspace(monkeypatch):
+    from cyrene.knowledge.workspace import (
+        WorkspaceNotFoundError,
+        WorkspaceRequiredError,
+    )
+
+    def reject(workspace):
+        if not str(workspace or "").strip():
+            raise WorkspaceRequiredError("workspace is required")
+        raise WorkspaceNotFoundError(f"workspace not found: {workspace}")
+
+    monkeypatch.setattr(library_routes, "resolve_workspace_id", reject)
+    app = FastAPI()
+    router = APIRouter()
+    library_routes.register_workbench_library_routes(router)
+    app.include_router(router)
+    client = TestClient(app)
+
+    assert client.get("/api/workbench/library/items").status_code == 400
+    assert client.get(
+        "/api/workbench/library/items", params={"workspace": "missing"}
+    ).status_code == 404
+
+
 def test_library_http_contract(monkeypatch, library_db):
     async def ensure(_workspace):
         return library_db
 
-    monkeypatch.setattr(library_routes, "_ensure_kb_db", ensure)
-    monkeypatch.setattr(library_routes, "_resolve_workspace_id", lambda value: value or "default")
+    monkeypatch.setattr(library_routes, "ensure_workspace_db", ensure)
+    monkeypatch.setattr(library_routes, "resolve_workspace_id", lambda value: value or "default")
     app = FastAPI()
     router = APIRouter()
     library_routes.register_workbench_library_routes(router)
@@ -681,7 +862,7 @@ async def test_library_raw_media_is_served_inline(
     async def ensure(_workspace):
         return library_db
 
-    monkeypatch.setattr(library_routes, "_ensure_kb_db", ensure)
+    monkeypatch.setattr(library_routes, "ensure_workspace_db", ensure)
     app = FastAPI()
     router = APIRouter()
     library_routes.register_workbench_library_routes(router)
@@ -738,7 +919,7 @@ async def test_library_raw_media_rebases_restored_managed_path(
     async def ensure(_workspace):
         return library_db
 
-    monkeypatch.setattr(library_routes, "_ensure_kb_db", ensure)
+    monkeypatch.setattr(library_routes, "ensure_workspace_db", ensure)
     app = FastAPI()
     router = APIRouter()
     library_routes.register_workbench_library_routes(router)
@@ -780,7 +961,7 @@ async def test_library_read_event_marks_unique_viewed_attachment(
     async def ensure(_workspace):
         return library_db
 
-    monkeypatch.setattr(library_routes, "_ensure_kb_db", ensure)
+    monkeypatch.setattr(library_routes, "ensure_workspace_db", ensure)
     app = FastAPI()
     router = APIRouter()
     library_routes.register_workbench_library_routes(router)
@@ -809,7 +990,7 @@ def test_bibliography_parsers_and_upload_contract(monkeypatch, library_db):
     async def ensure(_workspace):
         return library_db
 
-    monkeypatch.setattr(library_routes, "_ensure_kb_db", ensure)
+    monkeypatch.setattr(library_routes, "ensure_workspace_db", ensure)
     app = FastAPI()
     router = APIRouter()
     library_routes.register_workbench_library_routes(router)
@@ -829,12 +1010,8 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     source = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(
         encoding="utf-8"
     )
-    shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
-    shell_styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    shell = workbench_shell_source()
+    shell_styles = workbench_style_source()
     styles = (root / "src" / "webui" / "frontend" / "workbench-library.css").read_text(
         encoding="utf-8"
     )
@@ -963,7 +1140,7 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert "暂无可显示内容。" in source
     assert ".wb-lib-media-preview" in styles
     assert "max-height: calc(100vh - 210px)" in styles
-    assert 'window.CyreneUI.require("markdown").render' in source
+    assert "workbenchServices.markdown().render" in source
     assert "root.marked.parse(source)" in markdown_renderer
     assert "root.DOMPurify.sanitize" in markdown_renderer
     assert 'className: "wb-lib-markdown"' in source

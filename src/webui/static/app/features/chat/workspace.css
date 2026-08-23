@@ -1,0 +1,1271 @@
+/* The task board is a single continuous canvas. Its directory rail floats
+   above that canvas, so horizontal board content can travel behind the same
+   frosted material used by the top bar instead of stopping at a grid lane. */
+.workbench-grid.integrated-sidebars.is-task-board {
+  --wb-task-board-rail-reserve: 300px;
+  --wb-task-board-edge-gap: 12px;
+  --wb-task-board-canvas-gutter: 22px;
+  position: relative;
+  isolation: isolate;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html[data-theme="dark"] .workbench-grid.integrated-sidebars.is-task-board {
+  /* The coloured board lives below this 65% glass. Counter its warmer canvas
+     so the resolved rail colour matches the same glass on neutral modules. */
+  --wb-floating-rail-tint: #24323f;
+}
+
+.workbench-grid.integrated-sidebars.rail-collapsed.is-task-board {
+  --wb-task-board-rail-reserve: 64px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* One shared glass material for every integrated module rail. Its base surface
+   deliberately matches the empty composer area, while geometry remains
+   module-owned so applying the material never changes card height or insets. */
+.workbench-grid.integrated-sidebars .workbench-integrated-rail {
+  background: var(--wb-floating-rail-bg);
+  -webkit-backdrop-filter: blur(32px) saturate(170%) contrast(102%);
+  backdrop-filter: blur(32px) saturate(170%) contrast(102%);
+  box-shadow: var(--wb-floating-rail-shadow);
+}
+
+.workbench-grid.integrated-sidebars.is-task-board .wbc-rail {
+  position: absolute;
+  /* An absolutely positioned board rail cannot resolve the shared
+     percentage height through the display:contents page wrapper. Anchor both
+     vertical edges explicitly so it keeps the same full-height card geometry
+     as the Work rail instead of shrinking to the task rows. */
+  inset: 0 auto var(--wb-floating-card-bottom-gap, 12px) 12px;
+  height: auto;
+  max-height: none;
+  margin: 0;
+  z-index: 30;
+}
+
+.workbench-grid.integrated-sidebars.is-task-board .workbench-task-board {
+  position: relative;
+  z-index: 0;
+  grid-column: 1;
+}
+
+.workbench-grid.integrated-sidebars.is-task-board .wb-board-header,
+.workbench-grid.integrated-sidebars.is-task-board .wb-board-error,
+.workbench-grid.integrated-sidebars.is-task-board .wb-board-loading,
+.workbench-grid.integrated-sidebars.is-task-board .wb-board-empty-overall,
+.workbench-grid.integrated-sidebars.is-task-board .wb-board-completed-strip {
+  margin-left: var(--wb-task-board-rail-reserve);
+  transition: margin-left var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
+}
+
+.workbench-grid.integrated-sidebars.is-task-board .wb-board-columns {
+  box-sizing: border-box;
+  min-width: calc(1748px + var(--wb-task-board-rail-reserve) + var(--wb-task-board-edge-gap) + var(--wb-task-board-canvas-gutter));
+  grid-template-columns: repeat(5, minmax(340px, 1fr));
+  padding-left: calc(var(--wb-task-board-rail-reserve) + var(--wb-task-board-canvas-gutter));
+  padding-right: var(--wb-task-board-edge-gap);
+  transition:
+    min-width var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    padding-left var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
+}
+
+.workbench-grid.integrated-sidebars.is-task-board .wb-board-scroll {
+  margin-inline: calc(0px - var(--wb-task-board-canvas-gutter));
+  scrollbar-width: none;
+}
+
+.workbench-grid.integrated-sidebars.is-task-board .wb-board-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+@media (max-width: 1040px) {
+  .workbench-grid.integrated-sidebars.is-task-board {
+    --wb-task-board-edge-gap: 12px;
+    --wb-task-board-canvas-gutter: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workbench-grid.integrated-sidebars.is-task-board .wb-board-header,
+  .workbench-grid.integrated-sidebars.is-task-board .wb-board-error,
+  .workbench-grid.integrated-sidebars.is-task-board .wb-board-loading,
+  .workbench-grid.integrated-sidebars.is-task-board .wb-board-empty-overall,
+  .workbench-grid.integrated-sidebars.is-task-board .wb-board-completed-strip,
+  .workbench-grid.integrated-sidebars.is-task-board .wb-board-columns {
+    transition: none;
+  }
+}
+
+/* Windows 1080p / low-DPI typography ---------------------------------------
+   Fractional variable-font weights look soft under DirectWrite at DPR 1–1.5.
+   Quantize the UI type ramp to Regular, Semibold, and Bold without changing
+   any font size, spacing, or macOS/HiDPI presentation. */
+@media (max-resolution: 1.5dppx) {
+  html[data-platform="win32"] :where(
+    .workbench-shell,
+    .wbq-shell,
+    .workbench-confirm-modal,
+    .workbench-toast-host
+  ),
+  html[data-platform="win32"] :where(
+    .workbench-shell,
+    .wbq-shell,
+    .workbench-confirm-modal,
+    .workbench-toast-host
+  ) * {
+    font-weight: 400 !important;
+  }
+
+  html[data-platform="win32"] :where(
+    .workbench-shell,
+    .wbq-shell,
+    .workbench-confirm-modal,
+    .workbench-toast-host
+  ) :where(
+    h3, h4, h5, h6,
+    strong, b,
+    button, [role="button"],
+    [aria-selected="true"],
+    .selected, .active, .current
+  ),
+  html[data-platform="win32"] :where(
+    .workbench-shell,
+    .wbq-shell,
+    .workbench-confirm-modal,
+    .workbench-toast-host
+  ) :where(strong, b) * {
+    font-weight: 600 !important;
+  }
+
+  html[data-platform="win32"] :where(
+    .workbench-shell,
+    .wbq-shell,
+    .workbench-confirm-modal,
+    .workbench-toast-host
+  ) :where(
+    h3, h4, h5, h6,
+    button, [role="button"],
+    [aria-selected="true"],
+    .selected, .active, .current
+  ) * {
+    font-weight: 600 !important;
+  }
+
+  html[data-platform="win32"] :where(
+    .workbench-shell,
+    .wbq-shell,
+    .workbench-confirm-modal,
+    .workbench-toast-host
+  ) :where(h1, h2),
+  html[data-platform="win32"] :where(
+    .workbench-shell,
+    .wbq-shell,
+    .workbench-confirm-modal,
+    .workbench-toast-host
+  ) :where(h1, h2) * {
+    font-weight: 700 !important;
+  }
+}
+/* Performance mode is deliberately renderer-wide: portal surfaces, browser
+   overlays and settings dialogs must obey the same low-overhead profile. */
+html[data-performance-mode="on"] {
+  --wb-flyout-shadow: none;
+  --wb-modal-shadow: none;
+  --wb-notif-shadow: none;
+  --wb-topbar-tab-shadow: none;
+  --wbc-control-shadow: none;
+  --wb-modal-scrim-filter: none;
+  scroll-behavior: auto !important;
+}
+
+html[data-performance-mode="on"] *,
+html[data-performance-mode="on"] *::before,
+html[data-performance-mode="on"] *::after {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  filter: none !important;
+  animation: none !important;
+  transition: none !important;
+  will-change: auto !important;
+  scroll-behavior: auto !important;
+}
+
+html[data-performance-mode="on"] *:focus-visible {
+  outline: 2px solid var(--wb-accent, #2563eb) !important;
+  outline-offset: 2px !important;
+}
+
+/* With backdrop blur disabled, the translucent composer lets conversation
+   text show through. Use the theme's solid card surface in performance mode. */
+html[data-performance-mode="on"] .wbc-composer-box {
+  background: var(--wb-card-bg) !important;
+}
+
+html[data-performance-mode="on"] .wbc-composer .wb-chip {
+  background: var(--wb-card-bg) !important;
+}
+
+html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
+  background: var(--wb-accent) !important;
+}
+
+/* Final composer geometry: every main-chat state uses the same three-sided
+   inset. Keeping the inline and bottom values equal prevents empty, populated,
+   split, and compact-density conversations from landing on different bottom
+   baselines. */
+.workbench-shell .wbc-main > .wbc-composer {
+  padding:
+    var(--wbc-composer-top-inset)
+    var(--wbc-composer-edge-inset)
+    var(--wbc-composer-edge-inset) !important;
+}
+
+/* When the workspace is split, the main conversation and the detached chat
+   card use the same three-sided composer inset. This more-specific rule must
+   follow the normal main-composer reset above so the left pane is not left
+   flush with the bottom edge while the right pane is correctly inset. */
+.workbench-shell .wbc-page.side-agent-split-open > .wbc-main > .wbc-composer {
+  padding:
+    var(--wbc-composer-top-inset)
+    var(--wbc-composer-edge-inset)
+    var(--wbc-composer-edge-inset) !important;
+}
+
+/* The active conversation can also be the left card inside the draggable pane
+   layout. Match the detached chat card's inset there as well; this is the DOM
+   shape used by the two-column split workspace. */
+.workbench-shell .wbc-pane-layout.split .wbc-pane-card .wbc-main > .wbc-composer {
+  padding:
+    var(--wbc-composer-top-inset)
+    var(--wbc-composer-edge-inset)
+    var(--wbc-composer-edge-inset) !important;
+}
+
+/* Detached chats use the exact same WbcComposer material as the main chat.
+   Keep this final geometry guard local to the detached surface so narrow
+   split/container rules cannot make its bottom inset differ from its sides. */
+.wbc-detached-pane-content > .wbc-chat-split > .wbc-composer {
+  padding:
+    var(--wbc-composer-top-inset)
+    var(--wbc-composer-edge-inset)
+    var(--wbc-composer-edge-inset) !important;
+}
+
+/* Settings is a first-class workbench module. Its left navigation uses the
+   same floating-card geometry as Profile while the forms keep their existing
+   controls and save behavior in a wider, independently scrolling canvas. */
+
+.settings-overlay .settings-overlay-body {
+  display: grid;
+  grid-template-columns: var(--wb-rail-w) minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.settings-overlay .settings-overlay-nav {
+  padding: 0;
+  gap: 0;
+  border-right: var(--wb-floating-rail-border);
+  background: var(--wb-floating-rail-bg);
+  overflow: hidden;
+}
+
+.settings-overlay-nav-head {
+  flex: 0 0 56px;
+}
+
+.settings-overlay-nav-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 2px 10px 12px;
+  scrollbar-width: none;
+}
+
+.settings-overlay-nav-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.settings-overlay .settings-overlay-nav-section {
+  min-height: auto;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 0 0;
+  border-top: 0;
+}
+
+.settings-overlay .settings-overlay-nav-section.first {
+  padding-top: 2px;
+}
+
+.settings-overlay-nav-label {
+  padding: 0 10px 5px;
+  color: var(--wb-faint);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  letter-spacing: .06em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.settings-overlay .settings-overlay-tab {
+  flex: none;
+  min-height: 38px;
+  padding: 0 10px;
+  border-radius: 10px;
+}
+
+.settings-overlay .settings-overlay-content {
+  padding: 30px clamp(28px, 4vw, 68px) 72px;
+  background: transparent;
+}
+
+.settings-overlay .settings-panel {
+  width: min(100%, 920px);
+}
+
+.settings-overlay .settings-overlay-content[data-settings-active-tab="extensions"] .settings-panel {
+  width: min(100%, 1120px);
+}
+
+.settings-overlay .settings-overlay-content[data-settings-active-tab="profile"] {
+  padding: 0;
+}
+
+.settings-overlay .settings-profile-panel,
+.settings-overlay .settings-profile-panel .wbp-page {
+  min-width: 0;
+  min-height: 100%;
+  overflow: visible;
+  background: transparent;
+}
+
+.settings-overlay .settings-profile-panel .wbp-page {
+  box-sizing: border-box;
+  padding: 40px clamp(24px, 4vw, 64px) 72px;
+}
+
+.settings-overlay .settings-profile-panel .wbp-inner {
+  max-width: 1120px;
+}
+
+.settings-overlay .settings-overlay-nav.is-collapsed .settings-overlay-nav-head > b,
+.settings-overlay .settings-overlay-nav.is-collapsed .settings-overlay-nav-label,
+.settings-overlay .settings-overlay-nav.is-collapsed .settings-overlay-tab > span:not(.settings-overlay-tab-icon) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.settings-overlay .settings-overlay-nav.is-collapsed .settings-overlay-nav-scroll {
+  display: none;
+}
+
+.settings-overlay .settings-overlay-nav.is-collapsed .settings-overlay-tab {
+  justify-content: center;
+  padding: 0;
+}
+
+@media (max-width: 760px) {
+  .settings-overlay .settings-overlay-body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .settings-overlay .settings-overlay-nav.workbench-integrated-rail {
+    position: relative;
+    width: calc(100% - 24px);
+    max-width: none;
+    height: auto;
+    min-height: 0;
+    flex: 0 0 auto;
+    margin: 8px 12px 0;
+    border-radius: 16px;
+  }
+
+  .settings-overlay .settings-overlay-nav-head,
+  .settings-overlay .workbench-sidebar-dock-slot,
+  .settings-overlay .settings-overlay-nav-label {
+    display: none;
+  }
+
+  .settings-overlay .settings-overlay-nav-scroll {
+    display: flex;
+    gap: 4px;
+    padding: 8px;
+    overflow-x: auto;
+  }
+
+  .settings-overlay .settings-overlay-nav-section,
+  .settings-overlay .settings-overlay-nav-section.first {
+    display: contents;
+  }
+
+  .settings-overlay .settings-overlay-tab {
+    width: auto;
+    min-width: max-content;
+    padding: 0 12px;
+  }
+
+  .settings-overlay .settings-overlay-content {
+    padding: 22px 16px 56px;
+  }
+}
+
+/* Unified Work + Board navigation -----------------------------------------
+   The account card no longer owns a second Dock row. Keep the existing five
+   destination pill, but let it sit lower and reserve only its real height. */
+.workbench-grid.integrated-sidebars {
+  --wb-sidebar-dock-height: 72px;
+}
+
+.workbench-sidebar-dock,
+.workbench-sidebar-dock.is-persistent {
+  height: 72px;
+  min-height: 72px;
+  grid-template-rows: 56px;
+  gap: 0;
+  padding-top: 8px;
+}
+
+.workbench-sidebar-dock-slot {
+  flex-basis: 72px;
+  height: 72px;
+  min-height: 72px;
+  margin-bottom: 8px;
+}
+
+.workbench-sidebar-dock.is-persistent {
+  bottom: 19px;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed > .workbench-sidebar-dock,
+.workbench-grid.integrated-sidebars > .workbench-sidebar-dock.is-persistent.is-collapsed {
+  height: 204px;
+  min-height: 204px;
+  grid-template-rows: 196px;
+  gap: 0;
+}
+
+.workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed > .workbench-sidebar-dock-slot {
+  flex-basis: 204px;
+  height: 204px;
+  min-height: 204px;
+}
+
+/* Project tools stay attached to the Task / Chat rail. Files and terminals
+   both expand in place below their own row. */
+.wbc-project-tools {
+  position: relative;
+  z-index: 23;
+  flex: 0 0 auto;
+  display: grid;
+  gap: 3px;
+  margin: 0 10px;
+  padding: 10px 0 8px;
+  border-top: 1px solid color-mix(in srgb, var(--wb-line-2) 66%, transparent);
+}
+
+/* Project tools normally live below the full-viewport menu scrim. Lift the
+   container while a terminal menu is open so its actions remain clickable;
+   only the open card is allowed to receive pointer events through the scrim. */
+.wbc-project-tools.menu-active {
+  z-index: 200;
+  pointer-events: none;
+}
+
+/* Collapsed tool panels are still grid items for the expand animation. Remove
+   their hidden box from the resting layout so the two launcher cards keep one
+   compact, intentional gap instead of inheriting space on both sides. */
+.wbc-project-tools:not(.has-expanded-tool) {
+  gap: 0;
+}
+
+.wbc-project-tools:not(.has-expanded-tool) > .wbc-project-tool-expand {
+  height: 0;
+  overflow: hidden;
+}
+
+.wbc-project-tools:not(.has-expanded-tool) > .wbc-project-tool-expand + button {
+  margin-top: 3px;
+}
+
+.wbc-project-tools.has-expanded-tool {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  align-content: stretch;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  scrollbar-width: none;
+}
+
+.wbc-project-tools.has-expanded-tool::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.wbc-project-tools > header {
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px 2px;
+  color: var(--wb-faint);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 720;
+  letter-spacing: .02em;
+}
+
+.wbc-project-tools.has-expanded-tool > header {
+  position: sticky;
+  z-index: 3;
+  top: -10px;
+  min-height: 30px;
+  margin-top: -10px;
+  padding-top: 10px;
+  background: var(--wbc-panel-surface);
+}
+
+.wbc-project-tools.has-expanded-tool > button {
+  display: none;
+}
+
+.wbc-project-tools.expanded-file > .wbc-project-terminal-expand,
+.wbc-project-tools.expanded-terminal > .wbc-project-file-expand {
+  display: none;
+}
+
+.wbc-project-tools > button {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.wbc-project-tools > button:hover,
+.wbc-project-tools > button:focus-visible,
+.wbc-project-tools > button.is-expanded {
+  background: var(--wb-row-hover-bg);
+  outline: 0;
+}
+
+.wbc-project-tool-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-muted) 10%, transparent);
+  color: var(--wb-muted);
+}
+
+.wbc-project-tool-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wbc-project-tool-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wbc-project-tool-copy b,
+.wbc-project-tool-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-project-tool-copy b {
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+}
+
+.wbc-project-tool-copy small {
+  color: var(--wb-faint);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-project-tool-chevron {
+  display: inline-flex;
+  justify-content: flex-end;
+  color: var(--wb-faint);
+}
+
+.wbc-project-tool-chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.wbc-project-tool-expand {
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    grid-template-rows 260ms cubic-bezier(.22, 1, .36, 1),
+    min-height 260ms cubic-bezier(.22, 1, .36, 1),
+    opacity 170ms ease,
+    visibility 0s linear 260ms;
+}
+
+.wbc-project-tool-expand.is-expanded {
+  grid-template-rows: 1fr;
+  min-height: 0;
+  height: 100%;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    grid-template-rows 300ms cubic-bezier(.22, 1, .36, 1),
+    min-height 300ms cubic-bezier(.22, 1, .36, 1),
+    opacity 190ms ease 45ms,
+    visibility 0s;
+}
+
+.wbc-project-tool-expand-inner {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  margin: 2px 2px 0;
+  padding: 4px 4px 2px;
+  border-top: 1px solid color-mix(in srgb, var(--wb-line-2) 58%, transparent);
+}
+
+.wbc-project-tools.has-expanded-tool .wbc-project-tool-expand-inner {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.wbc-project-tool-inline-header {
+  position: sticky;
+  z-index: 2;
+  top: 20px;
+  min-width: 0;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border-radius: 10px;
+  background: var(--wbc-panel-surface);
+  animation: wbc-project-tool-header-enter 240ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.wbc-project-tool-inline-header.is-terminal {
+  grid-template-columns: 28px minmax(0, 1fr) 30px 30px;
+}
+
+@keyframes wbc-project-tool-header-enter {
+  from { opacity: 0; transform: translateY(4px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.wbc-project-tool-inline-header > button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.wbc-project-tool-inline-header > button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 68%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-card-bg) 66%, transparent);
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+
+.wbc-project-tool-inline-header > button:hover,
+.wbc-project-tool-inline-header > button:focus-visible {
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
+  outline: 0;
+}
+
+.wbc-project-tool-inline-collapse svg {
+  transform: rotate(90deg);
+}
+
+.wbc-project-tool-inline-header > button.wbc-project-tool-directory-control {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-accent) 9%, transparent);
+  color: var(--wb-muted);
+  line-height: 0;
+}
+
+.wbc-project-tool-inline-header > button.wbc-project-tool-directory-control:hover,
+.wbc-project-tool-inline-header > button.wbc-project-tool-directory-control:focus-visible {
+  background: var(--wb-row-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-project-tool-directory-control svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+  margin: auto;
+}
+
+.wbc-project-file-list {
+  min-width: 0;
+  max-height: min(248px, 34vh);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.wbc-project-tools.has-expanded-tool .wbc-project-file-list,
+.wbc-project-tools.has-expanded-tool .wbc-project-terminal-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.wbc-project-file-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.wbc-project-file-list .workbench-project-file-row {
+  min-height: 36px;
+  padding-inline: 6px;
+}
+
+.wbc-project-file-list .wbc-rail-empty,
+.wbc-project-file-list .wbc-rail-loading {
+  padding: 18px 8px;
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-project-terminal-list {
+  position: relative;
+  min-width: 0;
+  max-height: min(248px, 34vh);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.wbc-project-terminal-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.wbc-project-terminal-list.menu-active {
+  z-index: 200;
+  pointer-events: none;
+}
+
+.wbc-project-terminal-list.menu-active .wbc-terminal-card.menu-open {
+  position: relative;
+  z-index: 1;
+  pointer-events: auto;
+}
+
+.wbc-project-terminal-list .wbc-terminal-section {
+  padding-bottom: 5px;
+}
+
+.wbc-project-terminal-list .wbc-rail-section + .wbc-rail-section {
+  padding-top: 0;
+}
+
+.wbc-project-terminal-list .wbc-rail-section-label {
+  min-height: 24px;
+  padding: 0 6px;
+}
+
+.wbc-project-terminal-list .wbc-rail-section-label b {
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-project-terminal-list .wbc-rail-empty,
+.wbc-project-terminal-list .wbc-rail-loading {
+  padding: 18px 8px;
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-unified-search-results {
+  scrollbar-width: none;
+}
+
+.wbc-unified-search-results::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.wbc-unified-search-section + .wbc-unified-search-section {
+  margin-top: 4px;
+}
+
+.wbc-unified-search-section .wbc-rail-section-label {
+  justify-content: space-between;
+}
+
+.wbc-unified-search-section .wbc-rail-section-label > span {
+  color: var(--wb-faint);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-unified-search-file-items {
+  gap: 2px;
+}
+
+.workbench-project-file-row.wbc-unified-search-file {
+  min-height: 48px;
+}
+
+.workbench-project-file-row.wbc-unified-search-file > .wbc-unified-search-file-copy {
+  width: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wbc-unified-search-file-copy b,
+.wbc-unified-search-file-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-unified-search-file-copy small {
+  color: var(--wb-faint);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-unified-search-warning {
+  margin: 8px;
+  color: var(--wb-danger);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  line-height: 1.45;
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-project-tools {
+  display: none;
+}
+
+/* Expanding a project tool promotes the complete tool surface to the top of
+   the rail's content area. The conversation/task list collapses as one unit,
+   so the tool does not merely scroll inside its old footer shelf. */
+.wbc-rail > .wbc-chat-list {
+  transition:
+    flex-grow 320ms cubic-bezier(.22, 1, .36, 1),
+    flex-basis 320ms cubic-bezier(.22, 1, .36, 1),
+    padding 320ms cubic-bezier(.22, 1, .36, 1),
+    opacity 180ms ease,
+    visibility 0s;
+}
+
+.wbc-rail.has-expanded-project-tool > .wbc-chat-list {
+  flex: 0 0 0%;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  padding-block: 0;
+  transition:
+    flex-grow 320ms cubic-bezier(.22, 1, .36, 1),
+    flex-basis 320ms cubic-bezier(.22, 1, .36, 1),
+    padding 320ms cubic-bezier(.22, 1, .36, 1),
+    opacity 180ms ease,
+    visibility 0s linear 320ms;
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.has-expanded-project-tool > .wbc-chat-list {
+  padding: 0;
+}
+
+.wbc-rail.has-expanded-project-tool > .wbc-project-tools.has-expanded-tool {
+  margin-top: 0;
+  transition:
+    flex-grow 320ms cubic-bezier(.22, 1, .36, 1),
+    margin-top 320ms cubic-bezier(.22, 1, .36, 1);
+}
+
+.wbc-rail.has-expanded-project-tool > .wbc-conversation-status-track {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-project-tool-expand,
+  .wbc-project-tool-expand.is-expanded,
+  .wbc-project-tool-inline-header {
+    transition: none;
+    animation: none;
+  }
+}
+
+/* Task panes use the same frame, divider grip, resize and detach mechanics as
+   every other split resource. Only their interior needs to fill the frame. */
+.wbc-task-split,
+.wbc-task-pane,
+.wbc-task-pane > .workbench-main {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.wbc-task-split,
+.wbc-task-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Match the conversation card: the grip is a floating interaction layer, not
+   a dedicated blank row. Let the task surface paint through the full card so
+   the 34px handle band is also useful visual space. */
+.wbc-pane-card > .wbc-side-agent-split.wbc-task-split {
+  padding-top: 0;
+}
+
+.wbc-task-pane {
+  position: relative;
+}
+
+.wbc-task-pane > .workbench-main {
+  flex: 1 1 auto;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  /* Restore the task content's established 18px reading gutter while keeping
+     the zero bottom inset that lets it continue behind the floating composer. */
+  padding: 9px 18px 0;
+  /* Conversation panes let the shared pane card own the surface colour.
+     Do the same for tasks so the grip band, header and content area resolve
+     as one continuous card in both light and dark themes. */
+  background: transparent;
+}
+
+/* Do not resolve the task pane to an opaque panel before the title glass is
+   composited. The conversation glass tokens are designed to blend directly
+   with the workbench canvas; an intermediate solid pane made the title card
+   look white/flat even though backdrop-filter was technically active. */
+.wbc-pane-card-task {
+  background: transparent;
+  /* Let the title and composer sample the real Workbench backdrop. Keeping a
+     filter on this transparent outer card creates an intermediate backdrop
+     root, which makes the nested glass layers look like flat translucent
+     fills even though their own blur is enabled. */
+  isolation: auto;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Keep the title fixed over the task scroll plane. The stage owns a measured
+   leading spacer, so its first card rests below the title at scrollTop=0 but
+   subsequent content can still pass behind—and visibly feed—the glass blur. */
+.wbc-task-pane .workbench-task-header-sticky {
+  position: absolute;
+  z-index: 26;
+  inset: 10px 10px auto;
+  margin: 0;
+}
+
+/* The shared corner masks predate the task pane's transparent surface. Their
+   former floating-rail colour is itself translucent, so scrolled cards could
+   leak through the two cut-outs and square off the glass header. Cover only
+   those 14px exterior corners with the opaque canvas behind this pane. */
+.wbc-task-pane .workbench-task-header-sticky::before,
+.wbc-task-pane .workbench-task-header-sticky::after {
+  background: var(--wb-main-bg);
+}
+
+.wbc-task-pane .workbench-task-header {
+  /* A subtle reflected highlight keeps the material legible as glass even
+     over a perfectly flat canvas; the translucent base and shared compositor
+     filter still provide real backdrop blur when content scrolls underneath. */
+  --wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 58%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, #fff 7%, transparent), transparent 46%),
+    var(--wbc-composer-glass-background);
+  padding: 33px 24px 16px;
+}
+
+.wbc-task-pane .workbench-stage {
+  max-width: none;
+  padding-right: 0;
+  /* The stage begins one pixel above the floating task header. Clip that
+     sliver so overscrolled content cannot paint past the header's top edge. */
+  clip-path: inset(1px 0 0);
+}
+
+/* The negative trailing margin cancels the pseudo-item's automatic list gap.
+   The extra 13px accounts for the header's one-pixel stage offset and leaves
+   the first real task card one full 12px card gap below the glass at the top. */
+.wbc-task-pane > .workbench-main > .workbench-stage::before {
+  content: "";
+  display: block;
+  flex: 0 0 calc(var(--wbc-task-header-reserve-height, 143px) + 13px);
+  width: 1px;
+  margin-bottom: -12px;
+  pointer-events: none;
+}
+
+/* Task and conversation composers share one floating glass component. Keep
+   task content scrollable underneath it, while reserving enough trailing
+   space for the final card to be brought fully above the overlay. */
+:is(
+  .workbench-grid.is-task-detail .workbench-main,
+  .wbc-task-pane > .workbench-main
+) > .workbench-composer.wbc-composer {
+  position: absolute;
+  z-index: 24;
+  inset: auto 0 0;
+  box-sizing: border-box;
+  width: auto;
+  margin: 0;
+  pointer-events: none;
+  padding:
+    var(--wbc-composer-top-inset)
+    var(--wbc-composer-edge-inset)
+    var(--wbc-composer-edge-inset) !important;
+}
+
+/* Only the visible controls participate in hit testing. The transparent
+   wrapper gutter must not block scrolling or interaction with task content
+   underneath the floating composer. */
+:is(
+  .workbench-grid.is-task-detail .workbench-main,
+  .wbc-task-pane > .workbench-main
+) > .workbench-composer.wbc-composer > * {
+  pointer-events: auto;
+}
+
+/* Keep the conversation glass and blur, but remove the task composer's broad
+   outer shadow halo—the halo reads as an opaque blocking ring over the cards
+   scrolling behind it. Inner highlights and the one-pixel edge remain. */
+:is(
+  .workbench-grid.is-task-detail .workbench-main,
+  .wbc-task-pane > .workbench-main
+) > .workbench-composer.wbc-composer > .wbc-composer-box {
+  --wbc-composer-glass-drop-shadow: none;
+}
+
+:is(
+  .workbench-grid.is-task-detail .workbench-main,
+  .wbc-task-pane > .workbench-main
+) > .workbench-stage {
+  scroll-padding-bottom: calc(
+    var(--wbc-composer-reserve-height, calc(164px * var(--wb-ui-font-scale, 1)))
+    + 18px
+  );
+}
+
+/* Extend only the end of the scroll range. Unlike padding-bottom, this flex
+   sentinel sits after the real task content, so it does not consume the
+   visible viewport at rest; at the end it gives the last card enough room to
+   move completely above the floating composer. The stage's existing 12px gap
+   supplies the final separation from the input surface. */
+:is(
+  .workbench-grid.is-task-detail .workbench-main,
+  .wbc-task-pane > .workbench-main
+) > .workbench-stage::after {
+  content: "";
+  display: block;
+  flex: 0 0 var(
+    --wbc-composer-reserve-height,
+    calc(164px * var(--wb-ui-font-scale, 1))
+  );
+  width: 1px;
+  pointer-events: none;
+}
+
+.wb-task-detail-head .wbc-side-hide-btn {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 33px;
+  min-height: 33px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--wb-line);
+  border-radius: 7px;
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
+  cursor: pointer;
+}
+
+.wb-task-detail-head .wbc-side-hide-btn:hover {
+  border-color: var(--wb-accent);
+  background: var(--wb-control-hover-bg);
+}
+
+.wb-task-detail-head .wbc-side-hide-btn svg {
+  display: block;
+}
+
+/* In a split workspace the task inspector follows the split conversation
+   contract: the grip menu opens a floating panel owned by that task card,
+   and clicking outside dismisses it without moving either pane. */
+.wbc-task-pane-floating-panel {
+  position: absolute;
+  z-index: 3200;
+  top: 8px;
+  right: 16px;
+  width: min(var(--wb-right-w, 350px), calc(100% - 32px));
+  max-height: calc(100% - 20px);
+  pointer-events: auto;
+  animation: wbc-floating-side-panel-in 360ms cubic-bezier(.22, 1.16, .36, 1) both;
+}
+
+.wbc-task-pane-floating-panel > .wb-task-detail-shell {
+  width: 100%;
+  height: auto;
+  max-height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.wbc-task-pane-floating-panel .wb-task-detail-card {
+  width: 100%;
+  max-height: calc(100vh - var(--wbc-card-top-inset) - 58px);
+  background: var(--wbc-panel-surface);
+}
+
+/* Mixed board drag affordances. The placement rail is intentionally subtle:
+   cards keep their normal visual identity while the landing position is exact. */
+.wb-board-column.drop-active {
+  border-color: color-mix(in srgb, var(--wb-board-column-color) 66%, var(--wb-line));
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--wb-board-column-color) 10%, transparent);
+}
+
+.wb-board-card[draggable="true"] {
+  cursor: grab;
+}
+
+.wb-board-card[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.wb-board-card.dragging {
+  opacity: .38;
+  box-shadow: none;
+}
+
+.wb-board-card.drop-before::before,
+.wb-board-card.drop-after::after {
+  content: "";
+  position: absolute;
+  z-index: 3;
+  left: 8px;
+  right: 8px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--wb-board-column-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-board-column-color) 11%, transparent);
+}
+
+.wb-board-card.drop-before::before { top: -6px; }
+.wb-board-card.drop-after::after { bottom: -6px; }
+
+.wb-board-card-kind {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-board-column-color) 10%, transparent);
+  color: var(--wb-board-column-color);
+  font-size: calc(9.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 720;
+}
+.wbc-plugin-view-pane {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* An iframe plugin is transparent unless it deliberately paints its own
+     canvas. Let that default reveal the owning pane's shared surface instead
+     of introducing a plugin-only fallback colour. */
+  color: inherit;
+  background: transparent;
+}
+
+.wbc-plugin-view-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+html[data-theme="dark"] .wbc-plugin-view-frame { color-scheme: dark; }
+html[data-theme="light"] .wbc-plugin-view-frame { color-scheme: light; }
+
+.wbc-plugin-view-state {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 180px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--wb-muted);
+  text-align: center;
+}
+
+.wbc-plugin-view-state strong { color: var(--wb-text); }
+.wbc-plugin-view-state button {
+  margin-top: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--wb-line);
+  border-radius: 9px;
+  color: var(--wb-text);
+  background: var(--wb-card-bg);
+}
+
+.wbc-project-plugin-tool-icon {
+  font-size: 15px;
+  font-weight: 750;
+}

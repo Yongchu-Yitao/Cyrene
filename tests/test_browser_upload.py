@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
+
+from conftest import workbench_settings_source
 
 
 pytestmark = pytest.mark.asyncio
@@ -304,8 +307,6 @@ async def test_approved_file_snapshot_preserves_exact_bytes_and_name(tmp_path):
 
 
 async def test_electron_upload_uses_guarded_cdp_path():
-    from pathlib import Path
-
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
 
@@ -322,7 +323,7 @@ async def test_browser_upload_is_managed_by_browser_package_and_prompt():
     from pathlib import Path
 
     root = Path(__file__).resolve().parent.parent
-    settings = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    settings = workbench_settings_source()
     prompt = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
 
     assert '"browser_upload_files"' not in settings

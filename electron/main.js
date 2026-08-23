@@ -26,8 +26,8 @@ const { AppUseManager } = require('./app-use');
 const {
   AGENT_CURSOR_FADE_IN_MS,
   AGENT_CURSOR_MOVE_MS,
-  AGENT_CURSOR_PRESS_MS,
   agentCursorCommand,
+  agentCursorCompletionCommand,
   agentCursorHideCommand,
   agentCursorOverlayHtml,
   agentCursorRunningCommand,
@@ -129,13 +129,13 @@ function appendErrorLog(text) {
 function installWindowDiagnostics(window, label) {
   if (!window || !window.webContents) return;
   const prefix = `[electron:${label}]`;
-  window.webContents.on('console-message', (details, legacyLevel, legacyMessage, legacyLine, legacySourceId) => {
-    const level = String(details && details.level || legacyLevel || 'info');
-    const reportable = level === 'error' || level === 'warning' || Number(legacyLevel) >= 2;
+  window.webContents.on('console-message', (details) => {
+    const level = String(details && details.level || 'info');
+    const reportable = level === 'error' || level === 'warning';
     if (!reportable) return;
-    const message = String(details && details.message || legacyMessage || 'renderer console message');
-    const line = Number(details && details.lineNumber || legacyLine || 0);
-    const sourceId = String(details && details.sourceId || legacySourceId || '');
+    const message = String(details && details.message || 'renderer console message');
+    const line = Number(details && details.lineNumber || 0);
+    const sourceId = String(details && details.sourceId || '');
     const text = `${prefix} renderer-${level} ${sourceId}${line ? `:${line}` : ''} ${message}\n`;
     appendErrorLog(text);
     if (isDesktopSmokeTest) process.stderr.write(text);
@@ -583,6 +583,7 @@ const BROWSER_PARTITION = 'persist:cyrene-browser';
 const DEFAULT_BROWSER_VERSION = '147.0.0.0';
 const guardedBrowserPartitions = new Set();
 const pendingPointerLockPrompts = new Map();
+const allowedPointerLockOrigins = new Set();
 const BROWSER_CHAT_OVERLAY_HTML = `<!doctype html>
 <html><head><meta charset="utf-8"><style>
   :root { color-scheme: light dark; }
@@ -1040,8 +1041,8 @@ function installBrowserSessionGuards(partition = BROWSER_PARTITION) {
   }
   guardedBrowserPartitions.add(partitionName);
   // Fullscreen is the only permission pre-granted to arbitrary browser
-  // content. Pointer lock remains denied by the synchronous check so Chromium
-  // proceeds to the request handler, where Cyrene asks the user each time.
+  // content. Pointer lock is remembered by origin for the lifetime of this
+  // Electron process after the user allows it once.
   // Electron routes document.requestFullscreen() through the session
   // permission manager before emitting enter-html-full-screen. Denying it here
   // makes player controls (for example Bilibili's fullscreen button) silently
@@ -1049,9 +1050,15 @@ function installBrowserSessionGuards(partition = BROWSER_PARTITION) {
   // specific fullscreen surface. Camera, microphone, location, capture, etc.
   // remain denied.
   const browserPermissionAllowed = (permission) => permission === 'fullscreen';
-  browserSession.setPermissionCheckHandler((_webContents, permission) => (
-    browserPermissionAllowed(permission)
-  ));
+  browserSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details = {}) => {
+    if (browserPermissionAllowed(permission)) return true;
+    if (permission !== 'pointerLock') return false;
+    const origin = pointerLockRequestOrigin(webContents, {
+      ...details,
+      requestingUrl: details.requestingUrl || requestingOrigin,
+    });
+    return allowedPointerLockOrigins.has(origin);
+  });
   browserSession.setPermissionRequestHandler((webContents, permission, callback, details = {}) => {
     if (browserPermissionAllowed(permission)) {
       callback(true);
@@ -1061,8 +1068,16 @@ function installBrowserSessionGuards(partition = BROWSER_PARTITION) {
       callback(false);
       return;
     }
+    const origin = pointerLockRequestOrigin(webContents, details);
+    if (allowedPointerLockOrigins.has(origin)) {
+      callback(true);
+      return;
+    }
     void promptForPointerLock(webContents, details).then(
-      (allowed) => callback(allowed),
+      (allowed) => {
+        if (allowed) allowedPointerLockOrigins.add(origin);
+        callback(allowed);
+      },
       () => callback(false),
     );
   });
@@ -3428,13 +3443,21 @@ class BrowserTabManager {
     const result = await this.showAgentCursor(tab, x, y, { press: false });
     const fallback = result && result.first ? AGENT_CURSOR_FADE_IN_MS + 34 : AGENT_CURSOR_MOVE_MS;
     const waitMs = Math.max(0, Number(result && result.waitMs) || (result && result.moved ? fallback : 0));
-    if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+    if (result && waitMs > 0 && tab.view && tab.view.webContents && !tab.view.webContents.isDestroyed()) {
+      await tab.view.webContents.executeJavaScript(
+        agentCursorCompletionCommand(result.sequence), true
+      ).catch(() => false);
+    }
     return result;
   }
 
   async _pressAgentCursor(tab, x, y) {
     const result = await this.showAgentCursor(tab, x, y, { press: true, moveDurationMs: 0 });
-    if (result) await new Promise((resolve) => setTimeout(resolve, AGENT_CURSOR_PRESS_MS));
+    if (result && tab.view && tab.view.webContents && !tab.view.webContents.isDestroyed()) {
+      await tab.view.webContents.executeJavaScript(agentCursorCompletionCommand(result.sequence, {
+        press: true,
+      }), true).catch(() => false);
+    }
     return result;
   }
 
@@ -5748,10 +5771,6 @@ async function createQuickChatWindow() {
   return quickChatWindow;
 }
 
-const DETACHED_PANE_KINDS = new Set([
-  'chat', 'task', 'file', 'viewer', 'change', 'map', 'browser', 'subagents', 'side-agent', 'terminal',
-]);
-
 function debugDetachedPane(stage, details) {
   if (process.env.ELECTRON_DEV !== '1') return;
   try { console.log(`[detached-pane] ${stage}`, details || ''); } catch (_) {}
@@ -5770,7 +5789,10 @@ function detachedPaneContextForSender(sender) {
 function normalizeDetachedPaneDescriptor(value) {
   const source = value && typeof value === 'object' ? value : {};
   const kind = String(source.kind || '').trim();
-  if (!DETACHED_PANE_KINDS.has(kind)) throw new Error('Unsupported detached pane kind.');
+  // Pane transport is intentionally kind-agnostic. Built-ins and future
+  // plugin cards share the same structured-clone boundary; the renderer owns
+  // whether a registered card kind has UI for this window.
+  if (!/^[a-z][a-z0-9._-]{0,79}$/i.test(kind)) throw new Error('Invalid detached pane kind.');
   const serialized = JSON.stringify({
     kind,
     payload: source.payload == null ? null : source.payload,

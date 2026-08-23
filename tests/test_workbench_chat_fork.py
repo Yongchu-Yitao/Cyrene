@@ -4,18 +4,12 @@ import json
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-
-pil_mock = MagicMock()
-pil_mock.__version__ = "9.0.0"
-sys.modules["PIL"] = pil_mock
-pil_mock.Image = MagicMock()
 
 from cyrene import config as cyrene_config
 from cyrene.runtime import database as db
@@ -665,7 +659,11 @@ def test_non_streaming_send_is_owned_by_chat_run_manager(
     )
 
     assert response.status_code == 200
-    assert response.json()["assistantMessage"]["content"] == "owned reply"
+    payload = response.json()
+    assert payload["assistantMessage"]["content"] == "owned reply"
+    assert payload["chatSummary"]["id"] == "chat_owned"
+    assert payload["chatSummary"]["status"] == "idle"
+    assert payload["chatSummary"]["runStatus"] == "completed"
     assert calls == [{"chat_id": "chat_owned", "stream": False}]
 
 

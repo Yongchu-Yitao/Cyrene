@@ -177,6 +177,11 @@ def get_env_keys_meta() -> list[dict]:
     return _store.get_editable_env_meta()
 
 
+def editable_env_keys() -> dict[str, dict[str, object]]:
+    """Return a defensive copy of the editable environment-key policy."""
+    return {key: dict(meta) for key, meta in _EDITABLE_KEYS.items()}
+
+
 def mask_value(value: str, show: int = 4) -> str:
     """Mask a secret value, showing only the last N chars."""
     if len(value) <= show:

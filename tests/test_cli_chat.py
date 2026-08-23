@@ -211,6 +211,71 @@ def test_config_field_labels_and_values_are_localized():
     assert chat._config_value_preview("color", False) == "Off"
 
 
+@pytest.mark.asyncio
+async def test_config_skills_uses_unified_extension_api(monkeypatch):
+    from cyrene.cli_chat import ChatOptions, InteractiveChat, JsonRenderer
+
+    calls = []
+
+    class Transport:
+        async def get_setting(self, path):
+            calls.append(("get", path))
+            return {
+                "skills": [
+                    {"id": "demo-skill", "name": "Demo Skill", "enabled": True}
+                ]
+            }
+
+        async def update_setting(self, path, payload, *, method="PUT"):
+            calls.append(("update", path, payload, method))
+            return {"ok": True}
+
+    app = InteractiveChat(
+        Transport(),
+        JsonRenderer(stream=io.StringIO()),
+        ChatOptions(lang="en"),
+    )
+
+    async def choose(_title, items, *, label):
+        assert label(items[0]).startswith("● Demo Skill")
+        return items[0]
+
+    monkeypatch.setattr(app, "_choose", choose)
+    await app._config_skills()
+
+    assert calls == [
+        ("get", "/api/extensions"),
+        (
+            "update",
+            "/api/extensions/skill/demo-skill/enabled",
+            {"enabled": False},
+            "POST",
+        ),
+    ]
+
+    calls.clear()
+
+    async def install(_title, _items, *, label):
+        return None
+
+    async def prompt(_message):
+        return "/tmp/demo-skill"
+
+    monkeypatch.setattr(app, "_choose", install)
+    monkeypatch.setattr(app, "_prompt_text", prompt)
+    await app._config_skills()
+
+    assert calls == [
+        ("get", "/api/extensions"),
+        (
+            "update",
+            "/api/extensions/skills/install",
+            {"path": "/tmp/demo-skill"},
+            "POST",
+        ),
+    ]
+
+
 def test_config_text_editor_binds_escape_to_cancel():
     from cyrene.cli_chat import InteractiveChat
 

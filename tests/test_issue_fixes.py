@@ -22,12 +22,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from route.registry import register_routes
 
-# attachments.py imports PIL/pypdf at module load; stub them so the suite runs
-# without those heavy deps installed (mirrors tests/test_runtime_fixes.py).
-sys.modules.setdefault("PIL", MagicMock())
-sys.modules["PIL"].Image = MagicMock()
-sys.modules.setdefault("pypdf", MagicMock())
-
 
 # ---------------------------------------------------------------------------
 # #50 — scheduler interval units, once, and validation
@@ -754,19 +748,20 @@ def test_update_restart_api_missing_package_keeps_process_running(monkeypatch, t
 
 def test_update_restart_api_requires_electron_host_before_scheduling(monkeypatch, tmp_path):
     from cyrene.runtime import updater
-    from cyrene.workbench import runtime as routes
+    from cyrene.runtime import update_install
 
     package = tmp_path / "Cyrene-update.dmg"
     package.write_bytes(b"fake update")
+    checksum = hashlib.sha256(package.read_bytes()).hexdigest()
     monkeypatch.setitem(updater._download_progress, "downloaded", package.stat().st_size)
     monkeypatch.setitem(updater._download_progress, "total", package.stat().st_size)
     monkeypatch.setitem(updater._download_progress, "done", True)
     monkeypatch.setitem(updater._download_progress, "path", str(package))
-    monkeypatch.setitem(updater._download_progress, "expected_sha256", "0" * 64)
-    monkeypatch.setitem(updater._download_progress, "actual_sha256", "0" * 64)
+    monkeypatch.setitem(updater._download_progress, "expected_sha256", checksum)
+    monkeypatch.setitem(updater._download_progress, "actual_sha256", checksum)
     monkeypatch.setitem(updater._download_progress, "verified", True)
     launch = MagicMock(return_value=(True, "", "", 200))
-    monkeypatch.setattr(routes, "_launch_update_restart", launch)
+    monkeypatch.setattr(update_install, "launch_update_restart", launch)
     exit_mock = MagicMock()
     monkeypatch.setattr(os, "_exit", exit_mock)
 
@@ -781,17 +776,20 @@ def test_update_restart_api_requires_electron_host_before_scheduling(monkeypatch
 def test_update_restart_api_schedules_verified_install_without_exiting_in_route(monkeypatch, tmp_path):
     from cyrene.runtime import updater
     from cyrene.runtime import host_actions, host_bridge
-    from cyrene.workbench import runtime as routes
+    from cyrene.runtime import update_install
 
-    monkeypatch.setitem(updater._download_progress, "downloaded", 1)
-    monkeypatch.setitem(updater._download_progress, "total", 1)
+    package = tmp_path / "Cyrene-update.dmg"
+    package.write_bytes(b"verified update")
+    checksum = hashlib.sha256(package.read_bytes()).hexdigest()
+    monkeypatch.setitem(updater._download_progress, "downloaded", package.stat().st_size)
+    monkeypatch.setitem(updater._download_progress, "total", package.stat().st_size)
     monkeypatch.setitem(updater._download_progress, "done", True)
-    monkeypatch.setitem(updater._download_progress, "path", str(tmp_path / "Cyrene-update.dmg"))
-    monkeypatch.setitem(updater._download_progress, "expected_sha256", "0" * 64)
-    monkeypatch.setitem(updater._download_progress, "actual_sha256", "0" * 64)
+    monkeypatch.setitem(updater._download_progress, "path", str(package))
+    monkeypatch.setitem(updater._download_progress, "expected_sha256", checksum)
+    monkeypatch.setitem(updater._download_progress, "actual_sha256", checksum)
     monkeypatch.setitem(updater._download_progress, "verified", True)
     launch = MagicMock(return_value=(True, "", "", 200))
-    monkeypatch.setattr(routes, "_launch_update_restart", launch)
+    monkeypatch.setattr(update_install, "launch_update_restart", launch)
     call_host = AsyncMock(return_value={
         "ok": True, "hostKind": "electron", "appVersion": "0.7.9",
     })

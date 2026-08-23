@@ -1,4 +1,11 @@
-from conftest import workbench_chat_source
+from conftest import (
+    frontend_module_source,
+    workbench_chat_source,
+    workbench_i18n_source,
+    workbench_settings_source,
+    workbench_shell_source,
+    workbench_style_source,
+)
 import io
 from pathlib import Path
 
@@ -446,11 +453,12 @@ def test_voice_routes_reuse_engine_adapters(monkeypatch):
 def test_voice_controls_follow_existing_chat_layout():
     root = Path(__file__).resolve().parents[1]
     chat = workbench_chat_source()
-    settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
-    shell = (root / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    settings = workbench_settings_source()
+    shell = workbench_shell_source()
     shortcuts = (root / "src/webui/frontend/workbench-shortcuts.jsx").read_text(encoding="utf-8")
 
-    composer = chat.split("function WbcComposer", 1)[1].split("function wbcClearComposerDraft", 1)[0]
+    composer = frontend_module_source("features/chat/composer.jsx")
+    composer_voice = frontend_module_source("features/chat/composer-voice.jsx")
     model_index = composer.index("wbc-model-anchor")
     microphone_index = composer.index("wbc-voice-input", model_index)
     send_index = composer.index('className={"wbc-send"', microphone_index)
@@ -498,18 +506,18 @@ def test_voice_controls_follow_existing_chat_layout():
     assert 'window.addEventListener("cyrene:voice-status-changed", onVoiceStatusChanged)' in settings
     assert 'window.removeEventListener("cyrene:voice-status-changed", onVoiceStatusChanged)' in settings
     assert 'return settingsFetch("/api/voice/status")' in settings
-    assert "auto_send_after_asr" in composer
-    assert "auto_stop_on_silence" in composer
-    assert "wbcTranscribeVoiceBlob(blob)" in composer
+    assert "auto_send_after_asr" in composer_voice
+    assert "auto_stop_on_silence" in composer_voice
+    assert "wbcTranscribeVoiceBlob(blob)" in composer_voice
     assert "payload.silence_only === true" in chat
     assert "if (silenceOnly) return false" in chat
     assert "function wbcCleanVoiceTranscript" in chat
-    voice_start_index = composer.index('WbcVoice.stop();\n    setVoicePhase("starting")')
-    recorder_start_index = composer.index("wbcStartVoiceRecorder", voice_start_index)
+    voice_start_index = composer_voice.index('WbcVoice.stop()\n    setVoicePhase("starting")')
+    recorder_start_index = composer_voice.index("wbcStartVoiceRecorder", voice_start_index)
     assert voice_start_index < recorder_start_index
     assert "WBC_VOICE_SILENCE_MS = 1600" in chat
     assert "wbcCreateVoiceSilenceDetector" in chat
-    assert "onSilence: finishVoiceInput" in composer
+    assert "onSilence: finishVoiceInput" in composer_voice
     assert "function voiceTextChunks" in chat
     assert "function voicePlainText" in chat
     assert "function hasSpeakableText(chunk)" in chat
@@ -540,13 +548,13 @@ def test_voice_controls_follow_existing_chat_layout():
     assert 'return [text, optionText].filter(Boolean).join("。 ")' in chat
     assert '"可选择："' not in chat
     assert 'currentStatus.tts_provider === "minimax" ? 240 : 60' in chat
-    assert "var WbVoiceCommand = (function ()" in chat
+    assert "var WbVoiceCommand = {" in chat
     assert "initialSilenceMs: WBC_TOPBAR_INITIAL_SILENCE_MS" in chat
     assert 'fetch("/api/workbench/voice-command"' in chat
     assert "speechQueue = speechQueue.filter(function (item) { return item.runId !== state.runId; });" in chat
     assert 'event.type === "reply_done"' in chat
     assert 'event.type === "awaiting_user"' in chat
-    assert 'sc.matches(event, "voice-command")' in shell
+    assert 'shortcuts.matches(event, "voice-command")' in shell
     assert shell.index("workbench-voice-command-btn") < shell.index("workbench-avatar-btn")
     assert 'id: "voice-command"' in shortcuts
     assert 'keys: ["mod", "shift", "M"]' in shortcuts
@@ -560,11 +568,11 @@ def test_voice_controls_follow_existing_chat_layout():
     assert 'wbcT("topbar.voiceCommandListening"' in chat
     assert 'wbcT("topbar.voiceCommandRecognizingNotice"' in chat
     assert 'wbcT("workbenchChat.voiceInputComplete"' in chat
-    assert "voiceFeedbackRef.current.starting();" in composer
-    assert "voiceFeedbackRef.current.listening();" in composer
-    assert "voiceFeedbackRef.current.transcribing();" in composer
-    assert "voiceFeedbackRef.current.noSpeech();" in composer
-    assert "voiceFeedbackRef.current.complete();" in composer
+    assert "voiceFeedbackRef.current.starting()" in composer_voice
+    assert "voiceFeedbackRef.current.listening()" in composer_voice
+    assert "voiceFeedbackRef.current.transcribing()" in composer_voice
+    assert "voiceFeedbackRef.current.noSpeech()" in composer_voice
+    assert "voiceFeedbackRef.current.complete()" in composer_voice
     assert 'aria-pressed={voicePhase === "recording"}' in composer
     assert 'aria-busy={voicePhase === "starting" || voicePhase === "transcribing"}' in composer
 
@@ -578,7 +586,7 @@ def test_voice_controls_follow_existing_chat_layout():
     assert "voiceFeedbackRef.current.noSpeech();" in task_composer
     assert "voiceFeedbackRef.current.complete();" in task_composer
 
-    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
     composer_recording_css = styles.split(".wbc-voice-input.recording {", 1)[1].split("}", 1)[0]
     assert "animation: wb-voice-command-pulse 1.4s ease-in-out infinite;" in composer_recording_css
     assert ".wbc-voice-input.starting," in styles
@@ -592,10 +600,23 @@ def test_voice_controls_follow_existing_chat_layout():
     assert "mediaTypes.every((mediaType) => mediaType === 'audio')" in electron_main
 
 
+def test_voice_stream_refreshes_status_once_per_reply_instead_of_per_delta():
+    chat = workbench_chat_source()
+    auto_stream = chat.split(
+        "  function autoStream(text, key, finished, restart) {", 1
+    )[1].split("\n  function speak(text, key)", 1)[0]
+
+    assert "restart || autoStreamStatusKey !== targetKey" in auto_stream
+    assert "autoStreamStatusPromise = refresh(false);" in auto_stream
+    assert "autoStreamStatusPromise || Promise.resolve(currentStatus)" in auto_stream
+    assert "var voiceStatus = currentStatus;" in auto_stream
+    assert "return refresh(false).then(function (voiceStatus)" not in auto_stream
+
+
 def test_local_model_card_hides_stale_error_and_localizes_backend_errors():
     root = Path(__file__).resolve().parents[1]
-    settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
-    translations = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    settings = workbench_settings_source()
+    translations = workbench_i18n_source()
     models_panel = settings.split("function ModelsPanel(p) {", 1)[1].split("function modelDraftField", 1)[0]
 
     # Readiness takes precedence over a stale download error: the error is only

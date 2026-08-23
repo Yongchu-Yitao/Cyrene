@@ -137,9 +137,17 @@ def test_remote_workspace_upload_resume_hash_atomic_commit_and_scope(
             downloaded.extend(raw)
             offset = chunk["next_offset"]
             if chunk["eof"]:
-                assert chunk["sha256"] == digest
+                assert chunk["sha256"] == ""
                 break
         assert bytes(downloaded) == content
+
+        explicit_hash = await files.execute(
+            controller_id,
+            "files.download",
+            "project_1",
+            {"path": "nested/payload.bin", "offset": 0, "limit": 1, "include_hash": True},
+        )
+        assert explicit_hash["sha256"] == digest
 
         with pytest.raises(ValueError, match="project-relative|escapes"):
             await files.execute(
@@ -169,6 +177,134 @@ def test_remote_workspace_upload_resume_hash_atomic_commit_and_scope(
         assert absolute["entry"]["sha256"] == hashlib.sha256(b"full access").hexdigest()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.asyncio
+async def test_remote_download_accumulates_digest_without_final_file_rescan(
+    monkeypatch,
+    tmp_path,
+):
+    from cyrene.tool_impl.remote import files as remote_files_tool
+
+    content = b"streamed remote payload"
+    expected = hashlib.sha256(content).hexdigest()
+    requests: list[tuple[str, dict]] = []
+
+    async def fake_request(
+        _args,
+        _db_path,
+        _chat_id,
+        *,
+        command,
+        payload,
+        key=None,
+    ):
+        del key
+        requests.append((command, dict(payload)))
+        if command == "files.stat":
+            return {
+                "ok": True,
+                "entry": {"kind": "file", "size": len(content), "sha256": expected},
+            }
+        offset = int(payload["offset"])
+        chunk = content[offset:offset + 7]
+        next_offset = offset + len(chunk)
+        return {
+            "ok": True,
+            "offset": offset,
+            "next_offset": next_offset,
+            "size": len(content),
+            "eof": next_offset >= len(content),
+            "sha256": "",
+            "chunk_sha256": hashlib.sha256(chunk).hexdigest(),
+            "content_base64": base64.b64encode(chunk).decode(),
+        }
+
+    async def no_progress(**_kwargs):
+        return None
+
+    async def forbidden_hash(_path):
+        pytest.fail("completed remote downloads must use the streaming digest")
+
+    monkeypatch.setattr(remote_files_tool, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(remote_files_tool, "_request", fake_request)
+    monkeypatch.setattr(remote_files_tool, "publish_tool_progress", no_progress)
+    monkeypatch.setattr(remote_files_tool, "_hash_file", forbidden_hash)
+    monkeypatch.setattr(
+        remote_files_tool,
+        "register_generated_attachment",
+        lambda path, display_name=None: {"path": path, "name": display_name},
+    )
+
+    result = await remote_files_tool._download(
+        {"device_id": "device", "project_id": "project", "remote_path": "payload.bin"},
+        "db.sqlite3",
+        1,
+    )
+
+    assert result["sha256"] == expected
+    assert requests[0] == (
+        "files.stat",
+        {"path": "payload.bin", "include_hash": True},
+    )
+    assert all("include_hash" not in payload for command, payload in requests if command == "files.download")
+
+
+@pytest.mark.asyncio
+async def test_remote_sync_upload_reuses_stable_manifest_digest(monkeypatch, tmp_path):
+    from cyrene.tool_impl.remote import files as remote_files_tool
+
+    source = tmp_path / "stable.bin"
+    source.write_bytes(b"stable manifest bytes")
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    identity = remote_files_tool._file_identity(source)
+    commands: list[str] = []
+
+    async def fake_request(
+        _args,
+        _db_path,
+        _chat_id,
+        *,
+        command,
+        payload,
+        key=None,
+    ):
+        del key
+        commands.append(command)
+        if command == "files.upload.begin":
+            assert payload["sha256"] == expected
+            return {"ok": True, "offset": 0}
+        if command == "files.upload.chunk":
+            return {
+                "ok": True,
+                "offset": payload["offset"],
+                "next_offset": payload["offset"] + len(base64.b64decode(payload["content_base64"])),
+            }
+        return {"ok": True, "sha256": expected}
+
+    async def no_progress(**_kwargs):
+        return None
+
+    async def forbidden_hash(_path):
+        pytest.fail("stable sync manifests must not be hashed again before upload")
+
+    monkeypatch.setattr(remote_files_tool, "_request", fake_request)
+    monkeypatch.setattr(remote_files_tool, "publish_tool_progress", no_progress)
+    monkeypatch.setattr(remote_files_tool, "_hash_file", forbidden_hash)
+
+    result = await remote_files_tool._upload_file(
+        {"device_id": "device", "project_id": "project"},
+        "db.sqlite3",
+        1,
+        source,
+        "stable.bin",
+        conflict_policy="overwrite",
+        known_sha256=expected,
+        known_identity=identity,
+    )
+
+    assert result["sha256"] == expected
+    assert commands == ["files.upload.begin", "files.upload.chunk", "files.upload.commit"]
 
 
 def test_remote_directory_sync_diff_and_delete_are_typed(
@@ -229,9 +365,6 @@ def test_absolute_paths_require_exact_controller_receipt(
         target = paired_stores["target"]
         executor = RemoteCommandExecutor(
             store=target,
-            chat_adapter={},
-            project_adapter={},
-            task_adapter={},
         )
         payload = {"path": str(outside), "include_hash": True}
         arguments = {

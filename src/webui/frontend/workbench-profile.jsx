@@ -1,3 +1,4 @@
+import { workbenchServices } from "./shared/runtime/services.jsx"
 // Workbench Profile page.
 //
 // Fully independent from the agent UI's profile popover (compiled/app.js). It has
@@ -74,13 +75,13 @@
     if (hit) return hit[lang] || hit.en;
     if (tool.indexOf("browser") === 0) return lang === "zh" ? "浏览器" : "Browser";
     try {
-      var localized = window.CyreneUI.require("i18n").toolName(tool, lang);
+      var localized = workbenchServices.i18n().toolName(tool, lang);
       if (localized && localized !== tool) return localized;
     } catch (error) {}
     return tool.replace(/[_-]+/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
   }
   function wbpSpend(usage, lang) {
-    return window.CyreneUI.require("format").formatLocalizedSpend(usage, lang);
+    return workbenchServices.format().formatLocalizedSpend(usage, lang);
   }
 
   // Avatar: uploaded image > emoji > initials on an optional colour.
@@ -127,9 +128,9 @@
   }
 
   function WorkbenchProfilePage() {
-    var i18n = window.CyreneUI.require("i18n").use();
+    var i18n = workbenchServices.i18n().use();
     var t = i18n.t, lang = i18n.lang;
-    var dataStore = window.CyreneUI.require("data");
+    var dataStore = workbenchServices.data();
     dataStore.useVersion();
 
     var user = dataStore.state.user || {};
@@ -186,11 +187,11 @@
         .then(function (d) {
           if (d.user) { dataStore.state.user = d.user; dataStore.bump(); }
           setSaving(false); setEditing(false);
-          window.CyreneUI.require("feedback").showToast(t("settings.saved"), "success");
+          workbenchServices.feedback().showToast(t("settings.saved"), "success");
         })
         .catch(function (e) {
           setSaving(false);
-          window.CyreneUI.require("feedback").showToast(String(e.message || e), "error");
+          workbenchServices.feedback().showToast(String(e.message || e), "error");
         });
     }
 

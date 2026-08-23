@@ -31,6 +31,7 @@ _EXPORT_GROUPS: dict[str, tuple[str, ...]] = {
     "cyrene.tooling.wire": (
         "DIRECT_TOOL_NAMES",
         "MODULE_TOOL_NAMES",
+        "TOOLBOX_TOOL_NAME",
         "get_main_wire_tool_defs",
         "get_subagent_wire_tool_defs",
         "get_wire_bundle_hash",

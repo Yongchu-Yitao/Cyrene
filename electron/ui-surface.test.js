@@ -83,7 +83,7 @@ function loadSurfaceWithDocument() {
         bottom: this.rect.bottom == null ? this.rect.top + this.rect.height : this.rect.bottom,
       };
     }
-    querySelectorAll() { return []; }
+    querySelectorAll() { return []; } getAnimations() { return []; }
     closest(selector) {
       let current = this;
       while (current) {
@@ -483,7 +483,7 @@ test('inspect, click, type, scroll, and drag render the private agent cursor at 
   assert.equal(clicked.ok, true);
   assert.equal(button.clicks, 1);
   assert.equal(cursor.style.transform, 'translate3d(194px,99px,0)');
-  assert.ok(cursorTimers.includes(180));
+  assert.match(cursor.style.transition, /transform 180ms/);
   assert.ok(cursorTimers.includes(100));
 
   input.rect = { left: 300, top: 120, width: 120, height: 40 };
@@ -543,7 +543,7 @@ test('inspect, click, type, scroll, and drag render the private agent cursor at 
   });
   assert.equal(dragged.ok, true);
   assert.equal(cursor.style.transform, 'translate3d(264px,194px,0)');
-  assert.ok(cursorTimers.includes(350));
+  assert.match(cursor.style.transition, /transform 350ms/);
 });
 
 test('agent cursor keeps animated movement but still schedules stale-position fade while running', () => {
@@ -574,6 +574,26 @@ test('agent cursor keeps animated movement but still schedules stale-position fa
 
   surface.setAgentRunning(false);
   assert.equal(cursorTimers.includes(3000), true);
+});
+
+test('semantic actions wait on renderer animation completion instead of fixed cursor sleeps', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '../src/webui/frontend/platform/ui-surface.jsx'), 'utf8'
+  );
+  const completion = source.slice(
+    source.indexOf('async function waitForAgentCursorCompletion'),
+    source.indexOf('function agentControlHighlightElement')
+  );
+  const act = source.slice(
+    source.indexOf('async function act(args)'),
+    source.indexOf('async function handleHostRequest')
+  );
+  assert.match(completion, /getAnimations/);
+  assert.match(completion, /animation\.finished/);
+  assert.match(completion, /requestAnimationFrame/);
+  assert.doesNotMatch(completion, /setTimeout|Promise\.race/);
+  assert.doesNotMatch(act, /await delayCursor/);
+  assert.match(act, /await waitForAgentCursorCompletion\(clickPress, \{ press: true \}\)/);
 });
 
 test('projection keeps only the current layer and deduplicates explicitly registered elements', () => {

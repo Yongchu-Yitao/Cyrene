@@ -18,6 +18,8 @@ class ChatMessageDTO(TypedDict, total=False):
     attachments: list[dict[str, Any]]
     trace: list[dict[str, Any]]
     usage: dict[str, int]
+    modelStatusCard: bool
+    modelStatus: dict[str, str]
 
 
 class ChatSummaryDTO(TypedDict, total=False):

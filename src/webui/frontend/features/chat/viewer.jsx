@@ -1,10 +1,11 @@
+import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_ICONS, WBC_OFFICE_MAX_FILE_BYTES, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcFileViewKind, wbcHardenOfficeLinks, wbcLoadOfficeRenderer, wbcRenderMapMarkdown, wbcRenderMarkdown, wbcT, wbcValidateOfficeArchive } from "../../workbench-chat.jsx"
 import { WBC_PROJECT_FILE_DRAFTS, useWbcMapData, wbcCanEditProjectTextFile, wbcMapItemKey, wbcProjectFileDraftKey, wbcProjectFileEditUrl, wbcZoomAnchorRestorer } from "./split-pane.jsx"
 import { WbcFileVisual, wbcCanOpenExternally, wbcDownloadLink, wbcHtmlPreviewDocument } from "./file-resources.jsx"
 
 // Workbench chat feature module with explicit ESM dependencies.
 function WbcPdfJsViewer({ file, url, onViewed }) {
-  var pdf = window.CyreneUI.require("pdf");
+  var pdf = workbenchServices.pdf();
   var gestureRef = useWbcRef(null);
   var containerRef = useWbcRef(null);
   var viewerRef = useWbcRef(null);
@@ -189,7 +190,7 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
   function analyzePdfText() {
     var text = pdf.getSelectedText(containerRef.current).trim();
     if (!text || analyzing) return;
-    var language = window.CyreneUI.require("i18n").getLang();
+    var language = workbenchServices.i18n().getLang();
 
     setAnalyzing(true);
     setAnalysisResult('');
@@ -271,7 +272,7 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
           {pageNum} / {pageCount}
         </span>
       )}
-      {url ? <a className="wbc-viewer-open" href={"/pdf/viewer?url=" + encodeURIComponent(url) + "&name=" + encodeURIComponent((file && file.name) || "PDF") + "&lang=" + encodeURIComponent(window.CyreneUI.require("i18n").getLang())} target="_blank" rel="noreferrer" title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}>↗</a> : null}
+      {url ? <a className="wbc-viewer-open" href={"/pdf/viewer?url=" + encodeURIComponent(url) + "&name=" + encodeURIComponent((file && file.name) || "PDF") + "&lang=" + encodeURIComponent(workbenchServices.i18n().getLang())} target="_blank" rel="noreferrer" title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}>↗</a> : null}
       {file ? wbcDownloadLink(file, { className: "wbc-viewer-download" }) : null}
     </div>
   );
@@ -887,7 +888,7 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
       setEditorAutoSavePaused(true);
       if (error.status === 409 && error.payload) {
         setEditorConflict(error.payload);
-        var feedback = window.CyreneUI.require("feedback");
+        var feedback = workbenchServices.feedback();
         var request = feedback.confirmModal({
           title: wbcT("workbenchChat.editorConflictShort", "Conflict"),
           body: wbcT("workbenchChat.editorAutoSaveConflict", "The file changed outside the editor. Overwrite it with your version, or reload the external version?"),
@@ -900,7 +901,7 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
           else reloadEditor();
         });
       } else {
-        window.CyreneUI.require("feedback").showToast(
+        workbenchServices.feedback().showToast(
           error.message || wbcT("workbenchChat.editorSaveFailed", "Save failed"),
           "error"
         );
@@ -920,7 +921,7 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
       if (draftKey) delete WBC_PROJECT_FILE_DRAFTS[draftKey];
       applyLoadedEditor(payload, false);
     }).catch(function (error) {
-      window.CyreneUI.require("feedback").showToast(
+      workbenchServices.feedback().showToast(
         error.message || wbcT("workbenchChat.viewerLoadFailed", "File failed to load."),
         "error"
       );

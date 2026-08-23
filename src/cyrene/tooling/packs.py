@@ -19,8 +19,10 @@ PACKS = (
     PackSpec("skill", "skill_tools", "Discover, install, remove, inspect, and run Agent Skills.", ("skill.",), 1200),
     PackSpec("remote", "remote_tools", "Operate paired Cyrene devices explicitly selected in the current chat.", ("remote.",), 1300),
     PackSpec("application", "cyrene_tools", "Snapshot and inspect the current Cyrene UI, then control declared components with focus-independent click, double-click, type, scroll, and drag gestures.", ("cyrene.",), 1400),
-    PackSpec("integration", "integration_tools", "Dynamically connected MCP and external integration capabilities.", ("integration.",), 1500),
-    PackSpec("custom", "custom_tools", "Trusted user Python modules loaded from the global custom-tools directory.", ("custom.", "system."), 1600),
+    PackSpec("office", "office_tools", "Inspect, edit, render, verify, and progressively compose the Microsoft PowerPoint presentation connected through the local Cyrene Office add-in.", ("office.", "ppt."), 1450),
+    PackSpec("plugin", "plugin_tools", "Create, validate, install, enable, debug, reload, and remove trusted Cyrene plugins.", ("plugin.",), 1500),
+    PackSpec("integration", "integration_tools", "Dynamically connected MCP and external integration capabilities.", ("integration.",), 1600),
+    PackSpec("custom", "custom_tools", "Trusted user Python modules loaded from the global custom-tools directory.", ("custom.", "system."), 1700),
 )
 
 CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -166,13 +168,75 @@ CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
         ("cyrene.settings.read", "CyreneSettingsRead"),
         ("cyrene.settings.update", "CyreneSettingsUpdate"),
     ),
+    "plugin_tools": (
+        ("plugin.authoring.guide", "PluginAuthoringGuide"),
+        ("plugin.scaffold", "PluginScaffold"),
+        ("plugin.validate", "PluginValidate"),
+        ("plugin.list", "PluginList"),
+        ("plugin.install", "PluginInstall"),
+        ("plugin.enable", "PluginEnable"),
+        ("plugin.disable", "PluginDisable"),
+        ("plugin.reload", "PluginReload"),
+        ("plugin.contributions", "PluginContributions"),
+        ("plugin.call", "PluginCall"),
+        ("plugin.logs", "PluginLogs"),
+        ("plugin.delete", "PluginDelete"),
+    ),
+    "office_tools": (
+        ("office.setup.get", "OfficeSetupInfo"),
+        ("office.sessions.list", "OfficeListSessions"),
+        ("ppt.list_slides", "PowerPointListSlides"),
+        ("ppt.get_slide", "PowerPointGetSlide"),
+        ("ppt.list_shapes", "PowerPointListShapes"),
+        ("ppt.get_shape", "PowerPointGetShape"),
+        ("ppt.read_text", "PowerPointReadText"),
+        ("ppt.get_master", "PowerPointGetMaster"),
+        ("ppt.get_theme", "PowerPointGetTheme"),
+        ("ppt.get_selection", "PowerPointGetSelection"),
+        ("ppt.add_shape", "PowerPointAddShape"),
+        ("ppt.update_shape", "PowerPointUpdateShape"),
+        ("ppt.move_shape", "PowerPointMoveShape"),
+        ("ppt.resize_shape", "PowerPointResizeShape"),
+        ("ppt.update_text", "PowerPointUpdateText"),
+        ("ppt.apply_style", "PowerPointApplyStyle"),
+        ("ppt.delete_shape", "PowerPointDeleteShape"),
+        ("ppt.group_shapes", "PowerPointGroupShapes"),
+        ("ppt.set_z_order", "PowerPointSetZOrder"),
+        ("ppt.insert_image", "PowerPointInsertImage"),
+        ("ppt.create_slide", "PowerPointCreateSlide"),
+        ("ppt.create_slides", "PowerPointCreateSlides"),
+        ("ppt.duplicate_slide", "PowerPointDuplicateSlide"),
+        ("ppt.apply_slide_spec", "PowerPointApplySlideSpec"),
+        ("ppt.relayout_slide", "PowerPointRelayoutSlide"),
+        ("ppt.create_from_template", "PowerPointCreateFromTemplate"),
+        ("ppt.replace_slide", "PowerPointReplaceSlide"),
+        ("ppt.move_slide", "PowerPointMoveSlide"),
+        ("ppt.delete_slide", "PowerPointDeleteSlide"),
+        ("ppt.render_slide", "PowerPointRenderSlideAdvanced"),
+        ("ppt.verify_slide", "PowerPointVerifySlide"),
+        ("ppt.check_overflow", "PowerPointCheckOverflow"),
+        ("ppt.check_overlap", "PowerPointCheckOverlap"),
+        ("ppt.check_contrast", "PowerPointCheckContrast"),
+        ("ppt.compare_before_after", "PowerPointCompareBeforeAfter"),
+        ("ppt.undo_batch", "PowerPointUndoBatch"),
+        ("ppt.edit_chart", "PowerPointEditChart"),
+        ("ppt.edit_table", "PowerPointEditTable"),
+        ("ppt.edit_master", "PowerPointEditMaster"),
+        ("ppt.edit_layout", "PowerPointEditLayout"),
+        ("ppt.edit_notes", "PowerPointEditNotes"),
+        ("ppt.bind_shape", "PowerPointBindShape"),
+        ("ppt.apply_ooxml_patch", "PowerPointApplyOoxmlPatch"),
+        ("ppt.import_slides", "PowerPointImportSlides"),
+        ("ppt.execute_officejs", "PowerPointExecuteOfficeJs"),
+        ("ppt.replace_slide_ooxml", "PowerPointReplaceSlideOoxml"),
+    ),
     "custom_tools": (),
     "integration_tools": (),
 }
 
 PACK_BY_WIRE_NAME = {pack.wire_name: pack for pack in PACKS}
 MODULE_TOOL_NAMES = tuple(pack.wire_name for pack in PACKS)
-MAIN_ONLY_MODULE_TOOL_NAMES = frozenset({"cyrene_tools"})
+MAIN_ONLY_MODULE_TOOL_NAMES = frozenset({"cyrene_tools", "office_tools", "plugin_tools"})
 INTERNAL_ONLY_CONCRETE_TOOL_NAMES = frozenset({
     "CyreneSessionMessage",
     "CyreneProjectControl",
@@ -190,3 +254,10 @@ WIRE_NAME_BY_CONCRETE_TOOL = {
     for wire_name, bindings in CAPABILITY_BINDINGS.items()
     for _capability_id, concrete_name in bindings
 }
+WIRE_NAME_BY_CONCRETE_TOOL.update({
+    "PowerPointGetContext": "office_tools",
+    "PowerPointInspect": "office_tools",
+    "PowerPointApplyBatch": "office_tools",
+    "PowerPointRenderSlide": "office_tools",
+    "PowerPointToolSearch": "office_tools",
+})

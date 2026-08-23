@@ -23,15 +23,14 @@ def _png_base64(width: int, height: int, color: tuple[int, int, int] = (240, 240
 
 
 @pytest.fixture(autouse=True)
-def clear_app_use_runtime_session_state():
+def clear_app_use_runtime_session_state(monkeypatch):
     from cyrene.tooling.backends import app_use
 
-    prior_pil_modules = {name: sys.modules.get(name) for name in ("PIL", "PIL.Image", "PIL.ImageDraw")}
-    sys.modules["PIL"] = _REAL_PIL
-    sys.modules["PIL.Image"] = _REAL_PIL_IMAGE
-    sys.modules["PIL.ImageDraw"] = _REAL_PIL_IMAGE_DRAW
-    _REAL_PIL.Image = _REAL_PIL_IMAGE
-    _REAL_PIL.ImageDraw = _REAL_PIL_IMAGE_DRAW
+    monkeypatch.setitem(sys.modules, "PIL", _REAL_PIL)
+    monkeypatch.setitem(sys.modules, "PIL.Image", _REAL_PIL_IMAGE)
+    monkeypatch.setitem(sys.modules, "PIL.ImageDraw", _REAL_PIL_IMAGE_DRAW)
+    monkeypatch.setattr(_REAL_PIL, "Image", _REAL_PIL_IMAGE)
+    monkeypatch.setattr(_REAL_PIL, "ImageDraw", _REAL_PIL_IMAGE_DRAW)
     app_use._SESSION_MEASUREMENTS.clear()
     app_use._SESSION_FOCUS_READY.clear()
     app_use._SESSION_VISUAL_READY.clear()
@@ -43,11 +42,6 @@ def clear_app_use_runtime_session_state():
     app_use._SESSION_VISUAL_READY.clear()
     app_use._SESSION_PRIMARY_CLICK_RESULTS.clear()
     app_use._SESSION_CAPABILITIES.clear()
-    for name, previous in prior_pil_modules.items():
-        if previous is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = previous
 
 
 def test_app_use_is_one_stable_main_only_tool():

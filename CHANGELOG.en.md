@@ -11,6 +11,7 @@ The Chinese edition remains the most detailed record for older releases.
 
 ### Features and interface changes
 
+- Agent tool context now uses one stable `toolbox` gateway. Initial requests no longer expose every package gateway and its detailed operating instructions; selected capabilities disclose schemas and guidance on demand. Phase 1 and Phase 2 still share an identical tool array to preserve stable model prefix-cache hits.
 - Chat lists, chat details, message appends, and run-state saves are substantially faster. Projects with long histories or many conversations feel smoother when opening, sending, reconnecting, and completing replies.
 - Context reporting, token estimation, and automatic compaction checks are faster for long conversations while preserving the existing counts, context boundaries, and compaction behavior.
 - Conversation, project, behavior-learning, and skill context is prepared more efficiently before each Agent turn, with one consistent conversation scope used throughout the turn.

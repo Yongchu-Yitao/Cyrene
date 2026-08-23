@@ -7,6 +7,14 @@ from pathlib import Path
 import pytest
 
 
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+CHECKOUT_VENV_PYTHON = (
+    PROJECT_DIR / ".venv" / "Scripts" / "python.exe"
+    if os.name == "nt"
+    else PROJECT_DIR / ".venv" / "bin" / "python3"
+)
+
+
 def test_direct_local_cli_file_bootstraps_source_imports(tmp_path):
     entrypoint = (
         Path(__file__).resolve().parents[1]
@@ -38,16 +46,12 @@ def test_direct_local_cli_file_bootstraps_source_imports(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.skipif(
+    not CHECKOUT_VENV_PYTHON.is_file(),
+    reason="checkout virtual environment is not available",
+)
 def test_direct_local_cli_prefers_checkout_virtualenv(tmp_path):
-    project_dir = Path(__file__).resolve().parents[1]
-    entrypoint = project_dir / "src" / "cyrene" / "local_cli.py"
-    venv_python = (
-        project_dir / ".venv" / "Scripts" / "python.exe"
-        if os.name == "nt"
-        else project_dir / ".venv" / "bin" / "python3"
-    )
-    if not venv_python.is_file():
-        pytest.skip("checkout virtual environment is not available")
+    entrypoint = PROJECT_DIR / "src" / "cyrene" / "local_cli.py"
 
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)

@@ -62,7 +62,6 @@ LEGACY_MODULE_ALIASES: dict[str, str] = {
     "cyrene.workbench_chat_service": "cyrene.workbench.chat",
     "cyrene.workbench_context": "cyrene.workbench.context",
     "cyrene.workbench_inbox": "cyrene.workbench.inbox",
-    "cyrene.workbench_knowledge_service": "cyrene.workbench.knowledge",
     "cyrene.workbench_memory_service": "cyrene.workbench.memory",
     "cyrene.workbench_runtime": "cyrene.workbench.runtime",
     "cyrene.workbench_store": "cyrene.workbench.store",

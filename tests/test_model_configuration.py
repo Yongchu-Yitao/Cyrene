@@ -1,7 +1,12 @@
 """Focused coverage for plugin-oriented model configuration."""
 
 from __future__ import annotations
-from conftest import workbench_chat_source
+from conftest import (
+    workbench_chat_source,
+    workbench_i18n_source,
+    workbench_settings_source,
+    workbench_shell_source,
+)
 
 from pathlib import Path
 
@@ -707,6 +712,44 @@ def test_selectable_models_include_non_default_chat_profiles_only():
     assert candidates[1]["model"] == "vision/manual"
 
 
+def test_legacy_model_settings_payload_uses_selectable_profile_graph(monkeypatch):
+    from cyrene.runtime import model_configuration, settings_store
+    from cyrene.runtime.model_probe_service import ModelProbeService
+    from route.settings.model_service import ModelSettingsApplicationService
+
+    monkeypatch.setattr(settings_store, "get_models", lambda: [{
+        "id": "legacy-primary",
+        "model": "legacy-model",
+        "provider": "openai_compatible",
+    }])
+    monkeypatch.setattr(settings_store, "get_custom_models", lambda: [])
+    monkeypatch.setattr(settings_store, "get_codex_model", lambda: None)
+    monkeypatch.setattr(settings_store, "get_model_source", lambda: "custom")
+    monkeypatch.setattr(settings_store, "get_vision_models", lambda: [])
+    monkeypatch.setattr(settings_store, "get_secondary_model", lambda: {})
+    monkeypatch.setattr(
+        model_configuration,
+        "selectable_model_candidates",
+        lambda: [{
+            "id": "profile-chat",
+            "profile_id": "profile-chat",
+            "connection_id": "provider-main",
+            "name": "Profile Chat",
+            "model": "profile-model",
+            "provider": "openai_compatible",
+            "adapter": "openai_compatible",
+            "capabilities": ["chat"],
+        }],
+    )
+
+    payload = ModelSettingsApplicationService(ModelProbeService()).get_settings()
+
+    assert [item["id"] for item in payload["selectable_models"]] == [
+        "profile-chat"
+    ]
+    assert [item["id"] for item in payload["models"]] == ["legacy-primary"]
+
+
 def test_deleting_connection_persists_graph_and_clears_legacy_mirrors(
     isolated_model_store,
 ):
@@ -747,9 +790,9 @@ def test_deleting_connection_persists_graph_and_clears_legacy_mirrors(
 def test_frontend_registers_split_pages_and_live_context_contract():
     root = Path(__file__).resolve().parents[1]
     settings = (root / "src/webui/frontend/settings-model-configuration.jsx").read_text()
-    overlay = (root / "src/webui/frontend/settings-overlay.jsx").read_text()
+    overlay = workbench_settings_source()
     chat = workbench_chat_source()
-    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text()
+    i18n = workbench_i18n_source()
     styles = (root / "src/webui/frontend/settings-model-configuration.css").read_text()
 
     assert 'register("model-settings"' in settings
@@ -757,10 +800,10 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert "UsagePage: UsagePage" in settings
     assert 'id: "setting-model-" + route + "-route"' in settings
     assert 'CustomEvent("cyrene:model-configuration-changed"' in settings
-    assert 'require("model-settings").ServicesPage' in overlay
-    assert 'require("model-settings").UsagePage' in overlay
+    assert 'workbenchServices.modelSettings().ServicesPage' in overlay
+    assert 'workbenchServices.modelSettings().UsagePage' in overlay
     assert '"settings.modelUsage": "模型配置"' in i18n
-    assert 'label(props, "settings.adapter", "协议")' in settings
+    assert 'v.label(v.props, "settings.adapter", "协议")' in settings
     assert '"settings.adapter": "Adapter"' in i18n
     assert '"settings.adapter": "协议"' in i18n
     assert '"settings.modelConnectionFailed": "Model connection failed."' in i18n
@@ -771,13 +814,13 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert 'h("h4", { id: "wb-mcfg-profiles-heading" }, "模型列表")' in settings
     assert "档案描述一个可被多个用途引用的远端模型。" not in settings
     assert "连接配置与模型档案" not in settings
-    assert 'selectedDescription ? h("p", null, selectedDescription) : null' in settings
+    assert 'v.selectedDescription ? h("p", null, v.selectedDescription) : null' in settings
     assert 'className: "wb-mcfg-capability-picker"' in settings
     assert 'var capabilityOptions = ["chat", "vision", "embedding"];' in settings
     assert 'capabilityLabel(capability, props)' in settings
     assert 'props.onChange("capabilities", next);' in settings
     assert 'body: JSON.stringify({ connection: connectionDraftPayload(selected), profile: profile })' in settings
-    assert 'onTest: function () { testProfile(profile); }' in settings
+    assert 'onTest: function () { v.testProfile(profile); }' in settings
     assert 'onClick: testConnection' not in settings
     assert 'onClick: discoverConnection' not in settings
     assert '"获取模型列表"' not in settings
@@ -794,7 +837,7 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert 'placeholder: "搜索模型服务…"' in settings
     assert "config.connections.filter(matchesConnectionQuery)" in settings
     assert 'className: "wb-mcfg-filter"' not in settings
-    assert 'genericName === "openai_compatible"' in settings
+    assert 'return presetIcons[preset] || ""' in settings
     assert 'settingsGlyph("server", 17)' in settings
     assert ".wb-mcfg-toggle.is-on span {\n  transform: translateX(18px);\n  background: #fff;\n}" in styles
     assert 'label: "Adapter"' not in settings
@@ -812,7 +855,7 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert 'value === "local_onnx" ? "Local ONNX"' in settings
     assert 'className: "wb-model-card wb-local-model wb-mcfg-local-row"' in settings
     assert 'label(props, "settings.localModelActive"' in settings
-    assert '!isLocalConnection(selected) ? h("section", { className: "wb-mcfg-form-section"' in settings
+    assert '!v.isLocalConnection(selected) ? h("section", { className: "wb-mcfg-form-section"' in settings
     assert 'hideHeader: true' in settings
     assert 'title: "嵌入模型", titleKey: "settings.embeddingRouteTitle"' in settings
     assert 'label(props, "settings.selectModelProfile", "Select model profile…")' in settings
@@ -829,21 +872,15 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert 'WBC_CHAT_MODEL_CHANGED_EVENT = "cyrene:wbc-chat-model-changed"' in chat
     assert 'window.addEventListener("cyrene:model-configuration-changed"' in chat
     assert "payload.selectable_models" in chat
-    assert "payload.selectable_models" in (
-        root / "src/webui/frontend/workbench.jsx"
-    ).read_text()
-    settings_route = (root / "src/route/settings/general.py").read_text()
-    assert "for candidate in selectable_model_candidates():" in settings_route
-    assert '"selectable_models": selectable_models,' in settings_route
-    assert "selectable_models or normalized" not in settings_route
-    assert 'setSelectedModelId("");' in chat
+    assert "payload.selectable_models" in workbench_shell_source()
+    assert 'setSelectedId("")' in chat
     assert "persistQueuedConfig();" in settings
     assert "store.save(snapshot, true, {" in settings
     assert "saveQueueInFlight.current" in settings
     assert '"保存配置"' not in settings
     assert "并立即保存。" in settings
-    assert chat.index("var liveModel = String(liveData") < chat.index(
-        "var activeModel = String(runtime"
+    assert chat.index("var activeModel = String(runtime") < chat.index(
+        "var liveModel = String(liveData"
     )
     assert "segTotal <= 0 && used <= 0 && limit <= 0" in chat
 
@@ -856,7 +893,7 @@ def test_codex_oauth_service_exposes_cli_download_and_progress():
     styles = (
         root / "src/webui/frontend/settings-model-configuration.css"
     ).read_text()
-    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text()
+    i18n = workbench_i18n_source()
 
     oauth_section = settings.split("function OAuthSection(props) {", 1)[1].split(
         "function LocalModelsSection(props) {", 1
@@ -878,7 +915,8 @@ def test_codex_oauth_service_exposes_cli_download_and_progress():
     )
     assert "JSON.stringify({ force: true })" in services_page
     assert "function startOauthCliPolling()" in services_page
-    assert "onDownloadCli: downloadOauthCli" in services_page
+    assert "onDownloadCli: v.downloadOauthCli" in settings
+    assert "downloadOauthCli: downloadOauthCli" in services_page
     assert ".wb-mcfg-cli-runtime {" in styles
     assert ".wb-mcfg-cli-progress progress {" in styles
     for key in (
@@ -895,7 +933,7 @@ def test_settings_and_provider_icons_are_inlined_before_first_render():
     root = Path(__file__).resolve().parents[1]
     build = (root / "src/webui/build-jsx.mjs").read_text()
     index = (root / "src/webui/frontend/index.html").read_text()
-    overlay = (root / "src/webui/frontend/settings-overlay.jsx").read_text()
+    overlay = workbench_settings_source()
     settings = (root / "src/webui/frontend/settings-model-configuration.jsx").read_text()
 
     assert "<!-- CYRENE_ICON_ASSETS -->" in index

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>模型用量</title>
+  <style>
+    :root { color-scheme: light dark; font-family: Inter, system-ui, sans-serif; }
+    body { margin: 0; padding: 24px; color: CanvasText; background: transparent; }
+    header { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+    h1 { margin: 0; font-size: 22px; }
+    header span, .muted { color: GrayText; font-size: 13px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(160px,1fr)); gap: 12px; }
+    article { padding: 16px; border: 1px solid color-mix(in srgb, CanvasText 14%, transparent); border-radius: 14px; background: color-mix(in srgb, Canvas 88%, transparent); }
+    article span { display: block; margin-bottom: 8px; color: GrayText; font-size: 12px; }
+    article strong { font-size: 25px; }
+    table { width: 100%; margin-top: 18px; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent); text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    .error { color: #d33; }
+  </style>
+</head>
+<body>
+  <header><div><h1>模型用量</h1><span>最近 7 天</span></div><span id="updated"></span></header>
+  <main id="content"><p class="muted">正在加载…</p></main>
+  <script>
+    const number = new Intl.NumberFormat();
+    function metric(label, value) {
+      return `<article><span>${label}</span><strong>${number.format(Number(value || 0))}</strong></article>`;
+    }
+    const pending = new Map();
+    function call(method, args) {
+      const requestId = crypto.randomUUID();
+      parent.postMessage({ source: 'cyrene-plugin', type: 'call', requestId, method, args }, '*');
+      return new Promise((resolve, reject) => pending.set(requestId, { resolve, reject }));
+    }
+    addEventListener('message', event => {
+      const message = event.data || {};
+      if (message.source !== 'cyrene-host' || message.type !== 'response') return;
+      const request = pending.get(message.requestId);
+      if (!request) return;
+      pending.delete(message.requestId);
+      message.ok ? request.resolve(message.result) : request.reject(new Error(message.error));
+    });
+    async function load() {
+      try {
+        const stats = await call('usage.load', { days: 7 }) || {};
+        const total = stats.total && typeof stats.total === 'object' ? stats.total : stats;
+        const models = Array.isArray(stats.by_model) ? stats.by_model : [];
+        document.getElementById('content').innerHTML = `
+          <section class="grid">
+            ${metric('输入 Token', total.prompt_tokens)}
+            ${metric('输出 Token', total.completion_tokens)}
+            ${metric('总 Token', total.total_tokens)}
+            ${metric('调用次数', total.requests)}
+          </section>
+          <table><thead><tr><th>模型</th><th>输入</th><th>输出</th><th>总量</th></tr></thead>
+          <tbody>${models.map(item => `<tr><td>${String(item.model || '—').replace(/[<>&]/g, '')}</td><td>${number.format(item.prompt_tokens || 0)}</td><td>${number.format(item.completion_tokens || 0)}</td><td>${number.format(item.total_tokens || 0)}</td></tr>`).join('')}</tbody></table>`;
+        document.getElementById('updated').textContent = new Date().toLocaleTimeString();
+      } catch (error) {
+        document.getElementById('content').innerHTML = `<p class="error">${String(error.message || error)}</p>`;
+      }
+    }
+    load();
+  </script>
+</body>
+</html>

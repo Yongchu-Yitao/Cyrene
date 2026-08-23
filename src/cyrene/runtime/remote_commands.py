@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi.responses import JSONResponse
 from PIL import Image, ImageOps
 
 from cyrene.agent.context import bind_run_context
@@ -55,7 +54,7 @@ from cyrene.workbench.workspace_changes import (
     get_chat_file_change,
     list_chat_change_sets,
 )
-from route import schemas as api_models
+from cyrene.workbench.control_services import ControlServiceError
 
 _DEFAULT_TRANSFER_CHUNK_BYTES = 512 * 1024
 _MAX_TRANSFER_CHUNK_BYTES = 1024 * 1024
@@ -692,20 +691,6 @@ def public_remote_event(event: dict[str, Any]) -> dict[str, Any] | None:
     return result
 
 
-def _json_response_payload(value: Any) -> dict[str, Any]:
-    if not isinstance(value, JSONResponse):
-        return dict(value or {}) if isinstance(value, dict) else {"data": value}
-    try:
-        payload = json.loads(bytes(value.body).decode("utf-8"))
-    except Exception:
-        payload = {"error": "remote command failed"}
-    if not isinstance(payload, dict):
-        payload = {"error": str(payload)}
-    status_code = int(value.status_code)
-    ok = 200 <= status_code < 300 and payload.get("ok") is not False
-    return {"ok": ok, "status_code": status_code, **payload}
-
-
 def _require_text(
     payload: dict[str, Any],
     field: str,
@@ -1326,20 +1311,20 @@ class RemoteCommandExecutor:
         self,
         *,
         store: RemoteControlStore,
-        chat_adapter: dict[str, Any],
-        project_adapter: dict[str, Any],
-        task_adapter: dict[str, Any],
-        goal_loop_adapter: dict[str, Any] | None = None,
+        chat: Any = None,
+        projects: Any = None,
+        tasks: Any = None,
+        goals: Any = None,
         bot: Any = None,
         db_path: str = "",
     ) -> None:
         self.store = store
         self.bot = bot
         self.db_path = str(db_path or "")
-        self.chat = chat_adapter
-        self.project = project_adapter
-        self.task = task_adapter
-        self.goal_loop = goal_loop_adapter or {}
+        self.chat = chat
+        self.projects = projects
+        self.tasks = tasks
+        self.goals = goals
         self._remote_shell_owners: dict[str, tuple[str, str]] = {}
         self._remote_files = RemoteWorkspaceFiles(store)
         self._remote_jobs = RemoteJobManager(store)
@@ -1348,6 +1333,18 @@ class RemoteCommandExecutor:
         self._remote_jobs.set_event_sender(sender)
 
     async def __call__(
+        self,
+        peer_device_id: str,
+        command: str,
+        payload: dict[str, Any],
+        project_id: str,
+    ) -> dict[str, Any]:
+        try:
+            return await self._execute(peer_device_id, command, payload, project_id)
+        except ControlServiceError as exc:
+            return {"ok": False, "status_code": exc.status_code, **exc.payload}
+
+    async def _execute(
         self,
         peer_device_id: str,
         command: str,
@@ -1371,52 +1368,9 @@ class RemoteCommandExecutor:
             }
         if command == "projects.list":
             return await self._projects_list(peer_device_id)
-        if command == "chats.list":
-            return await self._chats_list(project_id)
-        if command == "chats.create":
-            return await self._chats_create(project_id, payload)
-        if command == "chats.update":
-            return await self._chats_update(project_id, payload)
-        if command == "chats.delete":
-            return await self._chats_delete(project_id, payload)
-        if command == "chats.read":
-            return await self._chats_read(project_id, payload)
-        if command == "changes.read":
-            return await self._changes_read(project_id, payload)
-        if command == "chats.send":
-            return await self._chats_send(project_id, payload)
-        if command == "runs.read":
-            return await self._runs_read(project_id, payload)
-        if command == "runs.events":
-            return await self._runs_events(project_id, payload)
-        if command == "runs.wait":
-            return await self._runs_wait(project_id, payload)
-        if command == "runs.guide":
-            return await self._runs_guide(project_id, payload)
-        if command == "runs.interrupt":
-            return await self._runs_interrupt(project_id, payload)
-        if command == "tasks.list":
-            return await self._tasks_list(project_id)
-        if command == "tasks.create":
-            return await self._tasks_create(project_id, payload)
-        if command == "tasks.read":
-            return await self._tasks_read(project_id, payload)
-        if command == "tasks.dispatch":
-            return await self._tasks_dispatch(project_id, payload)
-        if command == "tasks.approve_plan":
-            return await self._tasks_approve_plan(project_id, payload)
-        if command == "tasks.run_step":
-            return await self._tasks_run_step(project_id, payload)
-        if command in {"tasks.pause", "tasks.resume", "tasks.cancel"}:
-            return await self._tasks_control(command, project_id, payload)
-        if command == "approvals.respond":
-            return await self._approvals_respond(project_id, payload)
-        if command == "artifacts.list":
-            return await self._artifacts_list(project_id, payload)
-        if command == "artifacts.read":
-            return await self._artifacts_read(project_id, payload)
-        if command == "attachments.read":
-            return await self._attachments_read(project_id, payload)
+        workbench = await self._execute_workbench(command, project_id, payload)
+        if workbench is not None:
+            return workbench
         if command.startswith("files."):
             allow_outside = self._remote_path_authorization(
                 command,
@@ -1443,18 +1397,9 @@ class RemoteCommandExecutor:
                 payload,
                 allow_outside=allow_outside,
             )
-        if command == "settings.read":
-            return self._settings_read()
-        if command == "settings.models.copy":
-            return self._settings_models_copy(payload)
-        if command == "settings.update":
-            return self._settings_update(payload)
-        if command == "settings.openai_oauth.read":
-            return await self._settings_openai_oauth_read()
-        if command == "settings.openai_oauth.login":
-            return await self._settings_openai_oauth_login()
-        if command == "settings.openai_oauth.logout":
-            return await self._settings_openai_oauth_logout()
+        settings = await self._execute_settings(command, payload)
+        if settings is not None:
+            return settings
         if command.startswith("shell."):
             return await self._shell_command(
                 peer_device_id, command, project_id, payload
@@ -1468,6 +1413,52 @@ class RemoteCommandExecutor:
             "code": "remote_command_unsupported",
             "error": f"unsupported remote command: {command}",
         }
+
+    async def _execute_workbench(
+        self, command: str, project_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        no_payload = {
+            "chats.list": self._chats_list,
+            "tasks.list": self._tasks_list,
+        }
+        with_payload = {
+            "chats.create": self._chats_create, "chats.update": self._chats_update,
+            "chats.delete": self._chats_delete, "chats.read": self._chats_read,
+            "changes.read": self._changes_read, "chats.send": self._chats_send,
+            "runs.read": self._runs_read, "runs.events": self._runs_events,
+            "runs.wait": self._runs_wait, "runs.guide": self._runs_guide,
+            "runs.interrupt": self._runs_interrupt, "tasks.create": self._tasks_create,
+            "tasks.read": self._tasks_read, "tasks.dispatch": self._tasks_dispatch,
+            "tasks.approve_plan": self._tasks_approve_plan,
+            "tasks.run_step": self._tasks_run_step,
+            "approvals.respond": self._approvals_respond,
+            "artifacts.list": self._artifacts_list, "artifacts.read": self._artifacts_read,
+            "attachments.read": self._attachments_read,
+        }
+        if operation := no_payload.get(command):
+            return await operation(project_id)
+        if operation := with_payload.get(command):
+            return await operation(project_id, payload)
+        if command in {"tasks.pause", "tasks.resume", "tasks.cancel"}:
+            return await self._tasks_control(command, project_id, payload)
+        return None
+
+    async def _execute_settings(
+        self, command: str, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        if command == "settings.read":
+            return self._settings_read()
+        if command == "settings.models.copy":
+            return self._settings_models_copy(payload)
+        if command == "settings.update":
+            return self._settings_update(payload)
+        operations = {
+            "settings.openai_oauth.read": self._settings_openai_oauth_read,
+            "settings.openai_oauth.login": self._settings_openai_oauth_login,
+            "settings.openai_oauth.logout": self._settings_openai_oauth_logout,
+        }
+        operation = operations.get(command)
+        return await operation() if operation is not None else None
 
     def _remote_path_authorization(
         self,
@@ -1920,7 +1911,7 @@ class RemoteCommandExecutor:
         return {"ok": True}
 
     async def _projects_list(self, peer_device_id: str) -> dict[str, Any]:
-        store = workbench_runtime._read_workbench_store_lightweight()
+        projects = await self.projects.list_projects()
         peer = self.store.get_peer(peer_device_id)
         shared_project_ids = set(
             peer.get("granted_project_scopes") or [] if peer else []
@@ -1934,16 +1925,14 @@ class RemoteCommandExecutor:
                     "status": str(project.get("status") or "active"),
                     "updated_at": str(project.get("updatedAt") or ""),
                 }
-                for project in store.get("projects") or []
+                for project in projects
                 if isinstance(project, dict)
                 and str(project.get("id") or "") in shared_project_ids
             ],
         }
 
     async def _chats_list(self, project_id: str) -> dict[str, Any]:
-        result = _json_response_payload(
-            await self.chat["list_chats"](project=project_id)
-        )
+        result = await self.chat.list(project_id)
         if result.get("ok") is False:
             return result
         return {
@@ -1960,14 +1949,10 @@ class RemoteCommandExecutor:
         project_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        result = _json_response_payload(
-            await self.chat["create_chat"](
-                api_models.ChatCreateBody(
-                    project=project_id,
-                    title=str(payload.get("title") or "")[:160],
-                )
-            )
-        )
+        result = await self.chat.create({
+            "project": project_id,
+            "title": str(payload.get("title") or "")[:160],
+        })
         return {"ok": True, **result} if result.get("ok") is not False else result
 
     async def _chats_update(
@@ -1979,12 +1964,7 @@ class RemoteCommandExecutor:
         if chat is None or chat.get("ok") is False:
             return dict(chat or {"ok": False, "error": "chat not found"})
         title = _require_text(payload, "title", max_length=60)
-        result = _json_response_payload(
-            await self.chat["update_chat"](
-                chat_id,
-                api_models.ChatUpdateBody(title=title),
-            )
-        )
+        result = await self.chat.update(chat_id, {"title": title})
         return {"ok": True, **result} if result.get("ok") is not False else result
 
     async def _chats_delete(
@@ -1995,7 +1975,7 @@ class RemoteCommandExecutor:
         chat_id, chat = await self._chat_for_project(project_id, payload)
         if chat is None or chat.get("ok") is False:
             return dict(chat or {"ok": False, "error": "chat not found"})
-        result = _json_response_payload(await self.chat["delete_chat"](chat_id))
+        result = await self.chat.delete(chat_id)
         return {"ok": True, **result} if result.get("ok") is not False else result
 
     async def _chat_for_project(
@@ -2004,7 +1984,7 @@ class RemoteCommandExecutor:
         payload: dict[str, Any],
     ) -> tuple[str, dict[str, Any] | None]:
         chat_id = _require_text(payload, "chat_id", max_length=200)
-        result = _json_response_payload(await self.chat["get_chat"](chat_id))
+        result = await self.chat.get(chat_id)
         if result.get("ok") is False:
             return chat_id, result
         chat = dict(result.get("chat") or {})
@@ -2068,7 +2048,7 @@ class RemoteCommandExecutor:
                 "context_blocks": context_blocks,
                 "inbox": _remote_inbox_snapshot(
                     chat_id,
-                    self.chat.get("run_manager"),
+                    self.chat.run_manager,
                 ),
                 "used_tool_packages": _remote_used_tool_packages(chat),
                 "subagents": subagents,
@@ -2136,13 +2116,7 @@ class RemoteCommandExecutor:
         if attachments:
             send_body["attachments"] = attachments
         try:
-            result = _json_response_payload(
-                await self.chat["send_chat_detached"](
-                    chat_id,
-                    send_body,
-                    detached=True,
-                )
-            )
+            result = await self.chat.send(chat_id, send_body)
         except Exception:
             for attachment in attachments:
                 Path(str(attachment.get("path") or "")).unlink(missing_ok=True)
@@ -2159,14 +2133,14 @@ class RemoteCommandExecutor:
         payload: dict[str, Any],
     ) -> tuple[Any, dict[str, Any] | None]:
         run_id = _require_text(payload, "run_id", max_length=200)
-        run = self.chat["run_manager"].get_replayable_by_run_id(run_id)
+        run = self.chat.run_manager.get_replayable_by_run_id(run_id)
         if run is None:
             return None, {
                 "ok": False,
                 "code": "run_not_found",
                 "error": "run not found",
             }
-        result = _json_response_payload(await self.chat["get_chat"](run.chat_id))
+        result = await self.chat.get(run.chat_id)
         if result.get("ok") is False:
             return None, result
         chat = dict(result.get("chat") or {})
@@ -2457,15 +2431,10 @@ class RemoteCommandExecutor:
         chat_id, chat = await self._chat_for_project(project_id, payload)
         if chat is None or chat.get("ok") is False:
             return dict(chat or {"ok": False, "error": "chat not found"})
-        result = _json_response_payload(
-            await self.chat["guide_chat"](
-                chat_id,
-                api_models.ChatGuidanceBody(
-                    message=_require_text(payload, "message"),
-                    clientRequestId=str(payload.get("request_id") or ""),
-                ),
-            )
-        )
+        result = await self.chat.guide(chat_id, {
+            "message": _require_text(payload, "message"),
+            "clientRequestId": str(payload.get("request_id") or ""),
+        })
         return {"ok": True, **result} if result.get("ok") is not False else result
 
     async def _runs_interrupt(
@@ -2476,7 +2445,7 @@ class RemoteCommandExecutor:
         chat_id, chat = await self._chat_for_project(project_id, payload)
         if chat is None or chat.get("ok") is False:
             return dict(chat or {"ok": False, "error": "chat not found"})
-        run_manager = self.chat["run_manager"]
+        run_manager = self.chat.run_manager
         run = run_manager.get(chat_id)
         interrupted = run_manager.interrupt(chat_id)
         if (
@@ -2501,9 +2470,7 @@ class RemoteCommandExecutor:
         }
 
     async def _tasks_list(self, project_id: str) -> dict[str, Any]:
-        result = _json_response_payload(
-            await self.project["list_tasks"](project_id)
-        )
+        result = await self.projects.list_tasks(project_id)
         if result.get("ok") is False:
             return result
         return {
@@ -2520,16 +2487,11 @@ class RemoteCommandExecutor:
         project_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        result = _json_response_payload(
-            await self.project["create_task"](
-                project_id,
-                api_models.SessionCreateBody(
-                    title=str(payload.get("title") or "")[:160],
-                    goal=_require_text(payload, "goal", max_length=50_000),
-                    priority=str(payload.get("priority") or "medium"),
-                ),
-            )
-        )
+        result = await self.projects.create_task(project_id, {
+            "title": str(payload.get("title") or "")[:160],
+            "goal": _require_text(payload, "goal", max_length=50_000),
+            "priority": str(payload.get("priority") or "medium"),
+        })
         if result.get("ok") is False:
             return result
         return {"ok": True, "task": _task_summary(dict(result.get("session") or {}))}
@@ -2540,7 +2502,7 @@ class RemoteCommandExecutor:
         payload: dict[str, Any],
     ) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
         task_id = _require_text(payload, "task_id", max_length=200)
-        result = _json_response_payload(await self.task["get_task"](task_id))
+        result = await self.tasks.get(task_id)
         if result.get("ok") is False:
             return task_id, None, result
         task = dict(result.get("session") or {})
@@ -2570,21 +2532,16 @@ class RemoteCommandExecutor:
             return error
         attachments = _store_remote_attachments(payload.get("attachments"))
         try:
-            result = _json_response_payload(
-                await self.task["dispatch_task"](
-                    task_id,
-                    api_models.AgentInputBody(
-                        input=_require_text(payload, "message"),
-                        attachments=attachments,
-                        mode=_permission_mode(
-                            payload,
-                            allowed=frozenset({"auto", "default", "plan", "full_access"}),
-                            default="auto",
-                        ),
-                        command=str(payload.get("command") or ""),
-                    ),
-                )
-            )
+            result = await self.tasks.dispatch(task_id, {
+                "input": _require_text(payload, "message"),
+                "attachments": attachments,
+                "mode": _permission_mode(
+                    payload,
+                    allowed=frozenset({"auto", "default", "plan", "full_access"}),
+                    default="auto",
+                ),
+                "command": str(payload.get("command") or ""),
+            })
         except Exception:
             for attachment in attachments:
                 Path(str(attachment.get("path") or "")).unlink(missing_ok=True)
@@ -2614,15 +2571,10 @@ class RemoteCommandExecutor:
                 "code": "task_plan_empty",
                 "error": "task plan is empty",
             }
-        result = _json_response_payload(
-            await self.task["update_task"](
-                task_id,
-                api_models.SessionUpdateBody(
-                    status="waiting_for_approval",
-                    approvedPlanDefinitionRevision=revision,
-                ),
-            )
-        )
+        result = await self.tasks.update(task_id, {
+            "status": "waiting_for_approval",
+            "approvedPlanDefinitionRevision": revision,
+        })
         if result.get("ok") is False:
             return result
         return {
@@ -2670,32 +2622,22 @@ class RemoteCommandExecutor:
             if str(item.get("id") or "") == step_id:
                 item["status"] = "running"
                 item["currentAction"] = "Remote controller started this step."
-        prepared = _json_response_payload(
-            await self.task["update_task"](
-                task_id,
-                api_models.SessionUpdateBody(status="running", plan=plan),
-            )
-        )
+        prepared = await self.tasks.update(task_id, {"status": "running", "plan": plan})
         if prepared.get("ok") is False:
             return prepared
-        result = _json_response_payload(
-            await self.task["create_run"](
-                task_id,
-                api_models.AgentInputBody(
-                    input=_require_text(payload, "message"),
-                    mode=_permission_mode(
-                        payload,
-                        allowed=frozenset({"auto", "default", "plan", "full_access"}),
-                        default="auto",
-                    ),
-                    stepId=step_id,
-                    stepTitle=str(step.get("title") or "")[:1000],
-                    action="spawn_subagent",
-                    meta={"scope": "plan_step", "continueAll": False},
-                    planDefinitionRevision=revision,
-                ),
-            )
-        )
+        result = await self.tasks.create_run(task_id, {
+            "input": _require_text(payload, "message"),
+            "mode": _permission_mode(
+                payload,
+                allowed=frozenset({"auto", "default", "plan", "full_access"}),
+                default="auto",
+            ),
+            "stepId": step_id,
+            "stepTitle": str(step.get("title") or "")[:1000],
+            "action": "spawn_subagent",
+            "meta": {"scope": "plan_step", "continueAll": False},
+            "planDefinitionRevision": revision,
+        })
         if result.get("ok") is False:
             return result
         updated = dict(result.get("session") or {})
@@ -2715,15 +2657,10 @@ class RemoteCommandExecutor:
             str(item.get("status") or "") in resolved
             for item in returned_plan
         )
-        finalized = _json_response_payload(
-            await self.task["update_task"](
-                task_id,
-                api_models.SessionUpdateBody(
-                    status="review" if fully_done else "paused",
-                    plan=returned_plan,
-                ),
-            )
-        )
+        finalized = await self.tasks.update(task_id, {
+            "status": "review" if fully_done else "paused",
+            "plan": returned_plan,
+        })
         if finalized.get("ok") is False:
             return finalized
         return {
@@ -2742,10 +2679,8 @@ class RemoteCommandExecutor:
         task_id, task, error = await self._task_for_project(project_id, payload)
         if error:
             return error
-        if self.goal_loop:
-            goal_state = _json_response_payload(
-                await self.goal_loop["get"](task_id)
-            )
+        if self.goals is not None:
+            goal_state = await self.goals.get(task_id)
             goal_loop = goal_state.get("goalLoop")
             if (
                 isinstance(goal_loop, dict)
@@ -2753,9 +2688,7 @@ class RemoteCommandExecutor:
                 not in {"completed", "failed", "cancelled"}
             ):
                 action = command.removeprefix("tasks.")
-                controlled = _json_response_payload(
-                    await self.goal_loop[action](task_id)
-                )
+                controlled = await self.goals.control(action, task_id)
                 if controlled.get("ok") is False:
                     return controlled
                 return {
@@ -2790,12 +2723,7 @@ class RemoteCommandExecutor:
             from cyrene.agent import interrupt_active_run
 
             interrupt_active_run(session_id=task_id)
-        result = _json_response_payload(
-            await self.task["update_task"](
-                task_id,
-                api_models.SessionUpdateBody(status=next_status),
-            )
-        )
+        result = await self.tasks.update(task_id, {"status": next_status})
         if result.get("ok") is False:
             return result
         return {"ok": True, "task": _task_summary(dict(result.get("session") or {}))}
@@ -2812,23 +2740,11 @@ class RemoteCommandExecutor:
             )
             if error:
                 return error
-            result = _json_response_payload(
-                await self.task["answer_task"](
-                    task_id,
-                    api_models.AnswerBody(
-                        question_id=_require_text(
-                            payload,
-                            "question_id",
-                            max_length=500,
-                        ),
-                        answer=_require_text(payload, "answer"),
-                        mode=_permission_mode(
-                            payload,
-                            allowed=frozenset({"auto", "default"}),
-                        ),
-                    ),
-                )
-            )
+            result = await self.tasks.answer(task_id, {
+                "question_id": _require_text(payload, "question_id", max_length=500),
+                "answer": _require_text(payload, "answer"),
+                "mode": _permission_mode(payload, allowed=frozenset({"auto", "default"})),
+            })
             if result.get("ok") is False:
                 return result
             return {
@@ -2839,23 +2755,11 @@ class RemoteCommandExecutor:
         chat_id, chat = await self._chat_for_project(project_id, payload)
         if chat is None or chat.get("ok") is False:
             return dict(chat or {"ok": False, "error": "chat not found"})
-        result = _json_response_payload(
-            await self.chat["answer_chat"](
-                chat_id,
-                api_models.AnswerBody(
-                    question_id=_require_text(
-                        payload,
-                        "question_id",
-                        max_length=500,
-                    ),
-                    answer=_require_text(payload, "answer"),
-                    mode=_permission_mode(
-                        payload,
-                        allowed=frozenset({"auto", "default"}),
-                    ),
-                ),
-            )
-        )
+        result = await self.chat.answer(chat_id, {
+            "question_id": _require_text(payload, "question_id", max_length=500),
+            "answer": _require_text(payload, "answer"),
+            "mode": _permission_mode(payload, allowed=frozenset({"auto", "default"})),
+        })
         return {"ok": True, **result} if result.get("ok") is not False else result
 
     async def _artifacts_list(
@@ -2866,9 +2770,7 @@ class RemoteCommandExecutor:
         task_id, _task, error = await self._task_for_project(project_id, payload)
         if error:
             return error
-        result = _json_response_payload(
-            await self.task["task_artifacts"](task_id)
-        )
+        result = await self.tasks.artifacts(task_id)
         if result.get("ok") is False:
             return result
         return {
@@ -2904,26 +2806,18 @@ class RemoteCommandExecutor:
                 "code": "artifact_not_found",
                 "error": "artifact not found",
             }
-        store = workbench_runtime._read_workbench_store()
-        project, full_task = workbench_runtime._workbench_find_session(
-            store,
-            str((task or {}).get("id") or ""),
-        )
         try:
-            _artifact, path = workbench_runtime._workbench_artifact_download_target(
-                project,
-                full_task,
-                artifact_id,
+            download = self.tasks.artifact_download(
+                str((task or {}).get("id") or ""), artifact_id
             )
         except (LookupError, ValueError, FileNotFoundError) as exc:
             return {"ok": False, "code": "artifact_unavailable", "error": str(exc)}
-        file_path = Path(path)
+        file_path = Path(download.path)
         return {
             "ok": True,
             "artifact": _artifact_summary(artifact),
-            "filename": file_path.name,
-            "media_type": mimetypes.guess_type(file_path.name)[0]
-            or "application/octet-stream",
+            "filename": download.filename,
+            "media_type": download.media_type,
             **_file_chunk(file_path, payload),
         }
 

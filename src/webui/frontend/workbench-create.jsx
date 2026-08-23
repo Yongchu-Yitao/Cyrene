@@ -1,3 +1,4 @@
+import { workbenchServices } from "./shared/runtime/services.jsx"
 // Workbench create-flows + project initialization.
 //
 // These components live in the Workbench shell and talk to `/api/projects` +
@@ -13,11 +14,11 @@
   var useEffect = React.useEffect;
   var useRef = React.useRef;
   function T(key, params, fallback) {
-    return window.CyreneUI.require("i18n").t(key, params, fallback);
+    return workbenchServices.i18n().t(key, params, fallback);
   }
   function createErrorText(err) {
     try {
-      var api = window.CyreneUI.require("api");
+      var api = workbenchServices.api();
       if (api && typeof api.errorText === "function") return api.errorText(err);
     } catch (e) {}
     return String((err && err.message) || err || "");
@@ -85,7 +86,7 @@
 
   // ── New Project wizard ───────────────────────────────────────────────
   function WorkbenchNewProjectModal(props) {
-    window.CyreneUI.require("i18n").use();
+    workbenchServices.i18n().use();
     var [step, setStep] = useState(0); // 0 = config (basics + template), 1 = finish
     var [name, setName] = useState("");
     var [description, setDescription] = useState("");
@@ -312,7 +313,7 @@
   // ── New Task dialog ──────────────────────────────────────────────────
   var PRIORITIES = [{ id: "high", labelKey: "priority.high" }, { id: "medium", labelKey: "priority.medium" }, { id: "low", labelKey: "priority.low" }];
   function WorkbenchNewTaskModal(props) {
-    window.CyreneUI.require("i18n").use();
+    workbenchServices.i18n().use();
     var [title, setTitle] = useState("");
     var [goal, setGoal] = useState("");
     var [priority, setPriority] = useState("medium");
@@ -620,7 +621,7 @@
   }
 
   function WorkbenchInitView(props) {
-    var model = window.CyreneUI.require("model");
+    var model = workbenchServices.model();
     var project = props.project;
     var session = props.session;
     var sid = session ? session.id : "";
@@ -706,7 +707,7 @@
       setGenerating(true);
       model.generateInitForm(project.id)
         .then(function (next) { props.onRefresh && props.onRefresh(next); })
-        .catch(function (e) { window.CyreneUI.require("feedback").showToast((e && e.message) || String(e), "error"); })
+        .catch(function (e) { workbenchServices.feedback().showToast((e && e.message) || String(e), "error"); })
         .finally(function () { setGenerating(false); });
     }
     function complete() {
@@ -715,7 +716,7 @@
       if (saveTimer.current) clearTimeout(saveTimer.current);
       model.submitInit(sid, answersRef.current)
         .then(function (next) { props.onRefresh && props.onRefresh(next); })
-        .catch(function (e) { window.CyreneUI.require("feedback").showToast((e && e.message) || String(e), "error"); })
+        .catch(function (e) { workbenchServices.feedback().showToast((e && e.message) || String(e), "error"); })
         .finally(function () { setBusy(false); });
     }
     function saveCompletedAnswers() {
@@ -724,7 +725,7 @@
       if (saveTimer.current) clearTimeout(saveTimer.current);
       model.patchSession(sid, { init: { answers: answersRef.current } })
         .then(function (next) { props.onRefresh && props.onRefresh(next); })
-        .catch(function (e) { window.CyreneUI.require("feedback").showToast((e && e.message) || String(e), "error"); })
+        .catch(function (e) { workbenchServices.feedback().showToast((e && e.message) || String(e), "error"); })
         .finally(function () { setBusy(false); });
     }
     function revisePlan() {
@@ -732,7 +733,7 @@
       setPlanning(true);
       model.reviseInitPlan(sid, feedback, taskPlan)
         .then(function (next) { setFeedback(""); props.onRefresh && props.onRefresh(next); })
-        .catch(function (e) { window.CyreneUI.require("feedback").showToast((e && e.message) || String(e), "error"); })
+        .catch(function (e) { workbenchServices.feedback().showToast((e && e.message) || String(e), "error"); })
         .finally(function () { setPlanning(false); });
     }
     function confirmPlan() {
@@ -740,7 +741,7 @@
       setBusy(true);
       model.confirmInitPlan(sid, taskPlan)
         .then(function (next) { props.onRefresh && props.onRefresh(next); })
-        .catch(function (e) { window.CyreneUI.require("feedback").showToast((e && e.message) || String(e), "error"); })
+        .catch(function (e) { workbenchServices.feedback().showToast((e && e.message) || String(e), "error"); })
         .finally(function () { setBusy(false); });
     }
 

@@ -183,22 +183,34 @@ def test_prompt_versions_use_modified_time_conflicts_and_restore_as_new_revision
     assert restored_again["current"]["modifiedAt"] > current_time
 
 
-def _project_memory_api(monkeypatch) -> TestClient:
-    class Runtime:
+def _project_memory_api(*, chat=None) -> TestClient:
+    class Chats:
         @staticmethod
-        def _workbench_find_project_lightweight(project_id):
-            return {"id": project_id} if project_id == "project-a" else None
+        def get(chat_id):
+            return chat if chat and chat_id == chat.get("id") else None
 
-    monkeypatch.setattr(project_memory_routes, "runtime_service", lambda: Runtime())
+    class StructuredMemories:
+        @staticmethod
+        def list(_workspace, *, include_hidden=False):
+            return {"memories": []}
+
+    service = memory_prompt.ProjectMemoryApplicationService(
+        "",
+        memory_prompt.ProjectQueryPort(
+            lambda project_id: {"id": project_id} if project_id == "project-a" else None
+        ),
+        Chats(),
+        StructuredMemories(),
+    )
     app = FastAPI()
     router = APIRouter()
-    project_memory_routes.register_project_memory_routes(router)
+    project_memory_routes.register_project_memory_routes(router, service)
     app.include_router(router)
     return TestClient(app)
 
 
-def test_project_memory_http_contract_reads_edits_restores_and_conflicts(monkeypatch):
-    client = _project_memory_api(monkeypatch)
+def test_project_memory_http_contract_reads_edits_restores_and_conflicts():
+    client = _project_memory_api()
 
     missing = client.get("/api/projects/missing/memory-prompt?include_memories=false")
     assert missing.status_code == 404
@@ -238,11 +250,9 @@ def test_project_memory_http_contract_reads_edits_restores_and_conflicts(monkeyp
 
 
 def test_manual_chat_memory_learning_http_contract_queues_root_chat(monkeypatch):
-    client = _project_memory_api(monkeypatch)
     chat = {"id": "chat-a", "projectId": "project-a", "kind": "chat"}
+    client = _project_memory_api(chat=chat)
     captured = {}
-    monkeypatch.setattr(chat_service, "_read_chats_store", lambda: {"chats": [chat]})
-    monkeypatch.setattr(chat_service, "_find_chat", lambda _payload, chat_id: chat if chat_id == "chat-a" else None)
 
     def fake_schedule(project_id, chat_id, *, source, reason, chat, language):
         captured.update(
@@ -270,6 +280,10 @@ def test_manual_chat_memory_learning_http_contract_queues_root_chat(monkeypatch)
         "chat": chat,
         "language": "zh",
     }
+
+    empty_body = client.post("/api/workbench/chats/chat-a/memory-learning")
+    assert empty_body.status_code == 202
+    assert captured["language"] == ""
 
 
 def test_new_chat_freezes_memory_while_pre_feature_chat_has_no_suffix():
@@ -614,29 +628,82 @@ async def test_memory_agent_rejects_text_or_malformed_tool_submission(monkeypatc
     monkeypatch.setattr(
         "cyrene.model_runtime.client.resolve_exact_model_candidate", lambda _identity: candidate
     )
+    response = {"role": "assistant", "content": "I learned something.", "tool_calls": []}
+
+    async def fake_call_llm(_messages, **_kwargs):
+        return copy.deepcopy(response)
+
+    monkeypatch.setattr("cyrene.call_llm.call_llm", fake_call_llm)
+    snapshot = {"messages": [{"role": "user", "content": "evidence"}], "model": {}}
+    with pytest.raises(memory_prompt.InvalidProjectMemoryOutput, match="no project-memory result after 2 attempts"):
+        await memory_prompt._learn_prompt(snapshot, "")
+
+    response = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{
+            "function": {
+                "name": "submit_project_memory",
+                "arguments": "{not-json",
+            },
+        }],
+    }
+    with pytest.raises(memory_prompt.InvalidProjectMemoryOutput, match="malformed"):
+        await memory_prompt._learn_prompt(snapshot, "")
+
+
+@pytest.mark.asyncio
+async def test_memory_agent_retries_once_after_missing_tool_submission(monkeypatch):
+    candidate = {
+        "id": "only",
+        "provider": "openai_compatible",
+        "model": "MiniMax-M3",
+        "base_url": "https://api.minimaxi.com/v1",
+        "endpoints": ["https://api.minimaxi.com/v1/chat/completions"],
+    }
+    monkeypatch.setattr(
+        "cyrene.model_runtime.client.resolve_exact_model_candidate", lambda _identity: candidate
+    )
     responses = iter([
         {"role": "assistant", "content": "I learned something.", "tool_calls": []},
         {
             "role": "assistant",
+            "model": "MiniMax-M3",
             "content": "",
+            "finish_reason": "tool_calls",
             "tool_calls": [{
                 "function": {
                     "name": "submit_project_memory",
-                    "arguments": "{not-json",
+                    "arguments": '{"prompt":"## Current work\\n- Parser fix verified.","change_summary":"Recorded verified work."}',
                 },
             }],
         },
     ])
+    calls = []
 
-    async def fake_call_llm(_messages, **_kwargs):
+    async def fake_call_llm(messages, **kwargs):
+        calls.append((copy.deepcopy(messages), kwargs))
         return next(responses)
 
     monkeypatch.setattr("cyrene.call_llm.call_llm", fake_call_llm)
-    snapshot = {"messages": [{"role": "user", "content": "evidence"}], "model": {}}
-    with pytest.raises(memory_prompt.InvalidProjectMemoryOutput, match="exactly one"):
-        await memory_prompt._learn_prompt(snapshot, "")
-    with pytest.raises(memory_prompt.InvalidProjectMemoryOutput, match="malformed"):
-        await memory_prompt._learn_prompt(snapshot, "")
+    learned, summary, used_model = await memory_prompt._learn_prompt(
+        {
+            "projectId": "project-a",
+            "messages": [{"role": "user", "content": "evidence"}],
+            "model": {"candidateId": "only", "model": "MiniMax-M3"},
+            "language": "en",
+        },
+        "",
+    )
+
+    assert len(calls) == 2
+    assert len(calls[1][0]) == len(calls[0][0]) + 1
+    assert "submitted no project-memory result" in calls[1][0][-1]["content"]
+    assert "call submit_project_memory exactly once" in calls[1][0][-1]["content"]
+    assert calls[1][1]["candidates"] == [candidate]
+    assert learned == "## Current work\n- Parser fix verified."
+    assert summary == "Recorded verified work."
+    assert used_model["model"] == "MiniMax-M3"
 
 
 @pytest.mark.asyncio

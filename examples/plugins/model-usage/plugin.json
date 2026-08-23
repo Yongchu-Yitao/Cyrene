@@ -1,0 +1,30 @@
+{
+  "apiVersion": 1,
+  "id": "com.cyrene.example.model-usage",
+  "name": "模型用量",
+  "version": "1.0.0",
+  "description": "A project plugin with its own UI that shows Cyrene token usage.",
+  "backend": {
+    "type": "python",
+    "entry": "plugin.py"
+  },
+  "frontend": {
+    "mode": "iframe",
+    "entry": "ui/index.html"
+  },
+  "contributes": [
+    {
+      "point": "cyrene.view",
+      "id": "usage.dashboard",
+      "title": "模型用量"
+    },
+    {
+      "point": "cyrene.projectTool",
+      "id": "model-usage",
+      "title": "模型用量",
+      "subtitle": "最近 7 天",
+      "iconText": "Σ",
+      "view": "usage.dashboard"
+    }
+  ]
+}

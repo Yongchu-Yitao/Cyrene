@@ -18,9 +18,15 @@ def test_import_panel_has_three_supported_options_and_no_other_option():
 
 
 def test_welcome_footer_links_share_explicit_typography():
-    styles = (ROOT / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = (
+        ROOT
+        / "src"
+        / "webui"
+        / "frontend"
+        / "features"
+        / "chat"
+        / "onboarding.css"
+    ).read_text(encoding="utf-8")
 
     rule = styles.split(".wb-wel-more {", 1)[1].split("}", 1)[0]
     assert "font-family: inherit;" in rule

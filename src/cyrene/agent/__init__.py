@@ -110,7 +110,6 @@ _EXPORT_GROUPS: dict[str, tuple[str, ...]] = {
         "_looks_like_report_followup",
         "_normalize_pending_question",
         "_pending_question_resume_context",
-        "_refresh_session_labels",
         "_remove_messages_by_request_id",
         "_report_reference_stub",
         "_report_title_from_text",

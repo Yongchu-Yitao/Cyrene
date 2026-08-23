@@ -1,3 +1,4 @@
+import { workbenchServices } from "./shared/runtime/services.jsx"
 // Quick Chat surface. The Electron main process owns the global shortcut,
 // screenshot and window lifecycle; this renderer reuses the workbench data layer
 // (WorkbenchChatModel), the shared composer and the shared run-manager +
@@ -15,7 +16,7 @@ var {
 
 function quickChatText(zh, en) {
   try {
-    var lang = window.CyreneUI.require("i18n").getLang();
+    var lang = workbenchServices.i18n().getLang();
     return String(lang || "").toLowerCase().startsWith("zh") ? zh : en;
   } catch (e) {
     return zh;
@@ -86,12 +87,12 @@ function quickChatApplyPresentation() {
 }
 
 function quickChatJson(url) {
-  return window.CyreneUI.require("api").json(url, { toast: false });
+  return workbenchServices.api().json(url, { toast: false });
 }
 
 function quickChatErrorText(err) {
   try {
-    var api = window.CyreneUI.require("api");
+    var api = workbenchServices.api();
     if (api && typeof api.errorText === "function") return api.errorText(err);
   } catch (e) {}
   return String((err && err.message) || err || "");
@@ -145,19 +146,16 @@ function quickChatConfirmUserMessage(prev, confirmation) {
 }
 
 function QuickChatApp() {
-  var chatService = window.CyreneUI.require("chat");
-  var model = chatService.Model;
+  var chatService = workbenchServices.chat(); var model = chatService.Model;
   // Shared singleton run-manager: owns the send stream and folds live SSE
   // tool-call / phase / subagent progress into the runtime, exactly like the
   // main conversation page. This renderer is a separate Electron window (its own
   // JS context), so its run-manager and transcript hooks never collide with the
   // main window's.
   var runtimeEngine = chatService.Runtimes;
-  var [loading, setLoading] = useQuickChatState(true);
-  var [error, setError] = useQuickChatState("");
+  var [loading, setLoading] = useQuickChatState(true); var [error, setError] = useQuickChatState("");
   var [defaultProject, setDefaultProject] = useQuickChatState(null);
-  var [targets, setTargets] = useQuickChatState([]);
-  var [context, setContext] = useQuickChatState(null);
+  var [targets, setTargets] = useQuickChatState([]); var [context, setContext] = useQuickChatState(null);
   // The chosen target as a full object (null = new chat in the default project).
   // Stored standalone — not looked up in `targets` — so a search that filters
   // the list out doesn't silently drop the selection.
@@ -208,7 +206,7 @@ function QuickChatApp() {
     }
     try {
       if (window.CyreneUI.has("uiSurface")) {
-        window.CyreneUI.require("uiSurface").setAgentRunning(isRunning === true);
+        workbenchServices.uiSurface().setAgentRunning(isRunning === true);
       }
     } catch (error) {}
   }
@@ -637,7 +635,7 @@ function QuickChatApp() {
     if (!b || typeof b.getScreenshot !== "function") return;
     b.getScreenshot().then(function (shot) {
       if (!shot || !shot.bytes) {
-        if (window.CyreneUI.require("feedback").showToast) window.CyreneUI.require("feedback").showToast(quickChatText("截图不可用", "Screenshot unavailable"), "error");
+        if (workbenchServices.feedback().showToast) workbenchServices.feedback().showToast(quickChatText("截图不可用", "Screenshot unavailable"), "error");
         return;
       }
       var bytes = shot.bytes instanceof Uint8Array ? shot.bytes : new Uint8Array(shot.bytes);
@@ -647,7 +645,7 @@ function QuickChatApp() {
       window.dispatchEvent(new CustomEvent("cyrene:add-chat-attachments", { detail: { files: [file] } }));
       setScreenshotAddedAt(screenshotKey);
     }).catch(function () {
-      if (window.CyreneUI.require("feedback").showToast) window.CyreneUI.require("feedback").showToast(quickChatText("截图读取失败", "Failed to read screenshot"), "error");
+      if (workbenchServices.feedback().showToast) workbenchServices.feedback().showToast(quickChatText("截图读取失败", "Failed to read screenshot"), "error");
     });
   }
 
@@ -808,8 +806,8 @@ function QuickChatApp() {
       </main>
       {/* Render the shared toast/confirm host so the composer's upload errors
           (and any other feedback) surface in this window too. */}
-      {typeof window.CyreneUI.require("feedback").Host === "function"
-        ? React.createElement(window.CyreneUI.require("feedback").Host)
+      {typeof workbenchServices.feedback().Host === "function"
+        ? React.createElement(workbenchServices.feedback().Host)
         : null}
     </div>
   );

@@ -19,8 +19,8 @@ import json
 
 import pytest
 
-from cyrene.workbench import runtime as R
-from cyrene.workbench import knowledge as kb
+from cyrene.knowledge import workspace as kb
+from cyrene.workbench import context as workbench_context
 
 
 @pytest.fixture
@@ -31,37 +31,50 @@ def default_project_store(monkeypatch):
             {"id": "project_abc123", "dataKey": "default", "name": "Cyrene"}
         ]
     }
-    monkeypatch.setattr(R, "_read_workbench_store", lambda: payload)
+    monkeypatch.setattr(workbench_context, "read_projects", lambda: payload["projects"])
     return payload
 
 
-# ── resolver: read path (Workbench knowledge page) ──────────────────────────
+# ── resolver: read path (Workbench Library page) ────────────────────────────
 
 def test_resolve_default_data_key_decouples_to_project_id_key(default_project_store):
     # Frontend sends dataKey "default"; it must resolve to the project's id-based
     # knowledge key, NOT the shared global "default" catalog db.
-    assert kb._resolve_workspace_id("default") == "project_abc123"
+    assert kb.resolve_workspace_id("default") == "project_abc123"
 
 
 def test_resolve_default_project_id_maps_to_same_key(default_project_store):
     # Passing the id directly resolves to the same id-based key.
-    assert kb._resolve_workspace_id("project_abc123") == "project_abc123"
+    assert kb.resolve_workspace_id("project_abc123") == "project_abc123"
 
 
 def test_resolve_non_default_project_is_unchanged(monkeypatch):
     # Non-default projects have dataKey == safe(id), so the key is the id either
     # way — this change is a no-op for them.
     payload = {"projects": [{"id": "project_x", "dataKey": "project_x", "name": "X"}]}
-    monkeypatch.setattr(R, "_read_workbench_store", lambda: payload)
-    assert kb._resolve_workspace_id("project_x") == "project_x"
+    monkeypatch.setattr(workbench_context, "read_projects", lambda: payload["projects"])
+    assert kb.resolve_workspace_id("project_x") == "project_x"
 
 
-def test_resolve_unknown_workspace_falls_back_to_sanitized_id(default_project_store):
-    assert kb._resolve_workspace_id("project_other") == "project_other"
+def test_unknown_workspace_is_rejected(default_project_store):
+    assert workbench_context.resolve_workbench_project_id("project_other") is None
+    with pytest.raises(kb.WorkspaceNotFoundError, match="workspace not found"):
+        kb.resolve_workspace_id("project_other")
+
+
+def test_empty_workspace_is_not_an_alias_for_default_project(default_project_store):
+    with pytest.raises(kb.WorkspaceRequiredError, match="workspace is required"):
+        kb.resolve_workspace_id("")
 
 
 @pytest.mark.asyncio
-async def test_ensure_kb_db_uses_id_scoped_file_for_default_project(
+async def test_unknown_workspace_never_creates_a_database(default_project_store):
+    with pytest.raises(kb.WorkspaceNotFoundError):
+        await kb.ensure_workspace_db("project_other")
+
+
+@pytest.mark.asyncio
+async def test_ensure_workspace_db_uses_id_scoped_file_for_default_project(
     tmp_path, monkeypatch, default_project_store
 ):
     # End-to-end on the read side: the default project's kb file is kb_<id>.db,
@@ -71,7 +84,7 @@ async def test_ensure_kb_db_uses_id_scoped_file_for_default_project(
     store_dir = tmp_path / "store"
     store_dir.mkdir()
     monkeypatch.setattr(config, "STORE_DIR", store_dir)
-    db_path = await kb._ensure_kb_db("default")
+    db_path = await kb.ensure_workspace_db("default")
     assert db_path.endswith("kb_project_abc123.db")
     assert not db_path.endswith("kb_default.db")
 

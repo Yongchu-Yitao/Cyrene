@@ -10,6 +10,7 @@ Covers the live-view foundation without launching a real browser:
 
 import asyncio
 import base64
+import importlib.util
 import json
 import sys
 import time
@@ -21,7 +22,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 # Patch missing optional deps before any cyrene import (mirrors test_runtime_fixes).
-sys.modules.setdefault("PIL", MagicMock())
+try:
+    _pil_missing = importlib.util.find_spec("PIL") is None
+except ValueError:
+    _pil_missing = "PIL" not in sys.modules
+if _pil_missing:
+    sys.modules.setdefault("PIL", MagicMock())
 sys.modules.setdefault("pypdf", MagicMock())
 
 _VALID_PNG = base64.b64decode(
@@ -571,20 +577,26 @@ async def test_screencast_frame_fans_out_and_acks():
     assert ("Page.screencastFrameAck", {"sessionId": "s1"}) in cdp.sent
 
 
-async def test_screencast_drops_frames_when_queue_full():
+async def test_screencast_skips_decode_and_acks_when_queue_full(monkeypatch):
     from cyrene import browser
 
     session = browser._BrowserSession()
     session._page = _FakePage()
-    session._cdp = None  # no ack path
+    cdp = _FakeCDP()
+    session._cdp = cdp
     q = asyncio.Queue(maxsize=1)
     q.put_nowait({"data": "old", "url": ""})
     session._frame_subs = {q}
+    decode = MagicMock(side_effect=AssertionError("discarded frame was decoded"))
+    monkeypatch.setattr(browser.base64, "b64decode", decode)
 
-    # Must not raise even though the queue is full; the new frame is dropped.
-    session._on_screencast_frame({"data": "new", "sessionId": None})
+    session._on_screencast_frame({"data": "new", "sessionId": "s1"})
+    await asyncio.sleep(0)
+
+    decode.assert_not_called()
     assert q.qsize() == 1
     assert q.get_nowait()["data"] == "old"
+    assert ("Page.screencastFrameAck", {"sessionId": "s1"}) in cdp.sent
 
 
 # --- M3: native-window login takeover --------------------------------------

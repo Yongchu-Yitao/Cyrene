@@ -64,6 +64,8 @@ _DEFAULT_ENV: dict[str, str] = {
     "LOTTERY_DELTA": "0.15",
     "LOTTERY_MAX": "0.85",
     "SEARCH_PROXY": "",
+    "TAVILY_API_KEY": "",
+    "BRAVE_SEARCH_API_KEY": "",
     "SEARXNG_URL": "",
     "SEARXNG_AUTO_START": "1",
     "SEARXNG_PORT": "8888",
@@ -99,8 +101,18 @@ _DEFAULT_ENABLED_TOOLS: dict[str, bool] = {
 _DEFAULT_SETTINGS: dict = {
     "search_mode": "builtin",
     "search_external_url": "",
+    "search": {
+        "provider_order": [],
+        "provider_enabled": {
+            "simplexng": True,
+            "deepseek": True,
+            "tavily": False,
+            "brave": False,
+        },
+    },
     "spawn_policy": "conservative",
     "heartbeat_interval": 1800,
+    "background_skill_learning": True,
     "write_permission_mode": "workspace_only",
     # Adapter definitions live in code; user-owned connections, model profiles,
     # and their independent role routes live in this encrypted document.

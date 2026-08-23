@@ -324,20 +324,10 @@ def _unique_id(preferred: str, used: set[str], prefix: str) -> str:
     return candidate
 
 
-def _with_default_provider_connections(raw: dict[str, Any]) -> dict[str, Any]:
-    """Add presets introduced after the stored version without reviving deletions."""
-
-    upgraded = deepcopy(raw)
-    connections = upgraded.get("connections")
-    if not isinstance(connections, list):
-        return upgraded
-
-    source_version = _configuration_version(raw)
-    pending_presets = [
-        preset
-        for preset in _DEFAULT_PROVIDER_CONNECTIONS
-        if source_version < int(preset["introduced_version"])
-    ]
+def _default_connection_state(
+    connections: list[Any],
+    pending_presets: list[dict[str, Any]],
+) -> tuple[set[str], set[str], dict[str, str]]:
     default_provider_ids = {
         str(preset.get("id") or "").strip().lower()
         for preset in pending_presets
@@ -366,18 +356,12 @@ def _with_default_provider_connections(raw: dict[str, Any]) -> dict[str, Any]:
         )
         base_url = str(connection.get("base_url") or "").strip().rstrip("/")
         if (
-            (
-                preset == "minimax"
-                or (connection_id == "minimax" and connection_name == "minimax")
-            )
+            (preset == "minimax" or (connection_id == "minimax" and connection_name == "minimax"))
             and base_url in _MINIMAX_REPLACED_DEFAULT_BASE_URLS
         ):
             connection["base_url"] = _MINIMAX_DEFAULT_BASE_URL
         if (
-            (
-                preset == "deepseek"
-                or (connection_id == "deepseek" and connection_name == "deepseek")
-            )
+            (preset == "deepseek" or (connection_id == "deepseek" and connection_name == "deepseek"))
             and base_url in _DEEPSEEK_REPLACED_DEFAULT_BASE_URLS
         ):
             connection["base_url"] = _DEEPSEEK_DEFAULT_BASE_URL
@@ -395,6 +379,27 @@ def _with_default_provider_connections(raw: dict[str, Any]) -> dict[str, Any]:
             host = ""
         if connection_id:
             hosts_by_connection[connection_id] = host
+    return recognized, used_ids, hosts_by_connection
+
+
+def _with_default_provider_connections(raw: dict[str, Any]) -> dict[str, Any]:
+    """Add presets introduced after the stored version without reviving deletions."""
+
+    upgraded = deepcopy(raw)
+    connections = upgraded.get("connections")
+    if not isinstance(connections, list):
+        return upgraded
+
+    source_version = _configuration_version(raw)
+    pending_presets = [
+        preset
+        for preset in _DEFAULT_PROVIDER_CONNECTIONS
+        if source_version < int(preset["introduced_version"])
+    ]
+    recognized, used_ids, hosts_by_connection = _default_connection_state(
+        connections,
+        pending_presets,
+    )
 
     raw_profiles = upgraded.get("profiles")
     profiles = raw_profiles if isinstance(raw_profiles, list) else []

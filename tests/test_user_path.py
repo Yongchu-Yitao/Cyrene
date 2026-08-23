@@ -6,6 +6,9 @@ import pytest
 from cyrene.runtime import user_path
 
 
+LOGIN_SHELL = user_path._select_login_shell()
+
+
 def test_merge_path_entries_dedupes_preserving_order():
     merged = user_path.merge_path_entries("/a:/b", "/b:/c", "/d")
     assert merged == os.pathsep.join(["/a", "/b", "/c", "/d"])
@@ -16,11 +19,9 @@ def test_merge_path_entries_skips_blanks():
     assert merged == os.pathsep.join(["/a", "/b"])
 
 
+@pytest.mark.skipif(LOGIN_SHELL is None, reason="no login shell is available")
 def test_probe_login_shell_path_returns_path():
-    shell = user_path._select_login_shell()
-    if not shell:
-        pytest.skip("no login shell available")
-    path = user_path._probe_login_shell_path(shell)
+    path = user_path._probe_login_shell_path(LOGIN_SHELL)
     assert path
     assert os.pathsep in path
     assert path.startswith("/")

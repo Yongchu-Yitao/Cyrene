@@ -9,14 +9,14 @@ import asyncio
 import ipaddress
 import logging
 import re
-import sys
 import time
 from urllib.parse import urlparse
 
 import requests
 
-from cyrene.config import SEARCH_PROXY, SEARXNG_URL
+from cyrene.config import SEARXNG_URL
 from cyrene.observability.trace import new_trace_id, trace_span
+from cyrene.runtime.search_settings import provider_api_key, runtime_settings
 from cyrene.tooling.backends.deepseek_web_search import (
     DeepSeekWebSearchError,
     find_official_deepseek_search_candidate,
@@ -26,23 +26,26 @@ from cyrene.tooling.backends.deepseek_web_search import (
 logger = logging.getLogger(__name__)
 
 
+class SearchBackendUnavailable(RuntimeError):
+    """The configured search service could not execute the query."""
+
+
 def _proxied_session() -> requests.Session:
     """创建 requests Session，如果配置了代理则使用代理。"""
+    from cyrene.tooling.backends.searxng_manager import get_effective_search_proxy
+
     s = requests.Session()
     s.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
-    if SEARCH_PROXY:
-        s.proxies = {"http": SEARCH_PROXY, "https": SEARCH_PROXY}
+    proxy_url = get_effective_search_proxy()
+    if proxy_url:
+        s.proxies = {"http": proxy_url, "https": proxy_url}
     return s
+
 
 _HTTP_TIMEOUT = 30.0
 _MAX_CONCURRENT = 20
 _EVIDENCE_EXCERPT_CHARS = 1_500
 
-# Native DeepSeek web search is used only on Windows, where the locally
-# managed SimpleXNG instance is unavailable. The adapter in
-# deepseek_web_search.py recognizes only DeepSeek's official endpoint and
-# never probes credentials; SimpleXNG remains the fallback on every platform.
-_NATIVE_DEEPSEEK_SEARCH_ENABLED = sys.platform == "win32"
 
 def _get_simplexng_url() -> str:
     """Resolve the app-managed SimpleXNG search API URL."""
@@ -68,11 +71,20 @@ def _is_loopback_url(url: str) -> bool:
         return False
 
 
+def _unresponsive_engine_names(data: dict) -> list[str]:
+    failures = data.get("unresponsive_engines") or []
+    return sorted({
+        str(item[0]).strip()
+        for item in failures
+        if isinstance(item, (list, tuple)) and item and str(item[0]).strip()
+    })
+
+
 async def _search_simplexng(query: str) -> list[dict]:
     """Search via the built-in SimpleXNG SearXNG-compatible API."""
     base_url = _get_simplexng_url()
     if not base_url:
-        return []
+        raise SearchBackendUnavailable("Web search backend is not running or configured.")
     url = f"{base_url.rstrip('/')}/search"
     headers = {"Accept": "application/json"}
 
@@ -85,16 +97,38 @@ async def _search_simplexng(query: str) -> list[dict]:
             # External SearXNG may require Cyrene's configured search proxy.
             sess = _proxied_session()
         with sess:
-            r = sess.get(url, params={"q": query, "format": "json", "language": "zh-CN", "safesearch": "0"}, headers=headers, timeout=_HTTP_TIMEOUT)
+            r = sess.get(
+                url,
+                params={
+                    "q": query,
+                    "format": "json",
+                    "language": "zh-CN",
+                    "safesearch": "0",
+                },
+                headers=headers,
+                timeout=_HTTP_TIMEOUT,
+            )
             r.raise_for_status()
             data = r.json()
-            return data.get("results", [])
+            raw_results = data.get("results") or []
+            failed_engines = _unresponsive_engine_names(data)
+            if not raw_results and failed_engines:
+                engine_list = ", ".join(failed_engines)
+                raise SearchBackendUnavailable(
+                    "Web search backend could not obtain results because search "
+                    f"engines were unreachable: {engine_list}."
+                )
+            return raw_results
 
     try:
         raw_results = await asyncio.to_thread(_fetch)
+    except SearchBackendUnavailable:
+        raise
     except Exception as exc:
         logger.warning("SimpleXNG search failed: %s", exc)
-        return []
+        raise SearchBackendUnavailable(
+            f"SimpleXNG request failed ({exc.__class__.__name__})."
+        ) from exc
 
     results = []
     for r in raw_results:
@@ -194,6 +228,95 @@ def _self_contained_search_result(
     return "\n".join(sections).rstrip()
 
 
+def _normalized_api_results(raw_results: list[dict], query: str) -> list[dict]:
+    results: list[dict] = []
+    for raw in raw_results:
+        if not isinstance(raw, dict):
+            continue
+        title = str(raw.get("title") or "").strip()
+        url = str(raw.get("url") or "").strip()
+        snippet = str(raw.get("content") or raw.get("description") or "").strip()
+        if title and url and snippet:
+            results.append({
+                "title": title,
+                "url": url,
+                "snippet": snippet,
+                "query": query,
+            })
+        if len(results) >= 8:
+            break
+    return results
+
+
+async def _search_tavily(topic: str) -> str:
+    api_key = provider_api_key("tavily")
+    if not api_key:
+        raise SearchBackendUnavailable("Tavily API key is not configured.")
+
+    def _request() -> list[dict]:
+        with _proxied_session() as session:
+            response = session.post(
+                "https://api.tavily.com/search",
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
+                json={
+                    "query": topic,
+                    "search_depth": "basic",
+                    "max_results": 8,
+                    "include_answer": False,
+                    "include_raw_content": False,
+                },
+                timeout=_HTTP_TIMEOUT,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return payload.get("results") or []
+
+    try:
+        results = _normalized_api_results(await asyncio.to_thread(_request), topic)
+    except Exception as exc:
+        raise SearchBackendUnavailable(
+            f"Tavily search request failed: {exc.__class__.__name__}."
+        ) from exc
+    if not results:
+        raise SearchBackendUnavailable("Tavily returned no usable search content.")
+    return _self_contained_search_result(results, [item["snippet"] for item in results])
+
+
+async def _search_brave(topic: str) -> str:
+    api_key = provider_api_key("brave")
+    if not api_key:
+        raise SearchBackendUnavailable("Brave Search API key is not configured.")
+
+    def _request() -> list[dict]:
+        with _proxied_session() as session:
+            response = session.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                params={"q": topic, "count": 8, "safesearch": "moderate"},
+                headers={
+                    "Accept": "application/json",
+                    "X-Subscription-Token": api_key,
+                },
+                timeout=_HTTP_TIMEOUT,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            web = payload.get("web") if isinstance(payload, dict) else None
+            return web.get("results") or [] if isinstance(web, dict) else []
+
+    try:
+        results = _normalized_api_results(await asyncio.to_thread(_request), topic)
+    except Exception as exc:
+        raise SearchBackendUnavailable(
+            f"Brave Search request failed: {exc.__class__.__name__}."
+        ) from exc
+    if not results:
+        raise SearchBackendUnavailable("Brave Search returned no usable search content.")
+    return _self_contained_search_result(results, [item["snippet"] for item in results])
+
+
 # ---------------------------------------------------------------------------
 # Main entry: deep_search
 # ---------------------------------------------------------------------------
@@ -206,8 +329,8 @@ async def _deep_search_simplexng(topic: str) -> str:
         1. Query selection: use the original user topic
         2. SimpleXNG search + fetch URL contents
 
-    This remains the dependency-free fallback when DeepSeek native search is
-    unavailable or the user has not configured an official DeepSeek account.
+    Any transport failure, empty result set, or result set without usable
+    evidence is reported to the ordered provider chain so it can continue.
     """
     logger.info("Deep search starting for: %s", topic)
 
@@ -231,7 +354,7 @@ async def _deep_search_simplexng(topic: str) -> str:
     async with trace_span(
         "search_stage", "simplexng_search", attributes={"query_count": len(queries)}
     ):
-        search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+        search_results = await asyncio.gather(*search_tasks)
 
     all_results: list[dict] = []
     for sr in search_results:
@@ -241,7 +364,7 @@ async def _deep_search_simplexng(topic: str) -> str:
     logger.info("Stage 2 search complete: %d raw results (SimpleXNG)", len(all_results))
 
     if not all_results:
-        return f"Search returned no results for: {topic}"
+        raise SearchBackendUnavailable("SimpleXNG returned no usable search results.")
 
     # Deduplicate by URL (keep first occurrence)
     seen_urls: set[str] = set()
@@ -303,6 +426,8 @@ async def _deep_search_simplexng(topic: str) -> str:
         logger.warning("=== end raw results ===")
 
     fetched_contents = [r.get("fetched_content", "") or r.get("snippet", "") for r in deduped]
+    if not any(str(content or "").strip() for content in fetched_contents):
+        raise SearchBackendUnavailable("SimpleXNG returned results without usable content.")
     result = _self_contained_search_result(deduped, fetched_contents)
     logger.info(
         "WebSearch evidence result generated (%d chars, %d sources)",
@@ -313,7 +438,7 @@ async def _deep_search_simplexng(topic: str) -> str:
 
 
 async def _deep_search_deepseek(topic: str) -> str:
-    """Native DeepSeek Responses-API web search (Windows only)."""
+    """Native DeepSeek Responses-API web search."""
     candidate = find_official_deepseek_search_candidate()
     if candidate is None:
         raise DeepSeekWebSearchError("no official DeepSeek account configured")
@@ -331,6 +456,28 @@ async def _deep_search_deepseek(topic: str) -> str:
         return result.text
 
 
+async def _run_search_provider(provider: str, topic: str) -> str:
+    try:
+        if provider == "simplexng":
+            return await _deep_search_simplexng(topic)
+        if provider == "deepseek":
+            return await _deep_search_deepseek(topic)
+        if provider == "tavily":
+            return await _search_tavily(topic)
+        if provider == "brave":
+            return await _search_brave(topic)
+        raise SearchBackendUnavailable(f"Unknown search provider: {provider}.")
+    except SearchBackendUnavailable:
+        raise
+    except DeepSeekWebSearchError as exc:
+        raise SearchBackendUnavailable(str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Search provider %s failed unexpectedly", provider)
+        raise SearchBackendUnavailable(
+            f"{provider} failed ({exc.__class__.__name__})."
+        ) from exc
+
+
 async def _deep_search_impl(
     topic: str,
     *,
@@ -338,27 +485,31 @@ async def _deep_search_impl(
     session_id: str = "",
     round_id: str = "",
 ) -> str:
-    """Search via native DeepSeek on Windows, falling back to SimpleXNG."""
+    """Try enabled search providers in user-configured order."""
     del db_path, session_id, round_id
-    logger.info(
-        "Web search using native DeepSeek enabled=%s (platform=%s)",
-        _NATIVE_DEEPSEEK_SEARCH_ENABLED,
-        sys.platform,
-    )
-    if _NATIVE_DEEPSEEK_SEARCH_ENABLED:
+    settings = runtime_settings()
+    if not settings.enabled:
+        raise SearchBackendUnavailable("Web search is disabled in Settings.")
+    if not settings.providers:
+        raise SearchBackendUnavailable("No search provider is enabled in Settings.")
+    failures: list[str] = []
+    for provider in settings.providers:
         try:
-            return await _deep_search_deepseek(topic)
-        except DeepSeekWebSearchError as exc:
-            logger.warning(
-                "Native DeepSeek search unavailable, falling back to SimpleXNG: %s",
-                exc,
-            )
-    async with trace_span(
-        "search_stage",
-        "simplexng_pipeline",
-        attributes={"backend": "simplexng", "deepseek_enabled": _NATIVE_DEEPSEEK_SEARCH_ENABLED},
-    ):
-        return await _deep_search_simplexng(topic)
+            async with trace_span(
+                "search_stage",
+                f"{provider}_pipeline",
+                attributes={"backend": provider},
+            ):
+                result = str(await _run_search_provider(provider, topic)).strip()
+            if not result:
+                raise SearchBackendUnavailable("provider returned empty content")
+            return result
+        except SearchBackendUnavailable as exc:
+            failures.append(f"{provider}: {exc}")
+            logger.warning("Search provider %s unavailable: %s", provider, exc)
+    raise SearchBackendUnavailable(
+        "All enabled search providers failed. " + " | ".join(failures)
+    )
 
 
 async def deep_search(

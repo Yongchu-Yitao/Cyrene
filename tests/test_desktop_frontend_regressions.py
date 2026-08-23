@@ -14,6 +14,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "src" / "webui" / "frontend"
+ESBUILD = ROOT / "src" / "webui" / "node_modules" / ".bin" / "esbuild"
 
 
 def _source(path: Path) -> str:
@@ -35,14 +36,15 @@ def test_electron_auth_header_is_limited_to_the_discovered_backend_port():
 
 
 def test_settings_requests_share_http_status_enforcement():
-    source = _source(FRONTEND / "settings-overlay.jsx")
+    source = _source(FRONTEND / "features" / "settings" / "shared.jsx")
+    overlay = _source(FRONTEND / "settings-overlay.jsx")
 
     assert source.count("window.fetch(") == 1
     assert not re.search(r"(?<![.A-Za-z0-9_])fetch\(", source)
     assert "if (response.ok) return response;" in source
     assert "response.clone().json()" in source
-    assert "setRedactSecrets(previousEnabled)" in source
-    assert "setCapability(\"redactSecrets\", previousEnabled)" in source
+    assert "setRedactSecrets(previousEnabled)" in overlay
+    assert "setCapability(\"redactSecrets\", previousEnabled)" in overlay
 
 
 def test_schedule_and_library_async_results_are_selection_scoped():
@@ -94,14 +96,14 @@ def test_scheduled_task_timezone_round_trips_through_database(tmp_path):
 
 
 def test_calendar_expansion_uses_the_same_timezone_across_dst():
-    from route.workbench.schedule import _expand_task
+    from cyrene.workbench.schedule_domain import expand_task
 
     task = {
         "schedule_type": "cron",
         "schedule_value": "0 9 * * *",
         "schedule_timezone": "America/New_York",
     }
-    occurrences = _expand_task(
+    occurrences = expand_task(
         task,
         datetime(2026, 3, 7, tzinfo=timezone.utc),
         datetime(2026, 3, 10, tzinfo=timezone.utc),
@@ -124,13 +126,14 @@ def test_calendar_expansion_uses_the_same_timezone_across_dst():
         "workbench-quick-chat.jsx",
     ],
 )
+@pytest.mark.skipif(
+    not ESBUILD.is_file(),
+    reason="frontend esbuild dependency is not installed",
+)
 def test_changed_frontend_sources_compile_with_esbuild(filename, tmp_path):
-    esbuild = ROOT / "src" / "webui" / "node_modules" / ".bin" / "esbuild"
-    if not esbuild.exists():
-        pytest.skip("frontend dependencies are not installed")
     subprocess.run(
         [
-            str(esbuild),
+            str(ESBUILD),
             str(FRONTEND / filename),
             "--loader:.jsx=jsx",
             f"--outfile={tmp_path / (filename + '.js')}",

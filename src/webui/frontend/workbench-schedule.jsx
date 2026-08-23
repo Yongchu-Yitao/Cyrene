@@ -1,3 +1,4 @@
+import { workbenchServices } from "./shared/runtime/services.jsx"
 // Workbench Schedule / Calendar page.
 //
 // Fully independent from the removed classic scheduled-tasks UI
@@ -40,10 +41,10 @@
   var WEEKDAY_EN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
   function T(key, params, fallback) {
-    return window.CyreneUI.require("i18n").t(key, params, fallback);
+    return workbenchServices.i18n().t(key, params, fallback);
   }
   function currentLang() {
-    return window.CyreneUI.require("i18n").getLang();
+    return workbenchServices.i18n().getLang();
   }
   function weekdayName(d, short) {
     return currentLang() === "zh" ? WEEKDAY_CN[d.getDay()] : WEEKDAY_EN[d.getDay()];
@@ -1026,7 +1027,7 @@
 
   // ── main page ────────────────────────────────────────────────────────
   function WorkbenchSchedulePage(props) {
-    window.CyreneUI.require("i18n").use();
+    workbenchServices.i18n().use();
     var project = props && props.project;
     var active = !props || props.active !== false;
     // Send the canonical id. The backend resolves it to the schedule dataKey
@@ -1124,7 +1125,7 @@
         pendingTaskIdRef.current = "";
         pendingEntityIdRef.current = "";
         pendingDateAppliedRef.current = false;
-        window.CyreneUI.require("navigation").clearPending();
+        workbenchServices.navigation().clearPending();
       }
     }
 
@@ -1159,7 +1160,7 @@
       }
 
       pendingDateAppliedRef.current = false;
-      var pending = window.CyreneUI.require("navigation").getPending();
+      var pending = workbenchServices.navigation().getPending();
       var pendingType = pending && pending.type;
       if (pendingType === "schedule") {
         applyPendingDate(pending);
@@ -1192,7 +1193,7 @@
       }
       window.addEventListener("focus", refreshSoon);
       document.addEventListener("visibilitychange", onVisibility);
-      var unsubscribe = window.CyreneUI.require("events").subscribe(onRuntimeEvent);
+      var unsubscribe = workbenchServices.events().subscribe(onRuntimeEvent);
       return function () {
         if (refreshTimer) clearTimeout(refreshTimer);
         window.removeEventListener("focus", refreshSoon);
@@ -1297,13 +1298,13 @@
       API.update(ev.task_id, { status: next }).then(function () { load(); }).catch(function (e) { setError(e.message || String(e)); });
     }
     function removeTask(ev) {
-      window.CyreneUI.require("feedback").confirmModal({ body: T("schedule.confirmDeleteTask"), confirmLabel: T("common.delete"), danger: true }).then(function (ok) {
+      workbenchServices.feedback().confirmModal({ body: T("schedule.confirmDeleteTask"), confirmLabel: T("common.delete"), danger: true }).then(function (ok) {
         if (!ok) return;
         API.remove(ev.task_id).then(function () { setSelectedId(null); load(); }).catch(function (e) { setError(e.message || String(e)); });
       });
     }
     function removeEntity(ev) {
-      window.CyreneUI.require("feedback").confirmModal({ body: T("schedule.confirmDeleteEvent"), confirmLabel: T("common.delete"), danger: true }).then(function (ok) {
+      workbenchServices.feedback().confirmModal({ body: T("schedule.confirmDeleteEvent"), confirmLabel: T("common.delete"), danger: true }).then(function (ok) {
         if (!ok) return;
         API.removeEntity(ev.entity_id).then(function () { setSelectedId(null); setEntityDetail(null); load(); }).catch(function (e) { setError(e.message || String(e)); });
       });

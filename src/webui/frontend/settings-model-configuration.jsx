@@ -1,5 +1,126 @@
+import { workbenchServices } from "./shared/runtime/services.jsx"
 // Model configuration settings — provider connections, model profiles and routes.
 // Loaded as a classic script and registered through the shared CyreneUI registry.
+var MODEL_CONFIGURATION_ERROR_KEYS = {
+  "model connection timed out": ["settings.modelConnectionTimedOut", "Model connection timed out."],
+  "model connection was rejected": ["settings.modelConnectionRejected", "The model service rejected the connection."],
+  "model connection failed": ["settings.modelConnectionFailed", "Model connection failed."],
+  "model connection is unavailable": ["settings.modelConnectionUnavailable", "The model service is currently unavailable."],
+  "model discovery timed out": ["settings.modelDiscoveryTimedOut", "Model discovery timed out."],
+  "model discovery was rejected": ["settings.modelDiscoveryRejected", "The model service rejected model discovery."],
+  "model discovery failed": ["settings.modelDiscoveryFailed", "Model discovery failed."],
+  "model discovery is unavailable": ["settings.modelDiscoveryUnavailable", "Model discovery is currently unavailable."],
+};
+var LEGACY_USER_ADAPTERS = {
+  anthropic: "Anthropic", anthropic_messages: "Anthropic",
+  openai: "OpenAI", openai_chat: "OpenAI", openai_compatible: "OpenAI",
+  openai_responses: "OpenAI Responses",
+  gemini: "Gemini", gemini_api: "Gemini", google_gemini: "Gemini",
+};
+var ROUTE_META = {
+  primary: { title: "默认模型顺位", description: "对话与 Agent 的主要模型，按顺序自动回退。", capability: "chat", ordered: true },
+  secondary: { title: "次要模型", description: "用于摘要、标题和低成本辅助任务。", capability: "chat", ordered: false },
+  vision: { title: "识图模型", description: "处理图片和视觉内容，按顺序自动回退。", capability: "vision", ordered: true },
+  embedding: { title: "嵌入模型", titleKey: "settings.embeddingRouteTitle", description: "为知识库和语义检索生成向量。", descriptionKey: "settings.embeddingRouteHint", capability: "embedding", ordered: false },
+};
+
+function renderModelConnectionPane(v) {
+  var h = v.h;
+  return h("aside", { className: "wb-mcfg-connection-pane", "aria-label": "模型服务商" },
+    h("div", { className: "wb-workbench-filterbar wb-mcfg-searchbar" },
+      h("label", { className: "wb-workbench-searchbox wb-mcfg-searchbox" },
+        v.searchIcon(16),
+        h("input", {
+          type: "search", value: v.query,
+          onChange: function (event) { v.setQuery(event.target.value); },
+          placeholder: "搜索模型服务…", "aria-label": "搜索模型服务",
+          autoComplete: "off", spellCheck: false,
+        })
+      )
+    ),
+    h("div", { className: "wb-mcfg-connection-list", role: "listbox", "aria-label": "服务商连接" },
+      !v.filtered.length ? h("div", { className: "wb-mcfg-list-empty" }, String(v.query || "").trim() ? "没有匹配的服务商。" : "还没有服务商连接。") : null,
+      v.filtered.map(function (connection) {
+        var adapter = v.adapters.find(function (item) { return item.id === connection.adapter; });
+        var local = v.isLocalConnection(connection);
+        var count = local
+          ? v.localModels.filter(function (model) { return model.ready === true; }).length
+          : v.config.profiles.filter(function (profile) { return profile.connection_id === connection.id; }).length;
+        var serviceLabel = local ? "Local" : (adapter && adapter.name || connection.adapter);
+        return h("button", {
+          type: "button", role: "option", key: connection.id,
+          className: "wb-mcfg-connection-item" + (v.selectedId === connection.id ? " is-selected" : ""),
+          "aria-selected": v.selectedId === connection.id,
+          "aria-haspopup": "menu",
+          "aria-expanded": !!v.connectionMenu && v.connectionMenu.connectionId === connection.id,
+          "aria-controls": v.connectionMenu && v.connectionMenu.connectionId === connection.id ? "wb-mcfg-connection-menu" : undefined,
+          "data-cyrene-context-menu": "true",
+          onClick: function () { v.setConnectionMenu(null); v.setSelectedId(connection.id); v.store.setError(""); },
+          onContextMenu: function (event) { v.openConnectionMenu(event, connection, false); },
+          onKeyDown: function (event) {
+            if (event.key === "ContextMenu" || event.key === "Menu" || (event.shiftKey && event.key === "F10")) v.openConnectionMenu(event, connection, true);
+          },
+        },
+          h("span", { className: "wb-mcfg-provider-mark", "aria-hidden": "true" }, v.connectionProviderMark(connection)),
+          h("span", { className: "wb-mcfg-connection-copy" },
+            h("strong", null, v.connectionDisplayName(connection)),
+            h("small", null, serviceLabel + " · " + count + " 个模型")
+          ),
+          h("span", { className: "wb-mcfg-dot " + (connection.enabled ? "is-ready" : "is-off"), title: connection.enabled ? "已启用" : "已停用" }, h("span", { className: "wb-mcfg-sr-only" }, connection.enabled ? "已启用" : "已停用"))
+        );
+      })
+    ),
+    h("button", { type: "button", className: "wb-mcfg-add-connection", disabled: !v.selectableAdapters.length, onClick: v.addConnection, title: v.selectableAdapters.length ? "" : v.label(v.props, "settings.adapterUnavailable", "当前服务没有可添加的协议。") }, v.browserIcon("plus", 17), "添加服务商")
+  );
+}
+
+function renderModelDetailPane(v) {
+  var h = v.h;
+  var selected = v.selected;
+  return h("main", { className: "wb-mcfg-detail-pane" }, selected ? h(React.Fragment, null,
+    h("div", { className: "wb-mcfg-detail-head" },
+      h("div", null, h("h3", null, v.connectionDisplayName(selected)), v.selectedDescription ? h("p", null, v.selectedDescription) : null),
+      v.isLocalConnection(selected)
+        ? h("button", { type: "button", className: "wb-mcfg-icon-btn", onClick: v.refreshLocalModels, "aria-label": "刷新本地模型" }, v.browserIcon("reload", 16))
+        : h(v.Toggle, { checked: selected.enabled, label: (selected.enabled ? "停用" : "启用") + selected.name, onChange: function (value) { v.updateConnection("enabled", value); } })
+    ),
+    !v.isLocalConnection(selected) ? h("section", { className: "wb-mcfg-form-section wb-mcfg-connection-section", "aria-label": "连接设置" },
+      h("div", { className: "wb-mcfg-form-grid" },
+        h(v.Field, { label: "连接名称" }, h("input", { className: "wb-input", value: selected.name, "aria-label": "连接名称", onChange: function (event) { v.updateConnection("name", event.target.value); } })),
+        h(v.Field, { label: v.label(v.props, "settings.adapter", "协议") }, h("select", { className: "wb-select", value: selected.adapter, "aria-label": "模型服务协议", disabled: !v.selectableAdapters.length, onChange: function (event) { v.updateConnection("adapter", event.target.value); } }, v.editorAdapters.map(function (adapter) {
+          return h("option", { key: adapter.id, value: adapter.id, disabled: !v.isUserSelectableAdapter(adapter) }, v.adapterOptionName(adapter));
+        }))),
+        !v.isCodexConnection(selected) && !v.isLocalConnection(selected) ? h(v.Field, { label: "API 地址", wide: true }, h("input", { className: "wb-input", type: "url", value: selected.base_url, "aria-label": "模型服务 API 地址", onChange: function (event) { v.updateConnection("base_url", event.target.value); }, placeholder: "https://api.example.com/v1", autoComplete: "url" })) : null,
+        !v.isCodexConnection(selected) && !v.isLocalConnection(selected) ? h(v.Field, { label: "API 密钥", wide: true, hint: selected.secret_configured && !selected.secret ? "已保存密钥；留空不会覆盖。" : "密钥只发送给本机配置 API。" }, h("input", {
+          className: "wb-input", type: "password", value: selected.secret,
+          onChange: function (event) { v.updateConnection("secret", event.target.value); },
+          placeholder: selected.secret_configured ? "已配置" : "sk-…", autoComplete: "new-password",
+          "aria-label": "API 密钥（只写）", "data-cyrene-agent-secret-input": "true", "data-cyrene-risk": "R3",
+        })) : null
+      )
+    ) : null,
+    v.isCodexConnection(selected) ? h(v.OAuthSection, { state: v.oauth, busy: v.oauthBusy, cliBusy: v.oauthBusy === "cli", onLogin: v.startOauthLogin, onLogout: v.logoutOauth, onDownloadCli: v.downloadOauthCli, onImportModels: v.importOauthModels, onImportModel: v.importOauthModel }) : null,
+    v.isLocalConnection(selected) ? h(v.LocalModelsSection, { t: v.props.t, models: v.localModels, cv2Runtime: v.localRuntime, error: v.localError, busy: v.localBusy, hideHeader: true, onRefresh: v.refreshLocalModels, onManage: v.manageLocalModel }) : null,
+    !v.isLocalConnection(selected) ? h("section", { className: "wb-mcfg-form-section", "aria-labelledby": "wb-mcfg-profiles-heading" },
+      h("div", { className: "wb-mcfg-section-head" },
+        h("h4", { id: "wb-mcfg-profiles-heading" }, "模型列表"),
+        h("button", { type: "button", className: "wb-btn", onClick: function () { v.addProfile(); } }, v.browserIcon("plus", 15), "添加模型")
+      ),
+      !v.profiles.length ? h("div", { className: "wb-mcfg-inline-empty" }, "还没有模型档案。请手动添加模型。") : null,
+      v.profiles.length ? h("div", { className: "wb-mcfg-profile-list", "aria-label": "模型列表" }, v.profiles.map(function (profile) {
+        return h(v.ProfileEditor, { key: profile.id, profile: profile, t: v.props.t,
+          onChange: function (key, value) { v.updateProfile(profile.id, key, value); },
+          onRemove: function () { v.removeProfile(profile.id); },
+          onTest: function () { v.testProfile(profile); }, testing: v.busy === "test:" + profile.id });
+      })) : null
+    ) : null
+  ) : h("div", { className: "wb-mcfg-state" },
+    h("strong", null, "选择或添加一个模型服务商"),
+    h("span", null, "服务商连接保存认证信息，模型档案保存具体模型和能力。"),
+    h("button", { type: "button", className: "wb-btn primary", disabled: !v.selectableAdapters.length, onClick: v.addConnection }, "添加服务商")
+  ));
+}
+
 (function () {
   "use strict";
 
@@ -18,23 +139,12 @@
   function showSettingsToast(message, type) {
     if (!message) return;
     try {
-      var feedback = window.CyreneUI.require("feedback");
+      var feedback = workbenchServices.feedback();
       if (feedback && typeof feedback.showToast === "function") {
         feedback.showToast(String(message), type || "info");
       }
     } catch (error) {}
   }
-
-  var MODEL_CONFIGURATION_ERROR_KEYS = {
-    "model connection timed out": ["settings.modelConnectionTimedOut", "Model connection timed out."],
-    "model connection was rejected": ["settings.modelConnectionRejected", "The model service rejected the connection."],
-    "model connection failed": ["settings.modelConnectionFailed", "Model connection failed."],
-    "model connection is unavailable": ["settings.modelConnectionUnavailable", "The model service is currently unavailable."],
-    "model discovery timed out": ["settings.modelDiscoveryTimedOut", "Model discovery timed out."],
-    "model discovery was rejected": ["settings.modelDiscoveryRejected", "The model service rejected model discovery."],
-    "model discovery failed": ["settings.modelDiscoveryFailed", "Model discovery failed."],
-    "model discovery is unavailable": ["settings.modelDiscoveryUnavailable", "Model discovery is currently unavailable."],
-  };
 
   function localizedModelConfigurationError(error, props) {
     var summary = String(error && (error.summary || error.message) || error || "").trim();
@@ -44,7 +154,7 @@
 
   function browserIcon(name, size) {
     try {
-      var Icon = window.CyreneUI.require("browser").Icon;
+      var Icon = workbenchServices.browser().Icon;
       return h(Icon, { name: name, size: size || 16 });
     } catch (error) {
       return null;
@@ -246,18 +356,6 @@
       capabilities: normalizedCapabilities(raw.capabilities || raw.supports),
     });
   }
-
-  var LEGACY_USER_ADAPTERS = {
-    anthropic: "Anthropic",
-    anthropic_messages: "Anthropic",
-    openai: "OpenAI",
-    openai_chat: "OpenAI",
-    openai_compatible: "OpenAI",
-    openai_responses: "OpenAI Responses",
-    gemini: "Gemini",
-    gemini_api: "Gemini",
-    google_gemini: "Gemini",
-  };
 
   function adapterKey(value) {
     return String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
@@ -601,17 +699,21 @@
 
   function connectionProviderIcon(connection) {
     var preset = adapterKey(connection && connection.options && connection.options.provider_preset);
-    if (["deepseek", "minimax"].indexOf(preset) >= 0) return preset;
-    var adapter = connectionAdapter(connection);
-    var genericName = adapterKey(connection && connection.name);
-    if (adapter === "openai_compatible" || genericName === "openai_compatible" || genericName === "openai_compatible_legacy") return "";
-    if (adapter === "anthropic" || adapter === "anthropic_messages") return "anthropic";
-    if (adapter === "gemini" || adapter === "gemini_api" || adapter === "google_gemini") return "gemini";
-    if (adapter === "openai" || adapter === "openai_chat" || adapter === "openai_responses"
-        || adapter === "codex_oauth" || adapter === "openai_oauth") return "openai";
-    if (adapter === "ollama") return "ollama";
-    if (adapter === "local_onnx" || adapter === "onnx") return "onnx";
-    return "";
+    var presetIcons = {
+      openai: "openai",
+      codex_oauth: "openai",
+      anthropic: "anthropic",
+      gemini: "gemini",
+      deepseek: "deepseek",
+      minimax: "minimax",
+      ollama: "ollama",
+      local_onnx: "onnx",
+      onnx: "onnx",
+    };
+    // The adapter is only a wire protocol. A user-created endpoint speaking
+    // OpenAI/Anthropic/Gemini must not inherit that vendor's brand. Brand marks
+    // are reserved for connections explicitly created as provider presets.
+    return presetIcons[preset] || "";
   }
 
   function connectionProviderMark(connection) {
@@ -1176,9 +1278,7 @@
       var targetIndex = config.connections.findIndex(function (connection) { return connection.id === connectionId; });
       var target = config.connections[targetIndex];
       if (!target) return;
-      var feedback = window.CyreneUI && window.CyreneUI.require
-        ? window.CyreneUI.require("feedback")
-        : null;
+      var feedback = workbenchServices.feedback();
       if (!feedback || typeof feedback.confirmModal !== "function") {
         showSettingsToast("暂时无法打开删除确认，请稍后重试。", "error");
         if (returnFocus && returnFocus.isConnected) window.requestAnimationFrame(function () { returnFocus.focus(); });
@@ -1510,6 +1610,26 @@
     var connectionMenuPortal = connectionMenuNode && typeof ReactDOM !== "undefined" && ReactDOM.createPortal
       ? ReactDOM.createPortal(connectionMenuNode, document.body)
       : connectionMenuNode;
+    var modelView = {
+      h: h, props: props, label: label, browserIcon: browserIcon, searchIcon: searchIcon,
+      config: config, store: store, query: query, setQuery: setQuery,
+      filtered: filtered, adapters: adapters, selectableAdapters: selectableAdapters,
+      selected: selected, selectedId: selectedId, setSelectedId: setSelectedId,
+      connectionMenu: connectionMenu, setConnectionMenu: setConnectionMenu,
+      openConnectionMenu: openConnectionMenu, connectionProviderMark: connectionProviderMark,
+      connectionDisplayName: connectionDisplayName, isLocalConnection: isLocalConnection,
+      localModels: localModels, addConnection: addConnection, selectedDescription: selectedDescription,
+      refreshLocalModels: refreshLocalModels, Toggle: Toggle, updateConnection: updateConnection,
+      Field: Field, editorAdapters: editorAdapters, isUserSelectableAdapter: isUserSelectableAdapter,
+      adapterOptionName: adapterOptionName, isCodexConnection: isCodexConnection,
+      OAuthSection: OAuthSection, oauth: oauth, oauthBusy: oauthBusy,
+      startOauthLogin: startOauthLogin, logoutOauth: logoutOauth, downloadOauthCli: downloadOauthCli,
+      importOauthModels: importOauthModels, importOauthModel: importOauthModel,
+      LocalModelsSection: LocalModelsSection, localRuntime: localRuntime, localError: localError,
+      localBusy: localBusy, manageLocalModel: manageLocalModel, profiles: profiles,
+      addProfile: addProfile, ProfileEditor: ProfileEditor, updateProfile: updateProfile,
+      removeProfile: removeProfile, testProfile: testProfile, busy: busy,
+    };
 
     return h("div", { id: "setting-model-services", className: "settings-panel settings-panel-wide wb-model-config-page" },
       h("header", { className: "wb-mcfg-page-head" },
@@ -1523,123 +1643,12 @@
         dirty ? h("button", { type: "button", className: "wb-btn", disabled: store.saveState === "saving", onClick: retryQueuedSave }, "重试保存") : null
       ) : null,
       h("div", { id: "setting-model-connections", className: "wb-mcfg-services" },
-        h("aside", { className: "wb-mcfg-connection-pane", "aria-label": "模型服务商" },
-          h("div", { className: "wb-workbench-filterbar wb-mcfg-searchbar" },
-            h("label", { className: "wb-workbench-searchbox wb-mcfg-searchbox" },
-              searchIcon(16),
-              h("input", {
-                type: "search",
-                value: query,
-                onChange: function (event) { setQuery(event.target.value); },
-                placeholder: "搜索模型服务…",
-                "aria-label": "搜索模型服务",
-                autoComplete: "off",
-                spellCheck: false,
-              })
-            )
-          ),
-          h("div", { className: "wb-mcfg-connection-list", role: "listbox", "aria-label": "服务商连接" },
-            !filtered.length ? h("div", { className: "wb-mcfg-list-empty" }, String(query || "").trim() ? "没有匹配的服务商。" : "还没有服务商连接。") : null,
-            filtered.map(function (connection) {
-              var adapter = adapters.find(function (item) { return item.id === connection.adapter; });
-              var local = isLocalConnection(connection);
-              var count = local
-                ? localModels.filter(function (model) { return model.ready === true; }).length
-                : config.profiles.filter(function (profile) { return profile.connection_id === connection.id; }).length;
-              var serviceLabel = local ? "Local" : (adapter && adapter.name || connection.adapter);
-              return h("button", {
-                type: "button", role: "option", key: connection.id,
-                className: "wb-mcfg-connection-item" + (selectedId === connection.id ? " is-selected" : ""),
-                "aria-selected": selectedId === connection.id,
-                "aria-haspopup": "menu",
-                "aria-expanded": !!connectionMenu && connectionMenu.connectionId === connection.id,
-                "aria-controls": connectionMenu && connectionMenu.connectionId === connection.id ? "wb-mcfg-connection-menu" : undefined,
-                "data-cyrene-context-menu": "true",
-                onClick: function () { setConnectionMenu(null); setSelectedId(connection.id); store.setError(""); },
-                onContextMenu: function (event) { openConnectionMenu(event, connection, false); },
-                onKeyDown: function (event) {
-                  if (event.key === "ContextMenu" || event.key === "Menu" || (event.shiftKey && event.key === "F10")) {
-                    openConnectionMenu(event, connection, true);
-                  }
-                },
-              },
-                h("span", { className: "wb-mcfg-provider-mark", "aria-hidden": "true" }, connectionProviderMark(connection)),
-                h("span", { className: "wb-mcfg-connection-copy" },
-                  h("strong", null, connectionDisplayName(connection)),
-                  h("small", null, serviceLabel + " · " + count + " 个模型")
-                ),
-                h("span", { className: "wb-mcfg-dot " + (connection.enabled ? "is-ready" : "is-off"), title: connection.enabled ? "已启用" : "已停用" }, h("span", { className: "wb-mcfg-sr-only" }, connection.enabled ? "已启用" : "已停用"))
-              );
-            })
-          ),
-          h("button", { type: "button", className: "wb-mcfg-add-connection", disabled: !selectableAdapters.length, onClick: addConnection, title: selectableAdapters.length ? "" : label(props, "settings.adapterUnavailable", "当前服务没有可添加的协议。") }, browserIcon("plus", 17), "添加服务商")
-        ),
-        h("main", { className: "wb-mcfg-detail-pane" }, selected ? h(React.Fragment, null,
-          h("div", { className: "wb-mcfg-detail-head" },
-            h("div", null,
-              h("h3", null, connectionDisplayName(selected)),
-              selectedDescription ? h("p", null, selectedDescription) : null
-            ),
-            isLocalConnection(selected)
-              ? h("button", { type: "button", className: "wb-mcfg-icon-btn", onClick: refreshLocalModels, "aria-label": "刷新本地模型" }, browserIcon("reload", 16))
-              : h(Toggle, { checked: selected.enabled, label: (selected.enabled ? "停用" : "启用") + selected.name, onChange: function (value) { updateConnection("enabled", value); } })
-          ),
-          !isLocalConnection(selected) ? h("section", { className: "wb-mcfg-form-section wb-mcfg-connection-section", "aria-label": "连接设置" },
-            h("div", { className: "wb-mcfg-form-grid" },
-              h(Field, { label: "连接名称" }, h("input", { className: "wb-input", value: selected.name, "aria-label": "连接名称", onChange: function (event) { updateConnection("name", event.target.value); } })),
-              h(Field, { label: label(props, "settings.adapter", "协议") }, h("select", { className: "wb-select", value: selected.adapter, "aria-label": "模型服务协议", disabled: !selectableAdapters.length, onChange: function (event) { updateConnection("adapter", event.target.value); } }, editorAdapters.map(function (adapter) {
-                return h("option", { key: adapter.id, value: adapter.id, disabled: !isUserSelectableAdapter(adapter) }, adapterOptionName(adapter));
-              }))),
-              !isCodexConnection(selected) && !isLocalConnection(selected) ? h(Field, { label: "API 地址", wide: true }, h("input", { className: "wb-input", type: "url", value: selected.base_url, "aria-label": "模型服务 API 地址", onChange: function (event) { updateConnection("base_url", event.target.value); }, placeholder: "https://api.example.com/v1", autoComplete: "url" })) : null,
-              !isCodexConnection(selected) && !isLocalConnection(selected) ? h(Field, { label: "API 密钥", wide: true, hint: selected.secret_configured && !selected.secret ? "已保存密钥；留空不会覆盖。" : "密钥只发送给本机配置 API。" }, h("input", {
-                className: "wb-input",
-                type: "password",
-                value: selected.secret,
-                onChange: function (event) { updateConnection("secret", event.target.value); },
-                placeholder: selected.secret_configured ? "已配置" : "sk-…",
-                autoComplete: "new-password",
-                "aria-label": "API 密钥（只写）",
-                "data-cyrene-agent-secret-input": "true",
-                "data-cyrene-risk": "R3",
-              })) : null
-            )
-          ) : null,
-          isCodexConnection(selected) ? h(OAuthSection, { state: oauth, busy: oauthBusy, cliBusy: oauthBusy === "cli", onLogin: startOauthLogin, onLogout: logoutOauth, onDownloadCli: downloadOauthCli, onImportModels: importOauthModels, onImportModel: importOauthModel }) : null,
-          isLocalConnection(selected) ? h(LocalModelsSection, { t: props.t, models: localModels, cv2Runtime: localRuntime, error: localError, busy: localBusy, hideHeader: true, onRefresh: refreshLocalModels, onManage: manageLocalModel }) : null,
-          !isLocalConnection(selected) ? h("section", { className: "wb-mcfg-form-section", "aria-labelledby": "wb-mcfg-profiles-heading" },
-            h("div", { className: "wb-mcfg-section-head" },
-              h("h4", { id: "wb-mcfg-profiles-heading" }, "模型列表"),
-              h("button", { type: "button", className: "wb-btn", onClick: function () { addProfile(); } }, browserIcon("plus", 15), "添加模型")
-            ),
-            !profiles.length ? h("div", { className: "wb-mcfg-inline-empty" }, "还没有模型档案。请手动添加模型。") : null,
-            profiles.length ? h("div", { className: "wb-mcfg-profile-list", "aria-label": "模型列表" },
-              profiles.map(function (profile) {
-                return h(ProfileEditor, {
-                  key: profile.id, profile: profile, t: props.t,
-                  onChange: function (key, value) { updateProfile(profile.id, key, value); },
-                  onRemove: function () { removeProfile(profile.id); },
-                  onTest: function () { testProfile(profile); },
-                  testing: busy === "test:" + profile.id,
-                });
-              })
-            ) : null
-          ) : null
-        ) : h("div", { className: "wb-mcfg-state" },
-          h("strong", null, "选择或添加一个模型服务商"),
-          h("span", null, "服务商连接保存认证信息，模型档案保存具体模型和能力。"),
-          h("button", { type: "button", className: "wb-btn primary", disabled: !selectableAdapters.length, onClick: addConnection }, "添加服务商")
-        ))
+        renderModelConnectionPane(modelView),
+        renderModelDetailPane(modelView)
       ),
       connectionMenuPortal
     );
   }
-
-  var ROUTE_META = {
-    primary: { title: "默认模型顺位", description: "对话与 Agent 的主要模型，按顺序自动回退。", capability: "chat", ordered: true },
-    secondary: { title: "次要模型", description: "用于摘要、标题和低成本辅助任务。", capability: "chat", ordered: false },
-    vision: { title: "识图模型", description: "处理图片和视觉内容，按顺序自动回退。", capability: "vision", ordered: true },
-    embedding: { title: "嵌入模型", titleKey: "settings.embeddingRouteTitle", description: "为知识库和语义检索生成向量。", descriptionKey: "settings.embeddingRouteHint", capability: "embedding", ordered: false },
-  };
 
   function supportsRoute(profile, route) {
     var caps = normalizedCapabilities(profile.capabilities);

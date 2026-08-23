@@ -1,15 +1,15 @@
 """Conversation and Workbench search routes."""
 
-# ruff: noqa: F403,F405
+from fastapi import APIRouter
 
-from cyrene.workbench.runtime import *
+from cyrene.runtime.memory.conversations import search_conversations_structured
+from cyrene.workbench.presentation_service import PresentationQueryService
 
 
-def register_search_routes(router: APIRouter, bot: Any, db_path: str) -> None:
-    global _bot, _db_path
-    _bot = bot
-    _db_path = db_path
-
+def register_search_routes(
+    router: APIRouter,
+    queries: PresentationQueryService,
+) -> None:
     # ---- Search API ----
 
     @router.get("/api/search/conversations")
@@ -37,5 +37,5 @@ def register_search_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         active_types = requested & all_types if requested else all_types
         per_type_limit = max(1, min(limit, 100))
 
-        results = await _search_workbench_items(query, active_types, per_type_limit)
+        results = await queries.search_workbench(query, active_types, per_type_limit)
         return {"ok": True, "groups": results}

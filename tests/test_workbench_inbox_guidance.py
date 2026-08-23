@@ -1,10 +1,12 @@
 from __future__ import annotations
-from conftest import workbench_chat_source
+from conftest import frontend_module_source, workbench_chat_source, workbench_i18n_source
 
 import asyncio
 import json
+import multiprocessing
 import sqlite3
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 
 async def _wait_for_query(db_path, query, expected, *, timeout=1.0):
@@ -17,6 +19,18 @@ async def _wait_for_query(db_path, query, expected, *, timeout=1.0):
         if asyncio.get_running_loop().time() >= deadline:
             return rows
         await asyncio.sleep(0.01)
+
+
+def _initialize_inbox_schema_process(db_path, barrier, results) -> None:
+    """Use a process-local schema cache/lock to exercise SQLite serialization."""
+    try:
+        from cyrene.workbench.persistence.schema import ensure_schema
+
+        barrier.wait(timeout=10)
+        ensure_schema(db_path)
+        results.put("")
+    except BaseException as exc:
+        results.put(f"{type(exc).__name__}: {exc}")
 
 
 async def test_tool_result_returns_through_session_inbox_while_guidance_is_retained(tmp_path):
@@ -481,6 +495,75 @@ async def test_tool_lifecycle_telemetry_records_batch_queue_and_durations(tmp_pa
     assert rows[3][12] is not None
 
 
+async def test_inbox_telemetry_flushes_by_threshold_and_close(
+    tmp_path,
+    monkeypatch,
+):
+    from cyrene.workbench import inbox as inbox_module
+
+    monkeypatch.setattr(inbox_module, "_TELEMETRY_BATCH_MAX", 3)
+    monkeypatch.setattr(inbox_module, "_TELEMETRY_FLUSH_INTERVAL_SECONDS", 60.0)
+    inbox = inbox_module.WorkbenchAgentInbox(
+        "chat_batch_trace",
+        str(tmp_path / "workbench.db"),
+        run_id="run_batch_trace",
+    )
+    batches = []
+    original_record_events = inbox._record_events
+
+    def tracked_record_events(rows):
+        batches.append([row[5] for row in rows])
+        original_record_events(rows)
+
+    monkeypatch.setattr(inbox, "_record_events", tracked_record_events)
+    inbox._record_event_background("trace_one")
+    inbox._record_event_background("trace_two")
+    inbox._record_event_background("trace_three")
+
+    deadline = asyncio.get_running_loop().time() + 1
+    while (
+        not batches
+        or (
+            inbox._telemetry_flush_task is not None
+            and not inbox._telemetry_flush_task.done()
+        )
+    ):
+        if asyncio.get_running_loop().time() >= deadline:
+            break
+        await asyncio.sleep(0.01)
+
+    assert batches == [["trace_one", "trace_two", "trace_three"]]
+    inbox._record_event_background("trace_four")
+    await inbox.close()
+
+    assert batches == [
+        ["trace_one", "trace_two", "trace_three"],
+        ["trace_four", "run_terminated"],
+    ]
+
+
+async def test_inbox_telemetry_flushes_after_short_interval(tmp_path, monkeypatch):
+    from cyrene.workbench import inbox as inbox_module
+
+    monkeypatch.setattr(inbox_module, "_TELEMETRY_BATCH_MAX", 64)
+    monkeypatch.setattr(inbox_module, "_TELEMETRY_FLUSH_INTERVAL_SECONDS", 0.01)
+    db_path = tmp_path / "workbench.db"
+    inbox = inbox_module.WorkbenchAgentInbox(
+        "chat_timer_trace",
+        str(db_path),
+        run_id="run_timer_trace",
+    )
+    inbox._record_event_background("timer_trace")
+
+    rows = await _wait_for_query(
+        db_path,
+        "SELECT event_type FROM workbench_agent_run_events ORDER BY rowid",
+        [("timer_trace",)],
+    )
+    assert rows == [("timer_trace",)]
+    await inbox.close()
+
+
 def test_inbox_schema_migrates_existing_database_without_dropping_events(tmp_path):
     from cyrene.workbench.inbox import WorkbenchAgentInbox
 
@@ -523,8 +606,220 @@ def test_inbox_schema_migrates_existing_database_without_dropping_events(tmp_pat
     assert old_event == ("old_event", "completed")
 
 
+def test_inbox_schema_migration_is_serialized_across_concurrent_runs(tmp_path):
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
+
+    db_path = tmp_path / "workbench.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE workbench_agent_inbox (
+                event_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+                round_id TEXT NOT NULL DEFAULT '', event_type TEXT NOT NULL,
+                status TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0,
+                dedupe_key TEXT NOT NULL DEFAULT '', payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL, completed_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+
+    concurrency = 24
+    barrier = threading.Barrier(concurrency)
+
+    def initialize(index: int):
+        barrier.wait()
+        return WorkbenchAgentInbox(
+            f"concurrent_chat_{index}", str(db_path), run_id=f"run_{index}"
+        )
+
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        inboxes = list(pool.map(initialize, range(concurrency)))
+
+    assert len(inboxes) == concurrency
+    with sqlite3.connect(db_path) as conn:
+        columns = {
+            row[1] for row in conn.execute(
+                "PRAGMA table_info(workbench_agent_inbox)"
+            )
+        }
+    assert {"run_id", "batch_id", "termination_reason"} <= columns
+
+
+def test_inbox_schema_migration_is_atomic_across_processes(tmp_path):
+    db_path = tmp_path / "workbench.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE workbench_agent_inbox (
+                event_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+                round_id TEXT NOT NULL DEFAULT '', event_type TEXT NOT NULL,
+                status TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0,
+                dedupe_key TEXT NOT NULL DEFAULT '', payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL, completed_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO workbench_agent_inbox VALUES "
+            "('old_event','chat','','tool_result','completed',0,'','{}','old','old')"
+        )
+
+    context = multiprocessing.get_context("spawn")
+    concurrency = 8
+    barrier = context.Barrier(concurrency)
+    results = context.Queue()
+    processes = [
+        context.Process(
+            target=_initialize_inbox_schema_process,
+            args=(str(db_path), barrier, results),
+        )
+        for _ in range(concurrency)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=20)
+    for process in processes:
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+
+    assert [process.exitcode for process in processes] == [0] * concurrency
+    assert [results.get(timeout=2) for _ in processes] == [""] * concurrency
+    with sqlite3.connect(db_path) as conn:
+        tables = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        inbox_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(workbench_agent_inbox)")
+        }
+        run_event_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(workbench_agent_run_events)")
+        }
+        indexes = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            )
+        }
+        old_event = conn.execute(
+            "SELECT status FROM workbench_agent_inbox WHERE event_id = 'old_event'"
+        ).fetchone()
+
+    assert {"workbench_agent_inbox", "workbench_agent_run_events"} <= tables
+    assert {"run_id", "batch_id", "termination_reason"} <= inbox_columns
+    assert {
+        "tool_queue_wait_ms",
+        "tool_execution_ms",
+        "agent_wait_ms",
+        "result_wait_ms",
+        "result_queue_delay_ms",
+    } <= run_event_columns
+    assert {
+        "idx_workbench_agent_inbox_dedupe",
+        "idx_workbench_agent_inbox_pending",
+        "idx_workbench_agent_inbox_completed",
+        "idx_workbench_agent_run_events_run",
+        "idx_workbench_agent_run_events_created",
+    } <= indexes
+    assert old_event == ("completed",)
+
+
+def test_chat_run_manager_initializes_inbox_schema_before_run_storage_attach(
+    monkeypatch, tmp_path
+):
+    from cyrene.workbench.chat_runs import ChatRun, ChatRunManager
+    from cyrene.workbench.persistence import schema
+
+    db_path = tmp_path / "workbench.db"
+    statements: list[str] = []
+    real_connect = sqlite3.connect
+
+    def traced_connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(schema.sqlite3, "connect", traced_connect)
+
+    manager = ChatRunManager(retention_seconds=0)
+    manager.configure(str(db_path))
+
+    with real_connect(db_path) as conn:
+        tables = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        inbox_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(workbench_agent_inbox)")
+        }
+    assert {
+        "workbench_state",
+        "workbench_chats",
+        "workbench_agent_inbox",
+        "workbench_agent_run_events",
+        "workbench_chat_runs",
+        "workbench_chat_run_events",
+    } <= tables
+    assert {"run_id", "batch_id", "termination_reason"} <= inbox_columns
+
+    statements.clear()
+    run = ChatRun("chat_preinitialized", {"type": "ack"})
+    run.inbox.configure_storage(str(db_path))
+
+    normalized = [statement.strip().upper() for statement in statements]
+    assert any(
+        statement.startswith("SELECT") and "WORKBENCH_AGENT_INBOX" in statement
+        for statement in normalized
+    )
+    assert not any(
+        statement.startswith(("CREATE ", "ALTER ", "DROP "))
+        or statement.startswith("PRAGMA JOURNAL_MODE")
+        for statement in normalized
+    )
+
+
+def test_inbox_operational_connection_does_not_reconfigure_journal_mode(
+    monkeypatch, tmp_path
+):
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
+    from cyrene.workbench.persistence import schema
+
+    db_path = tmp_path / "workbench.db"
+    WorkbenchAgentInbox("chat_schema_ready", str(db_path))
+    statements: list[str] = []
+    real_connect = sqlite3.connect
+
+    def traced_connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(schema.sqlite3, "connect", traced_connect)
+    inbox = WorkbenchAgentInbox("chat_operational", str(db_path))
+    statements.clear()
+
+    with inbox._connect() as conn:
+        conn.execute("SELECT 1").fetchone()
+
+    normalized = [statement.strip().upper() for statement in statements]
+    assert "PRAGMA BUSY_TIMEOUT = 5000" in normalized
+    assert not any(
+        statement.startswith("PRAGMA JOURNAL_MODE") for statement in normalized
+    )
+
+
 def test_inbox_startup_prunes_only_expired_terminal_history(tmp_path):
     from cyrene.workbench.inbox import WorkbenchAgentInbox
+    from cyrene.workbench.persistence.schema import SCHEMA_READY
 
     db_path = tmp_path / "workbench.db"
     WorkbenchAgentInbox("chat_1", str(db_path), run_id="run_1")
@@ -550,6 +845,9 @@ def test_inbox_startup_prunes_only_expired_terminal_history(tmp_path):
             """
         )
 
+    # A process restart clears the per-path schema cache and runs the bounded
+    # startup maintenance again. New runs in the same process do not repeat it.
+    SCHEMA_READY.discard(str(db_path.resolve()))
     WorkbenchAgentInbox("chat_2", str(db_path), run_id="run_2")
 
     with sqlite3.connect(db_path) as conn:
@@ -1557,29 +1855,32 @@ async def test_chat_run_interrupt_cleans_pending_inbox_with_run_id(tmp_path):
 
 
 def test_workbench_composer_switches_stop_button_to_guidance_when_typed():
+    composer = frontend_module_source("features/chat/composer.jsx")
+    actions = frontend_module_source("features/chat/chat-action-controller.jsx")
+    model_api = frontend_module_source("features/chat/model-api.jsx")
+    runtime = frontend_module_source("features/chat/file-resources.jsx")
+    split_pane = frontend_module_source("features/chat/split-pane.jsx")
 
-    source = workbench_chat_source()
-    assert "var hasRuntimeGuidance = running && !!draft.trim();" in source
-    assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in source
-    assert 'wbcT("workbenchChat.sendGuidance", "Send guidance")' in source
-    assert "model.sendGuidance(chatId, text" in source
-    assert "timeout: 0" in source.split("function sendGuidance", 1)[1].split(
+    assert "var hasRuntimeGuidance = running && !!draft.trim();" in composer
+    assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in composer
+    assert 'wbcT("workbenchChat.sendGuidance", "Send guidance")' in composer
+    assert "context.model.sendGuidance(chatId, text, requestId)" in actions
+    assert "timeout: 0" in model_api.split("function sendGuidance", 1)[1].split(
         "function answerChat", 1
     )[0]
-    assert 'id: "guidance_pending_" + clientRequestId' in source
-    assert "optimistic: true" in source
-    assert "wbcMergeChronologicalMessages(prev.messages || [], [optimisticMessage])" in source
-    assert 'entry.status === "running"' in source
-    assert 'err.code === "chat_not_running"' in source
-    assert "runtimeEngine.deferSend(chatId, { message: text }, model)" in source
-    assert "terminal event wakes the deferred send" in source
-    assert "if (!runtimes[chatId])" in source.split("function deferSend", 1)[1].split(
+    assert 'id: "guidance_pending_" + requestId' in actions
+    assert "guidance: true, optimistic: true" in actions
+    assert "wbcMergeChronologicalMessages(previous.messages || [], [optimistic])" in actions
+    assert 'error.code === "chat_not_running"' in actions
+    assert "context.runtimeEngine.deferSend(chatId, { message: text }, context.model)" in actions
+    assert "terminal event wakes the deferred send" in runtime
+    assert "if (!runtimes[chatId])" in runtime.split("function deferSend", 1)[1].split(
         "function setHooks", 1
     )[0]
-    split = source.split("function WbcChatSplit(", 1)[1].split(
+    split = split_pane.split("function WbcChatSplit(", 1)[1].split(
         "function WbcSideAgentSplitResizer", 1
     )[0]
-    side_agent = source.split("function WbcSideAgentTab(", 1)[1].split(
+    side_agent = split_pane.split("function WbcSideAgentTab(", 1)[1].split(
         "function WbcSideAgentsPanel", 1
     )[0]
     assert "function guide(message)" in split
@@ -1589,7 +1890,7 @@ def test_workbench_composer_switches_stop_button_to_guidance_when_typed():
     )[0]
     assert "function guide(message)" in side_agent
     assert "onGuidance={guide}" in side_agent
-    assert "disabled={compact && running}" not in source
+    assert "disabled={compact && running}" not in composer
 
 
 def test_runtime_guidance_marker_is_not_sent_as_an_upstream_message_field():
@@ -1602,28 +1903,57 @@ def test_runtime_guidance_marker_is_not_sent_as_an_upstream_message_field():
     }) == {"role": "user", "content": "guide"}
 
 
-def test_interrupt_waits_for_workbench_run_cleanup_before_acknowledging():
-    from pathlib import Path
+async def test_interrupt_waits_for_workbench_run_cleanup_before_acknowledging(
+    monkeypatch,
+):
+    import asyncio
+    from types import SimpleNamespace
 
-    route_source = Path("src/route/agent/chat.py").read_text(encoding="utf-8")
-    manager_source = Path("src/cyrene/workbench/chat_runs.py").read_text(
-        encoding="utf-8"
+    from cyrene.workbench import global_chat_service
+    from cyrene.workbench.global_chat_service import GlobalChatApplicationService
+    from cyrene.workbench.subagent_messaging_service import SubagentMessagingService
+
+    done = asyncio.Event()
+    calls: list[str] = []
+
+    class RunManager:
+        def get(self, session_id: str):
+            calls.append(f"get:{session_id}")
+            return SimpleNamespace(done=done)
+
+        def interrupt(self, session_id: str):
+            calls.append(f"manager:{session_id}")
+            asyncio.get_running_loop().call_soon(done.set)
+            return True
+
+    monkeypatch.setattr(global_chat_service, "get_chat_run_manager", RunManager)
+    monkeypatch.setattr(
+        global_chat_service.agent,
+        "interrupt_active_run",
+        lambda session_id="": calls.append(f"agent:{session_id}") or False,
     )
-    frontend_source = workbench_chat_source()
-    interrupt_route = route_source.split(
-        'async def api_interrupt_chat(session_id: str = ""):', 1
-    )[1].split('@router.post("/api/chat/clear")', 1)[0]
-    assert "workbench_run.done.wait()" in interrupt_route
-    assert "asyncio.shield" in interrupt_route
-    manager_interrupt = manager_source.split("def interrupt(self, chat_id: str)", 1)[1].split(
-        "async def terminate", 1
-    )[0]
-    assert "queue.put_nowait(None)" not in manager_interrupt
-    runtime_interrupt = frontend_source.split("function interrupt(chatId, model)", 1)[1].split(
-        "function deferSend", 1
-    )[0]
-    assert ".then(function (result)" in runtime_interrupt
-    assert ".finally(function ()" not in runtime_interrupt
+
+    def settle(session_id: str):
+        assert done.is_set()
+        calls.append(f"settle:{session_id}")
+
+    monkeypatch.setattr(global_chat_service, "settle_chat_running_status", settle)
+    service = GlobalChatApplicationService(
+        "",
+        bot=None,
+        subagents=SubagentMessagingService(None, ""),
+        reset_agent_lottery=lambda: None,
+    )
+
+    result = await service.interrupt("chat_1")
+
+    assert result == {"ok": True, "interrupted": True}
+    assert calls == [
+        "get:chat_1",
+        "agent:chat_1",
+        "manager:chat_1",
+        "settle:chat_1",
+    ]
 
 
 def test_main_prompt_prefers_inbox_wakeup_over_fixed_time_waits():
@@ -1658,7 +1988,7 @@ def test_subagent_monitoring_has_no_fixed_two_second_completion_sleep():
 def test_workbench_has_localized_model_fallback_progress_message():
     from pathlib import Path
 
-    source = Path("src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    source = workbench_i18n_source()
     assert '"phase.modelFallback": "Primary model unavailable' in source
     assert '"phase.modelFallback": "主模型不可用，正在切换备用模型' in source
 
@@ -1666,9 +1996,7 @@ def test_workbench_has_localized_model_fallback_progress_message():
 def test_workbench_has_actionable_codex_failure_alerts():
     from pathlib import Path
 
-    i18n = Path("src/webui/frontend/workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    i18n = workbench_i18n_source()
     chat = workbench_chat_source()
     for key in (
         "phase.codexQuotaExhausted",
@@ -1676,5 +2004,5 @@ def test_workbench_has_actionable_codex_failure_alerts():
         "phase.codexModelUnavailable",
     ):
         assert i18n.count(f'"{key}"') == 2
-    assert "if (event.alert && window.CyreneUI.require(\"feedback\").showToast)" in chat
+    assert "if (event.alert && workbenchServices.feedback().showToast)" in chat
     assert "failed: !!event.failed" in chat

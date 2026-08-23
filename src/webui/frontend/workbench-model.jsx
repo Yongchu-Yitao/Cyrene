@@ -1,3 +1,4 @@
+import { workbenchServices } from "./shared/runtime/services.jsx"
 // Cyrene workbench data adapter.
 // Keeps the new Project/Task Session UI decoupled from the legacy chat shell.
 
@@ -27,7 +28,7 @@ function wbIsPermissionQuestionKind(kind) {
 
 (function () {
   function wbModelT(key, fallback, params) {
-    var i18n = window.CyreneUI.require("i18n");
+    var i18n = workbenchServices.i18n();
     if (typeof i18n.t === "function") {
       return i18n.t(key, params, fallback);
     }
@@ -45,12 +46,12 @@ function wbIsPermissionQuestionKind(kind) {
   // runs for minutes; toast:false keeps each caller's existing error handling as
   // the single feedback channel. Quick CRUD callers may pass a `timeout` per call.
   function apiJson(url, options) {
-    return window.CyreneUI.require("api").json(url, { toast: false, timeout: 0, ...(options || {}) });
+    return workbenchServices.api().json(url, { toast: false, timeout: 0, ...(options || {}) });
   }
 
   function currentUiInstanceId() {
     return window.CyreneUI.has("uiSurface")
-      ? window.CyreneUI.require("uiSurface").getInstanceId()
+      ? workbenchServices.uiSurface().getInstanceId()
       : "";
   }
 
@@ -262,7 +263,7 @@ function wbIsPermissionQuestionKind(kind) {
   // Ask the agent to (re)generate the onboarding questions for a project's
   // "初始化项目" session, tailored to the project's name/description/template.
   function generateInitForm(projectId) {
-    var lang = window.CyreneUI.require("i18n").getLang().trim();
+    var lang = workbenchServices.i18n().getLang().trim();
     return apiJson("/api/projects/" + encodeURIComponent(projectId) + "/init/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -702,7 +703,7 @@ function wbIsPermissionQuestionKind(kind) {
     if (!raw) return wbModelT("path.unsetWorkspace", "Workspace not set");
     var home = "";
     try {
-      home = (window.CyreneUI.require("data").state.user || {}).home || "";
+      home = (workbenchServices.data().state.user || {}).home || "";
     } catch (e) {}
     if (home && raw.indexOf(home + "/") === 0) raw = "~" + raw.slice(home.length);
     var parts = raw.split("/").filter(Boolean);

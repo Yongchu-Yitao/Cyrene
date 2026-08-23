@@ -177,7 +177,6 @@ async def test_goal_loop_concurrent_start_returns_conflict_not_server_error(monk
 
 
 async def test_goal_loop_start_rolls_back_run_when_projection_write_fails(monkeypatch, tmp_path):
-    from route.workbench import goal_loop as goal_loop_routes
     from cyrene.workbench import goal_loop as goal_loop
 
     app, db_path, _store_path = _app(monkeypatch, tmp_path)
@@ -195,7 +194,11 @@ async def test_goal_loop_start_rolls_back_run_when_projection_write_fails(monkey
             },
         )
         draft_id = preview.json()["draftId"]
-        monkeypatch.setattr(goal_loop_routes, "_write_session", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")))
+        monkeypatch.setattr(
+            goal_loop.WorkbenchGoalLoopTransaction,
+            "write_session",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+        )
         with pytest.raises(OSError, match="disk full"):
             await client.post(
                 "/api/task-sessions/session_1/goal-loop/start",
@@ -411,8 +414,7 @@ def test_goal_loop_preview_returns_service_unavailable_before_generation_when_st
     tmp_path,
 ):
     from cyrene.workbench import runtime as routes
-    from route.workbench import goal_loop as goal_loop_routes
-    from cyrene.workbench import goal_loop as goal_loop
+    from cyrene.workbench.goal_loop_repository import SqliteGoalLoopRepository
 
     generation_called = False
 
@@ -421,15 +423,11 @@ def test_goal_loop_preview_returns_service_unavailable_before_generation_when_st
         generation_called = True
         raise AssertionError("planning must not run while draft storage is busy")
 
-    original_execute = goal_loop._execute
-
-    async def locked_execute(db_path, sql, args=()):
-        if "DELETE FROM goal_loop_drafts" in sql:
-            raise sqlite3.OperationalError("database is locked")
-        return await original_execute(db_path, sql, args)
+    async def locked_delete(_repository, _expires_before):
+        raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(routes, "_workbench_generate_plan_steps", fake_plan)
-    monkeypatch.setattr(goal_loop_routes, "_execute", locked_execute)
+    monkeypatch.setattr(SqliteGoalLoopRepository, "delete_expired_drafts", locked_delete)
     app, _db_path, _store_path = _app(monkeypatch, tmp_path)
     client = TestClient(app)
 

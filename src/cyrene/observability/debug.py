@@ -145,17 +145,22 @@ def get_log_path() -> str:
 # Event bus — 实时事件推送给 Web UI
 # ---------------------------------------------------------------------------
 
-_event_queue: asyncio.Queue | None = None
+_event_subscribers: dict[asyncio.Queue[dict], str] = {}
+_event_loop: asyncio.AbstractEventLoop | None = None
 _recent_events: deque[dict] = deque(maxlen=500)
 _full_events: dict[str, dict] = {}
 _MAX_FULL_EVENTS = 1000
 
 
 def enable_event_bus() -> None:
-    """启用事件总线。"""
-    global _event_queue
-    if _event_queue is None:
-        _event_queue = asyncio.Queue(maxsize=5000)
+    """Initialize the event bus.
+
+    Subscribers are registered lazily by :func:`subscribe`. Capturing the host
+    loop here also gives synchronous persistence services a single thread-safe
+    path into the same event stream.
+    """
+    global _event_loop
+    _event_loop = asyncio.get_running_loop()
 
 
 def _enqueue_telemetry(event: dict) -> None:
@@ -239,14 +244,8 @@ async def _flush_telemetry_batch() -> None:
     _telemetry_pending.extend(retained)
 
 
-async def publish_event(event: dict, session_id: str = "") -> None:
-    """发布一条事件（由 agent.py 调用）。自动初始化事件总线。
-
-    为模型、工具和权限事件生成唯一 event_id，并存储完整数据到 _full_events。
-
-    When *session_id* is non-empty, it is tagged on the event for per-session
-    filtering downstream (see :func:`subscribe`).
-    """
+def _publish_event_now(event: dict, session_id: str = "") -> None:
+    event = dict(event)
     if "timestamp" not in event:
         event = {**event, "timestamp": datetime.now(timezone.utc).isoformat()}
 
@@ -268,15 +267,45 @@ async def publish_event(event: dict, session_id: str = "") -> None:
         _enqueue_telemetry(dict(event))
 
     _recent_events.append(event)
-    if _event_queue is None:
-        enable_event_bus()
-    q = _event_queue
-    if q is None:
-        return
+    for queue, subscriber_session_id in tuple(_event_subscribers.items()):
+        if (
+            subscriber_session_id
+            and event.get("session_id") not in (subscriber_session_id, "")
+        ):
+            continue
+        queue.put_nowait(event)
+
+
+async def publish_event(event: dict, session_id: str = "") -> None:
+    """Publish one event from asynchronous runtime code."""
+    _publish_event_now(event, session_id)
+
+
+def publish_event_sync(event: dict, session_id: str = "") -> bool:
+    """Publish from a synchronous persistence boundary on the host event loop.
+
+    Worker-thread writes are handed to the loop captured by
+    :func:`enable_event_bus`; writes already running on that loop dispatch
+    immediately. A process without an enabled event host has no SSE clients, so
+    there is deliberately no secondary delivery mechanism.
+    """
+    global _event_loop
+    payload = dict(event)
     try:
-        q.put_nowait(event)
-    except asyncio.QueueFull:
-        pass  # 队列满了就丢弃
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+
+    if running_loop is not None and (
+        _event_loop is None or _event_loop.is_closed() or running_loop is _event_loop
+    ):
+        _event_loop = running_loop
+        _publish_event_now(payload, session_id)
+        return True
+    if _event_loop is None or _event_loop.is_closed():
+        return False
+    _event_loop.call_soon_threadsafe(_publish_event_now, payload, session_id)
+    return True
 
 
 def _search_debug_logs(event_id: str) -> dict | None:
@@ -324,23 +353,28 @@ async def subscribe(session_id: str = ""):
 
     自动初始化事件总线。每 15 秒发一次心跳保活。
 
-    When *session_id* is non-empty, only events tagged with that session_id
-    are yielded (others are silently skipped).  Filtering is a no-op until
-    :func:`publish_event` starts tagging events with session_id (Phase 4).
+    Each subscriber owns its queue, so every connected client receives every
+    matching event. Session filtering happens during publication, before an
+    event enters the queue, and therefore cannot consume another subscriber's
+    event.
     """
-    if _event_queue is None:
-        enable_event_bus()
-    q = _event_queue
-    if q is None:
-        return
-    while True:
-        try:
-            event = await asyncio.wait_for(q.get(), timeout=15.0)
-            if session_id and event.get("session_id") not in (session_id, ""):
-                continue
-            yield event
-        except asyncio.TimeoutError:
-            yield {"type": "heartbeat", "timestamp": datetime.now(timezone.utc).isoformat()}
+    global _event_loop
+    running_loop = asyncio.get_running_loop()
+    if _event_loop is None or _event_loop.is_closed():
+        _event_loop = running_loop
+    queue: asyncio.Queue[dict] = asyncio.Queue()
+    _event_subscribers[queue] = session_id
+    try:
+        while True:
+            try:
+                yield await asyncio.wait_for(queue.get(), timeout=15.0)
+            except asyncio.TimeoutError:
+                yield {
+                    "type": "heartbeat",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+    finally:
+        _event_subscribers.pop(queue, None)
 
 
 def get_recent_events(limit: int = 200) -> list[dict]:

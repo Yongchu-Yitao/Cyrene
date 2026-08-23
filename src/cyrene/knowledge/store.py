@@ -14,6 +14,11 @@ from typing import Any
 
 import aiosqlite
 
+from cyrene.runtime.file_hashing import (
+    cached_sha256_file,
+    sha256_bytes,
+    sha256_file,
+)
 from cyrene.runtime.sqlite_json import (
     deserialize_dict as _deserialize_dict,
     deserialize_list as _deserialize_list,
@@ -92,17 +97,16 @@ def _row_to_relation(row: aiosqlite.Row) -> dict:
 
 def content_hash_bytes(content: bytes) -> str:
     """Return the SHA-256 digest for file bytes."""
-    return hashlib.sha256(content).hexdigest()
+    return sha256_bytes(content)
+
+
+_content_hash_file_cached = cached_sha256_file
 
 
 def content_hash_file(path: str | Path) -> str:
     """Return the SHA-256 digest for a file, or an empty string if unreadable."""
-    h = hashlib.sha256()
     try:
-        with Path(path).open("rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
-        return h.hexdigest()
+        return sha256_file(path)
     except OSError:
         return ""
 

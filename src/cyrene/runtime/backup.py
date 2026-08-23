@@ -752,3 +752,76 @@ async def delete_backup(name: str) -> bool:
         return True
     except OSError:
         return False
+
+
+class BackupDownloadError(ValueError):
+    """A requested backup cannot be exposed for download."""
+
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class BackupRepository:
+    """Public repository boundary for backup operations and archive files."""
+
+    def __init__(self, root: Path | None = None) -> None:
+        self.root = root or _BACKUP_DIR
+
+    def list(self) -> list[dict[str, Any]]:
+        self.root.mkdir(parents=True, exist_ok=True)
+        backups: list[dict[str, Any]] = []
+        for path in self.root.glob("cyrene_backup_*.zip"):
+            try:
+                stat_result = path.stat()
+            except OSError:
+                continue
+            backups.append({
+                "name": path.name,
+                "path": str(path),
+                "size": stat_result.st_size,
+                "modified": datetime.fromtimestamp(
+                    stat_result.st_mtime,
+                    tz=timezone.utc,
+                ).isoformat(),
+            })
+        return sorted(
+            backups,
+            key=lambda item: (item["modified"], item["name"]),
+            reverse=True,
+        )
+
+    async def export(self, target_path: str = "") -> dict[str, Any]:
+        if target_path:
+            return await export_backup(target_path=target_path)
+        self.root.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        generated = self.root / (
+            f"cyrene_backup_{timestamp}_{uuid.uuid4().hex[:8]}.zip"
+        )
+        return await export_backup(target_path=generated)
+
+    async def restore(self, path: str) -> dict[str, Any]:
+        return await restore_backup(path)
+
+    async def delete(self, name: str) -> bool:
+        if Path(name).name != name or not name.startswith("cyrene_backup_"):
+            return False
+        if not name.endswith(".zip"):
+            return False
+        target = (self.root / name).resolve()
+        if target.parent != self.root.resolve() or not target.is_file():
+            return False
+        try:
+            target.unlink()
+            return True
+        except OSError:
+            return False
+
+    def download(self, name: str) -> Path:
+        target = (self.root / name).resolve()
+        if self.root.resolve() not in target.parents:
+            raise BackupDownloadError("invalid backup path", 400)
+        if not target.is_file():
+            raise BackupDownloadError("backup not found", 404)
+        return target

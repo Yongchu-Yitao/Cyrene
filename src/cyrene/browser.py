@@ -289,6 +289,11 @@ def browser_runtime_unavailable_message(exc: Exception | str | None = None) -> s
     return f"{base} {detail}"
 
 
+def browser_runtime_available() -> bool:
+    """Return whether the optional Playwright runtime can be imported."""
+    return _ensure_playwright() is not None
+
+
 def electron_browser_available() -> bool:
     """Return True when the Electron host exposed its browser RPC server."""
     return bool(os.environ.get("CYRENE_ELECTRON_RPC_PORT") and os.environ.get("CYRENE_ELECTRON_RPC_TOKEN"))
@@ -922,6 +927,17 @@ class _BrowserSession:
 
     async def current_url(self) -> str:
         return self._safe_url()
+
+    async def current_page_metadata(self) -> dict[str, str]:
+        """Return the live page identity without exposing the Playwright page."""
+        page = self._page
+        if page is None:
+            return {"url": "", "title": ""}
+        try:
+            title = await page.title()
+        except Exception:
+            title = ""
+        return {"url": self._safe_url(), "title": str(title or "")}
 
     def _safe_url(self) -> str:
         """Read the current page URL without raising if the page/context is gone."""
@@ -1730,6 +1746,11 @@ class _BrowserSession:
         session_id = params.get("sessionId")
         if self._cdp is not None and session_id is not None:
             asyncio.create_task(self._safe_ack(session_id))
+        available_queues = [
+            queue for queue in list(self._frame_subs) if not queue.full()
+        ]
+        if not available_queues:
+            return
         try:
             data = base64.b64decode(str(params.get("data") or ""), validate=False)
         except Exception:
@@ -1739,7 +1760,7 @@ class _BrowserSession:
             "url": self._page.url if self._page is not None else "",
             "content_type": "image/jpeg",
         }
-        for queue in list(self._frame_subs):
+        for queue in available_queues:
             try:
                 queue.put_nowait(frame)
             except asyncio.QueueFull:

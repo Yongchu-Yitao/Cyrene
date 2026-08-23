@@ -1,0 +1,409 @@
+/* -------------------------------------------------------------------------
+   Quick Chat surface
+   ------------------------------------------------------------------------- */
+
+.wbq-shell {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  color: var(--wb-text);
+  background:
+    radial-gradient(circle at 18% -20%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 42%),
+    var(--wb-bg);
+  border: 1px solid color-mix(in srgb, var(--wb-line) 82%, transparent);
+  border-radius: 16px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+}
+
+.wbq-header {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--wb-line);
+  -webkit-app-region: drag;
+}
+
+.wbq-brand {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.wbq-brand .brand-mark {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+}
+
+.wbq-brand div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.wbq-brand strong {
+  font-size: calc(14px * var(--wb-ui-font-scale, 1));
+  font-weight: 720;
+}
+
+.wbq-brand small {
+  overflow: hidden;
+  color: var(--wb-muted);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbq-close {
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--wb-line);
+  border-radius: 7px;
+  color: var(--wb-muted);
+  background: var(--wb-control-bg);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.wbq-main {
+  flex: 1;
+  min-height: 0;
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  /* visible so the composer's upward permission / slash menus aren't clipped by
+     this container; the rounded window edge still clips via .wbq-shell. */
+  overflow: visible;
+}
+
+/* Content column fills the window so the transcript (.wbq-thread) can flex to
+   the available height and scroll, while the composer stays pinned at the
+   bottom. The window is a normal resizable Electron window — no auto-sizing —
+   so dragging the edge just gives the transcript more/less room. */
+.wbq-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.wbq-state {
+  flex: 1;
+  min-height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: var(--wb-muted);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+}
+
+.wbq-state.is-error { color: var(--wb-error-text); }
+
+.wbq-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.wbq-target {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wbq-target-label {
+  flex: 0 0 auto;
+  color: var(--wb-muted);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wbq-target-pop {
+  position: relative;
+  min-width: 0;
+}
+
+/* Conversation target rendered as a rounded chip, matching the composer's
+   context chips (e.g. 添加上下文). */
+.wbq-target-chip {
+  max-width: 100%;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px 0 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  border-radius: 999px;
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--accent) 11%, var(--wb-card-bg));
+  font: inherit;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.wbq-target-chip.active,
+.wbq-target-chip:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--wb-card-bg));
+}
+
+.wbq-target-ic {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.wbq-target-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbq-caret {
+  flex: 0 0 auto;
+  color: var(--wb-muted);
+  font-size: calc(9px * var(--wb-ui-font-scale, 1));
+}
+
+.wbq-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.wbq-picker {
+  position: absolute;
+  z-index: 41;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 320px;
+  max-width: calc(100vw - 40px);
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--wb-flyout-border);
+  border-radius: var(--wb-flyout-radius);
+  background: var(--wb-flyout-bg);
+  box-shadow: var(--wb-flyout-shadow);
+}
+
+.wbq-picker-search {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--wb-field-border);
+  border-radius: 9px;
+  color: var(--wb-text);
+  background: var(--wb-control-bg);
+  outline: none;
+}
+
+.wbq-picker-search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-faint);
+}
+
+.wbq-picker-list {
+  max-height: 184px;
+  overflow: auto;
+  display: grid;
+  gap: 2px;
+}
+
+.wbq-picker-item {
+  display: grid;
+  gap: 2px;
+  padding: 7px 9px;
+  border: none;
+  border-radius: 7px;
+  text-align: left;
+  color: var(--wb-text);
+  background: transparent;
+  cursor: pointer;
+}
+
+.wbq-picker-item:hover { background: var(--wb-row-hover-bg); }
+.wbq-picker-item.active { background: var(--accent-faint); }
+.wbq-picker-item.is-running { cursor: not-allowed; opacity: 0.55; }
+
+.wbq-picker-title {
+  overflow: hidden;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbq-picker-sub {
+  overflow: hidden;
+  color: var(--wb-muted);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbq-picker-empty {
+  padding: 14px;
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  text-align: center;
+}
+
+.wbq-screenshot-status {
+  height: 34px;
+  max-width: 220px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  color: var(--wb-muted);
+  background: var(--wb-control-bg);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  white-space: nowrap;
+}
+
+.wbq-screenshot-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--wb-muted);
+}
+
+.wbq-screenshot-status.is-ready .wbq-screenshot-dot {
+  background: var(--wb-green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-green) 15%, transparent);
+}
+
+.wbq-screenshot-btn {
+  height: 34px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--wb-line));
+  border-radius: 8px;
+  color: var(--accent);
+  background: var(--accent-faint);
+  font: inherit;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.wbq-screenshot-btn .wbq-screenshot-dot {
+  background: var(--accent);
+}
+
+.wbq-screenshot-btn:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+
+.wbq-screenshot-btn.is-added,
+.wbq-screenshot-btn:disabled {
+  color: var(--wb-muted);
+  border-color: var(--wb-line);
+  background: var(--wb-control-bg);
+  cursor: default;
+}
+
+.wbq-screenshot-btn.is-added .wbq-screenshot-dot {
+  background: var(--wb-green);
+}
+
+.wbq-permission {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--wb-amber) 35%, var(--wb-line));
+  border-radius: 9px;
+  color: var(--wb-muted);
+  background: color-mix(in srgb, var(--wb-amber) 8%, var(--wb-card-bg));
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+}
+
+.wbq-permission button {
+  flex: 0 0 auto;
+  border: none;
+  color: var(--accent);
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* Conversation transcript. Reuses the full chat's registered message cards
+   through the
+   shared .wbc-thread layout, so tool-call traces, agent files and the live
+   "thinking / calling tools" card match the main UI exactly. .wbc-thread already
+   provides flex:1 + min-height:0 + overflow-y:auto, so the transcript fills the
+   content column and scrolls; .wbq-thread only tightens spacing for the compact
+   quick-chat window. */
+.wbq-thread {
+  padding: 12px 14px 6px;
+  gap: 14px;
+}
+
+/* Empty state fills the transcript area (keeping the composer pinned at the
+   bottom) and stays vertically centered. */
+.wbq-empty {
+  max-width: 300px;
+}
+
+/* Footer groups the send error + composer; flex:0 0 auto pins it at the bottom
+   of the content column while the transcript above flexes to fill the window. */
+.wbq-footer {
+  flex: 0 0 auto;
+  padding-top: 4px;
+}
+
+/* Host for the shared registered composer. It carries its own box
+   chrome (.wbc-composer-box), so the host only resets the surrounding margins. */
+.wbq-composer-host {
+  flex: 0 0 auto;
+}
+
+.wbq-composer-host .wbc-composer {
+  margin: 0;
+  padding: 0;
+}
+
+.wbq-send-error {
+  flex: 0 0 auto;
+  margin-bottom: 10px;
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--wb-error-text) 35%, var(--wb-line));
+  border-radius: 8px;
+  color: var(--wb-error-text);
+  background: color-mix(in srgb, var(--wb-error-text) 8%, var(--wb-card-bg));
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+}
+
+@media (max-width: 620px) {
+  .wbq-toolbar { align-items: stretch; flex-direction: column; }
+  .wbq-screenshot-status,
+  .wbq-screenshot-btn { max-width: none; justify-content: center; }
+}
+

@@ -306,6 +306,11 @@ def _get_effective_search_proxy() -> str:
     return proxy_url
 
 
+def get_effective_search_proxy() -> str:
+    """Public network boundary shared by every web-search provider."""
+    return _get_effective_search_proxy()
+
+
 def _is_proxy_reachable(proxy_url: str, timeout: float = 1.5) -> bool:
     parsed = urlparse(proxy_url)
     host = parsed.hostname

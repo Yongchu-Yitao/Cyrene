@@ -212,8 +212,8 @@ async def _request_scope_elevation(
     Returns ``None`` when the operation is **allowed** (caller should proceed),
     or a ``str`` otherwise:
 
-    - ``default`` mode → creates a pending question and returns the
-      ``awaiting_user`` JSON; the agent loop pauses until the user answers.
+    - ``default`` mode → normally returns a pending ``awaiting_user`` question;
+      extension/plugin changes use the same central reviewer without a custom prompt.
     - ``auto`` mode → a review agent decides autonomously. Approve → grants
       only the exact resolver retry (when needed) and returns ``None``; deny →
       returns a denial message string for the agent to see.
@@ -284,7 +284,7 @@ async def _request_scope_elevation(
         "self_configuration_confirmation",
         "host_lifecycle_confirmation",
     }
-    always_review = permission_kind == "extension_change"
+    always_review = permission_kind in {"extension_change", "plugin_change"}
     # A paired controller may pre-authorize one exact, argument-hashed capability
     # invocation. That bounded receipt carries the controller chat's local path
     # decision, but never deletion or external-upload authority.

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import mimetypes
+import os
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -14,7 +17,7 @@ import aiosqlite
 import httpx
 
 from cyrene.knowledge import ingest, library, store
-from cyrene.runtime.attachments import UPLOADS_DIR
+from cyrene.runtime import attachments as runtime_attachments
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:23119/api"
@@ -23,6 +26,85 @@ CHILD_TYPES = {"attachment", "note", "annotation"}
 
 class ZoteroLocalError(RuntimeError):
     """A friendly failure from an unavailable or incompatible local Zotero."""
+
+
+def _copy_file_with_sha256(source: Path, target: Path) -> str:
+    """Atomically copy a file while hashing the bytes already flowing to disk."""
+    descriptor, raw_temporary = tempfile.mkstemp(
+        prefix=f".{target.name}-",
+        suffix=".tmp",
+        dir=target.parent,
+    )
+    os.close(descriptor)
+    temporary = Path(raw_temporary)
+    digest = hashlib.sha256()
+    try:
+        with source.open("rb") as reader, temporary.open("wb") as writer:
+            for chunk in iter(lambda: reader.read(1024 * 1024), b""):
+                digest.update(chunk)
+                writer.write(chunk)
+            writer.flush()
+            os.fsync(writer.fileno())
+        shutil.copystat(source, temporary)
+        temporary.replace(target)
+        return digest.hexdigest()
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+async def _materialize_attachment(
+    raw: dict[str, Any],
+    data: dict[str, Any],
+    *,
+    client: ZoteroLocalClient | None,
+    library_id: str,
+    library_type: str,
+    db_path: str,
+    copy_attachment: bool,
+    errors: list[dict[str, str]],
+) -> tuple[Path | None, str]:
+    """Resolve and optionally copy one trusted Local API attachment."""
+    path = str(data.get("path") or "")
+    local_path = (
+        Path(path).expanduser()
+        if client and path and not path.startswith("attachments:")
+        else None
+    )
+    if (not local_path or not local_path.is_absolute() or not local_path.is_file()) and client:
+        try:
+            local_path = await client.attachment_path(
+                _zotero_key(raw),
+                library_id=library_id,
+                library_type=library_type,
+            )
+        except ZoteroLocalError as exc:
+            errors.append({"key": _zotero_key(raw), "error": str(exc)})
+    if not (
+        local_path
+        and local_path.is_absolute()
+        and local_path.is_file()
+        and copy_attachment
+    ):
+        return local_path, ""
+
+    target_dir = runtime_attachments.UPLOADS_DIR / "zotero" / Path(db_path).stem
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_name = runtime_attachments.safe_attachment_filename(
+        str(data.get("filename") or local_path.name),
+        fallback_stem="zotero_attachment",
+    )
+    target = target_dir / f"{_zotero_key(raw)}_{target_name}"
+    if target.is_file():
+        source_hash = store.content_hash_file(local_path)
+        target_hash = store.content_hash_file(target)
+        copied_hash = (
+            target_hash
+            if source_hash and source_hash == target_hash
+            else _copy_file_with_sha256(local_path, target)
+        )
+    else:
+        copied_hash = _copy_file_with_sha256(local_path, target)
+    return target, copied_hash
 
 
 class ZoteroLocalClient:
@@ -415,32 +497,18 @@ async def import_records(
         # Only a live Local API sync may turn Zotero attachment metadata into a
         # filesystem read.  JSON imported through the public API remains inert,
         # preventing a crafted payload from exposing an arbitrary local path.
-        local_path = (
-            Path(path).expanduser()
-            if client and path and not path.startswith("attachments:")
-            else None
+        local_path, copied_content_hash = await _materialize_attachment(
+            raw,
+            data,
+            client=client,
+            library_id=library_id,
+            library_type=library_type,
+            db_path=db_path,
+            copy_attachment=copy_attachments,
+            errors=errors,
         )
-        if (not local_path or not local_path.is_absolute() or not local_path.is_file()) and client:
-            try:
-                local_path = await client.attachment_path(
-                    _zotero_key(raw), library_id=library_id, library_type=library_type
-                )
-            except ZoteroLocalError as exc:
-                errors.append({"key": _zotero_key(raw), "error": str(exc)})
-        if local_path and local_path.is_absolute() and local_path.is_file() and copy_attachments:
-            from cyrene.runtime.attachments import UPLOADS_DIR, safe_attachment_filename
-
-            target_dir = UPLOADS_DIR / "zotero" / Path(db_path).stem
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target_name = safe_attachment_filename(
-                str(data.get("filename") or local_path.name), fallback_stem="zotero_attachment"
-            )
-            target = target_dir / f"{_zotero_key(raw)}_{target_name}"
-            if not target.is_file() or store.content_hash_file(target) != store.content_hash_file(local_path):
-                shutil.copy2(local_path, target)
-            local_path = target
         if local_path and local_path.is_absolute() and local_path.is_file():
-            content_hash = store.content_hash_file(local_path)
+            content_hash = copied_content_hash or store.content_hash_file(local_path)
             doc = await store.upsert_document_by_path(
                 db_path, path=str(local_path.resolve()), name=str(data.get("filename") or local_path.name),
                 source="zotero", kind="pdf" if local_path.suffix.lower() == ".pdf" else "file",
@@ -568,7 +636,7 @@ async def _apply_deleted(
                     )
                     await db.execute("DELETE FROM kb_documents WHERE id = ?", (doc_id,))
                     path = str(doc_row[0] or "")
-                    if path and path.startswith(str(UPLOADS_DIR / "zotero")) and Path(path).is_file():
+                    if path and path.startswith(str(runtime_attachments.UPLOADS_DIR / "zotero")) and Path(path).is_file():
                         Path(path).unlink(missing_ok=True)
             await db.execute(
                 """INSERT INTO library_sync_tombstones

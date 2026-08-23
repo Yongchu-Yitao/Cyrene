@@ -18,6 +18,16 @@ _MAX_ITEMS = 400
 _VALID_TABS = {"all", "mention", "comment", "system"}
 
 
+def _publish_notification_change(change: str, **details: Any) -> None:
+    from cyrene.observability.debug import publish_event_sync
+
+    publish_event_sync({
+        "type": "notification_changed",
+        "change": change,
+        **details,
+    })
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -131,6 +141,7 @@ def append_notification(
     items.insert(0, item)
     del items[_MAX_ITEMS:]
     _write_store(payload)
+    _publish_notification_change("created", notification_id=item["id"])
     return item
 
 
@@ -163,6 +174,7 @@ def _remove_visible_unread(
     if removed:
         payload["items"] = kept
         _write_store(payload)
+        _publish_notification_change("removed", count=removed)
     return removed
 
 
@@ -220,4 +232,5 @@ def mark_notifications_read(ids: list[str] | None = None, *, mark_all: bool = Fa
             changed += 1
     if changed:
         _write_store(payload)
+        _publish_notification_change("read", count=changed)
     return {"ok": True, "changed": changed}

@@ -1,3 +1,5 @@
+import { workbenchServices } from "../runtime/services.jsx"
+
 // Inject action buttons (copy, edit) into Workbench Markdown code blocks.
 // Uses MutationObserver to handle dynamically loaded messages.
 
@@ -6,7 +8,7 @@
 
   function translate(key, fallback) {
     try {
-      var i18n = window.CyreneUI.require("i18n");
+      var i18n = workbenchServices.i18n();
       return i18n.t(key, null, fallback);
     } catch (error) {
       return fallback;
@@ -51,8 +53,8 @@
   }
 
   function getCodeText(pre) {
-    var code = pre.querySelector("code");
-    if (!code) return "";
+    var code = pre.firstElementChild;
+    if (!code || code.tagName !== "CODE") return "";
     // Extract raw text, stripping line-number spans.
     var clone = code.cloneNode(true);
     var nums = clone.querySelectorAll(".hljs-ln-n");
@@ -107,6 +109,11 @@
 
   function addActions(pre) {
     if (pre.dataset.actionsAdded === "1") return;
+    // Tool traces and other UI surfaces also use <pre> for structured text.
+    // Only Markdown code blocks have a direct <code> child and should receive
+    // the copy/edit toolbar.
+    var codeElement = pre.firstElementChild;
+    if (!codeElement || codeElement.tagName !== "CODE") return;
     pre.dataset.actionsAdded = "1";
 
     var code = getCodeText(pre);
@@ -119,7 +126,7 @@
       var label = document.createElement("span");
       label.className = "code-lang-label";
       label.textContent =
-        window.CyreneUI.require("codeHighlight").getLanguageName(lang) || lang;
+        workbenchServices.codeHighlight().getLanguageName(lang) || lang;
       bar.appendChild(label);
     }
 

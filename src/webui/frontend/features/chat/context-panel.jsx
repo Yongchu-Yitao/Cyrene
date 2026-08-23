@@ -1,3 +1,5 @@
+import { workbenchServices } from "../../shared/runtime/services.jsx"
+import { PluginView } from "../../platform/plugins.jsx"
 import { WBC_CHAT_MODEL_CHANGED_EVENT, WBC_ICONS, WORKBENCH_BUDGET_CODES, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAgentConnectionLabel, wbcAgentDisplayName, wbcChatAgent, wbcCompactNumber, wbcCurrentModel, wbcErrorText, wbcFormatTime, wbcIsBuiltinAgent, wbcModelAccessLabel, wbcModelContextLimit, wbcOpenAgentDetail, wbcStructuredEventSummary, wbcT, wbcUsageReported } from "../../workbench-chat.jsx"
 import { WBC_PROJECT_FILE_DRAFTS, WbcArtifactSplit, WbcBrowserSplit, WbcChangeSplit, WbcChatSplit, WbcMapPaneContent, WbcSideAgentSplit, WbcSubagentsTab, wbcChatArtifactFiles, wbcMapItemLabel, wbcProjectFileDraftKey } from "./split-pane.jsx"
 import { wbcStartFileDrag } from "./file-resources.jsx"
@@ -1126,6 +1128,10 @@ var WBC_PROGRESSIVE_TOOL_PACKAGES = new Set([
   "environment_tools",
   "skill_tools",
   "remote_tools",
+  "cyrene_tools",
+  "office_tools",
+  "plugin_tools",
+  "custom_tools",
   "integration_tools",
 ]);
 
@@ -1142,6 +1148,9 @@ function wbcUsedToolPackages(chat, runtime) {
     (message && Array.isArray(message.tools) ? message.tools : []).forEach(function (tool) {
       addToolName(tool && tool.name);
     });
+    (message && Array.isArray(message.trace) ? message.trace : []).forEach(function (entry) {
+      addToolName(entry && entry.tool);
+    });
   });
   function addProgress(items) {
     (Array.isArray(items) ? items : []).forEach(function (entry) {
@@ -1151,9 +1160,11 @@ function wbcUsedToolPackages(chat, runtime) {
   addProgress(runtime && runtime.progress);
   (runtime && Array.isArray(runtime.activities) ? runtime.activities : []).forEach(function (activity) {
     addProgress(activity && activity.progress);
+    addProgress(activity && activity.trace);
   });
   (runtime && Array.isArray(runtime.segments) ? runtime.segments : []).forEach(function (segment) {
     addProgress(segment && segment.progress);
+    addProgress(segment && segment.trace);
   });
   return used;
 }
@@ -1437,8 +1448,16 @@ function WbcDetachedPaneApp() {
       </aside>;
     }
     if (kind === "terminal") {
-      var TerminalPane = window.CyreneUI.require("terminal").Pane;
+      var TerminalPane = workbenchServices.terminal().Pane;
       return <TerminalPane terminalId={String(context.payload || "")} />;
+    }
+    if (kind === "plugin-view") {
+      return <section className="wbc-plugin-view-pane detached">
+        <PluginView
+          projectId={String(context.payload && context.payload.projectId || context.project && context.project.id || "")}
+          payload={context.payload}
+        />
+      </section>;
     }
     if (kind === "side-agent") {
       var agents = Array.isArray(context.agents) ? context.agents : [];

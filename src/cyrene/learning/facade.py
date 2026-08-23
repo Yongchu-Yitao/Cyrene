@@ -111,6 +111,10 @@ async def learn_from_turn(turn_id: str) -> dict[str, Any]:
     return await _behavior.learn_from_turn(turn_id)
 
 
+async def project_scope_for_turn(turn_id: str) -> dict[str, str]:
+    return await _behavior.project_scope_for_turn(turn_id)
+
+
 async def tick(bot: Any, db_path: str) -> None:
     await _behavior.tick(bot, db_path)
 

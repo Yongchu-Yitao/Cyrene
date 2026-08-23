@@ -18,9 +18,11 @@ import re
 import threading
 import time
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from cyrene.config import STORE_DIR
 from cyrene.runtime.io import atomic_write_json, read_json_safe
@@ -98,6 +100,36 @@ class ProjectMemoryModelUnavailable(RuntimeError):
 
 class InvalidProjectMemoryOutput(RuntimeError):
     """The Memory Agent returned unsafe or malformed output."""
+
+
+class _RetryableProjectMemoryOutput(InvalidProjectMemoryOutput):
+    """The Memory Agent returned a structurally invalid, retryable response."""
+
+
+@dataclass(frozen=True)
+class ProjectQueryPort:
+    """Public project lookup port used by project-memory use cases."""
+
+    find: Callable[[str], dict[str, Any] | None]
+
+
+class ProjectMemoryChatRepository(Protocol):
+    """Minimum chat repository surface required by project-memory learning."""
+
+    def get(self, chat_id: str) -> dict[str, Any] | None: ...
+
+
+class StructuredMemoryQuery(Protocol):
+    def list(self, workspace: str, *, include_hidden: bool = False) -> dict: ...
+
+
+class ProjectMemoryApplicationError(RuntimeError):
+    """Stable project-memory application error consumed by HTTP adapters."""
+
+    def __init__(self, message: str, status_code: int, code: str | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
 
 
 def configure_store(db_path: str) -> None:
@@ -793,42 +825,31 @@ def _memory_agent_instruction(current_prompt: str, language: str) -> str:
     )
 
 
-async def _learn_prompt(
-    snapshot: dict[str, Any], current_prompt: str
+def _memory_agent_retry_instruction(error: Exception) -> str:
+    return (
+        "Your previous project-memory response was structurally invalid: "
+        f"{error}. Retry now. You must call submit_project_memory exactly once "
+        "with both prompt and change_summary. Do not answer with ordinary text "
+        "and do not call the tool more than once."
+    )
+
+
+def _parse_memory_agent_response(
+    response: Any,
+    *,
+    identity: dict[str, Any],
+    candidate: dict[str, Any],
 ) -> tuple[str, str, dict[str, Any]]:
-    from cyrene.call_llm import call_llm
-    from cyrene.model_runtime.client import resolve_exact_model_candidate
     from cyrene.model_runtime.messages import parse_tool_arguments
 
-    identity = dict(snapshot.get("model") or {})
-    candidate = resolve_exact_model_candidate(identity)
-    if candidate is None:
-        raise ProjectMemoryModelUnavailable("the triggering main-Agent model is no longer configured")
-    language = str(snapshot.get("language") or "").strip().lower()
-    if language not in {"en", "zh"}:
-        language = _preferred_project_memory_language()
-    messages = copy.deepcopy(snapshot.get("messages") or [])
-    messages.append({
-        "role": "user",
-        "content": _memory_agent_instruction(current_prompt, language),
-    })
-    response = await call_llm(
-        messages,
-        tools=[copy.deepcopy(_MEMORY_SUBMIT_TOOL)],
-        candidates=[candidate],
-        thinking="auto",
-        caller="project_memory_agent",
-        phase="learning",
-        session_id=f"memory:{snapshot.get('projectId') or ''}",
-    )
     if not isinstance(response, dict):
-        raise InvalidProjectMemoryOutput("Memory Agent returned no structured response")
+        raise _RetryableProjectMemoryOutput("Memory Agent returned no structured response")
     if str(response.get("finish_reason") or "").lower() in {
         "length",
         "max_tokens",
         "max_output_tokens",
     }:
-        raise InvalidProjectMemoryOutput("Memory Agent output was truncated")
+        raise _RetryableProjectMemoryOutput("Memory Agent output was truncated")
     tool_calls = response.get("tool_calls") or []
     submissions = [
         call
@@ -837,21 +858,25 @@ async def _learn_prompt(
         and isinstance(call.get("function"), dict)
         and str(call["function"].get("name") or "") == _MEMORY_SUBMIT_TOOL_NAME
     ]
-    if len(submissions) != 1:
-        raise InvalidProjectMemoryOutput(
-            "Memory Agent did not submit exactly one project-memory result"
+    if not submissions:
+        raise _RetryableProjectMemoryOutput(
+            "Memory Agent submitted no project-memory result"
+        )
+    if len(submissions) > 1:
+        raise _RetryableProjectMemoryOutput(
+            f"Memory Agent submitted {len(submissions)} project-memory results; expected exactly one"
         )
     try:
         parsed = parse_tool_arguments(submissions[0]["function"].get("arguments"))
     except ValueError as exc:
-        raise InvalidProjectMemoryOutput(
+        raise _RetryableProjectMemoryOutput(
             "Memory Agent submitted malformed project-memory arguments"
         ) from exc
     if "prompt" not in parsed:
-        raise InvalidProjectMemoryOutput("Memory Agent submission is missing prompt")
+        raise _RetryableProjectMemoryOutput("Memory Agent submission is missing prompt")
     prompt = normalize_prompt(parsed.get("prompt"))
     if len(prompt) > _MAX_PROMPT_CHARS:
-        raise InvalidProjectMemoryOutput(
+        raise _RetryableProjectMemoryOutput(
             f"Memory Agent prompt exceeds {_MAX_PROMPT_CHARS} characters"
         )
     if _contains_secret(prompt):
@@ -868,6 +893,58 @@ async def _learn_prompt(
         "reasoningEffort": str(identity.get("reasoningEffort") or candidate.get("reasoning_effort") or ""),
     }
     return prompt, summary, public_model
+
+
+async def _learn_prompt(
+    snapshot: dict[str, Any], current_prompt: str
+) -> tuple[str, str, dict[str, Any]]:
+    from cyrene.call_llm import call_llm
+    from cyrene.model_runtime.client import resolve_exact_model_candidate
+
+    identity = dict(snapshot.get("model") or {})
+    candidate = resolve_exact_model_candidate(identity)
+    if candidate is None:
+        raise ProjectMemoryModelUnavailable("the triggering main-Agent model is no longer configured")
+    language = str(snapshot.get("language") or "").strip().lower()
+    if language not in {"en", "zh"}:
+        language = _preferred_project_memory_language()
+    messages = copy.deepcopy(snapshot.get("messages") or [])
+    messages.append({
+        "role": "user",
+        "content": _memory_agent_instruction(current_prompt, language),
+    })
+    call_kwargs = {
+        "tools": [copy.deepcopy(_MEMORY_SUBMIT_TOOL)],
+        "candidates": [candidate],
+        "thinking": "auto",
+        "caller": "project_memory_agent",
+        "phase": "learning",
+        "session_id": f"memory:{snapshot.get('projectId') or ''}",
+    }
+    try:
+        response = await call_llm(messages, **call_kwargs)
+        return _parse_memory_agent_response(
+            response,
+            identity=identity,
+            candidate=candidate,
+        )
+    except _RetryableProjectMemoryOutput as first_error:
+        retry_messages = copy.deepcopy(messages)
+        retry_messages.append({
+            "role": "user",
+            "content": _memory_agent_retry_instruction(first_error),
+        })
+        response = await call_llm(retry_messages, **call_kwargs)
+        try:
+            return _parse_memory_agent_response(
+                response,
+                identity=identity,
+                candidate=candidate,
+            )
+        except _RetryableProjectMemoryOutput as retry_error:
+            raise InvalidProjectMemoryOutput(
+                f"{retry_error} after 2 attempts"
+            ) from retry_error
 
 
 async def _publish_job_event(job: dict[str, Any]) -> None:
@@ -1120,11 +1197,130 @@ async def wait_for_pending_jobs() -> None:
         await asyncio.gather(*list(_PENDING_TASKS), return_exceptions=True)
 
 
+class ProjectMemoryApplicationService:
+    """Project prompt and completed-chat learning use cases."""
+
+    def __init__(
+        self,
+        db_path: str,
+        projects: ProjectQueryPort,
+        chats: ProjectMemoryChatRepository,
+        structured_memories: StructuredMemoryQuery,
+    ) -> None:
+        configure_store(db_path)
+        self.projects = projects
+        self.chats = chats
+        self.structured_memories = structured_memories
+
+    async def get(self, project_id: str, *, include_memories: bool = True) -> dict:
+        await self._require_project(project_id)
+        try:
+            payload = await asyncio.to_thread(get_project_memory_prompt, project_id)
+            if include_memories:
+                memories = await asyncio.to_thread(
+                    self.structured_memories.list,
+                    project_id,
+                    include_hidden=True,
+                )
+                payload["memories"] = memories.get("memories") or []
+            return payload
+        except Exception as exc:
+            logger.exception("Failed to read project-memory prompt for %s", project_id)
+            raise ProjectMemoryApplicationError(
+                "Memory prompt load failed", 500, "memory_prompt_load_failed"
+            ) from exc
+
+    async def update(
+        self,
+        project_id: str,
+        prompt: str,
+        *,
+        base_modified_at: str,
+    ) -> dict:
+        await self._require_project(project_id)
+        try:
+            payload, changed = await asyncio.to_thread(
+                update_project_memory_prompt,
+                project_id,
+                prompt,
+                base_modified_at=base_modified_at,
+            )
+            return {**payload, "status": "saved" if changed else "unchanged"}
+        except ProjectMemoryConflict as exc:
+            raise ProjectMemoryApplicationError(str(exc), 409, "optimistic_conflict") from exc
+        except InvalidProjectMemoryOutput as exc:
+            raise ProjectMemoryApplicationError(str(exc), 400, "invalid_prompt") from exc
+        except Exception as exc:
+            logger.exception("Failed to edit project-memory prompt for %s", project_id)
+            raise ProjectMemoryApplicationError(
+                "Memory prompt update failed", 500, "memory_prompt_update_failed"
+            ) from exc
+
+    async def restore(
+        self,
+        project_id: str,
+        modified_at: str,
+        *,
+        base_modified_at: str,
+    ) -> dict:
+        await self._require_project(project_id)
+        try:
+            payload, changed = await asyncio.to_thread(
+                restore_project_memory_prompt,
+                project_id,
+                modified_at,
+                base_modified_at=base_modified_at,
+            )
+            return {**payload, "status": "saved" if changed else "unchanged"}
+        except KeyError as exc:
+            raise ProjectMemoryApplicationError("memory version not found", 404) from exc
+        except ProjectMemoryConflict as exc:
+            raise ProjectMemoryApplicationError(str(exc), 409, "optimistic_conflict") from exc
+        except Exception as exc:
+            logger.exception("Failed to restore project-memory prompt for %s", project_id)
+            raise ProjectMemoryApplicationError(
+                "Memory prompt restore failed", 500, "memory_prompt_restore_failed"
+            ) from exc
+
+    async def learn_from_chat(self, chat_id: str, *, language: str = "") -> dict:
+        chat = await asyncio.to_thread(self.chats.get, chat_id)
+        if chat is None:
+            raise ProjectMemoryApplicationError("chat not found", 404)
+        if str(chat.get("kind") or "chat") != "chat":
+            raise ProjectMemoryApplicationError(
+                "only root conversations can generate project memory", 400
+            )
+        result = schedule_learning_from_completed_chat(
+            str(chat.get("projectId") or ""),
+            chat_id,
+            source="conversation_menu",
+            reason="manual_menu",
+            chat=chat,
+            language=str(language or "").strip().lower(),
+        )
+        if result.get("status") == "error":
+            code = str(result.get("type") or "")
+            status_code = 409 if code == "no_completed_context" else 400
+            raise ProjectMemoryApplicationError(
+                str(result.get("message") or ""), status_code, code
+            )
+        return result
+
+    async def _require_project(self, project_id: str) -> None:
+        project = await asyncio.to_thread(self.projects.find, project_id)
+        if project is None:
+            raise ProjectMemoryApplicationError("project not found", 404)
+
+
 __all__ = [
     "InvalidProjectMemoryOutput",
     "MAIN_AGENT_MEMORY_TRIGGER_PROMPT",
     "ProjectMemoryConflict",
+    "ProjectMemoryApplicationError",
+    "ProjectMemoryApplicationService",
+    "ProjectMemoryChatRepository",
     "ProjectMemoryModelUnavailable",
+    "ProjectQueryPort",
     "build_main_agent_suffix",
     "cancel_chat_jobs",
     "cancel_project_jobs",

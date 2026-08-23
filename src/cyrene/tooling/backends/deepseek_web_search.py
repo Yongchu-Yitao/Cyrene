@@ -17,6 +17,7 @@ import httpx
 
 from cyrene.config import strip_wrapping_quotes
 from cyrene.runtime.settings_store import get_custom_models
+from cyrene.tooling.backends.searxng_manager import get_effective_search_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +244,12 @@ async def search_with_deepseek(
     )
     started = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        proxy_url = get_effective_search_proxy()
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=False,
+            proxy=proxy_url or None,
+        ) as client:
             response = await client.post(
                 _RESPONSES_ENDPOINT,
                 json=payload,

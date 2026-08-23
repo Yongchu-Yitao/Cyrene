@@ -8,6 +8,7 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
   tabs: [
     { id: "profile", labelKey: "rail.profile" },
     { id: "general", labelKey: "settings.general" },
+    { id: "search", labelKey: "settings.searchProviders" },
     { id: "appearance", labelKey: "settings.appearance" },
     { id: "shortcuts", labelKey: "settings.shortcuts" },
     { id: "models", labelKey: "settings.modelServices" },
@@ -18,6 +19,7 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "channels", labelKey: "settings.channels" },
     { id: "remote", labelKey: "settings.remoteTab" },
     { id: "extensions", labelKey: "settings.extensionCenter" },
+    { id: "custom-plugins", labelKey: "settings.customPlugins" },
     { id: "custom-tools", labelKey: "settings.customTools" },
     { id: "integrations", labelKey: "settings.integrations" },
     { id: "budget", labelKey: "settings.budget" },
@@ -37,6 +39,8 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "setting-amap-key", tab: "general", labelKey: "settings.amapKey", hintKey: "settings.amapKeyHint", keywords: ["地图", "amap", "高德", "key", "密钥"] },
     { id: "setting-run-in-background", tab: "general", labelKey: "settings.runInBackground", hintKey: "settings.runInBackgroundHint", keywords: ["后台", "常驻", "resident", "background"] },
     { id: "setting-quick-chat", tab: "general", labelKey: "settings.quickChatAssistant", hintKey: "settings.quickChatAssistantHint", keywords: ["快捷对话", "quick", "chat", "截图"] },
+    { id: "setting-search-enabled", tab: "search", labelKey: "settings.searchEnabled", hintKey: "settings.searchEnabledHint", keywords: ["搜索", "search", "联网", "开关"] },
+    { id: "setting-search-providers", tab: "search", labelKey: "settings.searchProviders", hintKey: "settings.searchFallbackHint", keywords: ["搜索器", "search provider", "simplexng", "deepseek", "tavily", "brave", "fallback", "顺位"] },
     { id: "setting-zotero", tab: "integrations", labelKey: "settings.zoteroIntegration", hintKey: "settings.zoteroIntegrationHint", keywords: ["zotero", "文献", "引用", "集成"] },
     // ── Models ──
     { id: "setting-model-connections", tab: "models", labelKey: "settings.modelServices", keywords: ["模型服务", "provider", "api", "key", "base url", "codex", "ollama", "连接"] },
@@ -65,6 +69,7 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "setting-voice", tab: "voice", labelKey: "settings.voiceCapability", hintKey: "settings.voiceCapabilityHint", keywords: ["语音", "voice", "tts", "asr", "声音"] },
     // ── Extensions ──
     { id: "setting-extensions", tab: "extensions", labelKey: "settings.extensionCenter", keywords: ["扩展", "extension", "插件", "market", "mcp", "hooks", "钩子", "hook", "技能", "skill"] },
+    { id: "setting-custom-plugins", tab: "custom-plugins", labelKey: "settings.customPlugins", hintKey: "settings.customPluginsHint", keywords: ["自定义插件", "custom plugin", "插件", "plugin", "模型", "model", "UI"] },
     // ── Data ──
     { id: "setting-storage", tab: "data", labelKey: "settings.storageUsage", keywords: ["存储", "storage", "空间", "占用", "缓存"] },
     { id: "setting-paths", tab: "data", labelKey: "settings.pathInfo", keywords: ["路径", "path", "目录", "目录位置"] },

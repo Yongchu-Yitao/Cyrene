@@ -7,8 +7,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from cyrene import config
+from cyrene.knowledge.workspace import WorkspaceResolutionError
 from cyrene.workbench.chat_service import ChatService
+from cyrene.workbench.conversation_context_service import (
+    ConversationContextQueryService,
+    ConversationInboxQueryService,
+    SessionStateRepository,
+)
 from cyrene.workbench.runtime_facade import WorkbenchRuntimeFacade
+from cyrene.runtime.config_store import effective_ctx_limit_for_model
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +27,8 @@ class ChatRouteContext:
     db_path: str
     service: ChatService
     workbench_runtime: WorkbenchRuntimeFacade
+    conversation_context: ConversationContextQueryService
+    conversation_inbox: ConversationInboxQueryService
 
     @classmethod
     def create(cls, *, bot: Any, db_path: str) -> "ChatRouteContext":
@@ -27,11 +37,31 @@ class ChatRouteContext:
 
         pinned_resources.configure(db_path)
         chat_groups.configure_store(db_path)
+        runtime = WorkbenchRuntimeFacade()
         context = cls(
             bot=bot,
             db_path=str(db_path),
             service=service,
-            workbench_runtime=WorkbenchRuntimeFacade(),
+            workbench_runtime=runtime,
+            conversation_context=ConversationContextQueryService(
+                states=SessionStateRepository(
+                    lambda session_id: runtime.session_state_file(session_id)
+                ),
+                chats=service.repository,
+                agent_runtime=service.agent_runtime_builtin,
+                context_payload=service.chat_context_payload,
+                context_segments=service.context_segment_tokens,
+                subagent_payload=service.subagent_payload,
+                compact_session=service.compact_session,
+                default_model=lambda: str(getattr(config, "OPENAI_MODEL", "") or ""),
+                context_limit=effective_ctx_limit_for_model,
+                approx_token_count=lambda text: runtime.approx_token_count(text),
+            ),
+            conversation_inbox=ConversationInboxQueryService(
+                chats=service.repository,
+                run_manager=service.run_manager,
+                utc_now=service.utc_now_iso,
+            ),
         )
         context._configure_shell_wake()
         return context
@@ -58,9 +88,9 @@ class ChatRouteContext:
         try:
             from cyrene.knowledge import library as knowledge_library
             from cyrene.runtime.attachments import resolve_managed_attachment_path
-            from cyrene.workbench.knowledge import ensure_kb_db
+            from cyrene.knowledge.workspace import ensure_workspace_db
 
-            kb_path = await ensure_kb_db(workspace)
+            kb_path = await ensure_workspace_db(workspace)
             if not await knowledge_library.get_item(kb_path, item_id):
                 return body
             attachment = await knowledge_library.get_primary_attachment(kb_path, item_id)
@@ -99,6 +129,8 @@ class ChatRouteContext:
                 "ownerProjectId": workspace,
                 "file": resolved_file,
             }
+        except WorkspaceResolutionError:
+            raise
         except Exception:
             logger.exception(
                 "Failed to resolve dragged library item %s in %s",

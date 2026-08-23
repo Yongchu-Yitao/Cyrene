@@ -1,0 +1,1422 @@
+/* ── Light-mode workbench overrides ── */
+
+html[data-theme="light"] .workbench-shell {
+  --wb-green: #1a8a4c;
+  --wb-blue:  #1d6ec9;
+}
+
+/* Dark-mode neutral surface: near-black charcoal (not accent-tinted). Light
+   base values live on .workbench-shell above; this swaps them for dark. */
+html[data-theme="dark"] .workbench-shell {
+  --wb-bg: #0c0c0f;
+  --wb-bg-2: #111216;
+  --wb-surface: var(--wb-user-bg-dark, #101114);
+  /* #1a1a1a at 76% resolves to roughly the sampled #181818 over the default
+     canvas while still transmitting enough backdrop for a glass material. */
+  --wb-conversation-surface: color-mix(in srgb, #1a1a1a 76%, transparent);
+  --wb-row-hover-bg: color-mix(in srgb, var(--wb-accent) 8%, #18191e);
+  --wb-active-bg: color-mix(in srgb, var(--wb-accent) 28%, #18191e);
+  --wb-active-border: color-mix(in srgb, var(--wb-accent) 48%, transparent);
+  --wb-accent-strong: #eeeaff;
+  --wb-selection-bg: color-mix(in srgb, var(--wb-accent) 48%, #24212e);
+  --wb-selection-text: #ffffff;
+  /* Dark mode tones every user bubble into the charcoal panel. Its foreground
+     must therefore stay white across all accent presets instead of following
+     the adaptive text intended for solid, potentially bright controls. */
+  --wb-user-message-text: #fff;
+  --wb-link: #8ebcff;
+  --wb-link-hover: #b3d2ff;
+  --wb-card-bg: #18191e;
+  --wb-floating-rail-tint: #1b1c21;
+  --wb-card-bg-strong: #1d1e24;
+  --wb-flyout-border: color-mix(in srgb, var(--wb-text) 16%, var(--wb-line-2));
+  --wb-flyout-shadow:
+    0 14px 38px color-mix(in srgb, #000 34%, transparent),
+    0 2px 8px color-mix(in srgb, #000 16%, transparent);
+  --wb-modal-border: color-mix(in srgb, var(--wb-text) 16%, var(--wb-line-2));
+  --wb-modal-shadow:
+    0 28px 80px color-mix(in srgb, #000 58%, transparent),
+    0 3px 12px color-mix(in srgb, #000 24%, transparent);
+  --wb-notif-pop-bg: #1a1b20;
+  --wb-notif-pop-border: #3a3c45;
+  --wb-notif-shadow: 0 24px 60px rgba(0, 0, 0, 0.42), 0 6px 16px rgba(0, 0, 0, 0.24);
+  --wb-notif-title: #f1f1f4;
+  --wb-notif-body: #c2c3ca;
+  --wb-notif-meta: #8b8d97;
+  --wb-notif-link: #8ebcff;
+  --wb-notif-active-line: #ff7d7f;
+  --wb-notif-item-hover: color-mix(in srgb, var(--accent) 8%, rgba(255, 255, 255, 0.02));
+  --wb-chart-token: #72a7ff;
+  --wb-chart-request: #f4bd50;
+  --wb-chart-cost: #e77bd5;
+  --wb-chart-legend: #d7dae2;
+  --wb-chart-axis: #9ba3b0;
+  --wb-chart-grid: rgba(194, 195, 202, 0.16);
+  --wb-chart-axis-line: rgba(194, 195, 202, 0.28);
+  --wb-chart-tooltip-bg: #202126;
+  --wb-chart-tooltip-border: #454751;
+  --wb-chart-tooltip-text: #f1f1f4;
+}
+
+html[data-theme="light"] .settings-overlay-panel {
+  background: color-mix(in srgb, #ffffff 94%, transparent);
+  border-color: color-mix(in srgb, #cfd6df 78%, transparent);
+  box-shadow: 0 32px 90px rgba(24, 37, 46, 0.18), 0 8px 24px rgba(24, 37, 46, 0.08);
+}
+
+html[data-theme="light"] .settings-overlay-body {
+  background: color-mix(in srgb, #f5f6f8 88%, transparent);
+}
+
+html[data-theme="light"] .settings-overlay-content {
+  background: color-mix(in srgb, #f5f6f8 72%, #ffffff);
+}
+
+html[data-theme="light"] .settings-overlay-nav {
+  background: color-mix(in srgb, #ffffff 76%, transparent);
+  border-right-color: color-mix(in srgb, #d9dfe7 72%, transparent);
+}
+
+html[data-theme="light"] .settings-overlay-nav-section {
+  border-top-color: #e8ebf0;
+}
+
+html[data-theme="light"] .settings-overlay-tab:hover {
+  background: color-mix(in srgb, var(--wb-accent) 6%, #ffffff);
+}
+
+html[data-theme="light"] .settings-overlay-tab.active {
+  background: color-mix(in srgb, var(--wb-accent) 10%, #ffffff);
+  border-color: color-mix(in srgb, var(--wb-accent) 16%, #dfe4ea);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+html[data-theme="light"] .wb-input,
+html[data-theme="light"] .wb-select,
+html[data-theme="light"] .wb-btn {
+  background: #ffffff;
+}
+html[data-theme="light"] .wb-btn.primary {
+  background: var(--wb-accent);
+}
+
+html[data-theme="light"] .wb-btn:hover {
+  background: #f8f9fb;
+}
+html[data-theme="light"] .wb-btn.primary:hover {
+  background: var(--wb-accent);
+}
+
+html[data-theme="light"] .wb-seg {
+  background: #eef0f3;
+  border-color: #e1e4e8;
+}
+
+html[data-theme="light"] .wb-seg-btn.active {
+  background: #ffffff;
+}
+
+/* Toggle: neutral gray off-track in light mode. The on-state rules must be
+   re-stated here: html[data-theme="light"] .wb-toggle out-specifies the base
+   .wb-toggle.on, so without these the accent track would be masked in light. */
+html[data-theme="light"] .wb-toggle {
+  background: #cbd2db;
+}
+
+html[data-theme="light"] .wb-toggle:hover {
+  background: #bcc4cf;
+}
+
+html[data-theme="light"] .wb-toggle.on {
+  background: var(--wb-accent);
+}
+
+html[data-theme="light"] .wb-toggle.on:hover {
+  background: color-mix(in srgb, var(--wb-accent) 88%, #000);
+}
+
+html[data-theme="light"] .wb-toggle::after {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* Status pills: readable on light backgrounds */
+html[data-theme="light"] .workbench-status-pill.blue  { color: var(--wb-blue);  border-color: rgba(29, 110, 201, 0.32); background: rgba(29, 110, 201, 0.06); }
+html[data-theme="light"] .workbench-status-pill.green { color: var(--wb-green); border-color: rgba(26, 138, 76, 0.32);  background: rgba(26, 138, 76, 0.06); }
+html[data-theme="light"] .workbench-status-pill.amber { color: #9c6c1a;         border-color: rgba(156, 108, 26, 0.30); background: rgba(156, 108, 26, 0.06); }
+html[data-theme="light"] .workbench-status-pill.red   { color: #b53232;         border-color: rgba(181, 50, 50, 0.30);  background: rgba(181, 50, 50, 0.06); }
+
+/* Task-status chips */
+html[data-theme="light"] .workbench-task-status.blue  { background: rgba(29, 110, 201, 0.10); color: var(--wb-blue); }
+html[data-theme="light"] .workbench-task-status.green { background: rgba(26, 138, 76, 0.10);  color: var(--wb-green); }
+html[data-theme="light"] .workbench-task-status.amber { background: rgba(156, 108, 26, 0.10); color: #9c6c1a; }
+html[data-theme="light"] .workbench-task-status.red   { background: rgba(181, 50, 50, 0.10);  color: #b53232; }
+
+/* Panel title accent (purple spark) */
+html[data-theme="light"] .workbench-panel-title span {
+  color: var(--magenta);
+}
+
+/* Tool list monospace identifiers */
+html[data-theme="light"] .wb-tool-list .mono {
+  color: var(--wb-blue);
+}
+
+/* ── Search Overlay (workbench context, overrides generic styles.css) ── */
+/* Must be above the browser view (screencast/iframe compositing layer) and
+   all workbench content. High z-index ensures it paints on top even when
+   the browser view creates a GPU compositing layer. */
+.search-overlay {
+  z-index: 10050;
+}
+
+/* ── Settings Page ── */
+
+.settings-overlay {
+  /* Keep every settings form primitive on the same material system as the
+     Memory toolbar. These aliases intentionally live on the settings page because
+     it is rendered outside `.workbench-grid.integrated-sidebars`. */
+  --wb-settings-control-border: 1px solid color-mix(in srgb, var(--wb-line-2) 70%, transparent);
+  --wb-settings-control-radius: 12px;
+  --wb-settings-control-bg: color-mix(in srgb, var(--wb-card-bg) 88%, var(--wb-surface));
+  --wb-settings-control-hover-bg: color-mix(in srgb, var(--wb-accent) 6%, var(--wb-settings-control-bg));
+  --wb-settings-control-shadow:
+    0 5px 14px rgba(9, 17, 30, .045),
+    inset 0 1px 0 color-mix(in srgb, #fff 8%, transparent);
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: block;
+  padding: 0;
+  background: transparent;
+}
+
+/* Storage usage bar + legend (settings → Data) */
+.wb-storage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wb-storage-bar {
+  display: flex;
+  width: 100%;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--wb-icon-bg);
+}
+
+.wb-storage-seg {
+  height: 100%;
+  min-width: 0;
+}
+
+.wb-storage-legend {
+  display: flex;
+  flex-direction: column;
+}
+
+.wb-storage-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-text);
+}
+
+.wb-storage-legend-row.empty {
+  opacity: 0.55;
+}
+
+.wb-storage-swatch {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.wb-storage-legend-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--wb-text);
+}
+
+.wb-storage-legend-row b {
+  font-weight: 600;
+  color: var(--wb-muted);
+}
+
+.settings-overlay-panel {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 0;
+  background: transparent;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wb-toggle,
+  .wb-toggle::after {
+    transition: none;
+  }
+}
+
+.settings-overlay-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Sidebar navigation */
+.settings-overlay-nav {
+  width: 200px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 8px;
+  gap: 2px;
+  border-right: 1px solid color-mix(in srgb, var(--wb-line) 64%, transparent);
+  background: color-mix(in srgb, var(--wb-topbar-bg) 66%, transparent);
+  backdrop-filter: blur(28px) saturate(140%);
+  -webkit-backdrop-filter: blur(28px) saturate(140%);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.settings-overlay-nav::-webkit-scrollbar { display: none; }
+
+.settings-overlay-nav-section {
+  flex: var(--settings-tab-count, 1) 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-top: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--wb-line) 58%, transparent);
+}
+
+.settings-overlay-nav-section.first {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.settings-overlay-tab {
+  flex: 1 1 0;
+  width: 100%;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--wb-text);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 560;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background 0.16s, color 0.16s, border-color 0.16s, transform 0.16s;
+}
+
+.settings-overlay-tab > span:not(.settings-overlay-tab-icon) {
+  font-weight: 500;
+}
+
+.settings-overlay-tab-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  color: color-mix(in srgb, var(--wb-muted) 84%, var(--wb-text));
+}
+
+.settings-overlay-tab-glyph {
+  display: block;
+  width: 18px;
+  height: 18px;
+  background: currentColor;
+  -webkit-mask: var(--settings-tab-icon) center / contain no-repeat;
+  mask: var(--settings-tab-icon) center / contain no-repeat;
+}
+
+.settings-overlay-tab-glyph.is-inline {
+  background: none;
+  -webkit-mask: none;
+  mask: none;
+}
+
+.settings-overlay-tab-glyph.is-inline svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.settings-overlay-tab:hover {
+  background: color-mix(in srgb, var(--wb-accent) 6%, transparent);
+  color: var(--wb-text);
+}
+
+.settings-overlay-tab:focus {
+  outline: 0;
+}
+
+.settings-overlay-tab:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 66%, transparent);
+  outline-offset: 1px;
+}
+
+.settings-overlay-tab.active {
+  background: color-mix(in srgb, var(--wb-accent) 12%, var(--wb-card-bg));
+  border-color: color-mix(in srgb, var(--wb-accent) 20%, var(--wb-line));
+  color: var(--wb-text);
+  font-weight: 650;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .035);
+}
+
+.settings-overlay-tab.active .settings-overlay-tab-icon {
+  color: var(--wb-accent);
+}
+
+/* Content area */
+.settings-overlay-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--wb-muted) 26%, transparent) transparent;
+  -ms-overflow-style: none;
+  padding: 24px 28px 44px;
+  background: var(--wb-main-bg);
+  animation: settings-content-in 0.18s ease-out;
+}
+.settings-overlay-content::-webkit-scrollbar { width: 8px; }
+.settings-overlay-content::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-muted) 24%, transparent);
+  background-clip: padding-box;
+}
+
+/* The Extension Center keeps one scroll surface across all of its category
+   tabs. Preserve scrolling while removing the scrollbar chrome. */
+.settings-overlay-content[data-settings-active-tab="extensions"] {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.settings-overlay-content[data-settings-active-tab="extensions"]::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+@keyframes settings-content-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.settings-panel {
+  width: min(100%, 760px);
+  max-width: none;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-panel-wide {
+  width: 100%;
+}
+
+.remote-settings-panel {
+  width: min(100%, 860px);
+  padding-bottom: 42px;
+}
+
+/* The settings surface keeps using the existing wb-* form primitives. These
+   scoped refinements give those shared components the same generous cards,
+   controls and focus treatment as the conversation UI without forking them. */
+.settings-overlay .wb-section-title {
+  margin-bottom: 6px;
+}
+
+.settings-overlay .wb-section-title h3 {
+  font-size: calc(24px * var(--wb-ui-font-scale, 1));
+  letter-spacing: -.035em;
+}
+
+.settings-overlay .wb-section-title p {
+  max-width: 62ch;
+  margin-top: 7px;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  line-height: 1.55;
+}
+
+.settings-overlay .wb-section-block,
+.settings-overlay .wb-model-card,
+.settings-overlay .wb-shortcuts-platform {
+  border-color: color-mix(in srgb, var(--wb-line-2) 64%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--wb-card-bg) 82%, transparent);
+  box-shadow: var(--wbc-control-shadow, 0 1px 2px rgba(15, 23, 42, .035));
+}
+
+.settings-overlay .wb-section-block {
+  padding: 18px;
+  margin-bottom: 14px;
+}
+
+.settings-overlay .wb-field {
+  gap: 24px;
+  padding: 14px 0;
+  border-bottom-color: color-mix(in srgb, var(--wb-line) 64%, transparent);
+}
+
+/* Deep-linked settings: briefly highlight the anchored setting after the
+   search overlay jumps to it. */
+.wb-settings-highlight {
+  animation: wb-settings-highlight-pulse 2.2s ease-out;
+  border-radius: 10px;
+}
+@keyframes wb-settings-highlight-pulse {
+  0% { background: color-mix(in srgb, var(--wb-accent, #4f8cff) 28%, transparent); }
+  60% { background: color-mix(in srgb, var(--wb-accent, #4f8cff) 28%, transparent); }
+  100% { background: transparent; }
+}
+
+html[data-theme] .settings-overlay :where(.wb-input, .wb-select, .wb-textarea, .wb-btn) {
+  border: var(--wb-settings-control-border);
+  border-radius: var(--wb-settings-control-radius);
+  background: var(--wb-settings-control-bg);
+  box-shadow: var(--wb-settings-control-shadow);
+  transition:
+    transform 180ms cubic-bezier(.22, 1, .36, 1),
+    background .16s,
+    border-color .16s,
+    box-shadow .16s,
+    color .16s;
+}
+
+html[data-theme] .settings-overlay :where(.wb-input, .wb-select, .wb-btn) {
+  height: 38px;
+  min-height: 38px;
+}
+
+html[data-theme] .settings-overlay :where(.wb-input, .wb-select, .wb-textarea):hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--wb-accent) 34%, var(--wb-line-2));
+  /* Keep a select's chevron background layer intact while changing state. */
+  background-color: var(--wb-settings-control-hover-bg);
+}
+
+html[data-theme] .settings-overlay :where(.wb-input, .wb-select, .wb-textarea):focus {
+  outline: 0;
+  border-color: color-mix(in srgb, var(--wb-accent) 62%, var(--wb-line-2));
+  background-color: var(--wb-settings-control-bg);
+  box-shadow:
+    0 7px 18px rgba(9, 17, 30, .065),
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 18%, transparent);
+}
+
+html[data-theme] .settings-overlay .wb-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-inline: 14px 38px;
+  border-radius: var(--wb-settings-control-radius);
+  background-color: var(--wb-settings-control-bg);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 10 5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px;
+  font-weight: 620;
+}
+
+html[data-theme] .settings-overlay .wb-input::placeholder,
+html[data-theme] .settings-overlay .wb-textarea::placeholder {
+  color: var(--wb-faint);
+}
+
+.settings-overlay .wb-path-display {
+  width: min(460px, 48vw);
+  max-width: 100%;
+  min-width: 320px;
+  text-overflow: ellipsis;
+}
+
+.settings-overlay .wb-export-session-toolbar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--wb-muted);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+}
+
+.settings-overlay .wb-export-session-toolbar > b {
+  color: var(--wb-text);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+}
+
+.settings-overlay .wb-export-session-toolbar .wb-inline-row { gap: 7px; }
+.settings-overlay .wb-export-session-toolbar .wb-btn { height: 32px; min-height: 32px; }
+
+.settings-overlay .wb-export-session-list {
+  width: 100%;
+  max-height: 264px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px;
+  border: var(--wb-settings-control-border);
+  border-radius: 13px;
+  background: var(--wb-settings-control-bg);
+  box-shadow: var(--wb-settings-control-shadow);
+}
+
+.settings-overlay .wb-export-session-option {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+
+.settings-overlay .wb-export-session-option:hover {
+  background: var(--wb-settings-control-hover-bg);
+  color: var(--wb-text);
+}
+
+.settings-overlay .wb-export-session-option.selected {
+  border-color: color-mix(in srgb, var(--wb-accent) 40%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
+  color: var(--wb-text);
+}
+
+.settings-overlay .wb-export-session-option input { accent-color: var(--wb-accent); }
+.settings-overlay .wb-export-session-copy {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-overlay .wb-export-session-copy > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wb-text);
+  font-weight: 580;
+}
+
+.settings-overlay .wb-export-session-copy > small {
+  flex: 0 0 auto;
+  color: var(--wb-faint);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+}
+
+.settings-overlay .wb-export-footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 2px;
+}
+
+.settings-overlay .wb-export-format {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-overlay .wb-export-format > span {
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+}
+
+.settings-overlay .wb-export-format .wb-seg {
+  width: auto;
+  align-self: flex-start;
+}
+
+.settings-overlay .wb-export-submit {
+  min-width: 104px;
+  min-height: 44px;
+  padding-inline: 18px;
+  justify-content: center;
+  gap: 8px;
+}
+
+.settings-overlay .wb-export-submit svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.settings-overlay .wb-session-export-block > .wb-section-block-head {
+  align-items: flex-start;
+  justify-content: flex-start;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-overlay .wb-session-export-block > .wb-section-block-head small {
+  max-width: 70ch;
+  line-height: 1.5;
+}
+
+@media (max-width: 700px) {
+  .settings-overlay .wb-export-session-toolbar,
+  .settings-overlay .wb-export-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-overlay .wb-export-session-toolbar .wb-inline-row {
+    width: 100%;
+  }
+
+  .settings-overlay .wb-export-session-toolbar .wb-btn,
+  .settings-overlay .wb-export-submit {
+    flex: 1 1 0;
+  }
+
+  .settings-overlay .wb-export-session-copy > small {
+    display: none;
+  }
+}
+
+html[data-theme] .settings-overlay .wb-btn {
+  padding-inline: 13px;
+  font-weight: 650;
+}
+
+html[data-theme] .settings-overlay .wb-btn:not(.primary):not(.danger) {
+  border-color: color-mix(in srgb, var(--wb-line-2) 70%, transparent);
+  background: var(--wb-settings-control-bg);
+  color: var(--wb-text);
+  box-shadow:
+    0 5px 14px rgba(9, 17, 30, .045),
+    inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent);
+}
+
+html[data-theme] .settings-overlay .wb-btn:not(.primary):not(.danger):hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--wb-accent) 38%, var(--wb-line-2));
+  background: var(--wb-settings-control-hover-bg);
+  color: var(--wb-text);
+  box-shadow:
+    0 8px 18px rgba(9, 17, 30, .07),
+    inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent);
+}
+
+html[data-theme] .settings-overlay .wb-btn.primary {
+  border-color: color-mix(in srgb, var(--wb-accent) 56%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-accent) 26%, var(--wb-settings-control-bg));
+  color: var(--wb-text);
+  box-shadow:
+    0 5px 14px rgba(9, 17, 30, .045),
+    inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent);
+}
+
+html[data-theme] .settings-overlay .wb-btn.primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--wb-accent) 72%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-accent) 34%, var(--wb-settings-control-bg));
+  color: var(--wb-text);
+  box-shadow:
+    0 8px 18px rgba(9, 17, 30, .07),
+    inset 0 1px 0 color-mix(in srgb, #fff 12%, transparent);
+}
+
+html[data-theme] .settings-overlay .wb-btn.primary.wb-export-submit:not(:disabled) {
+  border-color: color-mix(in srgb, var(--wb-accent) 84%, var(--wb-line-2));
+  background: var(--wb-accent);
+  color: var(--accent-text, #fff);
+  box-shadow:
+    0 8px 20px color-mix(in srgb, var(--wb-accent) 22%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 18%, transparent);
+}
+
+html[data-theme] .settings-overlay .wb-btn.primary.wb-export-submit:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--wb-accent) 92%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-accent) 88%, #000);
+  color: var(--accent-text, #fff);
+  box-shadow:
+    0 10px 24px color-mix(in srgb, var(--wb-accent) 28%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 20%, transparent);
+}
+
+html[data-theme] .settings-overlay .wb-btn.primary.wb-export-submit:active:not(:disabled) {
+  transform: translateY(0) scale(.98);
+}
+
+html[data-theme] .settings-overlay .wb-btn.primary.wb-export-submit:disabled {
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--wb-line-2) 66%, transparent);
+  background: color-mix(in srgb, var(--wb-control-bg) 88%, transparent);
+  color: var(--wb-faint);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme] .settings-overlay .wb-btn.primary.wb-export-submit {
+    transition: none;
+  }
+
+  html[data-theme] .settings-overlay .wb-btn.primary.wb-export-submit:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+html[data-theme] .settings-overlay .wb-btn.danger {
+  border-color: color-mix(in srgb, var(--wb-red) 42%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-red) 8%, var(--wb-settings-control-bg));
+  color: var(--wb-red);
+  box-shadow:
+    0 5px 14px rgba(9, 17, 30, .04),
+    inset 0 1px 0 color-mix(in srgb, #fff 9%, transparent);
+}
+
+html[data-theme] .settings-overlay .wb-btn.danger:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--wb-red) 62%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-red) 13%, var(--wb-settings-control-bg));
+}
+
+html[data-theme] .settings-overlay .wb-btn:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--wb-accent) 72%, var(--wb-line-2));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--wb-accent) 12%, transparent),
+    var(--wb-settings-control-shadow);
+}
+
+html[data-theme] .settings-overlay .wb-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+html[data-theme] .settings-overlay .wb-seg {
+  min-height: 38px;
+  padding: 3px;
+  border: var(--wb-settings-control-border);
+  border-radius: var(--wb-settings-control-radius);
+  background: var(--wb-settings-control-bg);
+  box-shadow: var(--wb-settings-control-shadow);
+  box-sizing: border-box;
+}
+
+html[data-theme] .settings-overlay .wb-seg-btn {
+  min-height: 32px;
+  padding: 4px 11px;
+  border-radius: 8px;
+}
+
+html[data-theme] .settings-overlay .wb-seg-btn.active {
+  background: color-mix(in srgb, var(--wb-accent) 10%, var(--wb-settings-control-bg));
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, .12),
+    inset 0 1px 0 color-mix(in srgb, #fff 9%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--wb-accent) 28%, var(--wb-line-2));
+}
+
+html[data-theme] .settings-overlay .wb-toggle {
+  width: 40px;
+  height: 24px;
+  border: var(--wb-settings-control-border);
+  background: var(--wb-settings-control-bg);
+  box-shadow: var(--wb-settings-control-shadow);
+}
+
+html[data-theme] .settings-overlay .wb-toggle:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--wb-accent) 34%, var(--wb-line-2));
+  background: var(--wb-settings-control-hover-bg);
+}
+
+html[data-theme] .settings-overlay .wb-toggle.on {
+  border-color: color-mix(in srgb, var(--wb-accent) 64%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-accent) 42%, var(--wb-settings-control-bg));
+  box-shadow:
+    0 5px 14px rgba(9, 17, 30, .045),
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 20%, transparent);
+}
+
+/* Model settings reuse the same surface and control tokens as the rest of the
+   overlay; only their accordion layout remains model-specific. */
+.settings-overlay .wb-models-panel {
+  width: 100%;
+  max-width: none;
+  gap: 10px;
+}
+
+.settings-overlay .wb-model-section {
+  border-color: color-mix(in srgb, var(--wb-line-2) 64%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--wb-card-bg) 78%, transparent);
+  box-shadow: var(--wbc-control-shadow, 0 1px 2px rgba(15, 23, 42, .035));
+}
+
+.settings-overlay .wb-model-section + .wb-model-section {
+  margin-top: 0;
+}
+
+.settings-overlay .wb-model-section-head {
+  min-height: 48px;
+  padding: 10px 14px;
+}
+
+.settings-overlay details.wb-model-section > .wb-model-section-head {
+  transition: background .16s, color .16s;
+}
+
+.settings-overlay details.wb-model-section > .wb-model-section-head:hover {
+  background: color-mix(in srgb, var(--wb-accent) 5%, transparent);
+}
+
+.settings-overlay .wb-model-section-title {
+  gap: 2px;
+}
+
+.settings-overlay .wb-model-section-title b {
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+}
+
+.settings-overlay .wb-model-status {
+  padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 54%, transparent);
+  background: var(--wb-control-bg);
+}
+
+.settings-overlay .wb-model-section.is-primary .wb-model-status {
+  border-color: color-mix(in srgb, var(--wb-accent) 22%, transparent);
+  background: color-mix(in srgb, var(--wb-accent) 11%, var(--wb-card-bg));
+}
+
+.settings-overlay .wb-model-section-body {
+  padding: 0 14px 14px;
+  border-top-color: color-mix(in srgb, var(--wb-line) 64%, transparent);
+}
+
+.settings-overlay .wb-model-section-body > .wb-model-card {
+  margin: 0;
+  padding: 12px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.settings-overlay .wb-model-section-body > .wb-model-card + .wb-model-card {
+  margin-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--wb-line) 64%, transparent);
+}
+
+.settings-overlay .wb-model-section.is-primary .wb-model-card {
+  padding-top: 12px;
+}
+
+.settings-overlay .wb-model-line {
+  gap: 12px;
+  margin-bottom: 9px;
+}
+
+.settings-overlay .wb-model-line span {
+  width: 96px;
+}
+
+.settings-overlay .wb-model-meta {
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.settings-overlay .wb-model-draft,
+.settings-overlay .wb-model-section-body > .wb-model-draft {
+  padding: 12px;
+  border: 1px dashed color-mix(in srgb, var(--wb-line-2) 72%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-control-bg) 72%, transparent);
+}
+
+.settings-overlay .wb-primary-source-trigger {
+  min-width: 112px;
+  height: 36px;
+  padding: 0 12px;
+  border-color: var(--wb-line);
+  border-radius: 11px;
+  background: var(--wb-control-bg);
+}
+
+.settings-overlay .wb-primary-source-menu {
+  border-radius: 12px;
+  background: var(--wb-card-bg-strong);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .22);
+}
+
+.remote-identity-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.remote-identity-grid label,
+.remote-response-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--wb-muted);
+  font-size: 12px;
+}
+
+.remote-identity-facts {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.remote-identity-facts > div {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.remote-identity-facts span {
+  color: var(--wb-muted);
+  font-size: 12px;
+}
+
+.remote-identity-facts code,
+.remote-peer-header code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--wb-text);
+  font-size: 11px;
+}
+
+.remote-pairing-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.remote-pairing-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.remote-pairing-toolbar p {
+  flex: 1;
+  margin: 0;
+  color: var(--wb-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.remote-pairing-tabs {
+  flex: 0 0 auto;
+}
+
+.remote-pairing-tabs .wb-seg-btn {
+  min-width: 112px;
+}
+
+.remote-pairing-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding-top: 13px;
+  border-top: 1px solid var(--wb-line);
+}
+
+.remote-pairing-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.remote-pairing-copy small {
+  color: var(--wb-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.remote-pairing-settings {
+  overflow: hidden;
+  border: 1px solid var(--wb-line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-muted) 4%, var(--wb-card-bg));
+}
+
+.remote-pairing-settings summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  list-style: none;
+  padding: 11px 12px;
+  color: var(--wb-text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.remote-pairing-settings summary::-webkit-details-marker {
+  display: none;
+}
+
+.remote-pairing-settings-chevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--wb-muted) 82%, var(--wb-text));
+  transition: transform 140ms ease;
+}
+
+.remote-pairing-settings-chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.remote-pairing-settings[open] .remote-pairing-settings-chevron {
+  transform: rotate(90deg);
+}
+
+.remote-pairing-settings-title {
+  flex: 0 0 auto;
+}
+
+.remote-pairing-settings summary:hover,
+.remote-pairing-settings summary:focus-visible {
+  background: color-mix(in srgb, var(--wb-text) 5%, var(--wb-card-bg));
+}
+
+.remote-pairing-settings summary:focus {
+  outline: none;
+}
+
+.remote-pairing-settings summary small {
+  color: var(--wb-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.remote-pairing-settings[open] summary {
+  border-bottom: 1px solid var(--wb-line);
+}
+
+.remote-pairing-share-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(180px, 0.8fr);
+  gap: 10px;
+  padding: 10px;
+}
+
+.remote-pairing-group {
+  min-width: 0;
+  padding: 11px 12px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-muted) 7%, var(--wb-card-bg));
+}
+
+.remote-pairing-group-title {
+  display: block;
+  margin-bottom: 9px;
+  color: var(--wb-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.remote-required-capabilities {
+  display: block;
+  margin: -3px 0 9px;
+  color: var(--wb-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.remote-pairing-group .remote-option-list {
+  max-height: 220px;
+  padding: 3px;
+  border: 0;
+  background: transparent;
+}
+
+.remote-tool-package-options {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.remote-project-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 156px;
+  overflow: auto;
+}
+
+.remote-pairing-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.remote-pairing-control {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.remote-direct-offer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, auto);
+  gap: 8px 16px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-accent) 5%, var(--wb-card-bg));
+}
+
+.remote-direct-offer > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.remote-direct-offer small {
+  color: var(--wb-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.remote-direct-offer code {
+  font-size: 13px;
+  line-height: 30px;
+}
+
+.remote-pairing-key {
+  min-width: 172px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--wb-accent);
+  color: #fff;
+  font: 700 18px/1.2 var(--wb-mono, ui-monospace, monospace);
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.remote-pairing-key:hover {
+  filter: brightness(1.05);
+}
+
+.remote-direct-offer p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--wb-muted);
+  font-size: 11px;
+}
+
+.remote-key-input {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.remote-option-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+  max-height: 190px;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-control-bg);
+}
+
+.remote-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+  color: var(--wb-text);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.remote-option input {
+  margin: 1px 0 0;
+  accent-color: var(--wb-accent);
+}
+
+.remote-option span {
+  overflow-wrap: anywhere;
+}
+
+.remote-project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+}
+
+.remote-project-list > span {
+  color: var(--wb-muted);
+  font-size: 11px;
+}
+
+.remote-peer-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px 14px;
+  margin-top: 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-card-bg);
+}
+
+.remote-peer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.remote-peer-header > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.remote-peer-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+}
+
+.remote-peer-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 12px;
+  color: var(--wb-muted);
+  font-size: 11px;
+}
+
+.remote-grant-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--wb-line);
+}
+
+.remote-audit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.remote-audit-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+}
+
+.remote-audit-row > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.remote-audit-row b {
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.remote-audit-row small {
+  overflow-wrap: anywhere;
+  color: var(--wb-muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.remote-audit-outcome {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  justify-content: center;
+  overflow-wrap: anywhere;
+  color: var(--wb-green);
+  font-size: 9.5px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.remote-audit-outcome.error {
+  color: var(--wb-red);
+}
+
+@media (max-width: 860px) {
+  .remote-identity-grid,
+  .remote-pairing-share-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .remote-pairing-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .remote-pairing-tabs {
+    display: flex;
+  }
+
+  .remote-pairing-tabs .wb-seg-btn {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .remote-option-list {
+    grid-template-columns: 1fr;
+  }
+
+  .remote-peer-header {
+    flex-direction: column;
+  }
+}
+

@@ -43,7 +43,8 @@ def _safe_workbench_data_key(raw: str | None) -> str:
     return cleaned or _LEGACY_DATA_KEY
 
 
-def _read_projects() -> list[dict[str, Any]]:
+def read_project_state() -> dict[str, Any]:
+    """Public lightweight project state for adjacent read-only resolvers."""
     if (
         _WORKBENCH_DB_PATH
         and _CONFIGURED_PROJECTS_STORE == Path(_WORKBENCH_STORE)
@@ -56,6 +57,11 @@ def _read_projects() -> list[dict[str, Any]]:
         )
     else:
         payload = read_json_safe(_WORKBENCH_STORE)
+    return payload if isinstance(payload, dict) else {"projects": []}
+
+
+def _read_projects() -> list[dict[str, Any]]:
+    payload = read_project_state()
     projects = payload.get("projects") if isinstance(payload, dict) else None
     return projects if isinstance(projects, list) else []
 
@@ -63,6 +69,26 @@ def _read_projects() -> list[dict[str, Any]]:
 def read_projects() -> list[dict[str, Any]]:
     """Public read-only project lookup for adjacent domains."""
     return _read_projects()
+
+
+def resolve_workbench_project_id(project_ref: str | None) -> str | None:
+    """Resolve a project id or storage key to its canonical project id."""
+    raw = str(project_ref or "").strip()
+    data_key = _safe_workbench_data_key(raw)
+    for project in read_projects():
+        if not isinstance(project, dict):
+            continue
+        project_id = str(project.get("id") or "").strip()
+        if not project_id:
+            continue
+        if project_id == raw:
+            return project_id
+        project_data_key = _safe_workbench_data_key(
+            project.get("dataKey") or project_id
+        )
+        if project_data_key == data_key:
+            return project_id
+    return None
 
 
 def _legacy_scope_signature() -> tuple[Any, ...]:
@@ -322,8 +348,11 @@ async def ensure_knowledge_db_for_session(session_id: str | None) -> str:
 __all__ = [
     "configure_store",
     "ensure_knowledge_db_for_session",
+    "read_projects",
+    "read_project_state",
     "resolve_project_data_key_for_session",
     "resolve_project_knowledge_key_for_session",
+    "resolve_workbench_project_id",
     "resolve_workbench_project_data_key_for_session",
     "resolve_workbench_project_id_for_data_key",
     "resolve_workbench_project_id_for_session",

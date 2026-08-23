@@ -15,7 +15,7 @@ from typing import Any
 
 from cyrene.runtime.paths import user_data_dir
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 7
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 
 
@@ -261,14 +261,21 @@ class TerminalDaemonClient:
     ) -> dict[str, Any]:
         from .manager import TerminalManager
 
-        resolved = TerminalManager._resolve_cwd(project_id, cwd)
+        requested_cwd = str(cwd or "").strip()
+        project_cwd = str(TerminalManager._resolve_cwd(project_id, ""))
+        resolved_cwd = (
+            str(TerminalManager._resolve_cwd(project_id, requested_cwd))
+            if requested_cwd
+            else ""
+        )
         from importlib import import_module
 
         shell, argv = import_module(
             "cyrene.tooling.backends.shell_runtime"
         ).interactive_argv()
         return await self._request(
-            "create", projectId=project_id, title=title, cwd=str(resolved),
+            "create", projectId=project_id, title=title, cwd=resolved_cwd,
+            defaultCwd=project_cwd,
             shell=shell, argv=list(argv), cols=cols, rows=rows,
             createdBy="user", launchMode="interactive", activate=True,
         )
@@ -349,6 +356,32 @@ class TerminalDaemonClient:
         return await self._request(
             "inputHistory", terminalId=terminal_id,
             limit=max(1, min(int(limit or 200), 1000)),
+        )
+
+    async def search_history(
+        self,
+        project_id: str,
+        query: str,
+        *,
+        terminal_id: str = "",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        return await self._request(
+            "historySearch",
+            projectId=project_id,
+            query=query,
+            terminalId=terminal_id,
+            limit=max(1, min(int(limit or 100), 500)),
+        )
+
+    async def commands(self, terminal_id: str) -> dict[str, Any]:
+        return await self._request("commands", terminalId=terminal_id)
+
+    async def command_output(
+        self, terminal_id: str, command_id: str,
+    ) -> dict[str, Any]:
+        return await self._request(
+            "commandOutput", terminalId=terminal_id, commandId=command_id,
         )
 
     async def input(

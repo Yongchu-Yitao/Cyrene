@@ -51,7 +51,8 @@ _IGNORED_DIRECTORIES = frozenset({
     "venv",
     "node_modules",
 })
-_WATCH_INTERVAL_SECONDS = 0.75
+_WATCH_DEBOUNCE_MS = 250
+_WATCH_STEP_MS = 50
 _IMPORT_NAMESPACE = "_cyrene_user_tools"
 _PACKAGE_SETTING_PREFIX = "custom_tools:"
 _DISPLAY_CACHE_FILENAME = ".cyrene-tool-index.json"
@@ -90,6 +91,15 @@ class _ImportEntry:
     path: Path | None
     package_dir: Path
     is_package: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceFileState:
+    """Cached content identity guarded by cheap filesystem metadata."""
+
+    mtime_ns: int
+    size: int
+    digest: str
 
 
 class _CustomToolFinder(importlib.abc.MetaPathFinder):
@@ -167,13 +177,6 @@ def _package_switches() -> dict[str, bool]:
         if package_id and type(raw_enabled) is bool:
             result[package_id] = raw_enabled
     return result
-
-
-def _package_switch_fingerprint(
-    switches: dict[str, bool] | None = None,
-) -> tuple[tuple[str, bool], ...]:
-    selected = switches if switches is not None else _package_switches()
-    return tuple(sorted(selected.items()))
 
 
 def _cached_display_tool(
@@ -414,11 +417,12 @@ class CustomToolManager:
         self.root = selected_root.expanduser().resolve()
         self._instance_token = uuid4().hex[:12]
         self._packages: dict[str, CustomToolPackage] = {}
-        self._fingerprint: tuple[tuple[str, str], ...] = ()
+        self._discovered_packages: dict[
+            str, tuple[str, Path, tuple[Path, ...]]
+        ] = {}
+        self._source_states: dict[Path, _SourceFileState] = {}
         self._namespaces: set[str] = set()
         self._generation = 0
-        self._loaded_pack_enabled = False
-        self._loaded_package_switches: tuple[tuple[str, bool], ...] = ()
         self._last_reload_reason = "not_loaded"
         self._running = False
         self._watch_task: asyncio.Task[None] | None = None
@@ -436,7 +440,7 @@ class CustomToolManager:
         async with self._lock:
             if self._running:
                 return
-            self.root.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(self.root.mkdir, parents=True, exist_ok=True)
             try:
                 await self._reload_locked(reason="startup")
             except BaseException:
@@ -445,10 +449,7 @@ class CustomToolManager:
                 self._running = False
                 raise
             self._running = True
-            self._watch_task = asyncio.create_task(
-                self._watch_loop(),
-                name="custom-tool-source-watcher",
-            )
+            self._ensure_watcher_locked()
         await self._after_reload(reason="startup")
 
     async def stop(self) -> None:
@@ -460,9 +461,8 @@ class CustomToolManager:
             if watch_task is not None:
                 watch_task.cancel()
             self._packages = {}
-            self._fingerprint = ()
-            self._loaded_pack_enabled = False
-            self._loaded_package_switches = ()
+            self._discovered_packages = {}
+            self._source_states = {}
             self._discard_namespaces(self._namespaces)
             self._namespaces = set()
             self._generation += 1
@@ -477,9 +477,8 @@ class CustomToolManager:
             self._watch_task.cancel()
             self._watch_task = None
         self._packages = {}
-        self._fingerprint = ()
-        self._loaded_pack_enabled = False
-        self._loaded_package_switches = ()
+        self._discovered_packages = {}
+        self._source_states = {}
         self._discard_namespaces(self._namespaces)
         self._namespaces = set()
         self._generation += 1
@@ -487,8 +486,9 @@ class CustomToolManager:
 
     async def reload(self, *, reason: str = "manual") -> dict[str, Any]:
         async with self._lock:
-            self.root.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(self.root.mkdir, parents=True, exist_ok=True)
             await self._reload_locked(reason=reason)
+            self._ensure_watcher_locked()
         await self._after_reload(reason=reason)
         return self.status()
 
@@ -496,8 +496,37 @@ class CustomToolManager:
         """Compatibility name for an explicit full source reload."""
         return await self.reload(reason="rescan")
 
-    async def _reload_locked(self, *, reason: str) -> None:
-        fingerprint = self._root_fingerprint()
+    async def _scan_sources_locked(self) -> None:
+        discovered, source_states = await asyncio.to_thread(
+            self._scan_source_tree,
+            dict(self._source_states),
+        )
+        self._discovered_packages = discovered
+        self._source_states = source_states
+
+    def _commit_reload(
+        self,
+        packages: dict[str, CustomToolPackage],
+        namespaces: set[str],
+        previous_namespaces: set[str],
+        *,
+        reason: str,
+    ) -> None:
+        self._packages = packages
+        self._write_display_cache(packages)
+        self._last_reload_reason = reason
+        self._namespaces = namespaces
+        self._discard_namespaces(previous_namespaces)
+        self._invalidate_catalog()
+
+    async def _reload_locked(
+        self,
+        *,
+        reason: str,
+        scan_sources: bool = True,
+    ) -> None:
+        if scan_sources:
+            await self._scan_sources_locked()
         self._generation += 1
         generation = self._generation
         enabled = _pack_enabled()
@@ -508,9 +537,13 @@ class CustomToolManager:
         new_namespaces: set[str] = set()
         packages: dict[str, CustomToolPackage] = {}
 
-        for package_id, package_root, source_files in self._discover_packages():
+        for package_id, package_root, source_files in self._discovered_packages.values():
             namespace = self._namespace(package_id, generation)
-            revision = self._package_revision(package_id, package_root, source_files)
+            revision = self._cached_package_revision(
+                package_id,
+                package_root,
+                source_files,
+            )
             errors: list[CustomToolLoadError] = []
             tools: list[CustomToolDefinition] = []
             display_tools: tuple[dict[str, Any], ...] = ()
@@ -679,36 +712,102 @@ class CustomToolManager:
                 ),
             )
 
-        self._packages = packages
-        self._write_display_cache(packages)
-        self._fingerprint = fingerprint
-        self._loaded_pack_enabled = enabled
-        self._loaded_package_switches = _package_switch_fingerprint(
-            package_switches,
+        self._commit_reload(packages, new_namespaces, old_namespaces, reason=reason)
+
+    def _ensure_watcher_locked(self) -> None:
+        if not self._running or not _pack_enabled():
+            return
+        if self._watch_task is not None and not self._watch_task.done():
+            return
+        self._watch_task = asyncio.create_task(
+            self._watch_loop(),
+            name="custom-tool-source-watcher",
         )
-        self._last_reload_reason = reason
-        self._namespaces = new_namespaces
-        self._discard_namespaces(old_namespaces)
-        self._invalidate_catalog()
+
+    def _detach_watcher_locked(self) -> asyncio.Task[None] | None:
+        task, self._watch_task = self._watch_task, None
+        if task is not None:
+            task.cancel()
+        return task
+
+    async def sync_pack_state(self) -> dict[str, Any]:
+        """Apply the global pack gate without rescanning the source tree."""
+        cancelled: asyncio.Task[None] | None = None
+        async with self._lock:
+            if _pack_enabled():
+                await self._reload_locked(
+                    reason="pack_enabled",
+                    scan_sources=False,
+                )
+                self._ensure_watcher_locked()
+            else:
+                cancelled = self._detach_watcher_locked()
+                await self._reload_locked(
+                    reason="pack_disabled",
+                    scan_sources=False,
+                )
+            status = self.status()
+        if cancelled is not None:
+            await asyncio.gather(cancelled, return_exceptions=True)
+        await self._after_reload(reason="pack_toggle")
+        return status
 
     async def _watch_loop(self) -> None:
-        while self._running:
-            try:
-                await asyncio.sleep(_WATCH_INTERVAL_SECONDS)
-                fingerprint = self._root_fingerprint()
-                if (
-                    fingerprint != self._fingerprint
-                    or _pack_enabled() != self._loaded_pack_enabled
-                    or _package_switch_fingerprint()
-                    != self._loaded_package_switches
-                ):
-                    await self.reload(reason="source_or_settings_changed")
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                # One transient read/import/event failure must not permanently
-                # disable hot reload for all later edits.
-                logger.exception("Custom tool source watcher iteration failed")
+        from watchfiles import awatch
+
+        async for changes in awatch(
+            self.root,
+            watch_filter=self._watch_source_path,
+            debounce=_WATCH_DEBOUNCE_MS,
+            step=_WATCH_STEP_MS,
+            recursive=True,
+            ignore_permission_denied=True,
+            force_polling=False,
+        ):
+            if not self._running or not _pack_enabled():
+                return
+            if await self._apply_source_events(changes):
+                await self._after_reload(reason="source_event")
+
+    def _watch_source_path(self, _change: Any, raw_path: str) -> bool:
+        try:
+            relative = Path(raw_path).resolve().relative_to(self.root)
+        except (OSError, ValueError):
+            return False
+        if not relative.parts:
+            return False
+        if (
+            relative.parts[0].startswith(".")
+            or relative.parts[0] in _IGNORED_DIRECTORIES
+        ):
+            return False
+        if any(
+            part.startswith(".") or part in _IGNORED_DIRECTORIES
+            for part in relative.parts[:-1]
+        ):
+            return False
+        return relative.suffix == ".py" or len(relative.parts) == 1
+
+    async def _apply_source_events(self, changes: set[tuple[Any, str]]) -> bool:
+        changed_paths = tuple(Path(raw_path).resolve() for _change, raw_path in changes)
+        async with self._lock:
+            if not self._running or not _pack_enabled():
+                return False
+            discovered, states, content_changed = await asyncio.to_thread(
+                self._refresh_changed_sources,
+                changed_paths,
+                dict(self._discovered_packages),
+                dict(self._source_states),
+            )
+            self._discovered_packages = discovered
+            self._source_states = states
+            if not content_changed:
+                return False
+            await self._reload_locked(
+                reason="source_event",
+                scan_sources=False,
+            )
+            return True
 
     def _discover_packages(self) -> list[tuple[str, Path, tuple[Path, ...]]]:
         if not self.root.is_dir():
@@ -727,18 +826,126 @@ class CustomToolManager:
                 result.append((child.name, child, _python_files(child)))
         return result
 
-    def _root_fingerprint(self) -> tuple[tuple[str, str], ...]:
-        result: list[tuple[str, str]] = []
+    @staticmethod
+    def _source_file_state(
+        source_path: Path,
+        previous: _SourceFileState | None,
+    ) -> _SourceFileState:
+        try:
+            stat = source_path.stat()
+        except OSError as exc:
+            return _SourceFileState(
+                -1,
+                -1,
+                f"error:{type(exc).__name__}:{exc}",
+            )
+        mtime_ns = int(stat.st_mtime_ns)
+        size = int(stat.st_size)
+        if (
+            previous is not None
+            and previous.mtime_ns == mtime_ns
+            and previous.size == size
+        ):
+            return previous
+        try:
+            digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        except OSError as exc:
+            digest = f"error:{type(exc).__name__}:{exc}"
+        return _SourceFileState(mtime_ns, size, digest)
+
+    def _scan_source_tree(
+        self,
+        previous_states: dict[Path, _SourceFileState],
+    ) -> tuple[
+        dict[str, tuple[str, Path, tuple[Path, ...]]],
+        dict[Path, _SourceFileState],
+    ]:
+        """Perform the startup/manual full scan outside the event loop."""
+        discovered: dict[str, tuple[str, Path, tuple[Path, ...]]] = {}
+        states: dict[Path, _SourceFileState] = {}
         for package_id, package_root, source_files in self._discover_packages():
-            result.append((f"package:{package_id}", "file" if package_root.is_file() else "dir"))
+            discovered[package_id] = (package_id, package_root, source_files)
             for source_path in source_files:
-                try:
-                    data = source_path.read_bytes()
-                    relative = source_path.relative_to(self.root).as_posix()
-                    result.append((relative, hashlib.sha256(data).hexdigest()))
-                except OSError as exc:
-                    result.append((str(source_path), f"error:{type(exc).__name__}:{exc}"))
-        return tuple(result)
+                states[source_path] = self._source_file_state(
+                    source_path,
+                    previous_states.get(source_path),
+                )
+        return discovered, states
+
+    def _discover_package(
+        self,
+        package_id: str,
+    ) -> tuple[str, Path, tuple[Path, ...]] | None:
+        directory = self.root / package_id
+        source_file = self.root / f"{package_id}.py"
+        selected: tuple[str, Path, tuple[Path, ...]] | None = None
+        if directory.is_dir():
+            selected = (package_id, directory, _python_files(directory))
+        # Match the legacy sorted-root behavior when both forms collide:
+        # ``name.py`` is encountered after ``name/`` and wins the registry key.
+        if source_file.is_file():
+            selected = (package_id, source_file, (source_file,))
+        return selected
+
+    def _package_id_for_event(self, path: Path) -> str:
+        try:
+            relative = path.relative_to(self.root)
+        except ValueError:
+            return ""
+        if not relative.parts:
+            return ""
+        first = relative.parts[0]
+        if first.startswith(".") or first in _IGNORED_DIRECTORIES:
+            return ""
+        if len(relative.parts) == 1 and first.endswith(".py"):
+            return Path(first).stem
+        return first
+
+    def _refresh_changed_sources(
+        self,
+        changed_paths: tuple[Path, ...],
+        discovered: dict[str, tuple[str, Path, tuple[Path, ...]]],
+        previous_states: dict[Path, _SourceFileState],
+    ) -> tuple[
+        dict[str, tuple[str, Path, tuple[Path, ...]]],
+        dict[Path, _SourceFileState],
+        bool,
+    ]:
+        """Refresh only packages named by native filesystem events."""
+        affected_ids = {
+            package_id
+            for path in changed_paths
+            if (package_id := self._package_id_for_event(path))
+        }
+        if not affected_ids:
+            return discovered, previous_states, False
+
+        next_discovered = dict(discovered)
+        next_states = dict(previous_states)
+        content_changed = False
+        for package_id in sorted(affected_ids):
+            previous_package = next_discovered.pop(package_id, None)
+            previous_sources = (
+                set(previous_package[2]) if previous_package is not None else set()
+            )
+            current_package = self._discover_package(package_id)
+            current_sources = (
+                set(current_package[2]) if current_package is not None else set()
+            )
+            if previous_package != current_package:
+                content_changed = True
+            for stale_path in previous_sources - current_sources:
+                next_states.pop(stale_path, None)
+                content_changed = True
+            for source_path in current_sources:
+                previous = next_states.get(source_path)
+                current = self._source_file_state(source_path, previous)
+                next_states[source_path] = current
+                if previous is None or previous.digest != current.digest:
+                    content_changed = True
+            if current_package is not None:
+                next_discovered[package_id] = current_package
+        return next_discovered, next_states, content_changed
 
     def _read_display_cache(
         self,
@@ -826,10 +1033,36 @@ class CustomToolManager:
                 )
                 digest.update(relative.encode("utf-8", errors="surrogatepass"))
                 digest.update(b"\0")
-                digest.update(source_path.read_bytes())
+                source_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+                digest.update(source_digest.encode("ascii"))
                 digest.update(b"\0")
             except OSError as exc:
                 digest.update(f"error:{source_path}:{exc}".encode("utf-8"))
+        return digest.hexdigest()[:16]
+
+    def _cached_package_revision(
+        self,
+        package_id: str,
+        package_root: Path,
+        source_files: tuple[Path, ...],
+    ) -> str:
+        digest = hashlib.sha256(package_id.encode("utf-8"))
+        for source_path in source_files:
+            relative = (
+                source_path.name
+                if package_root.is_file()
+                else source_path.relative_to(package_root).as_posix()
+            )
+            digest.update(relative.encode("utf-8", errors="surrogatepass"))
+            digest.update(b"\0")
+            state = self._source_states.get(source_path)
+            digest.update(
+                (state.digest if state is not None else "missing").encode(
+                    "utf-8",
+                    errors="surrogatepass",
+                )
+            )
+            digest.update(b"\0")
         return digest.hexdigest()[:16]
 
     def _namespace(self, package_id: str, generation: int) -> str:
@@ -957,12 +1190,8 @@ class CustomToolManager:
             raise TypeError("enabled must be a boolean")
 
         async with self._lock:
-            self.root.mkdir(parents=True, exist_ok=True)
-            discovered_ids = {
-                discovered_id
-                for discovered_id, _package_root, _source_files
-                in self._discover_packages()
-            }
+            await asyncio.to_thread(self.root.mkdir, parents=True, exist_ok=True)
+            discovered_ids = set(self._discovered_packages)
             if selected_id not in discovered_ids:
                 raise KeyError(f"custom tool package {selected_id!r} was not found")
 
@@ -985,7 +1214,10 @@ class CustomToolManager:
             # newly-disabled package advertised from an old cache.
             self._invalidate_catalog()
             try:
-                await self._reload_locked(reason="package_toggle")
+                await self._reload_locked(
+                    reason="package_toggle",
+                    scan_sources=False,
+                )
             except Exception:
                 self._invalidate_catalog()
                 raise

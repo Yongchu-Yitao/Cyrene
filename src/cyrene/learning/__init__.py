@@ -21,6 +21,7 @@ __all__ = [
     "list_learned_skills",
     "list_skill_candidates",
     "list_tool_chains",
+    "project_scope_for_turn",
     "rebuild_learning_state",
     "record_action",
     "reject_skill_patch",

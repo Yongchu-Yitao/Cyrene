@@ -57,6 +57,25 @@ def control_env(monkeypatch, tmp_path):
     manager = ChatRunManager(retention_seconds=30)
     monkeypatch.setattr(chat_service, "_CHAT_RUN_MANAGER", manager)
 
+    async def fake_task_agent_reply(*_args, **_kwargs):
+        return "step completed"
+
+    async def fake_archive_task_knowledge(*_args, **_kwargs):
+        return None
+
+    # Install deterministic task-execution ports before route composition.
+    # The production routes capture explicit service dependencies at startup.
+    monkeypatch.setattr(
+        workbench_runtime,
+        "_workbench_agent_reply",
+        fake_task_agent_reply,
+    )
+    monkeypatch.setattr(
+        workbench_runtime,
+        "_workbench_archive_run_knowledge",
+        fake_archive_task_knowledge,
+    )
+
     atomic_write_json(
         workbench_runtime._WORKBENCH_STORE,
         {
@@ -149,6 +168,22 @@ def test_control_capabilities_disclose_remote_gateway_and_remaining_limits(
     }
 
 
+def test_workbench_chat_detail_does_not_hydrate_sibling_transcripts(
+    control_env,
+    monkeypatch,
+):
+    from cyrene.workbench import chat as chat_service
+
+    def unexpected_full_store_read():
+        raise AssertionError("single-chat detail must not read the full chat store")
+
+    monkeypatch.setattr(chat_service, "_read_chats_store", unexpected_full_store_read)
+    response = control_env["client"].get("/api/workbench/chats/chat_1")
+
+    assert response.status_code == 200
+    assert response.json()["chat"]["id"] == "chat_1"
+
+
 def test_control_projects_are_summaries_without_local_paths_or_credentials(
     control_env,
 ):
@@ -217,10 +252,8 @@ def test_control_task_contract_lists_creates_reads_cancels_and_lists_artifacts(
 
 def test_control_task_plan_can_be_approved_and_run_step_by_step(
     control_env,
-    monkeypatch,
 ):
     from cyrene.workbench import runtime as workbench_runtime
-    from route.workbench import task_sessions
 
     payload = workbench_runtime._read_workbench_store()
     _project, task = workbench_runtime._workbench_find_session(
@@ -242,23 +275,6 @@ def test_control_task_plan_can_be_approved_and_run_step_by_step(
         }
     ]
     workbench_runtime._write_workbench_store(payload)
-
-    async def fake_agent_reply(*_args, **_kwargs):
-        return "step completed"
-
-    async def fake_archive(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(
-        task_sessions,
-        "_workbench_agent_reply",
-        fake_agent_reply,
-    )
-    monkeypatch.setattr(
-        task_sessions,
-        "_workbench_archive_run_knowledge",
-        fake_archive,
-    )
 
     stale = control_env["client"].post(
         "/v1/control/tasks/task_1/plan/approve",

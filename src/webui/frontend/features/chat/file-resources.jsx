@@ -1,3 +1,4 @@
+import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_COMMANDS, WBC_ICONS, wbcAgentEventPayload, wbcAgentSessionPayload, wbcAttachmentVisual, wbcConfirmOptimisticMessage, wbcDurableTracePayload, wbcErrorText, wbcFileDragPayload, wbcFileViewKind, wbcFinalizeRuntime, wbcMergeToolOccurrence, wbcPersistDurableTrace, wbcSetResourceDrag, wbcStructuredEventSummary, wbcSubagentStatusText, wbcT, wbcToolArgsPreview } from "../../workbench-chat.jsx"
 
 // Workbench chat feature module with explicit ESM dependencies.
@@ -114,6 +115,32 @@ function wbcCommandMeta(id) {
   return null;
 }
 
+function wbcRuntimeToolEvent(event, eventAt) {
+  var toolName = String(event.tool || "");
+  if (["use_tools", "quit", "send_message", "update_plan_progress"].indexOf(toolName) >= 0) return null;
+  var toolStarted = event.type === "tool_call_started";
+  var toolProgress = event.type === "tool_call_progress";
+  var toolResult = String(event.result || "");
+  var failed = !!event.failed
+    || String(event.status || "").toLowerCase() === "failed"
+    || (!toolStarted && toolResult.toLowerCase().startsWith("tool failed:"));
+  var error = event.error && typeof event.error === "object" ? event.error : null;
+  var errorMessage = String(error && error.message || event.message || "").trim();
+  return {
+    terminal: event.type === "tool_call_finished",
+    entry: {
+      kind: "tool", toolCallId: String(event.tool_call_id || ""), text: toolName || undefined,
+      preview: toolProgress ? String(event.label || "") : (failed && errorMessage ? errorMessage.slice(0, 240) : wbcToolArgsPreview(event.args || {})),
+      status: (toolStarted || toolProgress) ? "running" : "completed", failed: failed,
+      progress: toolProgress ? Math.max(0, Math.min(1, Number(event.progress) || 0)) : undefined,
+      progressCurrent: toolProgress ? Math.max(0, Number(event.current) || 0) : undefined,
+      progressTotal: toolProgress ? Math.max(0, Number(event.total) || 0) : undefined,
+      startedAt: eventAt, output: failed && error ? error : undefined,
+      presentation: failed && error ? { kind: "error" } : undefined,
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Streaming runtime engine (module-level — survives view switches)
 // ---------------------------------------------------------------------------
@@ -130,6 +157,7 @@ function wbcCommandMeta(id) {
 var WorkbenchChatRuntimes = (function () {
   var runtimes = {};            // chatId -> { chatId, text, progress, activities, startedAt, lastEventAt, replying }
   var aborts = {};              // chatId -> AbortController
+  var reconnectTimers = {};     // chatId -> bounded transport-reconnect timer
   var deferredSends = {};       // chatId -> terminal-race guidance promoted to the next normal turn
   var failures = {};            // chatId -> terminal Error; retained until the next explicit run attempt
   var subscribers = new Set();
@@ -260,7 +288,16 @@ var WorkbenchChatRuntimes = (function () {
     });
   }
 
-  function clear(chatId) { update(chatId, null); }
+  function clearReconnectTimer(chatId) {
+    var timer = reconnectTimers[chatId];
+    if (timer) clearTimeout(timer);
+    delete reconnectTimers[chatId];
+  }
+
+  function clear(chatId) {
+    clearReconnectTimer(chatId);
+    update(chatId, null);
+  }
 
   function getFailure(chatId) {
     return failures[String(chatId || "")] || null;
@@ -272,6 +309,7 @@ var WorkbenchChatRuntimes = (function () {
 
   function failRun(chatId, err) {
     if (!chatId) return;
+    clearReconnectTimer(chatId);
     failures[chatId] = err || new Error(wbcT("workbenchChat.agentError.failed", "Agent run failed"));
     // The provider has exhausted its bounded retries and emitted the terminal
     // run failure; this is no longer a recoverable transport gap.
@@ -650,21 +688,30 @@ var WorkbenchChatRuntimes = (function () {
     var requestId = String(payload.requestId || payload.request_id || "");
     update(chatId, function (cur) {
       if (!cur) return null;
-      return { ...cur, awaitingRequestId: "", lastEventAt: Date.now() };
+      return { ...cur, awaitingRequestId: "", pendingQuestion: null, lastEventAt: Date.now() };
     });
     fire("onAgentRequestResolved", chatId, event);
   }
 
   function streamHandlers(chatId) {
     return {
+      onEventCursor: function (cursor) {
+        update(chatId, function (cur) {
+          if (!cur) return null;
+          return {
+            ...cur,
+            eventCursor: Math.max(Number(cur.eventCursor || 0), Number(cursor || 0)),
+            reconnecting: false,
+            reconnectAttempts: 0,
+          };
+        }, true);
+      },
       onRunStarted: function (event) {
         update(chatId, function (cur) {
           if (!cur) return null;
           var next = { ...cur, lastEventAt: Date.now() };
           if (event && event.activeModel) next.activeModel = String(event.activeModel);
-          if (event && (event.session_id || event.sessionId)) {
-            next.externalSessionId = String(event.session_id || event.sessionId);
-          }
+          if (event && (event.session_id || event.sessionId)) next.externalSessionId = String(event.session_id || event.sessionId);
           return next;
         });
         fire("onAgentSessionUpdated", chatId, wbcAgentSessionPayload(event || {}));
@@ -822,9 +869,7 @@ var WorkbenchChatRuntimes = (function () {
           presentation: { kind: "event" },
         }, true);
       },
-      onIntermediateMessage: function (event) {
-        appendIntermediate(chatId, event && event.message);
-      },
+      onIntermediateMessage: function (event) { appendIntermediate(chatId, event && event.message); },
       onGuidanceReceived: function (event) {
         if (event && event.userMessage) {
           recordUserMessage(chatId, event.userMessage);
@@ -868,7 +913,7 @@ var WorkbenchChatRuntimes = (function () {
         // rail; message persistence and status convergence are independent.
         fire("onAssistantSaved", chatId, savedMessages, event);
         publishLifecycle(chatId, "completed", event);
-        update(chatId, null);
+        clear(chatId);
         if (durableTrace) wbcPersistDurableTrace(chatId, durableTrace);
         fire("onSettled", chatId);
       },
@@ -884,6 +929,9 @@ var WorkbenchChatRuntimes = (function () {
         if (awaitingMessages.length) fire("onAssistantSaved", chatId, awaitingMessages);
         var pending = event.pending_question || event.pendingQuestion
           || (event && event.kind ? event : null);
+        update(chatId, function (cur) {
+          return cur ? { ...cur, pendingQuestion: pending || null, lastEventAt: Date.now() } : null;
+        });
         fire("onAwaitingUser", chatId, pending);
         publishLifecycle(chatId, "awaiting_user", event);
         // ACP permission/elicitation requests pause the external process but do
@@ -892,12 +940,12 @@ var WorkbenchChatRuntimes = (function () {
         if (pending && ["permission.requested", "elicitation.requested"].indexOf(String(pending.kind || "")) >= 0) {
           return;
         }
-        update(chatId, null);
+        clear(chatId);
         fire("onSettled", chatId);
       },
       onInterrupted: function (event) {
         publishLifecycle(chatId, "cancelled", event);
-        update(chatId, null);
+        clear(chatId);
         fire("onInterrupted", chatId);
       },
       onError: function (err) {
@@ -906,11 +954,33 @@ var WorkbenchChatRuntimes = (function () {
     };
   }
 
-  function ownStream(chatId, streamPromise, ac) {
+  function scheduleReconnect(chatId, model) {
+    if (!chatId || !runtimes[chatId] || !model || !model.reconnectRun || reconnectTimers[chatId]) return;
+    var current = runtimes[chatId];
+    var attempts = Math.max(0, Number(current.reconnectAttempts || 0)) + 1;
+    var delay = Math.min(4000, 250 * Math.pow(2, Math.min(attempts - 1, 4)));
+    update(chatId, function (cur) {
+      return cur ? { ...cur, reconnecting: true, reconnectAttempts: attempts } : null;
+    });
+    reconnectTimers[chatId] = setTimeout(function () {
+      delete reconnectTimers[chatId];
+      if (runtimes[chatId]) reconnect(chatId, model, true);
+    }, delay);
+  }
+
+  function ownStream(chatId, streamPromise, ac, model) {
+    var shouldReconnect = true;
     return streamPromise.catch(function (err) {
-      if (err && err.name === "AbortError") return;
+      if (err && err.name === "AbortError") {
+        shouldReconnect = false;
+        return;
+      }
       if (err && err.code === "chat_run_in_progress") {
         fire("onResync", chatId);
+        return;
+      }
+      if (err && err.code === "chat_run_not_found") {
+        shouldReconnect = false;
         return;
       }
       // A rejected/reconnecting transport is not yet the run's terminal
@@ -920,11 +990,17 @@ var WorkbenchChatRuntimes = (function () {
     }).finally(function () {
       if (aborts[chatId] === ac) delete aborts[chatId];
       if (runtimes[chatId]) {
-        // Stream ended without a `saved` / `awaiting` event (interrupted or a
-        // transport failure) — drop the runtime and let the page re-pull.
-        update(chatId, null);
-        publishLifecycle(chatId, "refresh");
-        fire("onResync", chatId);
+        if (shouldReconnect && model && model.reconnectRun) {
+          // A transport ending is not a run ending. Keep the assembled
+          // activities/segments visible and resume after the highest event
+          // cursor instead of replacing the timeline with an empty runtime.
+          fire("onResync", chatId);
+          scheduleReconnect(chatId, model);
+        } else {
+          clear(chatId);
+          publishLifecycle(chatId, "refresh");
+          fire("onResync", chatId);
+        }
       }
       // A guidance POST can race the server's finishing window: the UI still
       // has a live stream, but the agent has already returned and correctly
@@ -976,6 +1052,8 @@ var WorkbenchChatRuntimes = (function () {
       activitySeq: 0,
       segments: [],
       notifications: [],
+      eventCursor: 0,
+      reconnectAttempts: 0,
       startedAt: startedAt,
       lastEventAt: startedAt,
       replying: false,
@@ -986,19 +1064,31 @@ var WorkbenchChatRuntimes = (function () {
     return ownStream(
       chatId,
       model.sendMessage(chatId, input, streamHandlers(chatId), ac ? ac.signal : undefined),
-      ac
+      ac,
+      model
     );
   }
 
-  function reconnect(chatId, model) {
-    if (!chatId || runtimes[chatId] || !model || !model.reconnectRun) return null;
+  function reconnect(chatId, model, preserveRuntime) {
+    if (!chatId || !model || !model.reconnectRun) return null;
+    var existing = runtimes[chatId] || null;
+    if (existing && !preserveRuntime) return null;
+    clearReconnectTimer(chatId);
     var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
     if (ac) aborts[chatId] = ac;
-    update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], notifications: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: false, reconnecting: true });
+    if (existing) {
+      update(chatId, function (cur) {
+        return cur ? { ...cur, reconnecting: true } : null;
+      });
+    } else {
+      update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], notifications: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: false, reconnecting: true, reconnectAttempts: 0, eventCursor: 0 });
+    }
+    var cursor = Number(existing && existing.eventCursor || 0);
     return ownStream(
       chatId,
-      model.reconnectRun(chatId, streamHandlers(chatId), ac ? ac.signal : undefined),
-      ac
+      model.reconnectRun(chatId, streamHandlers(chatId), ac ? ac.signal : undefined, cursor),
+      ac,
+      model
     );
   }
 
@@ -1014,7 +1104,7 @@ var WorkbenchChatRuntimes = (function () {
     if (event.type === "budget_warning") {
       var warningError = new Error(String(event.message || ""));
       warningError.code = String(event.code || "");
-      window.CyreneUI.require("feedback").showToast(wbcErrorText(warningError), "warning");
+      workbenchServices.feedback().showToast(wbcErrorText(warningError), "warning");
       return;
     }
     var eventAt = Date.parse(String(event.timestamp || event.createdAt || event.created_at || ""));
@@ -1133,29 +1223,10 @@ var WorkbenchChatRuntimes = (function () {
     var eventActiveModel = "";
     var terminalToolEvent = false;
     if (event.type === "tool_call_started" || event.type === "tool_call" || event.type === "tool_call_finished" || event.type === "tool_call_progress") {
-      var toolName = String(event.tool || "");
-      if (["use_tools", "quit", "send_message", "update_plan_progress"].indexOf(toolName) >= 0) return;
-      var args = event.args || {};
-      var preview = wbcToolArgsPreview(args);
-      var toolStarted = event.type === "tool_call_started";
-      var toolProgress = event.type === "tool_call_progress";
-      terminalToolEvent = event.type === "tool_call_finished";
-      var toolResult = String(event.result || "");
-      var toolFailed = !!event.failed
-        || String(event.status || "").toLowerCase() === "failed"
-        || (!toolStarted && toolResult.toLowerCase().startsWith("tool failed:"));
-      entry = {
-        kind: "tool",
-        toolCallId: String(event.tool_call_id || ""),
-        text: toolName || undefined,
-        preview: toolProgress ? String(event.label || "") : preview,
-        status: (toolStarted || toolProgress) ? "running" : "completed",
-        failed: toolFailed,
-        progress: toolProgress ? Math.max(0, Math.min(1, Number(event.progress) || 0)) : undefined,
-        progressCurrent: toolProgress ? Math.max(0, Number(event.current) || 0) : undefined,
-        progressTotal: toolProgress ? Math.max(0, Number(event.total) || 0) : undefined,
-        startedAt: eventAt,
-      };
+      var toolEvent = wbcRuntimeToolEvent(event, eventAt);
+      if (!toolEvent) return;
+      entry = toolEvent.entry;
+      terminalToolEvent = toolEvent.terminal;
     } else if (event.type === "phase_transition" && (event.detail || event.detail_key)) {
       var phaseParams = event.detail_params && typeof event.detail_params === "object"
         ? event.detail_params
@@ -1169,8 +1240,8 @@ var WorkbenchChatRuntimes = (function () {
       var phaseText = event.detail_key
         ? wbcT(event.detail_key, String(event.detail || ""), phaseParams)
         : String(event.detail || "");
-      if (event.alert && window.CyreneUI.require("feedback").showToast) {
-        window.CyreneUI.require("feedback").showToast(
+      if (event.alert && workbenchServices.feedback().showToast) {
+        workbenchServices.feedback().showToast(
           phaseText,
           String(event.alert_level || "warning")
         );
@@ -1271,7 +1342,7 @@ var WorkbenchChatRuntimes = (function () {
       };
     });
   }
-  window.CyreneUI.require("events").subscribe(onSseEvent);
+  workbenchServices.events().subscribe(onSseEvent);
 
   return {
     subscribe: subscribe, subscribeSummary: subscribeSummary, snapshot: snapshot, get: get, isRunning: isRunning,

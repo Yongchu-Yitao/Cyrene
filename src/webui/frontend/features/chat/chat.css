@@ -1,0 +1,3827 @@
+/* ===================================================================
+   对话页面 (workbench-chat.jsx) — wbc- prefix
+   =================================================================== */
+
+.workbench-grid.is-chat {
+  grid-template-columns: minmax(0, 1fr);
+  height: 100vh;
+  margin-top: calc(0px - var(--wb-topbar-height));
+}
+
+.wbc-page {
+  --wbc-composer-reserve-height: calc(164px * var(--wb-ui-font-scale, 1));
+  --wbc-card-gutter: 12px;
+  --wbc-panel-surface: var(--wb-floating-rail-bg);
+  --wbc-topbar-clearance: 58px;
+  /* The 32px session tabs are vertically centred in the 58px topbar, so their
+     visible lower edge is 45px. Keep the card row one shared gutter below it,
+     while never letting the fixed topbar paint over the card's top border. */
+  --wbc-topbar-tab-bottom: 45px;
+  --wbc-card-top-inset: max(
+    var(--wbc-topbar-clearance),
+    calc(var(--wbc-topbar-tab-bottom) + var(--wbc-card-gutter))
+  );
+  --wbc-rail-width: 300px;
+  --wbc-docked-side-open-width: var(--wb-right-w, 350px);
+  --wbc-side-track-width: var(--wbc-docked-side-open-width);
+  /* Right anchor: the overlay panel's left edge sits at the right track. */
+  --wbc-motion-left: calc(100% - var(--wbc-side-track-width));
+  /* Both conversation panes share the same minimum. The JS resizer uses this
+     380px boundary for the split track as well, keeping either anchor equal. */
+  --wbc-main-min-width: 380px;
+  /* When the side panel closes, let the conversation lane use only a modest
+     slice of the reclaimed space. The remainder becomes a symmetric inset so
+     the messages and composer still glide into the new visual centre. */
+  --wbc-collapsed-lane-growth: clamp(144px, 12vw, 208px);
+  --wbc-reclaimed-side-width: 0px;
+  --wbc-conversation-shift: 0px;
+  --wbc-control-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.028),
+    0 5px 14px rgba(15, 23, 42, 0.02);
+  display: grid;
+  /* Always four tracks, so an anchored-side swap animates as a pure width
+     interpolation (0 <-> split track) instead of a track-count change, which
+     interpolates wrongly. The split overlay's reserved lane is the second
+     track on the right anchor and the fourth on the left. */
+  grid-template-columns: var(--wbc-rail-width) 0px minmax(var(--wbc-main-min-width), 1fr) var(--wbc-side-track-width);
+  /* The detail split and the grid share one lightly under-damped curve. This
+     lets the conversation lane compress as a single elastic surface instead
+     of reflowing first and then having the split catch up from the right. */
+  transition: grid-template-columns 500ms cubic-bezier(.22, 1.16, .36, 1);
+  position: relative;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--wb-main-bg);
+}
+
+html[data-theme="dark"] .wbc-page {
+  /* Keep the three primary chat cards on one opaque surface. A translucent
+     fill resolves differently over each track and creates a visible tint
+     shift between the rail, conversation, and detail panel. */
+  --wbc-panel-surface: #171819;
+}
+
+.wbc-page.wbc-nav-collapsed {
+  --wbc-rail-width: 64px;
+}
+/* Pin each column explicitly; with the reserved 0-width second track the DOM
+   order (rail, main, side) no longer matches the track order. */
+.wbc-page > .wbc-rail { grid-column: 1; }
+.wbc-page > .wbc-main { grid-column: 3; }
+.wbc-page > .wbc-side { grid-column: 4; }
+.wbc-page > .wbc-rail,
+.wbc-page > .wbc-side,
+.wbc-page > .wbc-pane-layout { grid-row: 1; }
+
+/* Collapse the right panel when hidden via the × / show button toggle. */
+.wbc-page.wbc-side-hidden {
+  --wbc-side-track-width: 0px;
+  --wbc-reclaimed-side-width: calc(var(--wb-right-w, 350px) - var(--wbc-collapsed-lane-growth));
+  --wbc-conversation-shift: calc(var(--wbc-reclaimed-side-width) / 2);
+}
+/* Hovering a rail conversation over the hidden panel's right-side target is
+   a live layout preview: reserve the exact future split width now so the main
+   conversation and its composer contract continuously into the final state. */
+.wbc-page.wbc-side-hidden.wbc-chat-side-drop-active {
+  --wbc-side-track-width: var(--wbc-chat-side-preview-width);
+  --wbc-reclaimed-side-width: 0px;
+  --wbc-conversation-shift: 0px;
+  grid-template-columns:
+    var(--wbc-rail-width)
+    0px
+    minmax(var(--wbc-main-min-width), 1fr)
+    var(--wbc-chat-side-preview-width);
+}
+/* ---- conversation rail ---- */
+
+.wbc-rail {
+  --wbc-rail-overlay-height: 56px;
+  --wbc-rail-content-inset: calc(var(--wbc-rail-overlay-height) + 6px);
+  position: relative;
+  z-index: 21;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 12px;
+  border-right: 0;
+  background: transparent;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.wbc-rail::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: var(--wbc-card-top-inset) var(--wbc-card-gutter) var(--wbc-card-gutter);
+  border: var(--wb-floating-rail-border);
+  border-radius: var(--wb-floating-rail-radius);
+  background: var(--wbc-panel-surface);
+  box-shadow: var(--wb-floating-rail-shadow);
+  -webkit-backdrop-filter: blur(18px) saturate(112%);
+  backdrop-filter: blur(18px) saturate(112%);
+  pointer-events: none;
+}
+
+.wbc-rail-glass {
+  position: absolute;
+  z-index: 22;
+  inset: var(--wbc-card-top-inset) 8px auto;
+  min-height: var(--wbc-rail-overlay-height);
+  box-sizing: border-box;
+  isolation: isolate;
+  display: flex;
+  padding: 0;
+  background: transparent;
+}
+
+.wbc-rail-glass::before {
+  content: none;
+}
+
+.wbc-nav-card {
+  position: relative;
+  width: 100%;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.wbc-nav-card-head {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+}
+
+.wbc-chat-nav-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+  outline: 0;
+}
+
+.wbc-chat-nav-title:focus-visible {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 34%, transparent);
+}
+
+.wbc-chat-nav-title > span {
+  display: inline-flex;
+  color: var(--wb-muted);
+}
+
+.wbc-chat-nav-title svg {
+  width: 17px;
+  height: 17px;
+}
+
+.wbc-chat-nav-title b {
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 690;
+}
+
+.wbc-nav-collapse-btn:focus-visible,
+.wbc-module-nav button:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-line-2) 78%, transparent);
+}
+
+.wbc-project-new-chat {
+  width: var(--wb-rail-toolbar-control-size, 32px);
+  height: var(--wb-rail-toolbar-control-size, 32px);
+  flex: 0 0 var(--wb-rail-toolbar-control-size, 32px);
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 72%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-card-bg) 58%, transparent);
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+
+.wbc-project-new-chat:hover {
+  background: var(--wb-row-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-project-new-chat svg {
+  width: 14px;
+  height: 14px;
+}
+
+.wbc-nav-collapse-btn {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--wb-faint);
+  cursor: pointer;
+}
+
+.wbc-nav-collapse-btn:hover {
+  background: color-mix(in srgb, var(--wb-accent) 5%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-nav-collapse-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wbc-rail-toolbar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 0;
+  box-sizing: border-box;
+}
+
+.wbc-search {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.wbc-new-chat-btn {
+  flex: 0 0 32px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--wb-card-bg);
+  color: var(--wb-muted);
+  box-shadow: var(--wbc-control-shadow);
+}
+
+.wbc-new-chat-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+.wbc-search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--wb-faint);
+  display: inline-flex;
+}
+
+.wbc-search input {
+  width: 100%;
+  height: var(--wb-rail-toolbar-control-size, 32px);
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 68%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-card-bg) 66%, transparent);
+  color: var(--wb-text);
+  padding: 0 10px 0 30px;
+  font: inherit;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  outline: none;
+  box-sizing: border-box;
+  box-shadow: none;
+}
+
+.wbc-search input:focus {
+  border-color: color-mix(in srgb, var(--wb-accent) 32%, var(--wb-line));
+  background: var(--wb-card-bg);
+}
+
+.wbc-rail-filter {
+  position: relative;
+  flex: 0 0 70px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+}
+
+.wbc-rail-filter select {
+  width: 100%;
+  height: 100%;
+  appearance: none;
+  padding: 0 26px 0 11px;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 68%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-card-bg) 66%, transparent);
+  color: var(--wb-text);
+  font: inherit;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+  cursor: pointer;
+  outline: none;
+}
+
+.wbc-rail-filter > span {
+  position: absolute;
+  right: 8px;
+  display: inline-flex;
+  color: var(--wb-faint);
+  pointer-events: none;
+}
+
+.wbc-rail-filter svg {
+  width: 13px;
+  height: 13px;
+}
+
+.wbc-chat-list {
+  position: relative;
+  z-index: 21;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  box-sizing: border-box;
+  padding: calc(var(--wbc-card-top-inset) + var(--wbc-rail-content-inset)) 10px 18px;
+}
+
+/* Keep a visible home for chat groups on short windows. Recent conversations
+   scroll in the flexible upper region; groups use an independently scrollable
+   lower region that can grow for expanded children without taking over the
+   whole navigator. */
+.wbc-chat-list.has-groups {
+  overflow: hidden;
+}
+
+.wbc-chat-list-primary {
+  width: 100%;
+  max-width: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+  box-sizing: border-box;
+  scrollbar-width: none;
+}
+
+.wbc-chat-list-primary > .wbc-rail-section,
+.wbc-chat-list-primary .wbc-rail-section-items {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.wbc-chat-list-primary::-webkit-scrollbar,
+.wbc-chat-list-group-region::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.wbc-chat-list-group-region {
+  position: relative;
+  z-index: 2;
+  flex: 0 1 auto;
+  min-height: 108px;
+  max-height: min(44%, 320px);
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding-top: 11px;
+  background:
+    linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--wb-line-2) 72%, transparent) 14%,
+      color-mix(in srgb, var(--wb-line-2) 72%, transparent) 86%,
+      transparent
+    ) 8px 4px / calc(100% - 16px) 1px no-repeat;
+}
+
+.wbc-chat-list-group-region:has(.wbc-chat-group.expanded) {
+  flex-shrink: 0;
+}
+
+/* Menus may be taller than the reserved group region in a compact window.
+   While one is open, let it paint across the neighbouring rail space; the
+   existing menu-active stacking layer keeps it above the Dock and scrim. */
+.wbc-chat-list.has-groups.menu-active,
+.wbc-chat-list-group-region:has(.menu-open) {
+  overflow: visible;
+}
+
+.wbc-chat-list-group-region .wbc-rail-section {
+  padding-bottom: 0;
+}
+
+.wbc-module-nav {
+  position: absolute;
+  z-index: 22;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+  padding: 4px;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--wb-line) 55%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.wbc-module-nav button {
+  min-width: 0;
+  min-height: 38px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 3px 2px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--wb-faint);
+  cursor: pointer;
+}
+
+.wbc-module-nav button:hover {
+  background: color-mix(in srgb, var(--wb-accent) 5%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-module-nav button.active {
+  background: var(--wb-active-bg);
+  color: var(--wb-accent-strong);
+}
+
+.wbc-module-nav button > span {
+  display: inline-flex;
+}
+
+.wbc-module-nav button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wbc-module-nav button b {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 9px;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-rail.is-collapsed {
+  padding-inline: 0;
+}
+
+.wbc-rail.is-collapsed .wbc-rail-glass {
+  left: 10px;
+  right: 10px;
+  min-height: 46px;
+}
+
+.wbc-rail.is-collapsed::before {
+  left: 8px;
+  right: 8px;
+}
+
+.wbc-rail.is-collapsed .wbc-nav-card {
+  border-radius: 0;
+}
+
+.wbc-rail.is-collapsed .wbc-nav-card-head {
+  flex-basis: 44px;
+  height: 44px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 0;
+}
+
+.wbc-rail.is-collapsed .wbc-chat-nav-title {
+  width: 44px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.wbc-rail.is-collapsed .wbc-chat-nav-title:hover {
+  background: color-mix(in srgb, var(--wb-accent) 7%, transparent);
+}
+
+.wbc-rail.is-collapsed .wbc-chat-nav-title b {
+  display: none;
+}
+
+.wbc-rail.is-collapsed .wbc-chat-list {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* The collapsed status track measures the hidden conversation rows. Keep that
+   layout at the expanded content width so titles, status labels, and Grid
+   tracks cannot reflow for one frame when the 48px rail opens. The rail still
+   clips/ignores this surface; only its geometry remains authoritative. */
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-chat-list {
+  width: calc(var(--wb-rail-w-open) - 18px);
+  align-self: flex-start;
+}
+
+.wbc-rail.is-collapsed .wbc-module-nav {
+  left: 10px;
+  right: 10px;
+  grid-template-columns: 1fr;
+  min-height: 0;
+  border-top-color: color-mix(in srgb, var(--wb-line) 55%, transparent);
+  border-radius: 0;
+  padding: 3px;
+}
+
+.wbc-rail.is-collapsed .wbc-module-nav button {
+  width: 36px;
+  min-height: 36px;
+  padding: 0;
+}
+
+.wbc-rail.is-collapsed .wbc-module-nav button b {
+  display: none;
+}
+
+.wbc-chat-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.wbc-chat-list.is-loading {
+  align-items: center;
+  justify-content: center;
+}
+
+.wbc-chat-list.is-loading .wbc-chat-list-primary {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wbc-chat-list.is-empty .wbc-chat-list-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wbc-chat-list.is-empty .wbc-rail-empty {
+  padding-block: 0;
+}
+
+/* The outside-click scrim sits at z-index 199. Lift the list only while a
+   card menu is open, then let pointer events through solely on the open card.
+   This keeps the menu clickable without making the rest of the rail pierce
+   the scrim's dismiss surface. */
+.wbc-chat-list.menu-active {
+  z-index: 200;
+  pointer-events: none;
+}
+
+.wbc-chat-list.menu-active .wbc-chat-card.menu-open,
+.wbc-chat-list.menu-active .wbc-chat-group.menu-open {
+  position: relative;
+  z-index: 1;
+  pointer-events: auto;
+}
+
+.wbc-rail-loading {
+  padding: 0;
+  text-align: center;
+}
+
+.wbc-chat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  border-radius: 11px;
+  background: var(--wb-card-bg);
+  color: var(--wb-text);
+  padding: 11px 12px;
+  text-align: left;
+  cursor: grab;
+  box-shadow: var(--wbc-control-shadow);
+  transition: background .12s ease, opacity .14s ease, transform .14s ease;
+  position: relative;
+}
+
+.wbc-chat-card:active {
+  cursor: grabbing;
+}
+
+.wbc-chat-card.dragging {
+  /* Match the established rail-reorder treatment: the native drag image
+     carries the conversation while its source leaves a quiet placeholder in
+     the list. Keeping this separate from the split-panel lift also prevents
+     the source card from reading as a clipped second drag image. */
+  opacity: .22;
+  transform: scale(.985);
+}
+
+/* Raw-DOM drag images borrow the rail selectors for an exact card rendering,
+   but must not inherit the rail's own glass backdrop. */
+.wbc-native-chat-drag-image::before {
+  display: none;
+}
+
+.wbc-rail.wbc-native-chat-drag-image > .wbc-chat-card {
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 74%, transparent);
+  border-radius: 11px;
+  background: var(--wb-card-bg-strong);
+  box-shadow:
+    0 14px 34px color-mix(in srgb, #06101d 20%, transparent),
+    0 2px 8px color-mix(in srgb, #06101d 8%, transparent);
+}
+
+.wbc-rail.wbc-native-chat-drag-image > .wbc-chat-card.status-attention {
+  border-color: color-mix(in srgb, var(--wb-amber) 36%, var(--wb-line));
+}
+
+.wbc-rail.wbc-native-chat-drag-image > .wbc-chat-card.status-failed {
+  border-color: color-mix(in srgb, var(--wb-red) 36%, var(--wb-line));
+}
+
+.wbc-rail.wbc-native-chat-drag-image > :is(.wbc-chat-group) {
+  background: var(--wb-card-bg-strong);
+  box-shadow: 0 14px 34px color-mix(in srgb, #06101d 20%, transparent);
+}
+
+.wbc-chat-card.wbc-split-card-lifted {
+  /* A split-panel drag intentionally lifts the matching rail card when its
+     custom ghost enters the rail. */
+  opacity: 1;
+  transform: translateY(-3px);
+  z-index: 50;
+  background: var(--wb-card-bg-strong);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.25);
+}
+
+.wbc-chat-card:hover {
+  background: var(--wb-row-hover-bg);
+}
+
+.wbc-chat-card:focus,
+.wbc-chat-card:focus-visible {
+  outline: 0;
+  background: var(--wb-row-hover-bg);
+}
+
+.wbc-chat-card.active,
+.wbc-chat-card.menu-open,
+.wbc-chat-card.active:focus,
+.wbc-chat-card.active:focus-visible {
+  background: var(--wb-active-bg);
+}
+
+.wbc-chat-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wbc-chat-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.wbc-chat-card-pin {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+}
+
+.wbc-chat-menu-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.wb-card-menu button.wbc-chat-pin-action,
+.wb-card-menu button.wbc-chat-menu-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wbc-chat-card .wb-card-menu {
+  min-width: 168px;
+}
+
+.wbc-chat-card .wb-card-menu button span:last-child {
+  white-space: nowrap;
+}
+
+.wbc-chat-card-top b {
+  flex: 1 1 auto;
+  color: var(--wb-text);
+  font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.wbc-chat-card-time {
+  flex: 0 0 auto;
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-faint);
+}
+
+.wbc-chat-card-preview {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-chat-card-preview > .wbc-hover-marquee {
+  flex: 1 1 auto;
+}
+
+.wbc-chat-group {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  padding: 9px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-line));
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--wb-active-bg) 24%, var(--wb-card-bg));
+  transition: border-color .14s ease, background .14s ease, box-shadow .14s ease, opacity .14s ease, transform .14s ease;
+}
+
+.wbc-chat-group.dragging {
+  opacity: 1;
+  transform: translateY(-3px) scale(1.01);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.22);
+}
+
+.wbc-chat-group.drop-ready {
+  border-color: color-mix(in srgb, var(--wb-accent) 58%, transparent);
+  background: color-mix(in srgb, var(--wb-active-bg) 46%, var(--wb-card-bg));
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--wb-accent) 9%, transparent);
+}
+
+.wbc-chat-group-head {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wbc-chat-group-toggle {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+  cursor: grab;
+  font: inherit;
+}
+
+.wbc-chat-group-toggle:active {
+  cursor: grabbing;
+}
+
+span.wbc-chat-group-toggle {
+  cursor: default;
+}
+
+.wbc-chat-group-toggle b {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+}
+
+.wbc-chat-group-actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.wbc-chat-group.menu-open .wbc-chat-group-actions {
+  z-index: 200;
+}
+
+.wbc-chat-group-actions .wb-card-menu {
+  top: 28px;
+  right: 20px;
+  min-width: 160px;
+}
+
+.wbc-chat-group-actions .wb-card-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wbc-chat-group-chevron {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+
+.wbc-chat-group-chevron:hover,
+.wbc-chat-group-toggle:hover {
+  color: var(--wb-text);
+}
+
+.wbc-chat-group-chevron:focus,
+.wbc-chat-group-chevron:focus-visible {
+  outline: none;
+  box-shadow: none;
+  background: color-mix(in srgb, var(--wb-text) 7%, transparent);
+}
+
+.wbc-chat-group-chevron svg {
+  transition: transform .22s cubic-bezier(.2, .75, .25, 1);
+}
+
+.wbc-chat-group-chevron.expanded svg {
+  transform: rotate(90deg);
+}
+
+.wbc-chat-group.collapsed {
+  gap: 4px;
+}
+
+.wbc-chat-group-content {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows .2s cubic-bezier(.22, 1, .36, 1),
+    opacity .14s ease-out;
+}
+
+.wbc-chat-group-content.collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.wbc-chat-group-content-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wbc-chat-group-content.expanded:has(.wbc-chat-card.menu-open) > .wbc-chat-group-content-inner {
+  overflow: visible;
+}
+
+.wbc-chat-group-children {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wbc-chat-group-child {
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--wb-card-bg);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .035), 0 4px 12px rgba(15, 23, 42, .018);
+}
+
+.wbc-chat-group .wbc-chat-group-child:hover {
+  background: color-mix(in srgb, var(--wb-row-hover-bg) 56%, var(--wb-card-bg));
+}
+
+.wbc-chat-group .wbc-chat-group-child.active,
+.wbc-chat-group .wbc-chat-group-child.active:focus,
+.wbc-chat-group .wbc-chat-group-child.active:focus-visible {
+  border-color: color-mix(in srgb, var(--wb-accent) 30%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-accent) 12%, var(--wb-card-bg));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--wb-accent) 7%, transparent),
+    0 6px 16px color-mix(in srgb, var(--wb-accent) 10%, transparent);
+}
+
+.wbc-chat-card.group-drop-target,
+.wbc-chat-group-drop-clone {
+  background: color-mix(in srgb, var(--wb-accent) 8%, var(--wb-card-bg));
+}
+
+.wbc-chat-group-drop-clone {
+  pointer-events: none;
+  cursor: default;
+  box-shadow: 0 7px 18px rgba(15, 23, 42, .09);
+}
+
+.wbc-chat-group-drop-hint {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 25px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 30%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg) 88%, transparent);
+  color: var(--wb-accent);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .035);
+  pointer-events: none;
+}
+
+.wbc-chat-group-drop-hint svg {
+  width: 13px;
+  height: 13px;
+}
+
+.wbc-chat-group-summary {
+  width: 100%;
+  min-width: 0;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  box-sizing: border-box;
+  padding: 2px 3px;
+  border: 0;
+  background: transparent;
+  color: var(--wb-muted);
+  font: inherit;
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  line-height: 1.35;
+  cursor: default;
+}
+
+.wbc-chat-group-summary.is-updating {
+  color: var(--wb-faint);
+}
+
+/* Unified project + conversation navigator. The rail is one floating surface;
+   its rows stay deliberately flat so drag affordances and group hierarchy do
+   not turn into nested cards. */
+.wbc-rail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 0 10px;
+}
+
+.wbc-rail-section + .wbc-rail-section {
+  padding-top: 4px;
+}
+
+.wbc-rail-section-label {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  color: var(--wb-text);
+}
+
+.wbc-rail-section-label > span {
+  display: inline-flex;
+  color: var(--wb-muted);
+}
+
+.wbc-rail-section-label svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wbc-rail-section-label b {
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 720;
+  letter-spacing: .01em;
+}
+
+.wbc-rail-section-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wbc-rail-empty {
+  padding: 24px 10px;
+  text-align: center;
+}
+
+.wbc-rail-show-all {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: -6px 2px 8px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--wb-faint);
+  font: inherit;
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  cursor: pointer;
+}
+
+.wbc-rail-show-all:hover {
+  background: color-mix(in srgb, var(--wb-row-hover-bg) 62%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-rail-show-all svg {
+  width: 13px;
+  height: 13px;
+}
+
+.wbc-rail .wbc-chat-card {
+  min-height: 44px;
+  display: block;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  box-shadow: none;
+  transition:
+    transform 180ms cubic-bezier(.22, 1, .36, 1),
+    background-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.wbc-rail .wbc-chat-card:hover,
+.wbc-rail .wbc-chat-card:focus,
+.wbc-rail .wbc-chat-card:focus-visible {
+  transform: translateX(2px);
+  background: color-mix(in srgb, var(--wb-accent) 7%, var(--wb-control-bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 10%, transparent);
+}
+
+.wbc-rail .wbc-chat-card.active,
+.wbc-rail .wbc-chat-card.menu-open,
+.wbc-rail .wbc-chat-card.active:focus,
+.wbc-rail .wbc-chat-card.active:focus-visible {
+  background: var(--wb-active-bg);
+  color: var(--wb-accent-strong);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 10%, transparent),
+    0 4px 12px color-mix(in srgb, var(--wb-accent) 6%, transparent);
+  transform: none;
+}
+
+.wbc-rail .wbc-chat-card.active:hover {
+  background: color-mix(in srgb, var(--wb-active-bg) 92%, var(--wb-accent));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 16%, transparent),
+    0 5px 14px color-mix(in srgb, var(--wb-accent) 8%, transparent);
+}
+
+/* Keep this after the active/hover rules so the return target remains visible
+   even when the dragged conversation is also the current rail selection. */
+.wbc-rail .wbc-chat-card.wbc-split-return-target {
+  opacity: .58;
+  background: color-mix(in srgb, var(--wb-accent) 13%, var(--wb-control-bg));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 42%, transparent),
+    0 7px 18px color-mix(in srgb, var(--wb-accent) 12%, transparent);
+  transform: scale(.985);
+}
+
+/* Semantic Agent actions receive a quiet, transient perimeter glint. */
+.wbc-rail .wbc-chat-card.agent-flow::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  z-index: 2;
+  border-radius: 10px;
+  padding: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    108deg,
+    transparent 34%,
+    color-mix(in srgb, var(--wb-accent) 58%, transparent) 50%,
+    transparent 66%
+  );
+  background-size: 240% 100%;
+  background-position: 135% 0;
+  opacity: .72;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: wbc-agent-chat-flow 3.2s cubic-bezier(.4, 0, .2, 1) infinite;
+}
+
+@keyframes wbc-agent-chat-flow {
+  0% { background-position: 135% 0; opacity: 0; }
+  18% { opacity: .68; }
+  76% { opacity: .46; }
+  100% { background-position: -135% 0; opacity: 0; }
+}
+
+.wbc-rail .wbc-chat-card.active .wbc-chat-row-icon,
+.wbc-rail .wbc-chat-card.active .wbc-chat-card-title,
+.wbc-rail .wbc-chat-card.active .wbc-chat-card-menu-btn {
+  color: var(--wb-accent-strong);
+}
+
+.wbc-rail .wbc-chat-card.status-completed .wbc-chat-row-icon {
+  color: var(--wb-green);
+}
+
+.wbc-rail .wbc-chat-card.status-attention .wbc-chat-row-icon,
+.wbc-rail .wbc-chat-card.status-attention .wbc-chat-card-top b {
+  color: var(--wb-amber);
+}
+
+.wbc-rail .wbc-chat-card.status-failed .wbc-chat-row-icon,
+.wbc-rail .wbc-chat-card.status-failed .wbc-chat-card-top b {
+  color: var(--wb-red);
+}
+
+.wbc-rail .wbc-chat-card.status-running .wbc-chat-row-icon {
+  color: var(--wb-accent);
+}
+
+.wbc-rail .wbc-chat-card.status-planning .wbc-chat-row-icon {
+  color: var(--wb-accent);
+}
+
+.wbc-rail .wbc-chat-card-top {
+  width: 100%;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.wbc-chat-row-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-muted);
+  transition: opacity 120ms ease;
+}
+
+.wbc-chat-row-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.wbc-chat-running-spinner {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  border-width: 2px;
+  animation-duration: 0.7s;
+}
+
+.wbc-rail .wbc-chat-card-title {
+  gap: 4px;
+}
+
+.wbc-rail .wbc-chat-card-top b {
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+}
+
+.wbc-rail .wbc-chat-card-pin {
+  display: none;
+}
+
+.wbc-rail .wbc-chat-card-right {
+  min-width: 42px;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 1px;
+}
+
+.wbc-rail .wbc-chat-card-time,
+.wbc-rail .wbc-chat-card-status {
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-chat-card-status {
+  color: var(--wb-muted);
+  font-style: normal;
+  font-weight: 560;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.wbc-chat-card.status-attention .wbc-chat-card-status {
+  color: var(--wb-amber);
+}
+
+.wbc-chat-card.status-failed .wbc-chat-card-status {
+  color: var(--wb-red);
+}
+
+.wbc-rail .wbc-chat-card-preview {
+  display: none;
+}
+
+.wbc-rail .wbc-chat-group {
+  gap: 2px;
+  padding: 5px 0;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--wb-card-bg) 42%, transparent);
+  box-shadow: none;
+}
+
+.wbc-rail .wbc-chat-group.collapsed {
+  gap: 0;
+}
+
+.wbc-rail .wbc-chat-group:hover,
+.wbc-rail .wbc-chat-group.menu-open {
+  border-color: color-mix(in srgb, var(--wb-line-2) 58%, transparent);
+  background: color-mix(in srgb, var(--wb-card-bg) 58%, transparent);
+  box-shadow: none;
+}
+
+.wbc-rail .wbc-chat-group.menu-open,
+.wbc-rail .wbc-chat-group:has(.wbc-chat-card.menu-open) {
+  z-index: 210;
+  border-color: color-mix(in srgb, var(--wb-accent) 20%, var(--wb-line-2));
+  background: color-mix(in srgb, var(--wb-active-bg) 24%, var(--wb-control-bg));
+  box-shadow:
+    0 7px 18px color-mix(in srgb, var(--wb-accent) 6%, transparent);
+}
+
+.wbc-rail .wbc-chat-group:has(.wbc-chat-card.menu-open) .wbc-chat-card.menu-open {
+  z-index: 220;
+}
+
+.wbc-rail .wbc-chat-group:has(.wbc-chat-card.menu-open) .wb-card-menu {
+  z-index: 230;
+}
+
+.wbc-rail .wbc-chat-group.drop-ready {
+  background: color-mix(in srgb, var(--wb-active-bg) 58%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 24%, transparent);
+}
+
+.wbc-rail .wbc-chat-group-preview {
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 34%, var(--wb-line));
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--wb-active-bg) 36%, var(--wb-card-bg));
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--wb-accent) 7%, transparent);
+}
+
+.wbc-rail .wbc-chat-group-preview .wbc-chat-group-head {
+  min-height: 36px;
+  padding: 0 7px 0 4px;
+}
+
+.wbc-rail .wbc-chat-group-preview .wbc-chat-group-children {
+  gap: 2px;
+  padding: 0;
+}
+
+.wbc-rail .wbc-chat-group-preview .wbc-chat-card {
+  min-height: 40px;
+  background: color-mix(in srgb, var(--wb-card-bg) 78%, transparent);
+}
+
+.wbc-rail .wbc-chat-group-preview .wbc-chat-card-top {
+  min-height: 40px;
+}
+
+.wbc-rail .wbc-chat-group-preview .wbc-chat-group-drop-clone {
+  opacity: .72;
+}
+
+.wbc-rail .wbc-chat-group-preview .wbc-chat-group-drop-hint {
+  min-height: 22px;
+  margin-top: 1px;
+  padding-inline: 8px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.wbc-rail .wbc-chat-group-head {
+  min-height: 40px;
+  padding: 0 10px 0 8px;
+  border-radius: 9px;
+  transition: background-color 140ms ease;
+}
+
+.wbc-rail .wbc-chat-group.expanded .wbc-chat-group-head:hover {
+  background: color-mix(in srgb, var(--wb-row-hover-bg) 48%, transparent);
+}
+
+.wbc-rail .wbc-chat-group-toggle {
+  display: grid;
+  grid-template-columns: 14px 22px minmax(0, 1fr);
+  gap: 6px;
+  padding: 0;
+}
+
+.wbc-chat-group-leading-chevron {
+  display: inline-flex;
+  color: var(--wb-muted);
+}
+
+.wbc-chat-group-leading-chevron svg {
+  width: 13px;
+  height: 13px;
+  transition: transform .2s cubic-bezier(.2, .75, .25, 1);
+}
+
+.wbc-chat-group-leading-chevron.expanded svg {
+  transform: rotate(90deg);
+}
+
+.wbc-rail .wbc-chat-group-toggle b {
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 640;
+}
+
+.wbc-rail .wbc-chat-group-actions {
+  gap: 3px;
+}
+
+.wbc-chat-group-count {
+  min-width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-muted) 9%, transparent);
+  color: var(--wb-muted);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-rail .wbc-chat-group-summary {
+  display: none;
+}
+
+.wbc-rail .wbc-chat-group-children {
+  gap: 2px;
+  margin-left: 0;
+  padding: 1px 6px;
+  border-left: 0;
+}
+
+.wbc-rail .wbc-chat-group-child {
+  width: auto;
+  min-height: 40px;
+  padding-inline: 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.wbc-rail .wbc-chat-group .wbc-chat-group-child:hover,
+.wbc-rail .wbc-chat-group .wbc-chat-group-child:focus,
+.wbc-rail .wbc-chat-group .wbc-chat-group-child:focus-visible {
+  transform: none;
+  background: color-mix(in srgb, var(--wb-accent) 7%, var(--wb-control-bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 10%, transparent);
+}
+
+.wbc-rail .wbc-chat-group-child .wbc-chat-card-top {
+  min-height: 40px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.wbc-rail .wbc-chat-group .wbc-chat-group-child.active,
+.wbc-rail .wbc-chat-group .wbc-chat-group-child.active:focus,
+.wbc-rail .wbc-chat-group .wbc-chat-group-child.active:focus-visible {
+  border: 0;
+  background: var(--wb-active-bg);
+  color: var(--wb-accent-strong);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 10%, transparent),
+    0 4px 12px color-mix(in srgb, var(--wb-accent) 6%, transparent);
+}
+
+.wbc-hover-marquee {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-hover-marquee-track {
+  display: inline-block;
+  min-width: max-content;
+  will-change: transform;
+}
+
+.wbc-hover-marquee.overflow:hover,
+.wbc-hover-marquee.overflow:focus-within,
+.wbc-hover-marquee.overflow.auto,
+.wbc-chat-card:hover .wbc-hover-marquee.overflow,
+.wbc-chat-card:focus-visible .wbc-hover-marquee.overflow,
+.workbench-session-tab:hover .wbc-hover-marquee.overflow,
+.workbench-session-tab:focus-visible .wbc-hover-marquee.overflow {
+  text-overflow: clip;
+}
+
+.wbc-hover-marquee.overflow:hover .wbc-hover-marquee-track,
+.wbc-hover-marquee.overflow:focus-within .wbc-hover-marquee-track,
+.wbc-hover-marquee.overflow.auto .wbc-hover-marquee-track,
+.wbc-chat-card:hover .wbc-hover-marquee.overflow .wbc-hover-marquee-track,
+.wbc-chat-card:focus-visible .wbc-hover-marquee.overflow .wbc-hover-marquee-track,
+.workbench-session-tab:hover .wbc-hover-marquee.overflow .wbc-hover-marquee-track,
+.workbench-session-tab:focus-visible .wbc-hover-marquee.overflow .wbc-hover-marquee-track {
+  animation: wbc-hover-marquee var(--wbc-marquee-duration, 7s) linear infinite;
+}
+
+@keyframes wbc-hover-marquee {
+  0%, 10% { transform: translateX(0); }
+  10% {
+    transform: translateX(0);
+    animation-timing-function: cubic-bezier(.45, 0, 1, 1);
+  }
+  88%, 100% { transform: translateX(calc(var(--wbc-marquee-distance, 0px) * -1)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-chat-group-content,
+  .wbc-chat-group-chevron svg,
+  .wbc-chat-group-leading-chevron svg,
+  .wbc-chat-running-spinner,
+  .wbc-hover-marquee.overflow:hover .wbc-hover-marquee-track,
+  .wbc-hover-marquee.overflow:focus-within .wbc-hover-marquee-track,
+  .wbc-hover-marquee.overflow.auto .wbc-hover-marquee-track,
+  .wbc-chat-card:hover .wbc-hover-marquee.overflow .wbc-hover-marquee-track,
+  .wbc-chat-card:focus-visible .wbc-hover-marquee.overflow .wbc-hover-marquee-track,
+  .workbench-session-tab:hover .wbc-hover-marquee.overflow .wbc-hover-marquee-track,
+  .workbench-session-tab:focus-visible .wbc-hover-marquee.overflow .wbc-hover-marquee-track {
+    transition: none;
+    animation: none;
+  }
+
+  .wbc-rail .wbc-chat-card.agent-flow::after {
+    animation: none;
+    background: color-mix(in srgb, var(--wb-accent) 36%, transparent);
+    opacity: .62;
+  }
+
+  .wbc-composer-box.agent-flow::before {
+    animation: none !important;
+    background: color-mix(in srgb, var(--wb-accent) 44%, transparent) !important;
+    opacity: .72 !important;
+  }
+}
+
+.wbc-running-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--wb-green);
+  animation: wbc-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes wbc-pulse {
+  50% { opacity: 0.35; }
+}
+
+/* ---- main column ---- */
+
+.wbc-main {
+  position: relative;
+  /* The cards, composer and floating browser own their local stacking layers. */
+  z-index: auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+  background: transparent;
+  overflow: visible;
+}
+
+/* A detail split owns the neighbouring track. Keep the main conversation's
+   paint and intrinsic content inside its assigned grid cell instead of letting
+   long messages or the composer extend underneath the split overlay. */
+.wbc-page.side-agent-split-open > .wbc-main {
+  overflow: hidden;
+}
+
+.wbc-side-agent-split-motion {
+  position: absolute;
+  z-index: 44;
+  top: 0;
+  bottom: 0;
+  /* Both anchors are concrete left values (see --wbc-motion-left on the
+     page), so an anchored-side swap interpolates continuously instead of
+     jumping between auto and a length. */
+  left: var(--wbc-motion-left, calc(100% - var(--wbc-side-track-width)));
+  width: var(--wbc-side-track-width);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateX(100%);
+  pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    transform 500ms cubic-bezier(.22, 1.16, .36, 1),
+    /* Anchored-side swap glides the panel across with the same elastic
+       curve as the grid, so it stays glued to the conversation lane. */
+    left 500ms cubic-bezier(.22, 1.16, .36, 1);
+  will-change: transform, opacity;
+}
+
+.wbc-side-agent-split-motion.open {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+/* Two-level card workspace. Every actual content surface owns its border and
+   grip; columns may contain one card or a single adjustable top/bottom pair. */
+.wbc-pane-layout {
+  position: relative;
+  z-index: 44;
+  grid-column: 3;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  box-sizing: border-box;
+  display: grid;
+  gap: 12px;
+  /* Reclaim 4px from the oversized rail-to-conversation gap while leaving the
+     rail itself on the same position and width as every other module. */
+  padding: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter) calc(var(--wbc-card-gutter) - 4px);
+  overflow: hidden;
+  /* Track sizing is layout work, so it should converge monotonically. The
+     lightweight card transform below carries the visible elastic overshoot
+     without forcing the transcript and composer to reflow backwards. */
+  transition: grid-template-columns 380ms cubic-bezier(.22, 1, .36, 1);
+}
+
+.wbc-pane-layout.split {
+  padding-right: var(--wbc-card-gutter);
+  grid-column: 2 / 5;
+  --wbc-pane-column-floor: min(380px, calc((100% - 12px) / 2));
+  --wbc-pane-right-used: clamp(
+    var(--wbc-pane-column-floor),
+    var(--wbc-pane-right-width, 520px),
+    calc(100% - 12px - var(--wbc-pane-column-floor))
+  );
+  grid-template-columns:
+    minmax(var(--wbc-pane-column-floor), 1fr)
+    12px
+    var(--wbc-pane-right-used);
+  gap: 0;
+}
+
+.wbc-pane-layout.split > .wbc-pane-column.left { grid-column: 1; }
+.wbc-pane-layout.split > .wbc-pane-column.right { grid-column: 3; }
+.wbc-pane-layout.split > .wbc-pane-column { grid-row: 1; }
+
+.wbc-pane-layout.single {
+  /* Keep the same three-track shape as the split state. Grid tracks with a
+     different count switch discretely; matching them lets Chromium animate
+     the new column in one continuous layout pass. */
+  grid-template-columns: minmax(0, 1fr) 0px 0px;
+  gap: 0;
+}
+
+/* A single pane column can still contain a top/bottom split. Once that card
+   workspace is active the docked conversation panel is not rendered. Collapse
+   its track to zero so the existing page-level grid-template-columns spring
+   expands the pane into that space (and reverses when the panel returns),
+   rather than jumping the pane discretely across grid columns. */
+.wbc-page.wbc-pane-single-column-open {
+  --wbc-side-track-width: 0px;
+}
+
+.wbc-page.side-agent-split-open > .wbc-pane-layout.single {
+  padding-right: var(--wbc-card-gutter);
+}
+
+/* Files opened without an active conversation are a project workspace, not a
+   conversation split. Collapse the unused context track and let a single file
+   card span the complete canvas to the right of the project rail. Keeping the
+   usual four grid tracks avoids a track-count jump when a conversation opens. */
+.wbc-page.wbc-project-pane-only {
+  --wbc-side-track-width: 0px;
+  grid-template-columns:
+    var(--wbc-rail-width)
+    0px
+    minmax(0, 1fr)
+    0px;
+}
+
+/* The normal hidden-side responsive rule is declared later and has the same
+   specificity. This extra selector keeps the project workspace on the stable
+   four-track geometry even when the context panel had already been hidden. */
+.wbc-page.wbc-side-hidden.wbc-project-pane-only {
+  grid-template-columns:
+    var(--wbc-rail-width)
+    0px
+    minmax(0, 1fr)
+    0px;
+}
+
+.wbc-page.wbc-project-pane-only > .wbc-pane-layout.single {
+  grid-column: 2 / 5;
+  padding-right: var(--wbc-card-gutter);
+}
+
+.wbc-page.wbc-side-hidden > .wbc-pane-layout.single {
+  padding-right: var(--wbc-card-gutter);
+}
+
+.wbc-page.wbc-project-pane-only > .wbc-side {
+  display: none;
+}
+
+/* A task opened from Work is still a project-owned workspace, but unlike a
+   bare file it has a real detail inspector. Reuse the conversation page's
+   fourth track so hide/show and width resizing follow the same geometry. */
+.wbc-page.wbc-project-pane-only.wbc-project-task-pane {
+  /* Restore the same responsive dock width used by a conversation. The
+     project-only base collapses this track for bare files, while tasks own a
+     real inspector. */
+  --wbc-side-track-width: var(--wbc-docked-side-open-width);
+  grid-template-columns:
+    var(--wbc-rail-width)
+    0px
+    minmax(var(--wbc-main-min-width), 1fr)
+    var(--wbc-side-track-width);
+}
+
+.wbc-page.wbc-side-hidden.wbc-project-pane-only.wbc-project-task-pane {
+  --wbc-side-track-width: 0px;
+  grid-template-columns:
+    var(--wbc-rail-width)
+    0px
+    minmax(0, 1fr)
+    0px;
+}
+
+.wbc-page.wbc-project-pane-only.wbc-project-task-pane > .wbc-pane-layout.single {
+  grid-column: 2 / 4;
+  padding-right: 0;
+  transition:
+    grid-template-columns 380ms cubic-bezier(.22, 1, .36, 1),
+    padding-right var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
+}
+
+.wbc-page.wbc-side-hidden.wbc-project-pane-only.wbc-project-task-pane > .wbc-pane-layout.single {
+  /* Keep the same grid lines while the inspector track collapses. Changing
+     the end line to 5 is a discrete layout jump, which made the task canvas
+     appear to snap closed even though the page grid itself was animating. */
+  grid-column: 2 / 4;
+  padding-right: var(--wbc-card-gutter);
+}
+
+.wbc-page.wbc-project-task-pane:not(.wbc-project-pane-only) > .wbc-pane-layout.single {
+  grid-column: 3;
+  padding-right: 0;
+}
+
+.wbc-page > .wbc-task-context-panel {
+  grid-column: 4;
+  grid-row: 1;
+  height: 100%;
+  padding: var(--wbc-card-top-inset) var(--wbc-card-gutter) var(--wbc-card-gutter);
+  border: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.wbc-page > .wbc-task-context-panel > .wb-task-detail-card {
+  width: 100%;
+  max-height: calc(100vh - var(--wbc-card-top-inset) - var(--wbc-card-gutter));
+  background: var(--wbc-panel-surface);
+}
+
+.wbc-pane-column {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  gap: 12px;
+  overflow: visible;
+  transition: grid-template-rows 360ms cubic-bezier(.22, 1, .36, 1);
+}
+
+.wbc-pane-card {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  isolation: isolate;
+  border: var(--wb-floating-rail-border);
+  border-radius: var(--wb-floating-rail-radius);
+  background: var(--wbc-panel-surface);
+  box-shadow: var(--wb-floating-rail-shadow);
+  -webkit-backdrop-filter: blur(18px) saturate(112%);
+  backdrop-filter: blur(18px) saturate(112%);
+  animation: wbc-pane-card-settle 360ms cubic-bezier(.22, 1.16, .36, 1) both;
+  backface-visibility: hidden;
+}
+
+@keyframes wbc-pane-card-settle {
+  0% { opacity: 0; transform: translate3d(0, 10px, 0); }
+  72% { opacity: 1; transform: translate3d(0, -1px, 0); }
+  100% { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+/* A side split is born from a horizontal drop target, so its first movement
+   must continue in that same direction.  The generic vertical settle made a
+   rail chat appear to blink into the destination after the outer grid had
+   already started compressing.  Match the grid's spring and let the new card
+   travel in from its anchored edge instead. */
+.wbc-pane-layout.split > .wbc-pane-column.right > .wbc-pane-card {
+  transform-origin: right center;
+  animation: wbc-pane-card-settle-from-right 400ms cubic-bezier(.22, 1.16, .36, 1) both;
+}
+
+@keyframes wbc-pane-card-settle-from-right {
+  0% { opacity: 0; transform: translate3d(20px, 0, 0); }
+  68% { opacity: 1; transform: translate3d(-2px, 0, 0); }
+  100% { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+.wbc-pane-card > .wbc-main,
+.wbc-pane-card > .wbc-side-agent-split {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  box-shadow: none;
+}
+
+.wbc-pane-card > .wbc-side-agent-split {
+  padding-top: 34px;
+}
+
+/* The pane frame's 34px grip band already provides the complete gap above
+   resource headers. Remove the header's generic 12px top margin for viewer
+   cards so the 4px handle sits optically centred between the frame edge and
+   the header card (15px of clear space on either side). */
+.wbc-pane-card > .wbc-artifact-split > .wbc-side-agent-split-head {
+  margin-top: 0;
+}
+
+/* Browser splits wrap their header in the tab-picker host, so the direct
+   resource-header rule above does not reach them. Remove the same generic
+   12px top margin here; the shared 34px grip band already owns that space. */
+.wbc-pane-card > .wbc-browser-split > .wbc-resource-split-picker-wrap > .wbc-side-agent-split-head {
+  margin-top: 0;
+}
+
+.wbc-pane-card > .wbc-side-agent-split.wbc-conversation-split {
+  padding-top: 34px;
+}
+
+.wbc-pane-card .wbc-thread-stage {
+  --wbc-thread-inset-top: 36px;
+  width: 100%;
+  left: 0;
+}
+
+.wbc-pane-card .wbc-main > .wbc-composer {
+  width: 100%;
+  transform: none;
+}
+
+.wbc-pane-card-grip,
+.wbc-pane-card .wbc-split-panel-grip {
+  position: absolute;
+  z-index: 1202;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 34px;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+.wbc-pane-card .wbc-split-panel-grip {
+  top: 0;
+}
+
+.wbc-pane-card .wbc-split-chat-panel {
+  top: 38px;
+  max-height: calc(100% - 50px);
+}
+
+.wbc-pane-card .wbc-side-split-grip-bar-visual {
+  width: 52px;
+}
+
+.wbc-pane-context-drop-host {
+  position: relative;
+  z-index: 3100;
+  grid-column: 3 / 5;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 0;
+  margin: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter);
+  pointer-events: none;
+}
+
+.wbc-pane-context-drop-host > .wbc-pane-card-drop-layer {
+  pointer-events: auto;
+}
+
+.wbc-pane-card-drop-layer.context-tracks {
+  grid-template-columns: minmax(0, 1fr) var(--wbc-side-track-width);
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+}
+
+.wbc-pane-context-drop-sensor {
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  min-height: 0;
+}
+
+.wbc-pane-context-drop-sensor.top {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.wbc-pane-context-drop-sensor.left {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.wbc-pane-context-drop-sensor.right {
+  grid-column: 2;
+  grid-row: 1 / 4;
+}
+
+.wbc-pane-context-drop-sensor.bottom {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.wbc-pane-card-drop-zone.context-preview {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.wbc-pane-card-drop-zone.context-preview.top {
+  grid-column: 1;
+  grid-row: 1;
+  margin-left: calc(var(--wbc-card-gutter) - 4px);
+  border-radius: 17px 17px 8px 8px;
+}
+
+.wbc-pane-card-drop-zone.context-preview.left {
+  grid-column: 1;
+  grid-row: 2;
+  margin-left: calc(var(--wbc-card-gutter) - 4px);
+  border-radius: 8px;
+}
+
+.wbc-pane-card-drop-zone.context-preview.right {
+  grid-column: 2;
+  grid-row: 1 / 4;
+  margin-right: var(--wbc-card-gutter);
+  margin-left: var(--wbc-card-gutter);
+  border-radius: 8px 17px 17px 8px;
+}
+
+.wbc-pane-card-drop-zone.context-preview.bottom {
+  grid-column: 1;
+  grid-row: 3;
+  margin-left: calc(var(--wbc-card-gutter) - 4px);
+  border-radius: 8px 8px 17px 17px;
+}
+
+.wbc-pane-card-drop-layer {
+  position: absolute;
+  z-index: 3000;
+  inset: 0;
+  display: grid;
+  grid-template-rows: 1fr minmax(64px, .58fr) 1fr;
+  pointer-events: auto;
+}
+
+.wbc-pane-card-drop-layer.replace-only {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.wbc-pane-card-drop-layer.axis-enabled {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+}
+
+.wbc-pane-card-axis-sensor {
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  min-height: 0;
+}
+
+.wbc-pane-card-axis-sensor.top {
+  grid-column: 1 / 4;
+  grid-row: 1;
+}
+
+.wbc-pane-card-axis-sensor.left {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.wbc-pane-card-axis-sensor.replace {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.wbc-pane-card-axis-sensor.right {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.wbc-pane-card-axis-sensor.bottom {
+  grid-column: 1 / 4;
+  grid-row: 3;
+}
+
+.wbc-pane-card-drop-zone.axis-preview {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.wbc-pane-card-drop-zone.axis-preview.top {
+  inset: 0 0 66.6667%;
+  border-radius: 17px 17px 8px 8px;
+}
+
+.wbc-pane-card-drop-zone.axis-preview.left {
+  inset: 0 50% 0 0;
+  border-radius: 17px 8px 8px 17px;
+}
+
+.wbc-pane-card-drop-zone.axis-preview.replace {
+  inset: 33.3333% 0;
+  border-radius: 8px;
+}
+
+.wbc-pane-card-drop-zone.axis-preview.right {
+  inset: 0 0 0 50%;
+  border-radius: 8px 17px 17px 8px;
+}
+
+.wbc-pane-card-drop-zone.axis-preview.bottom {
+  inset: 66.6667% 0 0;
+  border-radius: 8px 8px 17px 17px;
+}
+
+.wbc-pane-card-drop-zone {
+  position: relative;
+  display: grid;
+  place-items: center;
+  border: 2px solid transparent;
+  background: transparent;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease;
+}
+
+.wbc-pane-card-drop-zone.top { border-radius: 17px 17px 8px 8px; }
+.wbc-pane-card-drop-zone.left { border-radius: 8px 4px 4px 8px; }
+.wbc-pane-card-drop-zone.replace { border-radius: 8px; }
+.wbc-pane-card-drop-zone.right { border-radius: 4px 8px 8px 4px; }
+.wbc-pane-card-drop-zone.bottom { border-radius: 8px 8px 17px 17px; }
+.wbc-pane-card-drop-layer.replace-only .wbc-pane-card-drop-zone.replace { border-radius: 17px; }
+
+.wbc-pane-card-drop-zone.active {
+  z-index: 1;
+  border-color: color-mix(in srgb, var(--wb-accent) 72%, transparent);
+  background: color-mix(in srgb, var(--wb-accent) 13%, var(--wb-card-bg));
+}
+
+.wbc-pane-card-drop-zone span {
+  padding: 8px 12px;
+  max-width: min(340px, calc(100% - 32px));
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 52%, var(--wb-line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 92%, transparent);
+  color: var(--wb-text);
+  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.2);
+  white-space: nowrap;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  opacity: 0;
+  transform: translateY(4px) scale(.96);
+  transition: opacity 140ms ease, transform 360ms cubic-bezier(.22, 1.16, .36, 1);
+}
+
+.wbc-pane-card-drop-zone.active span {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+/* A vertical pair can be pulled apart into left/right columns. This overlay
+   uses the same material and activation motion as the card-local drop zones,
+   but spans the whole workspace so the axis change is explicit. */
+.wbc-pane-axis-drop-layer {
+  position: absolute;
+  z-index: 3050;
+  inset: var(--wbc-card-top-inset) var(--wbc-card-gutter) var(--wbc-card-gutter)
+    calc(var(--wbc-card-gutter) - 4px);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.wbc-pane-axis-drop-zone {
+  position: relative;
+  display: grid;
+  place-items: center;
+  border: 2px solid transparent;
+  border-radius: var(--wb-floating-rail-radius);
+  background: transparent;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.wbc-pane-axis-drop-zone.active {
+  border-color: color-mix(in srgb, var(--wb-accent) 68%, transparent);
+  background: color-mix(in srgb, var(--wb-accent) 13%, transparent);
+}
+
+.wbc-pane-axis-drop-zone span {
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 34%, var(--wb-line));
+  border-radius: 999px;
+  background: var(--wb-card-bg-strong);
+  color: var(--wb-text);
+  box-shadow: var(--wb-shadow-sm);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  opacity: 0;
+  transform: translateY(4px) scale(.96);
+  transition: opacity 140ms ease, transform 360ms cubic-bezier(.22, 1.16, .36, 1);
+}
+
+.wbc-pane-axis-drop-zone.active span {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.wbc-pane-row-resizer,
+.wbc-pane-column-resizer {
+  position: absolute;
+  z-index: 2600;
+  outline: none;
+  touch-action: none;
+}
+
+.wbc-pane-row-resizer {
+  right: 0;
+  left: 0;
+  height: 12px;
+  margin-top: -6px;
+  cursor: row-resize;
+}
+
+.wbc-pane-column-resizer {
+  position: relative;
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  width: 12px;
+  height: 88px;
+  cursor: col-resize;
+}
+
+.wbc-pane-row-resizer::after,
+.wbc-pane-column-resizer::after {
+  content: "";
+  position: absolute;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-text) 18%, transparent);
+  transition: background-color 150ms ease, transform 360ms cubic-bezier(.22, 1.16, .36, 1);
+}
+
+.wbc-pane-row-resizer::after {
+  top: 4px;
+  right: calc(50% - 30px);
+  width: 60px;
+  height: 4px;
+}
+
+.wbc-pane-column-resizer::after {
+  top: calc(50% - 30px);
+  left: 4px;
+  width: 4px;
+  height: 60px;
+}
+
+.wbc-pane-row-resizer:hover::after,
+.wbc-pane-row-resizer:focus-visible::after,
+.wbc-pane-column-resizer:hover::after,
+.wbc-pane-column-resizer:focus-visible::after {
+  background: var(--wb-accent);
+  transform: scale(1.08);
+}
+
+body.wbc-resizing-pane-row,
+body.wbc-resizing-pane-row *,
+body.wbc-resizing-pane-column,
+body.wbc-resizing-pane-column * {
+  user-select: none !important;
+}
+
+body.wbc-resizing-pane-row,
+body.wbc-resizing-pane-row * { cursor: row-resize !important; }
+body.wbc-resizing-pane-column,
+body.wbc-resizing-pane-column * { cursor: col-resize !important; }
+
+body.wbc-resizing-pane-row .wbc-pane-column,
+body.wbc-resizing-pane-column .wbc-pane-layout {
+  transition: none;
+}
+
+.wbc-pane-floating-conversation-panel {
+  position: absolute;
+  z-index: 3200;
+  top: 38px;
+  left: 50%;
+  width: min(var(--wb-right-w, 350px), calc(100% - 32px));
+  transform: translateX(-50%);
+  pointer-events: none;
+  animation: wbc-floating-side-panel-in 360ms cubic-bezier(.22, 1.16, .36, 1) both;
+}
+
+.wbc-pane-floating-conversation-panel > .wbc-side-floating {
+  position: relative;
+  width: 100%;
+  height: auto;
+  display: block;
+  padding: 0;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: none;
+}
+
+/* A conversation opened from the split panel changes React ownership while it
+   travels directly to the left/main track. JS swaps the two track widths in
+   the same commit, making the source and destination rectangles equal-sized;
+   the View Transition therefore carries the entire pane as a rigid horizontal
+   translation. Root snapshots stay still. */
+html.wbc-split-view-transition::view-transition-old(root),
+html.wbc-split-view-transition::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+html.wbc-split-view-transition::view-transition-group(wbc-promoted-conversation),
+html.wbc-split-view-transition::view-transition-old(wbc-promoted-conversation),
+html.wbc-split-view-transition::view-transition-new(wbc-promoted-conversation) {
+  animation-duration: 380ms;
+  /* Symmetric curve: reversing the endpoints produces the same motion path. */
+  animation-timing-function: cubic-bezier(.4, 0, .6, 1);
+  mix-blend-mode: normal;
+}
+
+/* Move one solid pane instead of cross-fading the source and destination
+   snapshots. The source snapshot is the conversation the user is watching;
+   its transition group carries that whole pane between the two rectangles.
+   The destination DOM is revealed only when the move completes. Applying the
+   same rule in both directions makes close the literal reverse of open. */
+html.wbc-split-view-transition::view-transition-old(wbc-promoted-conversation) {
+  animation-name: none;
+  opacity: 1;
+}
+
+html.wbc-split-view-transition::view-transition-new(wbc-promoted-conversation) {
+  animation-name: none;
+  opacity: 0;
+}
+
+/* The two supporting surfaces are time-reversed as well: opening fades the
+   previous main conversation out while the resource enters; closing fades the
+   resource out while that conversation returns. */
+html.wbc-split-view-transition-opening::view-transition-old(wbc-displaced-conversation),
+html.wbc-split-view-transition-opening::view-transition-new(wbc-promoted-resource),
+html.wbc-split-view-transition-closing::view-transition-old(wbc-promoted-resource),
+html.wbc-split-view-transition-closing::view-transition-new(wbc-displaced-conversation) {
+  animation-duration: 240ms;
+  animation-timing-function: cubic-bezier(.4, 0, .6, 1);
+  animation-fill-mode: both;
+  mix-blend-mode: normal;
+}
+
+html.wbc-split-view-transition-opening::view-transition-old(wbc-displaced-conversation),
+html.wbc-split-view-transition-closing::view-transition-old(wbc-promoted-resource) {
+  animation-name: wbc-split-surface-out;
+}
+
+html.wbc-split-view-transition-opening::view-transition-new(wbc-promoted-resource),
+html.wbc-split-view-transition-closing::view-transition-new(wbc-displaced-conversation) {
+  animation-name: wbc-split-surface-in;
+}
+
+@keyframes wbc-split-surface-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes wbc-split-surface-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.wbc-split-view-transition::view-transition-group(wbc-promoted-conversation),
+  html.wbc-split-view-transition::view-transition-old(wbc-promoted-conversation),
+  html.wbc-split-view-transition::view-transition-new(wbc-promoted-conversation),
+  html.wbc-split-view-transition::view-transition-old(wbc-displaced-conversation),
+  html.wbc-split-view-transition::view-transition-new(wbc-displaced-conversation),
+  html.wbc-split-view-transition::view-transition-old(wbc-promoted-resource),
+  html.wbc-split-view-transition::view-transition-new(wbc-promoted-resource) {
+    animation: none;
+  }
+}
+
+.wbc-side-agent-split-resizer {
+  position: absolute;
+  /* Above the conversation-split grip band so its full height stays a
+     resize surface; the grip only captures the rest of the band. */
+  z-index: 43;
+  top: 58px;
+  bottom: 0;
+  left: 0;
+  width: 10px;
+  outline: none;
+  cursor: col-resize;
+  touch-action: none;
+}
+/* On the left side the divider (and thus the resize handle) faces the
+   conversation column. */
+.wbc-page.wbc-split-left .wbc-side-agent-split-resizer {
+  left: auto;
+  right: 0;
+}
+
+.wbc-side-agent-split-resizer:focus-visible {
+  box-shadow: inset 2px 0 color-mix(in srgb, var(--wb-accent) 55%, transparent);
+}
+
+body.wbc-resizing-side-agent,
+body.wbc-resizing-side-agent * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+body.wbc-resizing-side-agent .wbc-page {
+  transition: none;
+}
+
+/* Resizing is a direct manipulation: remove every width-dependent easing so
+   the split edge and the bottom composer stay under the pointer. The normal
+   open/close and side-swap motion resumes as soon as the pointer is released. */
+body.wbc-resizing-side-agent .wbc-side-agent-split-motion,
+body.wbc-resizing-side-agent .wbc-split-main-grip,
+body.wbc-resizing-side-agent .wbc-thread-stage,
+body.wbc-resizing-side-agent .wbc-main > .wbc-composer {
+  transition: none;
+}
+
+/* Lock the split's outside edge while its conversation-facing divider moves.
+   Using a physical anchor during direct manipulation avoids recomputing both
+   left and width from the same variable, which can expose subpixel drift. */
+body.wbc-resizing-side-agent .wbc-page:not(.wbc-split-left) .wbc-side-agent-split-motion {
+  right: 0;
+  left: auto;
+}
+
+body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-motion {
+  right: auto;
+  left: var(--wbc-rail-width);
+}
+
+.wbc-side-agent-split {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  /* Content splits no longer carry their own grip; only clear the fixed
+     application top bar. */
+  padding-top: 58px;
+  overflow: hidden;
+  border-left: 1px solid var(--wb-line);
+  background: var(--wb-right-bg, var(--wb-surface, #f5f6f8));
+  box-shadow: -12px 0 30px rgba(15, 23, 42, 0.055);
+}
+/* Conversation splits (side questions, split chats) carry their own top grip:
+   58px app bar + a 26px grip band, with the header's 12px margin below. */
+.wbc-side-agent-split.wbc-conversation-split {
+  position: relative;
+  padding-top: 72px;
+}
+
+/* The panel grip strip: same pill as the main-conversation grip, anchored to
+   the conversation split's top band so the panel can be lifted from its own
+   edge (native drag onto the rail/side zones) or clicked for its menu. */
+.wbc-split-panel-grip {
+  position: absolute;
+  z-index: 42;
+  top: 58px;
+  left: 0;
+  right: 0;
+  height: 26px;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+/* The split chat's own floating conversation panel: opened from the panel
+   grip menu, it floats over the split transcript and reuses the exact
+   conversation-panel component (WbcSide) with this chat's own data. It mirrors
+   the main grip's floating panel — same width and padding, content-sized
+   height capped by the same card budget, opaque card, entrance animation,
+   non-blocking shell. */
+.wbc-split-chat-panel {
+  position: absolute;
+  z-index: 1190;
+  top: 88px;
+  left: 50%;
+  width: min(var(--wb-right-w, 350px), calc(100% - 24px));
+  transform: translateX(-50%);
+  max-height: calc(100% - 100px);
+  box-sizing: border-box;
+  overflow: visible;
+  pointer-events: none;
+  animation: wbc-floating-side-panel-in 170ms cubic-bezier(.2, .8, .2, 1) both;
+}
+.wbc-split-chat-panel .wbc-side {
+  padding: 0;
+  box-sizing: border-box;
+}
+.wbc-split-chat-panel .wbc-side-card {
+  max-height: calc(100vh - 104px);
+  background: var(--wb-card-bg);
+}
+
+/* ── Detail split anchored to the LEFT side of the conversation ─────────────
+   The grid grows a dedicated split track between rail and main; the split
+   overlay then sticks to the rail edge instead of the window edge. The right
+   panel track collapses to 0 so the conversation lane keeps the same width on
+   both anchored sides (and the grid never overflows on narrow windows). */
+.wbc-page.wbc-split-left {
+  grid-template-columns: var(--wbc-rail-width) var(--wbc-side-track-width) minmax(var(--wbc-main-min-width), 1fr) 0px;
+  /* The overlay panel sits in the reserved second track; a concrete length
+     on both anchors keeps the swap animation continuous. */
+  --wbc-motion-left: var(--wbc-rail-width);
+}
+/* The left layout inserts the split track between rail and main, so the DOM
+   order (rail, main, side) no longer matches the track order. Pin each column
+   explicitly or auto-placement would drop main into the split track. */
+.wbc-page.wbc-split-left > .wbc-rail { grid-column: 1; }
+.wbc-page.wbc-split-left > .wbc-main { grid-column: 3; }
+.wbc-page.wbc-split-left > .wbc-side { grid-column: 4; }
+/* The divider (and shadow) sit on the side that faces the conversation. */
+.wbc-page.wbc-split-left .wbc-side-agent-split {
+  border-left: 0;
+  border-right: 1px solid var(--wb-line);
+  box-shadow: 12px 0 30px rgba(15, 23, 42, 0.055);
+}
+
+/* ── Main-conversation grip ─────────────────────────────────────────────── */
+.wbc-split-grip-bar-host {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+/* The horizontal bar uses pointer capture so its drag continues beyond the
+   BrowserWindow boundary; click still opens the menu. */
+.wbc-side-split-grip-bar {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-app-region: no-drag;
+  border-radius: 6px;
+}
+.wbc-side-split-grip-bar:active {
+  cursor: grabbing;
+}
+.wbc-split-main-grip:hover .wbc-side-split-grip-bar,
+.wbc-split-panel-grip:hover .wbc-side-split-grip-bar,
+.wbc-side-split-grip-bar:focus-visible {
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 26%, transparent);
+}
+.wbc-side-split-grip-bar:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--wb-accent) 55%, transparent);
+}
+.wbc-side-split-grip-bar-visual {
+  width: 56px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--wb-text) 22%, transparent);
+  pointer-events: none;
+  transition: width .14s ease, background .14s ease;
+}
+.wbc-side-split-grip-bar:hover .wbc-side-split-grip-bar-visual,
+.wbc-side-split-grip-bar:focus-visible .wbc-side-split-grip-bar-visual {
+  width: 72px;
+  background: var(--wb-accent);
+}
+/* Menu opened by clicking the bar: restore the conversation panel, swap the
+   split side, or close. Anchor it to the grip's center on both columns. */
+.wbc-side-split-grip-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1200;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--wb-flyout-border);
+  border-radius: var(--wb-flyout-radius);
+  background: var(--wb-flyout-bg);
+  box-shadow: var(--wb-flyout-shadow);
+}
+.wbc-side-split-grip-menu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-text);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  text-align: left;
+  cursor: pointer;
+}
+.wbc-side-split-grip-menu button:hover {
+  background: var(--wb-row-hover-bg);
+}
+.wbc-side-split-grip-menu button > span:first-child {
+  display: inline-flex;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--wb-muted);
+}
+
+.wbc-side-split-grip-menu button > span:first-child svg {
+  display: block;
+  flex: 0 0 auto;
+}
+
+/* Mirror grip on the conversation column's top edge: reposition the split
+   from either side of the page. Positioned with the same CSS variables as the
+   grid tracks, so it stays centred live while the split animates or resizes
+   (no JS rect measurement, which would lag a frame behind). */
+.wbc-split-main-grip {
+  position: absolute;
+  z-index: 42;
+  top: 58px;
+  height: 26px;
+  box-sizing: border-box;
+  user-select: none;
+  /* Default (right-anchored): from the rail's right edge to the split's left. */
+  left: var(--wbc-rail-width);
+  right: var(--wbc-side-track-width);
+  /* Follows the elastic side swap with the grid, not a jump. */
+  transition: left 500ms cubic-bezier(.22, 1.16, .36, 1), right 500ms cubic-bezier(.22, 1.16, .36, 1);
+}
+.wbc-page.wbc-split-left .wbc-split-main-grip {
+  left: calc(var(--wbc-rail-width) + var(--wbc-side-track-width));
+  right: 0;
+}
+
+/* The existing conversation panel is reused as an anchored floating card
+   while a content split occupies the side track. Because it is rendered as a
+   child of the main grip, 50% is always the exact grip/conversation centre on
+   either split side. */
+.wbc-split-main-grip > .wbc-side-floating {
+  position: absolute;
+  z-index: 1190;
+  top: calc(100% + 4px);
+  left: 50%;
+  width: min(var(--wb-right-w, 350px), calc(100% - 24px));
+  height: auto;
+  display: block;
+  box-sizing: border-box;
+  padding: 0;
+  transform: translateX(-50%);
+  overflow: visible;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: none;
+  animation: wbc-floating-side-panel-in 170ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.wbc-side-floating > [class~="wbc-side-card"] {
+  max-height: calc(100vh - 104px);
+}
+/* The floating conversation panel floats over live conversation content, so
+   its card must stay opaque — the docked panel reads as a solid white card
+   because it sits on a plain surface, and a translucent float would show the
+   transcript through it. */
+.wbc-split-main-grip > .wbc-side-floating .wbc-side-card {
+  background: var(--wb-card-bg);
+}
+
+.wbc-side-floating .wbc-side-floating-close svg {
+  width: 18px;
+  height: 18px;
+}
+
+@keyframes wbc-floating-side-panel-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-5px) scale(.985); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+}
+
+/* ── Split panel native drag drop zones ─────────────────────────────────────
+   While the grip is dragged, these zones sit over the conversation rail
+   (drop = close the split) and over the main column, split into halves
+   (drop = anchor the split to that side). Positioned with the same CSS
+   variables as the grid tracks, so they match the layout live. They are
+   pure visual: hit testing stays on the layers below, and the zone logic
+   runs document-level from pointer coordinates — an interactive overlay on
+   top of the drag source would make Chromium cancel the drag. */
+.wbc-split-drop-zones {
+  position: absolute;
+  z-index: 60;
+  inset: 0;
+  pointer-events: none;
+}
+/* Every highlight uses the width of the conversation pane under the dragged
+   grip. Main and split panes can have different widths, so a fixed split-track
+   width would preview the wrong landing footprint for the main grip. */
+.wbc-split-drop-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--wbc-split-drop-width, var(--wbc-side-track-width));
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  transition: background 120ms ease, left 500ms cubic-bezier(.22, 1.16, .36, 1);
+}
+/* Hints light up only while their zone is under the pointer. */
+.wbc-split-drop-zone .wbc-chat-side-drop-hint {
+  display: none;
+}
+.wbc-split-drop-zone.active .wbc-chat-side-drop-hint {
+  display: block;
+}
+.wbc-split-drop-zone.active {
+  background: color-mix(in srgb, var(--wb-accent) 8%, transparent);
+}
+/* Left anchor preview: flush against the rail's right edge. */
+.wbc-split-drop-left {
+  left: var(--wbc-rail-width);
+}
+/* Right anchor preview: flush against the window's right edge. */
+.wbc-split-drop-right {
+  left: calc(100% - var(--wbc-split-drop-width, var(--wbc-side-track-width)));
+}
+/* Close preview follows the dragged conversation's current side. This is the
+   split anchor for its grip, but the opposite anchor for the main grip. */
+.wbc-split-drop-rail {
+  left: calc(100% - var(--wbc-split-drop-width, var(--wbc-side-track-width)));
+}
+.wbc-split-drop-zones[data-conversation-side="left"] .wbc-split-drop-rail {
+  left: var(--wbc-rail-width);
+}
+
+/* Project files use the same shared viewer as message attachments. During a
+   drag, preview the two possible viewer anchors without intercepting native
+   hit testing (the page handles the actual drop). */
+.wbc-resource-file-drop-zones {
+  position: absolute;
+  z-index: 60;
+  top: 58px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.wbc-resource-file-drop-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  border: 2px solid transparent;
+  background: transparent;
+  transition: border-color 120ms ease;
+}
+
+.wbc-resource-file-drop-zone.active {
+  border-color: color-mix(in srgb, var(--wb-accent) 72%, transparent);
+  background: transparent;
+}
+
+.wbc-resource-file-drop-zone .wbc-chat-side-drop-hint {
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, -50%) scale(.96);
+  transition:
+    opacity 120ms ease,
+    transform 360ms cubic-bezier(.22, 1.16, .36, 1),
+    visibility 0s linear 120ms;
+}
+
+.wbc-resource-file-drop-zone.active .wbc-chat-side-drop-hint {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, -50%) scale(1);
+  transition-delay: 0s;
+}
+
+/* ── Split panel drag ghost ─────────────────────────────────────────────────
+   The native ghost is hidden; this fixed overlay follows the pointer and
+   carries a clone of the real split panel, so the lifted "thing" reads as
+   the actual dialog. Over the conversation rail it switches to a clone of
+   the matching rail card, as if the conversation itself were being picked
+   up from the list. Size and position are set by JS (panel/card rect +
+   grab offset). */
+.wbc-split-drag-ghost {
+  position: fixed;
+  z-index: 90;
+  box-sizing: border-box;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 72%, transparent);
+  background: var(--wb-main-bg);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 6px 18px rgba(15, 23, 42, 0.08);
+  opacity: 0.92;
+  overflow: hidden;
+  pointer-events: none;
+  transition: width 160ms ease, height 160ms ease, border-radius 160ms ease;
+}
+.wbc-split-drag-ghost > * {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+/* The source panes reserve room for the fixed app bar and split grip. The
+   detached preview has neither, so carrying those insets into the clone
+   exposes a blank light strip above the conversation. */
+.wbc-split-drag-ghost > .wbc-main {
+  --wbc-thread-inset-top: 24px;
+}
+.wbc-split-drag-ghost > .wbc-conversation-split {
+  padding-top: 0;
+}
+.wbc-split-drag-ghost .wbc-split-panel-grip {
+  display: none;
+}
+.wbc-split-drag-ghost > .wbc-chat-card {
+  display: none;
+}
+.wbc-split-drag-ghost.card {
+  border-radius: 12px;
+}
+.wbc-split-drag-ghost.card > *:not(.wbc-chat-card) {
+  display: none;
+}
+.wbc-split-drag-ghost.card > .wbc-chat-card {
+  display: flex;
+}
+
+/* Pane-card grips use a renderer-owned drag preview as well. Keeping the
+   clone outside the live scroll tree prevents Chromium from clipping its
+   native bitmap while JS restores the exact visible conversation viewport. */
+.wbc-pane-card-drag-ghost {
+  position: fixed !important;
+  z-index: 2147483647 !important;
+  margin: 0 !important;
+  opacity: .92;
+  pointer-events: none !important;
+  overflow: visible !important;
+  contain: layout style;
+  will-change: transform, opacity;
+  transform-origin: top left;
+  transition: opacity 72ms cubic-bezier(.4, 0, 1, 1);
+}
+.wbc-pane-card-drag-ghost.releasing {
+  opacity: 0;
+}
+
+.wbc-detached-pane-return-layer {
+  position: absolute;
+  z-index: 2147483646;
+  inset: var(--wbc-card-top-inset) var(--wbc-card-gutter) var(--wbc-card-gutter);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  border: 2px solid color-mix(in srgb, var(--wb-accent) 78%, transparent);
+  border-radius: var(--wb-floating-rail-radius);
+  background: color-mix(in srgb, var(--wb-accent) 16%, transparent);
+  backdrop-filter: blur(8px);
+  animation: wbc-pane-return-in 180ms cubic-bezier(.22, 1.12, .36, 1) both;
+}
+
+.wbc-detached-pane-return-layer > span {
+  padding: 11px 16px;
+  border-radius: 999px;
+  color: var(--wb-text);
+  background: var(--wb-floating-rail-bg);
+  box-shadow: var(--wb-floating-rail-shadow);
+  font-weight: 700;
+}
+
+@keyframes wbc-pane-return-in {
+  from { opacity: 0; transform: scale(.985); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.wbc-pane-card-rail-drag-card {
+  position: absolute;
+  z-index: 2;
+  display: block;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(0, 5px, 0) scale(.97);
+  transform-origin: center;
+  will-change: transform, opacity;
+  transition:
+    opacity 110ms ease,
+    transform 180ms cubic-bezier(.22, 1.08, .36, 1);
+}
+
+.wbc-pane-card-drag-surface {
+  position: absolute !important;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0 !important;
+  opacity: 1;
+  overflow: hidden !important;
+  will-change: transform, opacity;
+  animation: none !important;
+  transition:
+    opacity 90ms ease,
+    transform 150ms cubic-bezier(.22, 1, .36, 1);
+}
+
+/* The preview is mounted under document.body, so it cannot match the
+   Workbench-scoped final composer geometry. Reuse the same current tokens
+   locally to keep only the ghost input aligned with its source. */
+.wbc-pane-card-drag-surface .wbc-main > .wbc-composer {
+  padding:
+    var(--wbc-composer-top-inset)
+    var(--wbc-composer-edge-inset)
+    var(--wbc-composer-edge-inset) !important;
+}
+
+.wbc-pane-card-drag-ghost.rail-card > .wbc-pane-card-drag-surface {
+  opacity: 0;
+  transform: translate3d(0, 3px, 0) scale(.992);
+}
+
+.wbc-pane-card-drag-ghost.rail-card > .wbc-pane-card-rail-drag-card {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+}
+
+/* ── Chat split (rail chat dragged onto the side) ──────────────────────────
+   Uses the same thread-stage + thread structure as the main conversation so
+   the transcript reads identically. */
+.wbc-chat-split {
+  /* Detached chat windows have no `.wbc-page` ancestor. Keep the transcript's
+     bottom runway valid before JS measures the actual composer height. */
+  --wbc-composer-reserve-height: calc(164px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-chat-split-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wbc-chat-split > .wbc-composer,
+.wbc-chat-split > .wbc-composer > :where(.wbc-composer-box) {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.wbc-chat-split > .wbc-composer {
+  position: absolute;
+  z-index: 24;
+  inset: auto 0 0;
+  isolation: isolate;
+  /* Keep the split composer evenly inset from the three visible card edges.
+     The narrower gutter also gives the controls enough horizontal room. */
+  padding:
+    var(--wbc-composer-top-inset, 10px)
+    var(--wbc-composer-edge-inset, 14px)
+    var(--wbc-composer-edge-inset, 14px);
+}
+.wbc-chat-split-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 16px;
+  color: var(--wb-muted);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+}
+
+/* Rail chat held over the right-side split zone: a dedicated drop layer
+   covers the zone (right panel track on wide windows, right-edge band when
+   the panel is hidden on narrow windows) only while a chat drag is in
+   progress, so the rest of the main area keeps its original behaviour. */
+.wbc-chat-side-drop-layer {
+  position: absolute;
+  z-index: 60;
+  top: 58px;
+  bottom: 0;
+  box-sizing: border-box;
+  border: 2px solid transparent;
+  background: transparent;
+  transition: border-color 120ms ease;
+}
+.wbc-chat-side-drop-layer.active {
+  border-color: color-mix(in srgb, var(--wb-accent) 72%, transparent);
+  background: transparent;
+}
+.wbc-chat-side-drop-hint {
+  position: absolute;
+  z-index: 70;
+  top: 50%;
+  left: 50%;
+  max-width: min(340px, calc(100% - 32px));
+  transform: translate(-50%, -50%);
+  padding: 10px 16px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 52%, var(--wb-line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 92%, transparent);
+  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.2);
+  color: var(--wb-text);
+  /* One line, never a broken word on its own row. */
+  white-space: nowrap;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  text-align: center;
+  pointer-events: none;
+  backdrop-filter: blur(18px);
+}
+.wbc-chat-side-drop-layer .wbc-chat-side-drop-hint {
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, -50%) scale(.96);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease,
+    visibility 0s linear 120ms;
+}
+.wbc-chat-side-drop-layer.active .wbc-chat-side-drop-hint {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, -50%) scale(1);
+  transition-delay: 0s;
+}
+
+.wbc-side-agent-split-head {
+  position: relative;
+  /* Keep the resource picker above embedded canvases (Leaflet panes and the
+     browser viewport establish their own high z-index stacking contexts). */
+  z-index: 1001;
+  min-width: 0;
+  min-height: 60px;
+  box-sizing: border-box;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 12px 8px;
+  padding: 6px;
+  border: 1px solid var(--wb-line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 94%, transparent);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.045);
+}
+
+.wbc-resource-split-picker-wrap {
+  position: relative;
+  z-index: 1100;
+  flex: 0 0 auto;
+}
+
+.wbc-resource-picker-menu {
+  position: relative;
+  top: auto;
+  right: auto;
+  left: auto;
+  z-index: 1101;
+  margin: -5px 12px 8px;
+}
+
+.wbc-side-agent-split-picker {
+  min-width: 0;
+  min-height: 46px;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wbc-side-agent-split-picker:hover {
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 10%, transparent);
+}
+
+.wbc-side-agent-split-picker[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 14%, transparent);
+}
+
+.wbc-side-agent-split-picker:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--wb-accent) 24%, transparent);
+  outline-offset: 1px;
+}
+
+.wbc-side-agent-split-title {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wbc-side-agent-split-picker-chevron {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--wb-faint);
+  transform: rotate(90deg);
+  transition: transform 180ms ease;
+}
+
+.wbc-side-agent-split-picker[aria-expanded="true"] .wbc-side-agent-split-picker-chevron {
+  transform: rotate(-90deg);
+}
+
+.wbc-side-agent-split-picker-chevron svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wbc-side-agent-split-title span,
+.wbc-side-agent-split-title b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-side-agent-split-title span {
+  color: var(--wb-faint);
+  font-size: calc(9.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+}
+
+.wbc-side-agent-split-title b {
+  color: var(--wb-text);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wbc-side-agent-split-close {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+
+.wbc-side-agent-split-close:hover {
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-side-agent-split-close:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 52%, transparent);
+  outline-offset: 1px;
+}
+
+.wbc-side-agent-split-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wbc-artifact-split-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.wbc-side-agent-split-action,
+.wbc-artifact-mode-switch button {
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-muted);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.wbc-side-agent-split-action:hover,
+.wbc-artifact-mode-switch button:hover,
+.wbc-artifact-mode-switch button.active {
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-side-agent-split-action svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wbc-artifact-mode-switch {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--wb-icon-bg);
+}
+
+.wbc-artifact-mode-switch button {
+  width: auto;
+  min-width: 42px;
+  height: 30px;
+  min-height: 30px;
+  padding-inline: 8px;
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-side-agent-split-menu {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  max-height: min(280px, 42vh);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--wb-flyout-border);
+  border-radius: var(--wb-flyout-radius);
+  background: var(--wb-flyout-bg);
+  box-shadow: var(--wb-flyout-shadow);
+  transform-origin: top center;
+  will-change: opacity, transform;
+}
+
+.wbc-side-agent-split-menu.open {
+  animation: wbc-split-menu-in 340ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+/* Legacy/web fallback: mount the picker in its final layout immediately. The
+   Electron path uses a separate animated WebContentsView above the live page. */
+.wbc-browser-picker-menu.open {
+  position: relative;
+  top: auto;
+  right: auto;
+  left: auto;
+  animation: none;
+  will-change: auto;
+}
+
+.wbc-side-agent-split-menu.closing {
+  pointer-events: none;
+  animation: wbc-split-menu-out 240ms cubic-bezier(.4, 0, .2, 1) both;
+}
+
+@keyframes wbc-split-menu-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -12px, 0) scale(.985);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes wbc-split-menu-out {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(0, -10px, 0) scale(.985);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-side-agent-split-menu { animation: none; }
+  .wbc-side-agent-split-menu.closing { opacity: 0; }
+}
+
+.wbc-side-agent-split-menu button {
+  min-width: 0;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wbc-side-agent-split-menu button:hover,
+.wbc-side-agent-split-menu button.active {
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-side-agent-split-menu button > span {
+  width: 24px;
+  flex: 0 0 auto;
+  color: var(--wb-faint);
+  font-family: var(--mono, "IBM Plex Mono", monospace);
+  font-size: calc(9.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-side-agent-split-menu button > b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 640;
+}
+
+.wbc-side-agent-split > .wbc-side-agent {
+  flex: 1 1 auto;
+}
+
+.wbc-artifact-split-viewer {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  margin: 0 12px 12px;
+  overflow: hidden;
+  border: 1px solid var(--wb-line);
+  border-radius: 14px;
+  background: var(--wb-card-bg);
+  container-type: inline-size;
+}
+
+.wbc-artifact-split-viewer > .wbc-viewer,
+.wbc-artifact-split-viewer > .wbc-pdf-viewer,
+.wbc-artifact-split-viewer > .wbc-office-viewer {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.wbc-change-split-diff {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  margin: 0 12px 12px;
+  overflow: hidden;
+  border: 1px solid var(--wb-line);
+  border-radius: 14px;
+  background: var(--wb-card-bg);
+}
+
+.wbc-resource-split-body {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  margin: 0 12px 12px;
+  overflow: hidden;
+  border: 1px solid var(--wb-line);
+  border-radius: 14px;
+  background: var(--wb-card-bg);
+}
+
+.wbc-resource-split-body > .wbc-map,
+.wbc-resource-split-body > .browser-viewport-panel,
+.wbc-resource-split-body > .browser-panel,
+.wbc-resource-split-body > .wbc-subagent-page {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.wbc-browser-split-body,
+.wbc-subagents-split-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.wbc-browser-split-body > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.wbc-browser-split-action {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+
+.wbc-browser-split-action:hover,
+.wbc-browser-split-action.active {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 18%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-browser-split-action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 34%, transparent);
+  outline-offset: 1px;
+}
+
+.wbc-browser-split > .wbc-resource-split-picker-wrap {
+  position: relative;
+  z-index: 1200;
+  display: block;
+  visibility: visible;
+  opacity: 1;
+  color: var(--wb-text);
+}
+
+.wbc-browser-split > .wbc-resource-split-picker-wrap > .wbc-side-agent-split-head {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* A browser card keeps its live WebContentsView and tab state when expanded.
+   Portal it into the themed Workbench root so it is not clipped by the pane
+   card's rounded overflow or its spring-animation transform. */
+.wbc-browser-split.maximized {
+  position: fixed;
+  z-index: 10040;
+  inset: 0;
+  width: auto;
+  height: auto;
+  max-height: none;
+  padding-top: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--wb-right-bg);
+  box-shadow: none;
+}
+
+.wbc-browser-split.maximized .wbc-side-agent-split-head {
+  min-height: 58px;
+  margin: 0;
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--wb-line);
+  border-radius: 0;
+  background: var(--wb-card-bg-strong);
+  box-shadow: none;
+}
+
+html[data-platform="darwin"] .wbc-browser-split.maximized .wbc-side-agent-split-head {
+  padding-left: 92px;
+}
+
+.wbc-browser-split.maximized .wbc-browser-split-body {
+  margin: 8px;
+}
+
+.wbc-browser-picker-menu {
+  gap: 4px;
+}
+
+.wbc-browser-picker-row {
+  min-width: 0;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 2px;
+  border-radius: 9px;
+  color: var(--wb-muted);
+}
+
+.wbc-browser-picker-row:hover {
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 18%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-browser-picker-row.active {
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 24%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-side-agent-split-menu .wbc-browser-picker-select {
+  min-height: 38px;
+  padding: 5px 7px;
+  background: transparent;
+  color: inherit;
+}
+
+.wbc-side-agent-split-menu .wbc-browser-picker-select:hover {
+  background: transparent;
+}
+
+.wbc-browser-picker-favicon {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.wbc-browser-picker-favicon-fallback,
+.wbc-browser-picker-favicon img {
+  position: absolute;
+  inset: 2px;
+  width: 18px;
+  height: 18px;
+}
+
+.wbc-browser-picker-favicon-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--wb-faint);
+}
+
+.wbc-browser-picker-favicon-fallback svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wbc-browser-picker-favicon img {
+  z-index: 1;
+  object-fit: contain;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 76%, transparent);
+}
+
+.wbc-browser-picker-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.wbc-side-agent-split-menu .wbc-browser-picker-actions > button {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 8px;
+  color: var(--wb-faint);
+}
+
+.wbc-side-agent-split-menu .wbc-browser-picker-actions > button:hover,
+.wbc-side-agent-split-menu .wbc-browser-picker-actions > button.active {
+  background: color-mix(in srgb, var(--wb-text) 7%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-browser-split .browser-view.native.split-chrome {
+  --browser-resize-gutter: 0px;
+  background: transparent;
+}
+
+.wbc-browser-picker-actions > button svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.9;
+}
+
+.wbc-browser-split .browser-view.native.split-chrome .browser-nav-bar {
+  min-height: 48px;
+  gap: 6px;
+  padding: 7px 9px;
+  border-bottom-color: color-mix(in srgb, var(--wb-line) 62%, transparent);
+  background: color-mix(in srgb, var(--wb-card-bg) 82%, transparent);
+}
+
+.wbc-browser-split .browser-view.native.split-chrome .browser-icon-btn {
+  width: 32px;
+  height: 32px;
+  border-color: transparent;
+  border-radius: 9px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.wbc-browser-split .browser-view.native.split-chrome .browser-icon-btn:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 18%, transparent);
+}
+
+.wbc-browser-split .browser-view.native.split-chrome .browser-address {
+  height: 32px;
+  border-color: color-mix(in srgb, var(--wb-line) 72%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-control-bg) 72%, transparent);
+  box-shadow: none;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-subagents-split-body {
+  padding: 10px 12px 12px;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+.wbc-static-split-head {
+  justify-content: space-between;
+  padding-inline: 14px 6px;
+}
+
+.wbc-static-split-head > .wbc-side-agent-split-title {
+  flex: 1 1 auto;
+}
+
+.wbc-artifact-split .wbc-viewer-head {
+  display: none;
+}
+
+.wbc-artifact-split .wbc-viewer-name {
+  display: none;
+}
+
+.wbc-artifact-picker-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wbc-artifact-picker-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wbc-main.chat-drop-active {
+  box-shadow: none;
+}
+
+.wbc-main.chat-drop-active::after {
+  content: "";
+  position: absolute;
+  z-index: 65;
+  /* The Workbench page extends underneath the fixed 58px app bar. Start the
+     visible drop outline below it so the top edge is not painted behind the
+     bar while the other three edges remain flush with the conversation. */
+  inset: 58px 0 0;
+  box-sizing: border-box;
+  border: 2px solid color-mix(in srgb, var(--wb-accent) 72%, transparent);
+  pointer-events: none;
+}
+
+.wbc-chat-open-drop-hint {
+  position: absolute;
+  z-index: 70;
+  top: 50%;
+  left: 50%;
+  max-width: min(360px, calc(100% - 48px));
+  transform: translate(-50%, -50%);
+  padding: 10px 16px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 52%, var(--wb-line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 92%, transparent);
+  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.2);
+  color: var(--wb-text);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  text-align: center;
+  pointer-events: none;
+  backdrop-filter: blur(18px);
+}
+
+.wbc-header {
+  position: absolute;
+  z-index: 20;
+  inset: 0 0 auto;
+  min-height: var(--wbc-header-overlay-height);
+  box-sizing: border-box;
+  isolation: isolate;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 22px 28px;
+  border-bottom: 0;
+  background: transparent;
+}
+
+.wbc-header::before {
+  content: none;
+}
+
+.wbc-header-info {
+  min-width: 0;
+}
+
+.wbc-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.wbc-header-title h1 {
+  margin: 0;
+  font-size: calc(19px * var(--wb-ui-font-scale, 1));
+  font-weight: 740;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-title-input {
+  font: inherit;
+  font-size: calc(18px * var(--wb-ui-font-scale, 1));
+  font-weight: 700;
+  color: var(--wb-text);
+  background: var(--wb-card-bg);
+  border: 1px solid var(--wb-active-border);
+  border-radius: 8px;
+  padding: 3px 8px;
+  outline: none;
+  min-width: 280px;
+}
+
+.wbc-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-muted);
+}
+
+.wbc-status-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--wb-icon-bg);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-status-chip.running {
+  color: var(--wb-green);
+  background: color-mix(in srgb, var(--wb-green) 14%, transparent);
+}
+
+.wbc-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.wbc-totask {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wbc-totask.is-busy {
+  cursor: progress;
+}
+
+/* Inline spinner shown on the primary "转为任务" button while the backend reads
+   the full conversation and synthesizes the task. */
+.wbc-spinner {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  opacity: 0.85;
+  animation: wb-spin 0.7s linear infinite;
+  flex: 0 0 auto;
+}
+
+/* "已转为任务 → <title>" note in the chat overview, so the original chat is
+   visibly preserved and linked to the task it produced. */
+.wbc-converted-note {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  line-height: 1.5;
+}
+
+.wbc-converted-note b {
+  color: var(--wb-text);
+  font-weight: 600;
+}
+
+.wbc-icon-btn {
+  height: 30px;
+  min-width: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.wbc-icon-btn:hover {
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-menu-wrap {
+  position: relative;
+}
+
+.wbc-menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+}
+
+.wbc-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 31;
+  min-width: 150px;
+  background: var(--wb-flyout-bg);
+  border: 1px solid var(--wb-flyout-border);
+  border-radius: var(--wb-flyout-radius);
+  box-shadow: var(--wb-flyout-shadow);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+}
+
+.wbc-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  padding: 8px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.wbc-menu button:hover {
+  background: var(--wb-row-hover-bg);
+}
+
+.wbc-menu button.danger {
+  color: var(--wb-red);
+}

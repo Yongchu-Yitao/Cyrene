@@ -519,9 +519,12 @@ async def test_all_candidates_cooling_still_tries(stub_server_factory):
     assert not cl._candidate_cooling(cl._candidate_key(good))
 
 
-async def test_connection_refused_fails_fast_and_cools_down(stub_server_factory):
+async def test_connection_refused_fails_fast_and_cools_down(stub_server_factory, monkeypatch):
     # A closed local port refuses instantly; the candidate must be cooled down
     # so the next call does not retry it.
+    # Retry timing is covered separately; this test only owns candidate
+    # rotation/cooldown and must not spend the production backoff budget.
+    monkeypatch.setattr(cl, "_NETWORK_RETRY_BASE_DELAY_SECONDS", 0)
     refused = {
         "id": "dead",
         "model": "dead-model",
@@ -647,18 +650,10 @@ def test_workbench_model_authentication_error_is_actionable():
 @pytest.mark.parametrize("base_url", [
     "https://api.deepseek.com/v1",
     "https://API.DEEPSEEK.COM:443/v1/",
-])
-def test_versioned_official_deepseek_prefers_configured_endpoint(base_url):
-    assert cl._normalized_llm_endpoints(base_url) == [
-        "https://api.deepseek.com/v1/chat/completions",
-    ]
-
-
-@pytest.mark.parametrize("base_url", [
     "https://api.deepseek.com",
     "https://api.deepseek.com/",
 ])
-def test_unversioned_official_deepseek_is_normalized_to_v1(base_url):
+def test_official_deepseek_urls_normalize_to_v1_endpoint(base_url):
     assert cl._normalized_llm_endpoints(base_url) == [
         "https://api.deepseek.com/v1/chat/completions",
     ]

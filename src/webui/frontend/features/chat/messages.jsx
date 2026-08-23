@@ -1,15 +1,26 @@
+import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_ICONS, WbcVoice, useWbcEffect, useWbcMemo, useWbcRef, useWbcState, wbcAgentErrorPresentation, wbcAttachmentTypeLabel, wbcCompactNumber, wbcErrorText, wbcFileViewKind, wbcFormatProcessingDuration, wbcFormatTime, wbcRandomThinkingPhrase, wbcRenderMarkdown, wbcRuntimeTimelineMessages, wbcT, wbcToolPresentationKind, wbcToolPresentationText, wbcToolPreviewText } from "../../workbench-chat.jsx"
 import { WbcThreadItem, wbcElicitationFields, wbcElicitationInitialValues, wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue, wbcValidateElicitationForm } from "./conversation.jsx"
 import { WbcFileVisual, wbcCanOpenExternally, wbcDownloadLink, wbcStartFileDrag } from "./file-resources.jsx"
 import { useWorkbenchI18n } from "../../workbench-i18n.jsx"
 
 // Workbench chat feature module with explicit ESM dependencies.
+function wbcLocalizedToolName(toolName) {
+  var raw = String(toolName || "").trim();
+  if (!raw) return wbcT("workbenchChat.toolFallback", "Tool");
+  var i18n = workbenchServices.i18n();
+  if (typeof i18n.toolName === "function") {
+    return i18n.toolName(raw, typeof i18n.getLang === "function" ? i18n.getLang() : undefined);
+  }
+  return wbcT("toolName." + raw, raw);
+}
+
 function WbcQuestionPrompt({ pending, onAnswer, busy, trace }) {
   var pq = pending || {};
   var options = Array.isArray(pq.options) ? pq.options : [];
   var kind = String(pq.kind || "");
   var isPermission = kind === "permission.requested"
-    || window.CyreneUI.require("model").isPermissionQuestionKind(kind);
+    || workbenchServices.model().isPermissionQuestionKind(kind);
   var isPlanConfirmation = kind === "plan_confirmation";
   // Permission choices are Agent-owned protocol data. Never fabricate option
   // ids from localized labels when the Agent omitted them.
@@ -26,7 +37,7 @@ function WbcQuestionPrompt({ pending, onAnswer, busy, trace }) {
   var optionSignature = JSON.stringify(treeOptions);
   useWbcEffect(function () {
     if (!pq.id || busy || !onAnswer || !window.CyreneUI.has("uiSurface")) return undefined;
-    var uiSurface = window.CyreneUI.require("uiSurface");
+    var uiSurface = workbenchServices.uiSurface();
     var risk = isPermission ? "R3" : "R2";
     var actions = treeOptions.map(function (_opt, index) {
       return {
@@ -208,9 +219,9 @@ function WbcErrorNotice({ message, kind, onRetry }) {
       ? navigator.clipboard.writeText(detail || body)
       : Promise.reject(new Error("Clipboard unavailable"));
     copied.then(function () {
-      window.CyreneUI.require("feedback").showToast(wbcT("workbenchChat.error.copied", "Error details copied"), "success");
+      workbenchServices.feedback().showToast(wbcT("workbenchChat.error.copied", "Error details copied"), "success");
     }).catch(function () {
-      window.CyreneUI.require("feedback").showToast(wbcT("workbenchChat.error.copyFailed", "Could not copy error details"), "error");
+      workbenchServices.feedback().showToast(wbcT("workbenchChat.error.copyFailed", "Could not copy error details"), "error");
     });
   }
   return (
@@ -249,9 +260,9 @@ function WbcAgentNotification({ notice }) {
       ? navigator.clipboard.writeText(message)
       : Promise.reject(new Error("Clipboard unavailable"));
     copied.then(function () {
-      window.CyreneUI.require("feedback").showToast(wbcT("workbenchChat.notification.copied", "Notification details copied"), "success");
+      workbenchServices.feedback().showToast(wbcT("workbenchChat.notification.copied", "Notification details copied"), "success");
     }).catch(function () {
-      window.CyreneUI.require("feedback").showToast(wbcT("workbenchChat.error.copyFailed", "Could not copy error details"), "error");
+      workbenchServices.feedback().showToast(wbcT("workbenchChat.error.copyFailed", "Could not copy error details"), "error");
     });
   }
   if (!message) return null;
@@ -289,7 +300,7 @@ function WbcHeader({ project, chat, running, finalizing, onRename, onDelete, onT
     setEditing(false);
     if (!next || next === chat.title) { setDraft(chat.title || ""); return; }
     onRename(next).catch(function (err) {
-      window.CyreneUI.require("feedback").showToast(err.message || String(err), "error");
+      workbenchServices.feedback().showToast(err.message || String(err), "error");
       setDraft(chat.title || "");
     });
   }
@@ -475,7 +486,7 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessag
     onEditMessage(msg.id, text);
   }
   function onEditKeyDown(event) {
-    var sc = window.CyreneUI.require("shortcuts");
+    var sc = workbenchServices.shortcuts();
     if (sc && sc.matches(event, "composer-send")) {
       if (event.nativeEvent && event.nativeEvent.isComposing) return;
       event.preventDefault();
@@ -806,7 +817,7 @@ function wbcTraceActionLabel(entry) {
   if (kind === "subagent") return wbcT("workbenchChat.traceAction.subagent", "Coordinated subagents");
   if (kind === "permission") return wbcT("workbenchChat.traceAction.permission", "Reviewed permissions");
   if (kind === "event") return wbcT("workbenchChat.traceAction.event", "Handled an agent event");
-  var toolName = wbcT("toolName." + raw, raw || wbcT("workbenchChat.traceLabel", "Execution"));
+  var toolName = wbcLocalizedToolName(raw);
   return wbcT("workbenchChat.traceAction.usedTool", "Used {tool}", { tool: toolName });
 }
 
@@ -945,7 +956,7 @@ function wbcTraceTimelineItems(entries, reasoning) {
 }
 
 function WbcTraceCard({ trace, live, running, label, reasoning }) {
-  var entries = Array.isArray(trace) ? trace : [];
+  useWorkbenchI18n(); var entries = Array.isArray(trace) ? trace : [];
   var [expanded, setExpanded] = useWbcState(false);
   var reasoningText = String(reasoning || "");
   if (!entries.length && !reasoningText.trim() && !live) return null;
@@ -1020,7 +1031,7 @@ function WbcTraceCard({ trace, live, running, label, reasoning }) {
                       {(function () {
                         var toolKey = entry.text || entry.tool || "";
                         var isToolEntry = entry.kind === "tool" || !!entry.tool;
-                        if (isToolEntry) return wbcT("toolName." + toolKey, toolKey);
+                        if (isToolEntry) return wbcLocalizedToolName(toolKey);
                         if (entry.detailKey) return wbcT(entry.detailKey, toolKey, entry.detailParams);
                         return toolKey;
                       })()}
@@ -1051,7 +1062,7 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
   var [copied, setCopied] = useWbcState(false);
   var [voiceSnapshot, setVoiceSnapshot] = useWbcState({ status: {}, activeKey: "" });
   var messageVoiceKey = "message:" + String(msg && msg.id || "");
-  var BrowserIcon = window.CyreneUI.require("browser").Icon;
+  var BrowserIcon = workbenchServices.browser().Icon;
   var processingDuration = wbcFormatProcessingDuration(msg.processingDurationMs);
   // Parse each finalized message's markdown once and reuse it: the whole thread
   // re-renders on every streaming frame, so without this every prior message
@@ -1203,7 +1214,7 @@ function wbcPhase1ProgressDetail(entries) {
     if (entry && entry.detailKey) {
       text = wbcT(entry.detailKey, text, entry.detailParams || {});
     } else if (entry && (entry.kind === "tool" || entry.tool)) {
-      text = wbcT("toolName." + text, text);
+      text = wbcLocalizedToolName(text);
     }
     var preview = String(entry && entry.preview || "").trim();
     var status = String(entry && entry.status || "").trim().toLowerCase();
@@ -1562,7 +1573,7 @@ var WbcRemoteDeviceCatalog = (function () {
     if (started) return;
     started = true;
     try {
-      eventUnsubscribe = window.CyreneUI.require("events").subscribe(function (event) {
+      eventUnsubscribe = workbenchServices.events().subscribe(function (event) {
         if (event && event.type === "remote_devices_changed") invalidate(event.reason || "sse");
       });
     } catch (e) {}

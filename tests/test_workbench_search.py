@@ -2,23 +2,14 @@
 
 import asyncio
 import json
-import sys
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import MagicMock
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-
-pil_mock = MagicMock()
-pil_mock.__version__ = "9.0.0"
-sys.modules["PIL"] = pil_mock
-pil_mock.Image = MagicMock()
 
 from cyrene import config as cyrene_config
 from cyrene.runtime import database as db
@@ -859,12 +850,18 @@ def test_workbench_chat_preferences_are_session_scoped_and_bound_to_run(
     client, search_env, monkeypatch,
 ):
     from cyrene import agent
-    from cyrene.runtime import settings_store
+    from cyrene.runtime import model_configuration, settings_store
 
     monkeypatch.setattr(settings_store, "get_models", lambda: [{
         "id": "session-model",
         "name": "Session Model",
         "model": "provider/session-model",
+    }])
+    monkeypatch.setattr(model_configuration, "selectable_model_candidates", lambda: [{
+        "id": "session-model",
+        "name": "Session Model",
+        "model": "provider/session-model",
+        "reasoning_effort": "",
     }])
     captured = []
 
@@ -1246,6 +1243,8 @@ def test_workbench_chat_answer_resumes_in_conversation_workspace(
     assert payload["userMessage"]["content"] == "continue"
     stored_chat = json.loads(chats_path.read_text(encoding="utf-8"))["chats"][0]
     assert payload["runId"] == stored_chat["lastRun"]["id"]
+    assert payload["chatSummary"]["id"] == "chat_1"
+    assert payload["chatSummary"]["runStatus"] == "completed"
     assert [message["content"] for message in stored_chat["messages"][-2:]] == ["continue", "continued"]
     assert stored_chat["messages"][-2]["answerToQuestionId"] == "question_1"
     assert "pendingQuestion" not in stored_chat
@@ -1260,9 +1259,8 @@ def test_workbench_chat_answer_resumes_in_conversation_workspace(
 async def test_cancelled_workbench_chat_answer_consumes_question_and_records_interrupt(
     search_env, monkeypatch,
 ):
-    from fastapi import APIRouter
-    from route import schemas as api_models
-    from route.workbench.chat import register_workbench_chat_routes
+    from route.workbench.chat_routes.context import ChatRouteContext
+    from route.workbench.chat_routes.run_answer_routes import ChatAnswerController
 
     chats_path = search_env["data_dir"] / "workbench_chats.json"
     chats = json.loads(chats_path.read_text(encoding="utf-8"))
@@ -1277,16 +1275,12 @@ async def test_cancelled_workbench_chat_answer_consumes_question_and_records_int
         "_workbench_answer_pending",
         cancelled_resume,
     )
-    routes = register_workbench_chat_routes(
-        APIRouter(), bot=None, db_path=search_env["db_path"]
+    controller = ChatAnswerController(
+        ChatRouteContext.create(bot=None, db_path=search_env["db_path"])
     )
-
-    result = await routes["answer_chat"](
+    result = await controller.answer(
         "chat_1",
-        api_models.AnswerBody(
-            question_id="question_cancel",
-            answer="继续",
-        ),
+        {"question_id": "question_cancel", "answer": "继续"},
     )
 
     assert result["interrupted"] is True
@@ -1301,9 +1295,13 @@ async def test_cancelled_workbench_chat_answer_consumes_question_and_records_int
 async def test_cancelled_workbench_task_answer_persists_paused_terminal_state(
     search_env, monkeypatch,
 ):
-    from fastapi import APIRouter
-    from route import schemas as api_models
-    from route.workbench import task_sessions
+    from dataclasses import replace
+    from route.workbench.task_session_routes.context import build_task_session_context
+    from cyrene.workbench import task_runs
+    from cyrene.workbench.task_execution_service import (
+        TaskExecutionApplicationService,
+        TaskExecutionDependencies,
+    )
 
     store = search_env["routes_mod"]._read_workbench_store()
     session = store["projects"][0]["sessions"][0]
@@ -1323,21 +1321,27 @@ async def test_cancelled_workbench_task_answer_persists_paused_terminal_state(
     async def cancelled_resume(*_args, **_kwargs):
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(
-        task_sessions,
-        "_workbench_answer_pending",
-        cancelled_resume,
+    execution_dependencies = replace(
+        TaskExecutionDependencies.from_runtime(search_env["routes_mod"]),
+        answer_pending=cancelled_resume,
     )
-    routes = task_sessions.register_task_session_routes(
-        APIRouter(), bot=None, db_path=search_env["db_path"]
+    execution = TaskExecutionApplicationService(
+        dependencies=execution_dependencies,
+        task_runs=task_runs,
+        db_path=search_env["db_path"],
     )
-
-    result = await routes["answer_task"](
+    context = build_task_session_context(
+        search_env["db_path"], search_env["routes_mod"],
+        execution_service=execution,
+    )
+    result = await context.run_coordination.execute(
+        "answer",
         "session_1",
-        api_models.AnswerBody(
-            question_id="task_question_cancel",
-            answer="继续",
+        {"question_id": "task_question_cancel", "answer": "继续"},
+        lambda: context.execution.answer(
+            "session_1", {"question_id": "task_question_cancel", "answer": "继续"}
         ),
+        bypass_goal_loop_answer=True,
     )
 
     assert result["interrupted"] is True
@@ -1410,3 +1414,5 @@ def test_workbench_chat_answer_can_stream_continuation_events(
         "saved",
     ]
     assert events[-2]["response"] == "继续完成"
+    assert events[-1]["chatSummary"]["id"] == "chat_1"
+    assert events[-1]["chatSummary"]["runStatus"] == "completed"

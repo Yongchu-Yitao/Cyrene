@@ -21,11 +21,13 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from cyrene.model_runtime.cache_invalidation import register_model_cache_invalidator
+from cyrene.model_runtime.constants import NETWORK_RETRY_LIMIT
 from cyrene.model_runtime.errors import format_httpx_error as _format_httpx_error
 from cyrene.model_runtime.messages import (
     canonical_tool_arguments,
     parse_tool_arguments,
 )
+from cyrene.model_runtime.status import persist_model_status
 from cyrene.config import (
     DB_PATH,
     DEFAULT_OPENAI_BASE_URL,
@@ -184,6 +186,17 @@ def set_session_model_preference(
             reasoning_effort or candidate.get("reasoning_effort") or ""
         ).strip().lower(),
     }
+    if str(candidate.get("provider") or "") == "cyrene_plugin":
+        preference.update({
+            "provider": "cyrene_plugin",
+            "plugin_id": str(candidate.get("plugin_id") or ""),
+            "plugin_provider_id": str(candidate.get("plugin_provider_id") or ""),
+            "plugin_method": str(candidate.get("plugin_method") or ""),
+            "project_id": str(candidate.get("project_id") or ""),
+            "name": str(candidate.get("name") or candidate.get("model") or ""),
+            "capabilities": list(candidate.get("capabilities") or ["chat"]),
+            "context_limit": int(candidate.get("context_limit") or candidate.get("ctx_limit") or 0),
+        })
     saved = _session_model_preferences()
     if saved.get(session) == preference:
         return
@@ -194,83 +207,116 @@ def set_session_model_preference(
     set_setting(_SESSION_MODEL_PREFERENCE_SETTING, dict(saved))
 
 
+def _plugin_preference_candidate(preference: dict[str, Any]) -> dict[str, Any]:
+    return {
+            "id": str(preference.get("candidate_id") or ""),
+            "profile_id": str(preference.get("candidate_id") or ""),
+            "connection_id": "plugin:" + str(preference.get("plugin_id") or ""),
+            "model": str(preference.get("model") or ""),
+            "name": str(preference.get("name") or preference.get("model") or ""),
+            "provider": "cyrene_plugin",
+            "adapter": "cyrene_plugin",
+            "plugin_id": str(preference.get("plugin_id") or ""),
+            "plugin_provider_id": str(preference.get("plugin_provider_id") or ""),
+            "plugin_method": str(preference.get("plugin_method") or ""),
+            "project_id": str(preference.get("project_id") or ""),
+            "base_url": str(preference.get("base_url") or "plugin://local"),
+            "api_key": "",
+            "capabilities": list(preference.get("capabilities") or ["chat"]),
+            "context_limit": int(preference.get("context_limit") or 0),
+            "ctx_limit": int(preference.get("context_limit") or 0),
+            "reasoning_effort": str(preference.get("reasoning_effort") or ""),
+            "endpoints": ["plugin://" + str(preference.get("plugin_id") or "")],
+    }
+
+
+def _inject_plugin_preference(
+    candidates: list[dict[str, Any]],
+    model_type: str,
+    preference: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not (
+        model_type == "primary"
+        and preference.get("provider") == "cyrene_plugin"
+        and preference.get("plugin_id")
+        and preference.get("plugin_method")
+    ):
+        return candidates
+    plugin_candidate = _plugin_preference_candidate(preference)
+    return [plugin_candidate] + [
+        item for item in candidates
+        if str(item.get("id") or "") != plugin_candidate["id"]
+    ]
+
+
+def _candidate_matches_saved(
+    candidate: dict[str, Any], saved: dict[str, Any]
+) -> bool:
+    return (
+        str(candidate.get("id") or "") == str(saved.get("candidate_id") or "")
+        and (
+            not str(saved.get("adapter") or "")
+            or str(candidate.get("adapter") or candidate.get("provider") or "")
+            == str(saved.get("adapter") or "")
+        )
+        and str(candidate.get("model") or "") == str(saved.get("model") or "")
+        and _base_root(candidate.get("base_url") or "")
+        == _base_root(saved.get("base_url") or "")
+    )
+
+
+def _prepare_prioritized_candidate(
+    original: dict[str, Any],
+    configured_rank: int,
+    affinity: dict[str, Any],
+    preference: dict[str, Any],
+) -> dict[str, Any]:
+    candidate = dict(original)
+    candidate["_configured_rank"] = configured_rank
+    endpoints = list(candidate.get("endpoints") or [])
+    candidate["_endpoint_ranks"] = {
+        endpoint: rank for rank, endpoint in enumerate(endpoints)
+    }
+    if _candidate_matches_saved(candidate, affinity):
+        preferred_endpoint = str(affinity.get("endpoint") or "")
+        if (
+            preferred_endpoint in endpoints
+            and not (
+                _is_official_deepseek_base_url(candidate.get("base_url") or "")
+                and preferred_endpoint == "https://api.deepseek.com/chat/completions"
+            )
+        ):
+            endpoints.remove(preferred_endpoint)
+            endpoints.insert(0, preferred_endpoint)
+    if _candidate_matches_saved(candidate, preference):
+        requested_effort = str(preference.get("reasoning_effort") or "").strip()
+        if requested_effort:
+            candidate["reasoning_effort"] = requested_effort
+    candidate["endpoints"] = endpoints
+    return candidate
+
+
 def _prioritize_last_success(
     candidates: list[dict[str, Any]], model_type: str, session_id: str = ""
 ) -> list[dict[str, Any]]:
     affinity_key = _session_affinity_key(model_type, session_id)
-    affinity = (
-        _last_success_map().get(affinity_key) or {}
-        if affinity_key
-        else {}
-    )
+    affinity = _last_success_map().get(affinity_key) or {} if affinity_key else {}
     preference = (
         _session_model_preferences().get(str(session_id or "").strip()) or {}
         if model_type == "primary" and session_id
         else {}
     )
-    prepared: list[dict[str, Any]] = []
-    for configured_rank, original in enumerate(candidates):
-        candidate = dict(original)
-        candidate["_configured_rank"] = configured_rank
-        endpoints = list(candidate.get("endpoints") or [])
-        candidate["_endpoint_ranks"] = {endpoint: rank for rank, endpoint in enumerate(endpoints)}
-        if (
-            str(candidate.get("id") or "") == str(affinity.get("candidate_id") or "")
-            and (
-                not str(affinity.get("adapter") or "")
-                or str(candidate.get("adapter") or candidate.get("provider") or "")
-                == str(affinity.get("adapter") or "")
-            )
-            and str(candidate.get("model") or "") == str(affinity.get("model") or "")
-            and _base_root(candidate.get("base_url") or "") == _base_root(affinity.get("base_url") or "")
-        ):
-            preferred_endpoint = str(affinity.get("endpoint") or "")
-            if (
-                preferred_endpoint in endpoints
-                and not (
-                    _is_official_deepseek_base_url(candidate.get("base_url") or "")
-                    and preferred_endpoint == "https://api.deepseek.com/chat/completions"
-                )
-            ):
-                endpoints.remove(preferred_endpoint)
-                endpoints.insert(0, preferred_endpoint)
-        if (
-            str(candidate.get("id") or "") == str(preference.get("candidate_id") or "")
-            and (
-                not str(preference.get("adapter") or "")
-                or str(candidate.get("adapter") or candidate.get("provider") or "")
-                == str(preference.get("adapter") or "")
-            )
-            and str(candidate.get("model") or "") == str(preference.get("model") or "")
-            and _base_root(candidate.get("base_url") or "") == _base_root(preference.get("base_url") or "")
-        ):
-            requested_effort = str(preference.get("reasoning_effort") or "").strip()
-            if requested_effort:
-                candidate["reasoning_effort"] = requested_effort
-        candidate["endpoints"] = endpoints
-        prepared.append(candidate)
+    candidates = _inject_plugin_preference(candidates, model_type, preference)
+    prepared = [
+        _prepare_prioritized_candidate(original, rank, affinity, preference)
+        for rank, original in enumerate(candidates)
+    ]
     # A remembered success may optimize the endpoint order *inside* the same
     # profile, but it must never promote a fallback model ahead of the primary
     # route configured in Settings.  Only an explicit per-conversation model
     # selection is allowed to override the global route order.
-    selected = preference
-    preferred_id = str(selected.get("candidate_id") or "")
-    preferred_adapter = str(selected.get("adapter") or "")
-    preferred_model = str(selected.get("model") or "")
-    preferred_root = _base_root(selected.get("base_url") or "")
     prepared.sort(
-        key=lambda candidate: 0
-        if (
-            str(candidate.get("id") or "") == preferred_id
-            and (
-                not preferred_adapter
-                or str(candidate.get("adapter") or candidate.get("provider") or "")
-                == preferred_adapter
-            )
-            and str(candidate.get("model") or "") == preferred_model
-            and _base_root(candidate.get("base_url") or "") == preferred_root
-        )
-        else 1
+        key=lambda candidate: 0 if _candidate_matches_saved(candidate, preference) else 1
     )
     return prepared
 
@@ -352,7 +398,6 @@ _CONNECT_TIMEOUT_SECONDS = 5.0
 # A model request may be dropped before the provider sends response headers.
 # Retry transport failures locally before surfacing them to the user. HTTP
 # responses (including 4xx/5xx) are deliberately excluded from this budget.
-NETWORK_RETRY_LIMIT = 10
 _NETWORK_RETRY_BASE_DELAY_SECONDS = 10.0
 # Bounded same-endpoint retry for transient upstream 5xx (incl. non-standard
 # overload codes like 550 / 529) before rotating to the next endpoint/candidate.
@@ -512,12 +557,14 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
     provider = str(raw.get("provider") or "openai_compatible").strip()
     adapter = str(raw.get("adapter") or provider).strip().lower()
     base_url = (
-        CODEX_BASE_URL
+        str(raw.get("base_url") or "plugin://local")
+        if provider == "cyrene_plugin"
+        else CODEX_BASE_URL
         if provider == CODEX_PROVIDER
         else str(raw.get("base_url") or active_base_url or DEFAULT_OPENAI_BASE_URL).strip() or DEFAULT_OPENAI_BASE_URL
     )
     raw_api_key = strip_wrapping_quotes(str(raw.get("api_key") or "").strip())
-    if provider == CODEX_PROVIDER:
+    if provider in {CODEX_PROVIDER, "cyrene_plugin"}:
         api_key = ""
     elif raw_api_key:
         api_key = raw_api_key
@@ -541,7 +588,9 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
             explicit_ctx_limit = int(float(configured_ctx) * multiplier)
         except (TypeError, ValueError):
             explicit_ctx_limit = 0
-    if provider == CODEX_PROVIDER:
+    if provider == "cyrene_plugin":
+        endpoints = list(raw.get("endpoints") or [base_url])
+    elif provider == CODEX_PROVIDER:
         endpoints = [CODEX_BASE_URL]
     elif adapter in {"anthropic", "openai", "openai_responses", "gemini", "ollama"}:
         from cyrene.model_runtime.protocol_adapters import protocol_endpoints
@@ -549,7 +598,7 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
         endpoints = protocol_endpoints(adapter, base_url, model)
     else:
         endpoints = _normalized_llm_endpoints(base_url)
-    return {
+    normalized = {
         "id": str(raw.get("id") or f"candidate-{index + 1}").strip() or f"candidate-{index + 1}",
         "profile_id": str(raw.get("profile_id") or raw.get("id") or f"candidate-{index + 1}").strip(),
         "connection_id": str(raw.get("connection_id") or "").strip(),
@@ -578,6 +627,14 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
         "context_limit": max(0, int(explicit_ctx_limit or 0)),
         "endpoints": endpoints,
     }
+    if provider == "cyrene_plugin":
+        normalized.update({
+            "plugin_id": str(raw.get("plugin_id") or ""),
+            "plugin_provider_id": str(raw.get("plugin_provider_id") or ""),
+            "plugin_method": str(raw.get("plugin_method") or ""),
+            "project_id": str(raw.get("project_id") or ""),
+        })
+    return normalized
 
 
 def primary_candidate_supports_vision(session_id: str = "") -> bool:
@@ -1874,10 +1931,7 @@ async def _publish_model_fallback_event(
 
     if session_id and round_id and fallback_model:
         try:
-            from cyrene.workbench.chat import persist_model_status_message
-
-            await asyncio.to_thread(
-                persist_model_status_message,
+            await persist_model_status(
                 session_id,
                 round_id,
                 status="switched",
@@ -1919,10 +1973,7 @@ async def _publish_model_retry_event(
 
     if session_id and round_id and model:
         try:
-            from cyrene.workbench.chat import persist_model_status_message
-
-            await asyncio.to_thread(
-                persist_model_status_message,
+            await persist_model_status(
                 session_id,
                 round_id,
                 status="retry",
@@ -2041,6 +2092,24 @@ async def _publish_llm_transport_event(
 # ---------------------------------------------------------------------------
 
 
+def _rank_explicit_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            **candidate,
+            "_configured_rank": candidate.get("_configured_rank", index),
+            "_endpoint_ranks": {
+                endpoint: (candidate.get("_endpoint_ranks") or {}).get(endpoint, rank)
+                for rank, endpoint in enumerate(candidate.get("endpoints") or [])
+            },
+        }
+        for index, candidate in enumerate(candidates)
+    ]
+
+
+def _candidate_label(candidate: dict[str, Any]) -> str:
+    return f"{candidate.get('id')}({candidate.get('model')}@{candidate.get('base_url')})"
+
+
 async def call_llm(
     messages: list[dict],
     *,
@@ -2117,17 +2186,7 @@ async def call_llm(
     if candidates is None:
         resolved = _prioritize_last_success(resolved, model_type, session_id)
     else:
-        resolved = [
-            {
-                **candidate,
-                "_configured_rank": candidate.get("_configured_rank", index),
-                "_endpoint_ranks": {
-                    endpoint: (candidate.get("_endpoint_ranks") or {}).get(endpoint, rank)
-                    for rank, endpoint in enumerate(candidate.get("endpoints") or [])
-                },
-            }
-            for index, candidate in enumerate(resolved)
-        ]
+        resolved = _rank_explicit_candidates(resolved)
 
     # Context capacity belongs to the candidate that will receive the request,
     # not only to the configured primary.  Reject undersized candidates locally
@@ -2199,9 +2258,6 @@ async def call_llm(
     fallback_notice_sent = False
     attempt_number = 0
     retry_backoff_ms = 0.0
-
-    def _candidate_label(c: dict[str, Any]) -> str:
-        return f"{c.get('id')}({c.get('model')}@{c.get('base_url')})"
 
     client, connection_pool_key, client_pool_reused = _get_http_client(timeout)
     try:
@@ -2382,7 +2438,40 @@ async def call_llm(
                                 )
 
                             try:
-                                if provider == "codex_oauth":
+                                if provider == "cyrene_plugin":
+                                    from cyrene.plugins.integrations import complete_chat_candidate
+
+                                    msg = await complete_chat_candidate(
+                                        candidate,
+                                        messages=messages,
+                                        tools=tools,
+                                        max_tokens=max_tokens,
+                                        stream=stream,
+                                        thinking=thinking,
+                                        response_format=response_format,
+                                        caller=caller,
+                                        phase=phase,
+                                        session_id=session_id,
+                                        timeout=timeout,
+                                    )
+                                    plugin_events = msg.pop("_plugin_stream_events", [])
+                                    if stream:
+                                        if plugin_events:
+                                            for plugin_event in plugin_events:
+                                                if isinstance(plugin_event, dict):
+                                                    await _tracked_stream_callback(plugin_event)
+                                        else:
+                                            await _tracked_stream_callback({"type": "reply_start"})
+                                            reasoning_text = str(msg.get("reasoning_content") or "")
+                                            if reasoning_text:
+                                                await _tracked_stream_callback({"type": "reasoning_start"})
+                                                await _tracked_stream_callback({"type": "reasoning_delta", "delta": reasoning_text})
+                                            content_text = str(msg.get("content") or "")
+                                            if content_text:
+                                                await _tracked_stream_callback({"type": "reply_delta", "delta": content_text})
+                                            await _tracked_stream_callback({"type": "reply_done", "response": content_text})
+                                    msg["usage"] = _normalized_usage(msg.get("usage"), messages, msg)
+                                elif provider == "codex_oauth":
                                     from cyrene.model_runtime.codex_provider import (
                                         CODEX_QUOTA_EXHAUSTED,
                                         CodexAvailabilityError,

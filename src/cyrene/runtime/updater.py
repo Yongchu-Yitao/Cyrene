@@ -363,9 +363,13 @@ async def _download_to(
                 mode = "wb"
 
             downloaded = resume_from
+            hasher = hashlib.sha256()
+            if mode == "ab":
+                _update_hash_from_file(dest, hasher)
             with open(dest, mode) as f:
                 async for chunk in resp.aiter_bytes(65536):
                     f.write(chunk)
+                    hasher.update(chunk)
                     downloaded += len(chunk)
                     if progress_callback and total > 0:
                         progress_callback(downloaded, total)
@@ -375,8 +379,7 @@ async def _download_to(
                     f"update download incomplete: {downloaded} of {total} bytes"
                 )
 
-    # 散列必须覆盖整个文件（续传时 = 已存在部分 + 本次追加），统一重读全文件。
-    checksum = _hash_file(dest)
+    checksum = hasher.hexdigest()
     if resume_from > 0:
         logger.info(
             "Resumed update download: %s (%d bytes / %.1f MB, resumed from %d), SHA256=%s",
@@ -393,10 +396,14 @@ async def _download_to(
 def _hash_file(path: Path) -> str:
     """Read a local file and return its bare sha256 hex digest."""
     hasher = hashlib.sha256()
+    _update_hash_from_file(path, hasher)
+    return hasher.hexdigest()
+
+
+def _update_hash_from_file(path: Path, hasher) -> None:
     with open(path, "rb") as f:
         for block in iter(lambda: f.read(1 << 20), b""):
             hasher.update(block)
-    return hasher.hexdigest()
 
 
 def get_restart_script(update_file: Path) -> str:
@@ -720,6 +727,73 @@ def _persist_download_state(info: UpdateInfo, result: DownloadResult) -> None:
 def get_download_progress() -> dict:
     _restore_download_state()
     return dict(_download_progress)
+
+
+class DownloadProgressRepository:
+    """Public mutation boundary for the shared update-download state."""
+
+    def snapshot(self) -> dict:
+        return get_download_progress()
+
+    def current(self) -> dict:
+        return dict(_download_progress)
+
+    def validate_install(
+        self,
+        validator: Callable[..., tuple[bool, str, str, int]],
+    ) -> tuple[bool, str, str, int]:
+        _restore_download_state()
+        return validator(_download_progress, validate_only=True)
+
+    def checksum_missing(self, info: UpdateInfo) -> str:
+        message = "无法验证更新包：发布资产缺少 sha256 校验值。"
+        _download_progress.update({
+            "downloaded": 0,
+            "total": info.asset_size,
+            "done": False,
+            "path": "",
+            "expected_sha256": "",
+            "actual_sha256": "",
+            "verified": False,
+            "verification_error": message,
+        })
+        return message
+
+    def begin(self, info: UpdateInfo) -> None:
+        _download_progress.update({
+            "downloaded": 0,
+            "total": info.asset_size,
+            "done": False,
+            "path": "",
+            "expected_sha256": info.asset_sha256,
+            "actual_sha256": "",
+            "verified": False,
+            "verification_error": "",
+        })
+
+    def progress(self, downloaded: int, total: int) -> None:
+        _download_progress["downloaded"] = downloaded
+        _download_progress["total"] = total
+
+    def failure(self, message: str) -> None:
+        _download_progress["verification_error"] = message
+
+    def complete(
+        self,
+        result: DownloadResult | None,
+        *,
+        verified: bool,
+        verification_error: str,
+    ) -> None:
+        _download_progress.update({
+            "done": True,
+            "path": str(result.path) if result else "",
+            "actual_sha256": result.sha256 if result else "",
+            "verified": verified,
+            "verification_error": verification_error,
+        })
+        if result:
+            _download_progress["downloaded"] = result.size
 
 
 # ---- 后台任务 ----

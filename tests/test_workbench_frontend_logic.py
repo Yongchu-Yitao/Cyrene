@@ -1,4 +1,14 @@
-from conftest import workbench_chat_route_source, workbench_chat_source
+from conftest import (
+    frontend_module_source,
+    workbench_chat_route_source,
+    workbench_chat_source,
+    workbench_i18n_source,
+    workbench_runtime_source,
+    workbench_settings_source,
+    workbench_shell_source,
+    workbench_style_source,
+)
+import asyncio
 import json
 import re
 import subprocess
@@ -9,8 +19,8 @@ def test_external_agent_frontend_consumes_unified_dynamic_events_and_viewers():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     route_source = workbench_chat_route_source()
-    settings = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    settings = workbench_settings_source()
+    i18n = workbench_i18n_source()
 
     for handler in (
         "onArtifactEvent", "onUsageUpdated", "onSessionUpdated",
@@ -29,15 +39,15 @@ def test_external_agent_frontend_consumes_unified_dynamic_events_and_viewers():
     assert "wbcToolPresentationKind" in source
     assert "progress.slice(-40)" in source
     assert 'var failed = !!entry.failed || ["failed", "error", "failure", "expired", "cancelled"].indexOf(entryStatus) >= 0;' in source
-    assert 'tool_entry["preview"] = str(visible_summary)' in route_source
-    assert "matching_tool_indices = [" in route_source
-    assert "open_tool_indices = [" in route_source
-    assert 'tool_entry["preview"] = existing_preview' in route_source
-    assert 'tool_entry["reasoningOffset"] = len("".join(external_reasoning_parts))' in route_source
-    assert "if external_trace or external_reasoning_parts:" in route_source
-    assert 'del external_trace[:-40]' in route_source
-    assert '"trace": external_trace[-40:]' in route_source
-    assert 'tool_status in {"failed", "error", "failure", "expired", "cancelled"}' in route_source
+    assert 'entry["preview"] = str(summary)' in route_source
+    assert "matching = [" in route_source
+    assert "open_indices = [" in route_source
+    assert 'entry["preview"] = preview' in route_source
+    assert 'entry["reasoningOffset"] = len("".join(self.projection.reasoning_parts))' in route_source
+    assert "if projection.trace or projection.reasoning_parts:" in route_source
+    assert 'del self.projection.trace[:-40]' in route_source
+    assert '"trace": projection.trace[-40:]' in route_source
+    assert 'status in {"failed", "error", "failure", "expired", "cancelled"}' in route_source
     assert 'notifyAgentCatalogChanged("installed")' in settings
     assert '"workbenchChat.attachmentType.audio": "音频"' in i18n
 
@@ -48,31 +58,29 @@ def test_pane_cards_can_detach_into_native_windows_with_browser_view_migration()
     bootstrap = (root / "src" / "webui" / "frontend" / "entry" / "bootstrap.jsx").read_text(
         encoding="utf-8"
     )
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    css = workbench_style_source()
+    i18n = workbench_i18n_source()
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
 
     assert "paneCardDetachRef" in chat
-    assert "preparePaneCardDetach(event, cardId, paneOverride)" in chat
+    drag_controller = frontend_module_source("features/chat/pane-card-drag-controller.jsx")
+    detach_controller = frontend_module_source("features/chat/pane-detachment.jsx")
+    assert "wbcPreparePaneCardDetach(context, event, cardId, paneOverride)" in drag_controller
     assert "onSplitPointerDown={pointerDown}" in chat
-    assert "detachedBridge.beginDrag(paneCardDetachIpcPayload(pendingDetach))" in chat
-    assert "detachedBridge.finishDrag(paneCardDetachIpcPayload(pendingDetach" in chat
+    assert "bridge.beginDrag(context.paneCardDetachIpcPayload(pendingDetach))" in drag_controller
+    assert "bridge.finishDrag(context.paneCardDetachIpcPayload(pendingDetach" in drag_controller
     assert "target.setPointerCapture(event.pointerId)" in chat
-    assert 'document.addEventListener("pointermove", movePaneCardGhost, true)' in chat
+    assert 'document.addEventListener("pointermove", session.move, true)' in drag_controller
     assert 'draggable="true"' not in chat.split("function WbcSplitGripBar", 1)[1].split(
         "function WbcSideAgentSplit", 1
     )[0]
-    assert "detachedBridge.onCreated" in chat
+    assert "bridge.onCreated" in drag_controller
     assert "detachedBridge.onReturned" in chat
-    assert "selectAlternateChatAfterDetachment(pendingDetach)" in chat
-    assert "removeDetachedPaneCard(pendingDetach)" in chat
-    assert "closePaneCard(pendingDetach.cardId, pendingDetach.layoutOwnerChatId)" in chat
-    returned_pane = chat.split("function restoreReturnedDetachedPane", 1)[1].split(
+    assert "wbcSelectAlternateChatAfterDetachment(context, pendingDetach)" in detach_controller
+    assert "wbcRemoveDetachedPaneCard(context, pendingDetach)" in detach_controller
+    assert "context.closePaneCard(pendingDetach.cardId, pendingDetach.layoutOwnerChatId)" in detach_controller
+    returned_pane = detach_controller.split("function wbcRestoreReturnedDetachedPane", 1)[1].split(
         "useWbcEffect(function ()", 1
     )[0]
     assert 'if (descriptor.kind === "chat" && descriptor.payload)' in returned_pane
@@ -101,7 +109,7 @@ def test_pane_cards_can_detach_into_native_windows_with_browser_view_migration()
     assert "const detachedPaneDragSessions = new Map()" in main
     assert "const detachedBrowserSurfaceWindows = new Map()" in main
     assert "createDetachedPaneWindow" in main
-    assert "'chat', 'task', 'file'" in main
+    assert "/^[a-z][a-z0-9._-]{0,79}$/i.test(kind)" in main
     detached_content = chat.split("  function renderContent() {", 1)[1].split(
         "\n  return (", 1
     )[0]
@@ -133,7 +141,7 @@ def test_pane_cards_can_detach_into_native_windows_with_browser_view_migration()
 def test_external_agent_context_uses_report_then_transcript_fallback_copy():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    i18n = workbench_i18n_source()
     assert 'data.compositionSource === "agent_report"' in source
     assert 'data.compositionSource === "public_transcript"' in source
     assert "workbenchChat.ctxBlocks.agentReportDetailed" in source
@@ -157,7 +165,7 @@ def test_external_agent_context_hides_cyrene_only_inbox_and_tool_packages():
 def test_system_default_model_description_is_localized_without_rewriting_custom_copy():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    i18n = workbench_i18n_source()
     friendly = "function wbcFriendlyModelName(" + source.split("function wbcFriendlyModelName(", 1)[1].split("function wbcLocalizedModelDescription", 1)[0]
     localized = "function wbcLocalizedModelDescription(" + source.split("function wbcLocalizedModelDescription(", 1)[1].split("function wbcNormalizePermissionMode", 1)[0]
     script = f'''\nfunction wbcT(key, fallback, params) {{\n  if (key === "workbenchChat.modelProviderDefault") return params.provider + " 默认配置";\n  return fallback;\n}}\n{friendly}\n{localized}\nprocess.stdout.write(JSON.stringify([\n  wbcLocalizedModelDescription({{model:"deepseek-v4-flash", desc:"DeepSeek default"}}),\n  wbcLocalizedModelDescription({{model:"deepseek-v4-flash", desc:"团队默认模型"}})\n]));\n'''
@@ -215,21 +223,22 @@ process.stdout.write(JSON.stringify(files));
 
 
 def test_conversation_viewer_is_chat_scoped_and_reuses_project_file_editor_resources():
-    Path(__file__).resolve().parent.parent
-    source = workbench_chat_source()
-    project_resource = "function wbcProjectFileResource(" + source.split(
+    root = Path(__file__).resolve().parent.parent
+    rail_model = (root / "src/webui/frontend/features/chat/rail-model.jsx").read_text(encoding="utf-8")
+    resource_splits = (root / "src/webui/frontend/features/chat/resource-splits.jsx").read_text(encoding="utf-8")
+    project_resource = "function wbcProjectFileResource(" + rail_model.split(
         "function wbcProjectFileResource(", 1
-    )[1].split("function WbcRail", 1)[0]
-    editable_resource = "function wbcEditableChatFileResource(" + source.split(
+    )[1].split("\n\nexport {", 1)[0]
+    editable_resource = "function wbcEditableChatFileResource(" + resource_splits.split(
         "function wbcEditableChatFileResource(", 1
     )[1].split("function wbcViewerFileFromItems", 1)[0]
-    viewer_match = "function wbcViewerFileFromItems(" + source.split(
+    viewer_match = "function wbcViewerFileFromItems(" + resource_splits.split(
         "function wbcViewerFileFromItems(", 1
     )[1].split("function wbcArtifactFileKey", 1)[0]
-    artifact_key = "function wbcArtifactFileKey(" + source.split(
+    artifact_key = "function wbcArtifactFileKey(" + resource_splits.split(
         "function wbcArtifactFileKey(", 1
     )[1].split("var WBC_PROJECT_FILE_DRAFTS", 1)[0]
-    edit_url = "function wbcProjectFileEditUrl(" + source.split(
+    edit_url = "function wbcProjectFileEditUrl(" + resource_splits.split(
         "function wbcProjectFileEditUrl(", 1
     )[1].split("function wbcCanEditProjectTextFile", 1)[0]
     script = f"""
@@ -260,15 +269,18 @@ process.stdout.write(JSON.stringify({{
     assert result["unrelated"] is None
     assert result["selected"]["source"] == "project"
 
+    source = workbench_chat_source()
     side_panel = source.split("function WbcSide({", 1)[1].split(
         "function WbcOverviewTab", 1
     )[0]
     assert "var chatViewerFile = wbcViewerFileFromItems(viewerFile, viewerItems);" in side_panel
     assert 'if (chatViewerFile) tabs.push({ id: "viewer"' in side_panel
-    open_pane = source.split("  function openPaneContent(", 1)[1].split(
-        "\n  function updatePaneCard", 1
+    open_pane = frontend_module_source("features/chat/pane-layout-controller.jsx").split(
+        "function wbcOpenPaneContent(", 1
+    )[1].split(
+        "\nfunction wbcOpenTaskWorkspace", 1
     )[0]
-    assert 'payload = wbcEditableChatFileResource({ projectId: projectId }, payload);' in open_pane
+    assert 'payload = wbcEditableChatFileResource({ projectId: context.projectId }, payload);' in open_pane
 
 
 def test_chat_file_type_labels_do_not_treat_text_formats_as_word_documents():
@@ -289,6 +301,7 @@ const window = {{ CyreneUI: {{ require() {{
     return 'file';
   }} }} }};
 }} }} }};
+const workbenchServices = {{ library: () => window.CyreneUI.require("library") }};
 eval({json.dumps(constants + helpers)});
 const files = [
   {{ name: 'notes.md', content_type: 'text/plain' }},
@@ -439,9 +452,7 @@ def test_global_search_times_out_and_ignores_stale_requests():
 def test_new_workbench_chat_reuses_create_response_without_refetching():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
+    shell = workbench_shell_source()
 
     assert 'var skipNextHydrationChatIdRef = useWbcRef("");' in source
     assert "skipNextHydrationChatIdRef.current = chat.id;" in source
@@ -585,20 +596,21 @@ process.stdout.write(JSON.stringify({{ created, extended, moved, removedFromThre
 def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     rail = source.split("function WbcRail(", 1)[1].split(
         "// Conversation main (column 3)", 1
     )[0]
+    drop_controller = frontend_module_source("features/chat/rail-drop-controller.jsx")
     assert "WBC_CHAT_GROUPS_PREFIX" in source
     assert "function wbcCreateChatGroup(" in source
     assert "function wbcRemoveChatFromGroups(" in source
     assert 'mode: "group"' in rail
     assert "sourceGroupId" in rail
     assert "commitUngroupDrop(dragState.movingId)" in rail
-    assert "function updateDragState(next)" in rail
+    assert "var updateDragState = dropController.update" in rail
+    assert "function update(next)" in drop_controller
+    assert "update: update" in drop_controller
     assert 'dragState.mode === "group"' in rail
     assert 'className="wbc-chat-group wbc-chat-group-preview drop-ready"' in rail
     assert 'wbcT("workbenchChat.releaseToGroup", "Release to create a chat group")' in rail
@@ -767,19 +779,19 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
 def test_overflowing_chat_card_and_topbar_tab_text_scrolls_on_hover():
     root = Path(__file__).resolve().parent.parent
     chat_source = workbench_chat_source()
-    shell_source = (
-        root / "src" / "webui" / "frontend" / "workbench.jsx"
-    ).read_text(encoding="utf-8")
-    styles = (
-        root / "src" / "webui" / "frontend" / "workbench.css"
-    ).read_text(encoding="utf-8")
+    shell_source = workbench_shell_source()
+    styles = workbench_style_source()
 
     assert "function WbcHoverMarquee(" in chat_source
     assert '<WbcHoverMarquee text={chat.title || wbcT(' in chat_source
     assert '<WbcHoverMarquee text={chat.preview || wbcT(' in chat_source
     assert '<WbcHoverMarquee text={item.title} className="workbench-session-tab-title" />' in shell_source
+    assert '<WbcHoverMarquee text={visibleStatusText}' in shell_source
+    assert 'className="workbench-session-tab-title workbench-session-tab-status-copy" auto={true}' in shell_source
     assert 'metrics.overflow ? " overflow" : ""' in chat_source
+    assert 'auto ? " auto" : ""' in chat_source
     assert ".wbc-hover-marquee.overflow:hover .wbc-hover-marquee-track" in styles
+    assert ".wbc-hover-marquee.overflow.auto .wbc-hover-marquee-track" in styles
     assert "animation: wbc-hover-marquee" in styles
     assert "animation-timing-function: cubic-bezier(.45, 0, 1, 1);" in styles
     assert "infinite alternate" not in styles.split("@keyframes wbc-hover-marquee", 1)[0].rsplit(".wbc-hover-marquee", 1)[-1]
@@ -792,9 +804,7 @@ def test_overflowing_chat_card_and_topbar_tab_text_scrolls_on_hover():
 def test_chat_sidebar_context_is_flat_and_overview_is_integrated():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     assert 'className="wbc-overview-compact"' in source
     assert 'className="workbench-side-section wbc-overview-session"' in source
@@ -845,9 +855,7 @@ def test_builtin_agent_in_overview_uses_plain_text_without_builtin_suffix():
 
 def test_workbench_chat_cards_are_borderless_and_compact_overview_is_flat():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     chat_card_css = styles.split(".wbc-chat-card {", 1)[1].split("}", 1)[0]
     compact_overview_css = styles.split(
@@ -881,9 +889,7 @@ def test_workbench_chat_cards_are_borderless_and_compact_overview_is_flat():
 
 def test_workbench_chat_search_and_custom_background_composer_stay_distinct():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     search_css = styles.split(".wbc-search input {", 1)[1].split("}", 1)[0]
     search_focus_css = styles.split(".wbc-search input:focus {", 1)[1].split("}", 1)[0]
@@ -903,9 +909,7 @@ def test_workbench_chat_search_and_custom_background_composer_stay_distinct():
 
 def test_main_chat_composer_uses_a_solid_canvas_and_readable_input_card():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     source = workbench_chat_source()
 
     stage_css = styles.split("\n.wbc-thread-stage {", 1)[1].split("}", 1)[0]
@@ -956,9 +960,7 @@ def test_main_chat_composer_uses_a_solid_canvas_and_readable_input_card():
 
 def test_split_chat_composers_align_with_the_floating_workspace_rail():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     rail_css = styles.split(
         ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail {", 1
@@ -1001,9 +1003,7 @@ def test_split_chat_composers_align_with_the_floating_workspace_rail():
 
 def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
     hidden_css = styles.split(".wbc-page.wbc-side-hidden {", 1)[1].split("}", 1)[0]
@@ -1041,9 +1041,7 @@ def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane()
 
 def test_workbench_chat_rails_use_hidden_scrollbars():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     chat_list_css = styles.split(".wbc-chat-list {", 1)[1].split("}", 1)[0]
     chat_scrollbar_css = styles.split(
@@ -1074,9 +1072,7 @@ def test_workbench_chat_rails_use_hidden_scrollbars():
 
 def test_global_topbar_is_solid_and_conversation_header_panel_is_removed():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     chat = workbench_chat_source()
     topbar_css = styles.split(".workbench-topbar {", 1)[1].split("}", 1)[0]
     thread_stage_css = styles.split("\n.wbc-thread-stage {", 1)[1].split("}", 1)[0]
@@ -1096,9 +1092,7 @@ def test_global_topbar_is_solid_and_conversation_header_panel_is_removed():
 
 def test_workbench_chat_rail_uses_the_shared_physical_card_and_fixed_header():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     source = workbench_chat_source()
 
     rail_css = styles.split("\n.wbc-rail {", 1)[1].split("}", 1)[0]
@@ -1190,12 +1184,8 @@ def test_workbench_chat_rail_uses_the_shared_physical_card_and_fixed_header():
 def test_collapsed_right_sidebar_restore_control_lives_in_the_global_topbar():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    source = workbench_shell_source()
+    styles = workbench_style_source()
 
     topbar = source.split("function WorkbenchTopbar(", 1)[1].split(
         "function WorkbenchNotificationCenter(", 1
@@ -1213,9 +1203,7 @@ def test_collapsed_right_sidebar_restore_control_lives_in_the_global_topbar():
 
 def test_workbench_chat_sidebar_is_a_top_aligned_floating_accordion():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     source = workbench_chat_source()
 
     right_panel_styles = styles.split("/* ---- right panel ---- */", 1)[1]
@@ -1244,9 +1232,7 @@ def test_workbench_chat_sidebar_is_a_top_aligned_floating_accordion():
 
 def test_workbench_chat_primary_cards_share_an_opaque_dark_surface():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
     dark_page_css = styles.split('html[data-theme="dark"] .wbc-page {', 1)[1].split("}", 1)[0]
@@ -1270,9 +1256,7 @@ def test_workbench_chat_primary_cards_share_an_opaque_dark_surface():
 
 def test_workbench_chat_sidebar_expanded_lists_share_a_responsive_content_system():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     trigger_css = styles.split(".wbc-side-accordion-trigger {", 1)[1].split("}", 1)[0]
     card_css = styles.split("\n.wbc-side-card {", 1)[1].split("}", 1)[0]
@@ -1305,12 +1289,8 @@ def test_workbench_chat_sidebar_tabs_use_panel_specific_svg_icons():
 def test_workbench_chat_single_card_uses_independent_hidden_gutter_resize_handles():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
-    shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    shell = workbench_shell_source()
+    styles = workbench_style_source()
 
     side = chat.split("function WbcSide(", 1)[1].split("function WbcChangesTab", 1)[0]
     browser = chat.split("function WbcBrowserFloatingSurface", 1)[1].split("function WbcMain", 1)[0]
@@ -1375,15 +1355,17 @@ def test_workbench_chat_single_card_uses_independent_hidden_gutter_resize_handle
 def test_workbench_deleted_chat_closes_every_split_reference():
     Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    close_deleted = source.split("  function closeDeletedChatSplits(chatId) {", 1)[1].split(
-        "\n  function movePaneCardOtherSide", 1
+    close_deleted = frontend_module_source("features/chat/pane-layout-controller.jsx").split(
+        "function wbcCloseDeletedChatSplits(context, chatId) {", 1
+    )[1].split(
+        "\nfunction wbcMovePaneCardOtherSide", 1
     )[0]
-    assert "setPaneLayoutsByChat(function (current)" in close_deleted
+    assert "context.setPaneLayoutsByChat(function (current)" in close_deleted
     assert 'card.kind === "chat" && String(card.payload || "") === deletedChatId' in close_deleted
     assert "if (!left.length && right.length)" in close_deleted
-    assert "setResourceSplitByChat(function (current)" in close_deleted
+    assert "context.setResourceSplitByChat(function (current)" in close_deleted
     assert 'resource.type === "chat" && String(resource.payload || "") === deletedChatId' in close_deleted
-    assert "delete paneLayoutRestoreRef.current[cardId]" in close_deleted
+    assert "delete context.paneLayoutRestoreRef.current[cardId]" in close_deleted
     delete_success = source.split("model.deleteChat(chatId).then(function () {", 1)[1].split(
         "}).catch(function (err)", 1
     )[0]
@@ -1393,44 +1375,42 @@ def test_workbench_deleted_chat_closes_every_split_reference():
 def test_workbench_pane_drag_ghost_preserves_current_viewport_and_handle_hotspot():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
-    pane_drag = source.split("  function handlePaneCardDragStart(event, cardId, paneOverride) {", 1)[1].split(
-        "\n  function handlePaneCardDragEnd", 1
-    )[0]
+    pane_drag = frontend_module_source("features/chat/pane-card-drag-controller.jsx")
+    styles = workbench_style_source()
     assert "var conversationViewport = wbcCaptureConversationViewport(card);" in pane_drag
     assert "var clonedCard = wbcClonePaneWithLiveState(card);" in pane_drag
-    assert "var panePreview = clonedCard.clone;" in pane_drag
-    assert 'panePreview.classList.add("wbc-pane-card-drag-surface")' in pane_drag
+    assert "var preview = clonedCard.clone;" in pane_drag
+    assert 'preview.classList.add("wbc-pane-card-drag-surface")' in pane_drag
     assert 'ghost.className = "wbc-pane-card-drag-ghost";' in pane_drag
     assert "clonedCard.restoreViewport();" in pane_drag
-    assert "wbcRestoreConversationViewport(panePreview, conversationViewport);" in pane_drag
+    assert "wbcRestoreConversationViewport(preview, conversationViewport);" in pane_drag
     assert "var handleGrabX" in pane_drag
     assert "var handleGrabY" in pane_drag
-    assert "var capturedClientX = Number(dragHandle.dataset.wbcDragClientX);" in pane_drag
-    assert "var capturedHandleX = Number(dragHandle.dataset.wbcDragHandleX);" in pane_drag
-    assert "movePaneCardGhost(event);" in pane_drag
-    assert "var grabX = (handleRect.left - cardRect.left) + handleGrabX;" in pane_drag
-    assert "var grabY = (handleRect.top - cardRect.top) + handleGrabY;" in pane_drag
-    assert 'ghost.style.transform = "translate3d("' in pane_drag
-    assert 'ghost.classList.add("releasing")' in pane_drag
-    assert "function retirePaneCardGhost()" in pane_drag
-    assert 'ghost.style.visibility = "hidden";' in pane_drag
-    assert "typeof ghost.animate === \"function\"" in pane_drag
-    assert "Promise.resolve(fadeAnimation.finished)" in pane_drag
+    assert "Number(handle.dataset.wbcDragClientX)" in pane_drag
+    assert "Number(handle.dataset.wbcDragHandleX)" in pane_drag
+    assert "wbcMovePaneCardGhost(session, event);" in pane_drag
+    assert "session.grabX = (session.handleRect.left - session.cardRect.left) + handleGrabX;" in pane_drag
+    assert "session.grabY = (session.handleRect.top - session.cardRect.top) + handleGrabY;" in pane_drag
+    assert 'session.ghost.style.transform = "translate3d("' in pane_drag
+    assert 'session.ghost.classList.add("releasing")' in pane_drag
+    assert "function wbcRetirePaneCardGhost(session)" in pane_drag
+    assert 'session.ghost.style.visibility = "hidden";' in pane_drag
+    assert "typeof session.ghost.animate === \"function\"" in pane_drag
+    assert "Promise.resolve(fade.finished)" in pane_drag
     assert "window.requestIdleCallback(detachGhost, { timeout: 300 });" in pane_drag
     assert 'wbcBuildRailCardDragPreview(railCard, "wbc-pane-card-rail-drag-card")' in pane_drag
-    assert 'moveEvent.dataTransfer.dropEffect = "move";' in pane_drag
-    assert 'moveEvent.preventDefault();' in pane_drag
-    assert "detachedBridge.updateDrag" in pane_drag
-    assert 'ghost.classList.toggle("rail-card", overRail);' in pane_drag
-    assert 'railCard.classList.toggle("dragging", overRail);' in pane_drag
-    assert "function pointerIsOverMatchingRailCard(clientX, clientY)" in pane_drag
-    assert 'railCard.classList.toggle("wbc-split-return-target", !!overMatchingCard);' in pane_drag
-    assert 'railPreview.style.left = (grabX - railGrabX) + "px";' in pane_drag
+    assert 'event.dataTransfer.dropEffect = "move";' in pane_drag
+    assert 'event.preventDefault();' in pane_drag
+    assert "bridge.updateDrag" in pane_drag
+    assert 'session.ghost.classList.toggle("rail-card", overRail);' in pane_drag
+    assert 'session.railCard.classList.toggle("dragging", overRail);' in pane_drag
+    assert "wbcPaneDragPointIn(session.railCard" in pane_drag
+    assert 'session.railCard.classList.toggle("wbc-split-return-target", overMatchingCard);' in pane_drag
+    assert 'session.railPreview.style.left = (session.grabX - railGrabX) + "px";' in pane_drag
     assert 'ghost.style.width = (overRail ? railPreviewWidth' not in pane_drag
-    assert "function finishPaneCardGhost(dropEvent)" in pane_drag
-    assert "if (droppedOnMatchingCard && draggedChatId)" in pane_drag
-    assert "placeExistingPaneCard(cardId, pointerPaneTarget.cardId, pointerPaneTarget.edge);" in pane_drag
+    assert "function wbcFinishPaneCardGhost(session, event)" in pane_drag
+    assert "if (droppedOnMatchingCard && session.draggedChatId)" in pane_drag
+    assert "session.context.placeExistingPaneCard(" in pane_drag
     assert "wbcHideNativeDragImage(transfer);" not in pane_drag
     assert "event.dataTransfer.setDragImage(" not in pane_drag
     assert ".wbc-pane-card-drag-ghost" in styles
@@ -1460,9 +1440,7 @@ def test_workbench_pane_drag_ghost_preserves_current_viewport_and_handle_hotspot
     assert "!drag.moved" in tracking
     assert "onSplitDragStart(event, dragSource)" in tracking
     assert "onSplitPointerDown(event, dragSource)" not in tracking
-    pane_drop = source.split("  function handlePaneDrop(event, targetCardId, edge) {", 1)[1].split(
-        "\n  function handleSideLayerDragOver", 1
-    )[0]
+    pane_drop = frontend_module_source("features/chat/pane-drop-controller.jsx")
     assert pane_drop.index("paneCardDragImageCleanupRef.current()") < pane_drop.index("updatePaneLayout(function (current)")
 
 
@@ -1499,9 +1477,7 @@ def test_workbench_clears_stale_side_questions_before_loading_another_chat():
 def test_workbench_side_question_panel_renders_only_the_question_list():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     panel = source.split("function WbcSideAgentsPanel", 1)[1].split(
         "function WbcSideAccordionBody", 1
@@ -1519,8 +1495,8 @@ def test_workbench_side_question_panel_renders_only_the_question_list():
 def test_rail_chat_drop_replaces_the_canonical_active_conversation_by_selection():
     Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    helper = "var WBC_PANE_CARD_SEQUENCE" + source.split(
-        "var WBC_PANE_CARD_SEQUENCE", 1
+    helper = "function wbcStablePaneValue" + source.split(
+        "function wbcStablePaneValue", 1
     )[1].split("function wbcSetSplitDrag", 1)[0]
     script = f"""
 global.localStorage = {{ getItem: () => null }};
@@ -1542,14 +1518,12 @@ process.stdout.write(JSON.stringify([
     )
     assert json.loads(result.stdout) == [True, True, False, False]
 
-    pane_drop = source.split(
-        "  function handlePaneDrop(event, targetCardId, edge) {", 1
-    )[1].split("\n  function handleSideLayerDragOver", 1)[0]
-    replacement_branch = pane_drop.split("if (droppedChatSelection) {", 1)[1].split(
-        "    updatePaneLayout(function (current)", 1
+    pane_drop = frontend_module_source("features/chat/pane-drop-controller.jsx")
+    replacement_branch = pane_drop.split("if (dropped.droppedChatSelection) {", 1)[1].split(
+        "  context.updatePaneLayout(function (current)", 1
     )[0]
     assert "wbcChatDropReplacesActiveConversation(" in pane_drop
-    assert "selectChat(droppedChatSelection);" in replacement_branch
+    assert "context.selectChat(dropped.droppedChatSelection);" in replacement_branch
     assert "updatePaneLayout" not in replacement_branch
     assert "setSideVisible(false)" not in replacement_branch
 
@@ -1557,9 +1531,7 @@ process.stdout.write(JSON.stringify([
 def test_vertical_conversation_split_elastically_reclaims_the_hidden_panel_track():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
     reclaim_css = styles.split(
         ".wbc-page.wbc-pane-single-column-open {", 1
@@ -1568,7 +1540,9 @@ def test_vertical_conversation_split_elastically_reclaims_the_hidden_panel_track
         ".wbc-page.side-agent-split-open > .wbc-pane-layout.single {", 1
     )[1].split("}", 1)[0]
 
-    assert "var singleColumnWorkspaceOpen = splitDetailOpen" in source
+    pane_presentation = frontend_module_source("features/chat/pane-workspace.jsx")
+    assert "singleColumnWorkspaceOpen: splitDetailOpen && !projectPaneOnly && !paneHasTwoColumns && !projectTaskPanelCard" in pane_presentation
+    assert "var singleColumnWorkspaceOpen = panePresentation.singleColumnWorkspaceOpen" in source
     assert 'singleColumnWorkspaceOpen ? " wbc-pane-single-column-open"' in source
     inline_width = source.split(
         '"--wbc-chat-side-preview-width": sideAgentSplitWidth + "px",', 1
@@ -1583,9 +1557,10 @@ def test_vertical_conversation_split_elastically_reclaims_the_hidden_panel_track
 def test_pane_grip_drag_uses_rendered_position_key_for_drop_feedback():
     Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
+    drag_controller = frontend_module_source("features/chat/pane-card-drag-controller.jsx")
 
-    hit_testing = source.split("    function paneTargetAt(clientX, clientY) {", 1)[1].split(
-        "    function movePaneCardGhost", 1
+    hit_testing = drag_controller.split("function wbcPaneDragTargetAt(session, clientX, clientY) {", 1)[1].split(
+        "function wbcPaneDragPointIn", 1
     )[0]
     frame = source.split("function WbcPaneCardFrame(", 1)[1].split(
         "function WbcPaneRowResizer", 1
@@ -1619,15 +1594,11 @@ def test_task_and_chat_side_drop_use_the_same_live_panel_geometry():
 def test_workbench_two_level_card_panes_share_drag_resize_and_menu_contracts():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
+    i18n = workbench_i18n_source()
 
-    helper = "var WBC_PANE_CARD_SEQUENCE" + source.split(
-        "var WBC_PANE_CARD_SEQUENCE", 1
+    helper = "function wbcStablePaneValue" + source.split(
+        "function wbcStablePaneValue", 1
     )[1].split("function wbcSetSplitDrag", 1)[0]
     script = f"""
 global.localStorage = {{ getItem: () => null }};
@@ -1637,6 +1608,8 @@ const fileA = wbcPaneCard("file", {{ path: "a.md" }}, {{ id: "file:a" }});
 const fileB = wbcPaneCard("file", {{ path: "b.md" }}, {{ id: "file:b" }});
 const chatB = wbcPaneCard("chat", "chat-b", {{ id: "chat:chat-b" }});
 const duplicateMain = wbcPaneCard("chat", "main", {{ freshInstance: true, ownerChatId: "main" }});
+const pluginA = wbcPaneCard("plugin-view", {{ pluginId: "usage", viewId: "main" }});
+const pluginB = wbcPaneCard("plugin-view", {{ viewId: "main", pluginId: "usage" }});
 const verticalSameChat = wbcPlacePaneCard(base, duplicateMain, "left", "top", "", "chat:main");
 const verticalSource = verticalSameChat.left[1];
 const verticalCompanion = verticalSameChat.left[0];
@@ -1665,6 +1638,7 @@ process.stdout.write(JSON.stringify({{
     distinctIds: verticalSameChat.left[0].id !== verticalSameChat.left[1].id,
     payloads: verticalSameChat.left.map(card => card.payload),
   }},
+  pluginIdentity: [pluginA.id === pluginB.id, pluginA.id.startsWith("plugin-view:")],
   axisLeft: [axisLeft.left[0].id === verticalSource.id, axisLeft.right[0].id === verticalCompanion.id],
   axisRight: [axisRight.left[0].id === verticalCompanion.id, axisRight.right[0].id === verticalSource.id],
   externalLeft: [externalLeft.left[0].id, externalLeft.right[0].id],
@@ -1691,6 +1665,7 @@ process.stdout.write(JSON.stringify({{
             "distinctIds": True,
             "payloads": ["main", "main"],
         },
+        "pluginIdentity": [True, True],
         "axisLeft": [True, True],
         "axisRight": [True, True],
         "externalLeft": ["file:a", "chat:main"],
@@ -1718,10 +1693,12 @@ process.stdout.write(JSON.stringify({{
     assert 'dropTarget.dropKey || ""' in source
     assert 'side + ":" + index' in source
     assert "freshInstance: !!existingChat" in source
-    assert "var existingChatCard = canonicalCardId" in source
-    assert 'wbcPaneCard("chat", payload, { ownerChatId: ownerId, freshInstance: true })' in source
-    assert 'sourceCardId = replacingSameChatCard ? canonicalChatCardId : ""' in source
-    assert 'String(card.id || "") === "chat:" + String(activeChatId || "")' in source
+    pane_layout = frontend_module_source("features/chat/pane-layout-controller.jsx")
+    assert "var canonicalId =" in pane_layout
+    assert "var existing = canonicalId ? wbcPaneCardLocation" in pane_layout
+    assert 'wbcPaneCard(normalizedType, payload, { ownerChatId: ownerId, freshInstance: true })' in pane_layout
+    assert 'sourceCardId = replacingChat ? chatCardId : ""' in source
+    assert "if (isActiveConversation && singlePane)" in source
     assert '(layout[target.side] || []).length >= 2 ? "replace" : edge' in source
     assert 'className={"wbc-pane-card-drop-layer" + (replaceOnly ? " replace-only" : "") + (axisEnabled ? " axis-enabled" : "")}' in source
     assert "axisEnabled={paneCardCount === 1}" in source
@@ -1733,7 +1710,7 @@ process.stdout.write(JSON.stringify({{
     assert 'card.kind === "file" || card.kind === "viewer"' in source
     assert 'card.kind === "side-agent"' in source
     assert 'setSideTab("side-agents")' in source
-    assert "wbcPlacePaneCard(current, card, target.side, effectiveEdge" in source
+    assert "current, dropped.card, target.side, effectiveEdge" in source
     assert "function openConversationPanelFromMainGrip()" in source
     assert "if (paneCardCount === 1)" in source
     assert 'window.dispatchEvent(new CustomEvent("workbench:show-chat-side"));' in source.split(
@@ -1812,7 +1789,7 @@ process.stdout.write(JSON.stringify({{
     context_surface = source.split("function WbcPaneContextTrackDropSurface", 1)[1].split(
         "function WbcPaneFiveWayDropSurface", 1
     )[0]
-    for edge in ("left", "right"):
+    for edge in ("top", "left", "right", "bottom"):
         assert f'className="wbc-pane-context-drop-sensor {edge}"' in context_surface
         assert f'onDrop(event, card.id, "{edge}")' in context_surface
     assert '"wbc-pane-card-drop-zone context-preview " + activeEdge + " active"' in context_surface
@@ -1822,8 +1799,19 @@ process.stdout.write(JSON.stringify({{
     assert "var(--wbc-card-top-inset)" in context_drop_css
     context_tracks_css = styles.split(".wbc-pane-card-drop-layer.context-tracks {", 1)[1].split("}", 1)[0]
     assert "grid-template-columns: minmax(0, 1fr) var(--wbc-side-track-width);" in context_tracks_css
-    assert ".wbc-pane-card-drop-zone.context-preview.left" in styles
-    assert ".wbc-pane-card-drop-zone.context-preview.right" in styles
+    assert "grid-template-rows: repeat(3, minmax(0, 1fr));" in context_tracks_css
+    for edge, column, row in (
+        ("top", "1", "1"),
+        ("left", "1", "2"),
+        ("right", "2", "1 / 4"),
+        ("bottom", "1", "3"),
+    ):
+        sensor_css = styles.split(f".wbc-pane-context-drop-sensor.{edge} {{", 1)[1].split("}", 1)[0]
+        preview_css = styles.split(f".wbc-pane-card-drop-zone.context-preview.{edge} {{", 1)[1].split("}", 1)[0]
+        assert f"grid-column: {column};" in sensor_css
+        assert f"grid-row: {row};" in sensor_css
+        assert f"grid-column: {column};" in preview_css
+        assert f"grid-row: {row};" in preview_css
     assert 'chatSideDropActive && paneCardCount !== 1' in source
     assert 'resourceSplitDropSide && paneCardCount !== 1' in source
     assert ".wbc-pane-axis-drop-layer" in styles
@@ -1879,28 +1867,30 @@ def test_each_conversation_split_grip_closes_its_own_conversation():
 def test_floating_conversation_panel_resource_split_replaces_right_and_restores_previous_split():
     Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    opener = source.split("function openPaneContent", 1)[1].split(
-        "function updatePaneCard", 1
+    pane_controller = frontend_module_source("features/chat/pane-layout-controller.jsx")
+    opener = pane_controller.split("function wbcOpenPaneContent", 1)[1].split(
+        "function wbcOpenTaskWorkspace", 1
     )[0]
     panel = source.split("function renderConversationPanel", 1)[1].split(
         "function openContentFromPaneCard", 1
     )[0]
-    closer = source.split("function closePaneCard", 1)[1].split(
-        "function movePaneCardOtherSide", 1
+    closer = pane_controller.split("function wbcClosePaneCard", 1)[1].split(
+        "function wbcCloseDeletedChatSplits", 1
     )[0]
     assert "paneLayoutRestoreRef.current[card.id] = layout" in opener
     assert "next.left = [source.card]" in opener
     assert "next.right = [card]" in opener
     assert "restore: !!floating" in panel
     assert "promoteSourceLeft: true" in panel
-    assert "updatePaneLayout(restore, ownerChatId)" in closer
+    assert "wbcUpdatePaneLayout(context, restore, ownerChatId)" in closer
 
 
 def test_workbench_message_viewer_action_opens_the_file_split_directly():
     Path(__file__).resolve().parent.parent
-    source = workbench_chat_source()
-    open_viewer = source.split("  function openViewer(file, preferredSide) {", 1)[1].split(
-        "\n  function resourceSplitSideAt", 1
+    open_viewer = frontend_module_source("features/chat/page-resource-controller.jsx").split(
+        "function wbcOpenViewer(context, file, preferredSide) {", 1
+    )[1].split(
+        "function wbcOpenProjectFile", 1
     )[0]
     assert "setViewerFile(file);" in open_viewer
     assert 'selectResourceSplit("viewer", wbcArtifactFileKey(file), true);' in open_viewer
@@ -1911,9 +1901,7 @@ def test_workbench_message_viewer_action_opens_the_file_split_directly():
 def _legacy_test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     select_handler = source.split("function selectSideAgent", 1)[1].split(
         "function closeSideAgentSplit", 1
@@ -2358,14 +2346,12 @@ process.stdout.write(JSON.stringify([
 def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     grip_bar = source.split("function WbcSplitGripBar", 1)[1].split(
         "function WbcSideAgentSplit", 1
     )[0]
-    assert 'window.CyreneUI.require("browser-overlays")' in grip_bar
+    assert "workbenchServices.browserOverlays()" in grip_bar
     assert "overlays.adjust(1);" in grip_bar
     assert "overlays.adjust(-1);" in grip_bar
     assert "}, [menuOpen]);" in grip_bar
@@ -2427,9 +2413,7 @@ def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
 def _legacy_test_each_conversation_split_grip_closes_its_own_conversation():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    i18n = workbench_i18n_source()
 
     close_main = source.split("  function closeMainConversationSplit() {", 1)[1].split(
         "\n  function closeActiveSplit", 1
@@ -2470,9 +2454,7 @@ def _legacy_test_each_conversation_split_grip_closes_its_own_conversation():
 def _legacy_test_floating_conversation_panel_resource_split_replaces_right_and_restores_previous_split():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     begin = source.split("  function beginFloatingPanelSplit(openSplit, sourceChatId, sourceChatSnapshot) {", 1)[1].split(
         "\n  function restoreFloatingPanelSplit", 1
@@ -2632,9 +2614,8 @@ def _legacy_test_floating_conversation_panel_resource_split_replaces_right_and_r
 def test_workbench_artifacts_use_the_shared_resizable_split_preview():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    split_controller = frontend_module_source("features/chat/split-selection-controller.jsx")
+    styles = workbench_style_source()
 
     artifact_tab = source.split("function WbcArtifactsTab", 1)[1].split(
         "window.CyreneUI.chat", 1
@@ -2642,16 +2623,16 @@ def test_workbench_artifacts_use_the_shared_resizable_split_preview():
     artifact_split = source.split("function WbcArtifactSplit({", 1)[1].split(
         "function WbcSideAgentSplitHost", 1
     )[0]
-    select_handler = source.split("function selectArtifact", 1)[1].split(
-        "function closeSideAgentSplit", 1
+    select_handler = split_controller.split("function wbcSelectArtifact", 1)[1].split(
+        "function wbcSelectChange", 1
     )[0]
 
     assert 'workbenchChat.filesAndArtifacts' not in artifact_tab
     assert 'className="wbc-artifact-list"' in artifact_tab
     assert 'className="wbc-artifact-list-row"' in artifact_tab
     assert "if (onSelectArtifact) onSelectArtifact(file);" in artifact_tab
-    assert "setArtifactSplitByChat" in select_handler
-    assert "setSideAgentSplitByChat" in select_handler
+    assert "context.setArtifactSplitByChat" in select_handler
+    assert 'wbcClearOtherSplits(context, chatId, "artifact")' in select_handler
     assert "function WbcArtifactSplitHost" in source
     assert "<WbcSideAgentSplitResizer width={width} onResize={onResize} splitSide={splitSide} />" in source
     assert "<WbcSideSplitGrip" not in source
@@ -2664,14 +2645,14 @@ def test_workbench_artifacts_use_the_shared_resizable_split_preview():
     assert "hideHeader={true}" in artifact_split
     assert 'className="wbc-artifact-split-actions"' in artifact_split
     assert 'className="wbc-side-agent-split-action"' in artifact_split
-    assert "var splitDetailOpen = paneUsesWorkspace;" in source
+    assert "var splitDetailOpen = paneCardCount > 1;" in source
     assert ".wbc-artifact-list-row" in styles
     assert ".wbc-artifact-split-viewer" in styles
 
 
 def test_workbench_viewer_split_grip_has_symmetric_vertical_spacing():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     pane_split = styles.split(
         "\n.wbc-pane-card > .wbc-side-agent-split {"
@@ -2716,9 +2697,7 @@ def _legacy_test_workbench_message_viewer_action_opens_the_file_split_directly()
 def test_project_file_rows_drag_to_viewer_split_and_topbar_resource_shelf():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     project_resource = source.split("function wbcProjectFileResource", 1)[1].split(
         "function WbcRail", 1
@@ -2729,9 +2708,7 @@ def test_project_file_rows_drag_to_viewer_split_and_topbar_resource_shelf():
     project_browser = source.split("function WbcRail", 1)[1].split(
         "function WbcBrowserFloatingSurface", 1
     )[0]
-    split_drop = source.split("  function resourceSplitDropGeometry", 1)[1].split(
-        "\n  function revealTopbarResource", 1
-    )[0]
+    split_drop = frontend_module_source("features/chat/page-drop-controller.jsx")
 
     assert 'source: "project"' in project_resource
     assert '"/api/projects/" + encodeURIComponent(projectId) + "/files/content/"' in project_resource
@@ -2744,7 +2721,7 @@ def test_project_file_rows_drag_to_viewer_split_and_topbar_resource_shelf():
     assert 'resource.kind !== "file"' in split_drop
     assert "setSplitSideDirect(side);" in split_drop
     assert "openViewer(resource.file" in split_drop
-    assert "function resourceSplitDropGeometry()" in source
+    assert "function wbcResourceSplitDropGeometry(pageRef)" in split_drop
     assert "var chatSideRect = wbcChatSideZoneRect();" in split_drop
     assert "event.clientX < geometry.rightLeft ? \"left\" : \"right\"" in split_drop
     assert 'className="wbc-resource-file-drop-zones"' in source
@@ -2772,24 +2749,18 @@ def test_project_file_rows_drag_to_viewer_split_and_topbar_resource_shelf():
 def test_project_files_open_in_a_project_scoped_pane_without_an_active_chat():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
-    pane_helpers = source.split("  function projectPaneOwnerKey()", 1)[1].split(
-        "\n  function updatePaneCard", 1
-    )[0]
-    open_viewer = source.split("  function openViewer(file, preferredSide)", 1)[1].split(
-        "\n  function openProjectFile", 1
-    )[0]
+    pane_helpers = frontend_module_source("features/chat/pane-layout-controller.jsx")
+    open_viewer = frontend_module_source("features/chat/page-resource-controller.jsx")
 
-    assert 'return projectId ? "project:" + String(projectId) : "";' in pane_helpers
-    assert "chatId || activeChatIdRef.current || projectPaneOwnerKey()" in pane_helpers
-    assert "wbcNormalizePaneLayout(paneLayoutsByChat[ownerId], ownerChatId)" in pane_helpers
+    assert 'return context.projectId ? "project:" + String(context.projectId) : "";' in pane_helpers
+    assert "chatId || context.activeChatIdRef.current || wbcProjectPaneOwnerKey(context)" in pane_helpers
+    assert "wbcNormalizePaneLayout(context.paneLayoutsByChat[ownerId], ownerChatId)" in pane_helpers
     assert 'if (!ownerId || !type) return null;' in pane_helpers
     assert 'openPaneContent("file", file' in open_viewer
-    assert "var projectPaneOnly = !activeChatId && paneCardCount > 0;" in source
-    assert "var showNewConversationWorkspace = !activeChatId && paneCardCount === 0;" in source
+    assert 'paneOnlyCard.kind !== "chat"' in source
+    assert "showNewConversationWorkspace: !activeChatId && paneCardCount === 0" in source
     assert '(projectPaneOnly ? " wbc-project-pane-only" : "")' in source
     assert "!projectPaneOnly && !floatingConversationPanelOpen && !splitDetailOpen" in source
     assert 'className="wbc-pane-column left wbc-new-conversation-column"' in source
@@ -2800,7 +2771,7 @@ def test_project_files_open_in_a_project_scoped_pane_without_an_active_chat():
     assert 'var isNewConversation = card.kind === "chat"' in pane_card_renderer
     assert 'String(card.id || "") === "new-conversation"' in pane_card_renderer
     assert "var isActiveConversation = isNewConversation || (" in pane_card_renderer
-    assert pane_card_renderer.index("if (isActiveConversation)") < pane_card_renderer.index(
+    assert pane_card_renderer.index("if (isActiveConversation && singlePane)") < pane_card_renderer.index(
         '} else if (card.kind === "chat")'
     )
     split_chat = source.split("function WbcChatSplit({", 1)[1].split(
@@ -2828,9 +2799,7 @@ def test_project_text_files_use_codemirror_with_live_markdown_and_conflict_contr
     renderer = (
         root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx"
     ).read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(
         encoding="utf-8"
     )
@@ -2874,9 +2843,7 @@ def test_project_text_files_use_codemirror_with_live_markdown_and_conflict_contr
 def test_workbench_changes_panel_is_list_only_and_opens_shared_diff_split():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     changes_tab = source.split("function WbcChangesTab", 1)[1].split(
         "function WbcSubagentsTab", 1
@@ -2912,9 +2879,7 @@ def test_workbench_resource_tabs_use_lists_and_shared_splits_while_branches_expa
     browser = (root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(
         encoding="utf-8"
     )
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     side = source.split("function WbcSide({", 1)[1].split("function wbcChangeTypeLabel", 1)[0]
     assert 'activeTab === "viewer" && <WbcViewerList' in side
@@ -2957,9 +2922,7 @@ def test_workbench_resource_tabs_use_lists_and_shared_splits_while_branches_expa
 def test_workbench_chat_composer_uses_native_content_sizing_without_forced_layout():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     composer = source.split("function WbcComposer({", 1)[1].split(
         "function wbcClearComposerDraft", 1
@@ -2999,9 +2962,7 @@ def test_workbench_chat_composer_batches_draft_storage_and_reserve_height_update
 
 def test_workbench_chat_composer_themes_share_one_optimized_glass_pipeline():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     shell = styles.split("\n.workbench-shell {", 1)[1].split("}", 1)[0]
     base = styles.split("\n.wbc-composer-box {", 1)[1].split("}", 1)[0]
@@ -3037,9 +2998,7 @@ def test_workbench_chat_composer_themes_share_one_optimized_glass_pipeline():
 
 def test_memory_detail_uses_shared_floating_card_and_animated_accordion():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     memory_source = (
         root / "src" / "webui" / "frontend" / "workbench-memory.jsx"
     ).read_text(encoding="utf-8")
@@ -3163,9 +3122,7 @@ def test_memory_detail_uses_shared_floating_card_and_animated_accordion():
 
 def test_memory_page_hides_all_scrollbars_without_disabling_scroll():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     scrollbar_scope = styles.split(
         "/* Keep every memory surface scrollable without exposing scrollbar chrome. */",
@@ -3185,7 +3142,7 @@ def test_memory_page_hides_all_scrollbars_without_disabling_scroll():
 
 def test_memory_first_card_clears_the_dark_glass_toolbar():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     memory_main = styles.split(".wb-mem-main {", 1)[1].split("}", 1)[0]
     dark_memory_main = styles.split(
@@ -3261,13 +3218,9 @@ def test_library_workspace_tabs_are_integrated_into_the_floating_right_inspector
 
 def test_notification_items_navigate_to_their_precise_context():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
+    source = workbench_shell_source()
     chat_source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     assert "function wbNotificationNavigationTarget(item)" in source
     assert 'type: "chat", chatId: meta.chatId' in source
@@ -3276,7 +3229,7 @@ def test_notification_items_navigate_to_their_precise_context():
     assert 'type: "knowledge", docId: meta.documentId || meta.docId' in source
     assert 'setSettingsTab("about")' in source
     assert "navigateFromSearch(target);" in source
-    assert "onOpenNotification={navigateFromNotification}" in source
+    assert "onOpenNotification={navigation.navigateNotification}" in source
     assert 'className="workbench-notif-item-jump"' in source
     assert 'targetProjectId === String(projectIdRef.current || "")' in chat_source
     assert "refreshChats(targetId);" in chat_source
@@ -3286,6 +3239,7 @@ def test_notification_items_navigate_to_their_precise_context():
 def test_workbench_chat_interrupt_waits_for_server_and_uses_live_status_everywhere():
     Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
+    runtime_hooks = frontend_module_source("features/chat/runtime-page-hooks.jsx")
 
     runtime_interrupt = source.split(
         "  function interrupt(chatId, model) {", 1
@@ -3299,7 +3253,7 @@ def test_workbench_chat_interrupt_waits_for_server_and_uses_live_status_everywhe
     assert ".finally(function () {" not in runtime_interrupt
     assert "abort(chatId);" in runtime_interrupt
     assert 'fire("onInterrupted", chatId);' in source
-    assert 'return { ...prev, status: "idle" };' in source
+    assert 'return !previous || previous.id !== chatId ? previous : { ...previous, status: "idle" };' in runtime_hooks
     assert "runtime ?" in side_status
     assert 'className={"wbc-overview-status" + (runtime ? " live" : "")}' in side_status
     assert 'chat.status === "running"' not in side_status
@@ -3316,22 +3270,45 @@ def test_workbench_chat_restores_project_cache_before_background_refresh():
     assert "setChatLoading(!cachedChat);" in source
 
 
-def test_remote_chat_change_refreshes_the_open_transcript_as_well_as_the_rail():
+def test_remote_chat_change_projects_summary_without_refreshing_the_open_transcript():
     Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
+    live_events = frontend_module_source("features/chat/live-event-controller.jsx")
 
-    event_block = source.split('if (event.type === "workbench_chat_changed") {', 1)[1].split(
+    event_block = live_events.split('if (event.type === "workbench_chat_changed") {', 1)[1].split(
         'if (event.type === "workspace_changes")', 1
     )[0]
-    assert "remoteChangedChatIdsRef.current.add(changedChatId || \"*\")" in event_block
-    assert 'refreshChats("");' in event_block
-    assert 'changedChatIds.has(openChatId)' in event_block
-    assert "setLoadRevision(function (value) { return value + 1; });" in event_block
+    summary_branch, fallback_branch = event_block.split(
+        "if (context.applyChatSummaryEvent(event)) return;", 1
+    )
+    assert "applyChatSummaryEvent" not in summary_branch
+    assert "wbcScheduleRemoteChatRefresh(context, event);" in fallback_branch
+    refresh_branch = live_events.split("function wbcScheduleRemoteChatRefresh", 1)[1].split(
+        "function wbcApplyProactiveMessage", 1
+    )[0]
+    assert "remoteChangedChatIdsRef.current.add(changedChatId || \"*\")" in refresh_branch
+    assert 'context.refreshChats("");' in refresh_branch
+    assert 'changedChatIds.has(openChatId)' in refresh_branch
+    assert "context.setLoadRevision(function (value) { return value + 1; });" in refresh_branch
+
+    projection = source.split("  function applyChatSummaryEvent(event) {", 1)[1].split(
+        "\n  // Initial load + project switch.", 1
+    )[0]
+    assert "chatCache.details[chatId] = mergeProjection(cached)" in projection
+    assert "setActiveChat(function (current)" in projection
+    assert "setChats(function (current)" in projection
+    assert "beginChatListRequest" in projection
+    assert "event.userMessage" in projection
+    assert "event.assistantMessages" in projection
+    assert "wbcMergeChronologicalMessages" in projection
+    assert "model.getChat" not in projection
+    assert "refreshChats" not in projection
 
 
 def test_remote_chat_refresh_and_notification_navigation_use_the_latest_project():
     Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
+    live_events = frontend_module_source("features/chat/live-event-controller.jsx")
 
     page_setup = source.split("function WorkbenchChatPage", 1)[1].split(
         "  function refreshChats", 1
@@ -3342,36 +3319,40 @@ def test_remote_chat_refresh_and_notification_navigation_use_the_latest_project(
     navigation = source.split("  function applyPendingChatSelection() {", 1)[1].split(
         "\n  useWbcEffect(function () {", 1
     )[0]
-    remote_events = source.split(
+    remote_events = live_events.split(
         'if (event.type === "workbench_chat_changed") {', 1
     )[1].split('if (event.type === "workspace_changes")', 1)[0]
+    remote_refresh = live_events.split("function wbcScheduleRemoteChatRefresh", 1)[1].split(
+        "function wbcApplyProactiveMessage", 1
+    )[0]
 
     assert "projectIdRef.current = projectId;" in page_setup
     assert 'var requestedProjectId = String(projectIdRef.current || "");' in refresh
     assert "var requestedProjectId = projectId;" not in refresh
     assert "refreshChats(targetId);" in navigation
-    assert 'refreshChats("");' in remote_events
+    assert "if (context.applyChatSummaryEvent(event)) return;" in remote_events
+    assert 'context.refreshChats("");' in remote_refresh
 
 
 def test_background_chat_completion_updates_detail_cache_before_runtime_is_cleared():
     Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
+    hooks = frontend_module_source("features/chat/runtime-page-hooks.jsx")
 
-    saved_hook = source.split(
-        "onAssistantSaved: function (chatId, assistantMessages, terminalEvent) {", 1
-    )[1].split("onAwaitingUser:", 1)[0]
-    settled_hook = source.split("onSettled: function (chatId) {", 1)[1].split(
-        "onResync:", 1
-    )[0]
-    resync_hook = source.split("onResync: function (chatId) {", 1)[1].split(
-        "    });", 1
+    saved_hook = hooks.split(
+        "function wbcRuntimeAssistantSaved(context, chatId, assistantMessages, terminalEvent) {", 1
+    )[1].split("function wbcRuntimeAgentArtifact", 1)[0]
+    resync_hook = hooks.split("function wbcRuntimeResync(context, chatId) {", 1)[1].split(
+        "function wbcRuntimePageHooks", 1
     )[0]
 
-    assert "chatCache.details[chatId] = wbcMergeSavedAssistantMessages" in saved_hook
-    assert 'wbcSettleChatListItem(chat, "completed", terminalEvent)' in saved_hook
+    assert "var terminalSummary = terminalEvent && terminalEvent.chatSummary;" in saved_hook
+    assert "function mergeTerminal(chat)" in saved_hook
+    assert "context.chatCache.details[chatId] = mergeTerminal(cachedChat);" in saved_hook
+    assert 'wbcSettleChatListItem(projected, "completed", terminalEvent)' in saved_hook
     assert "beginChatListRequest(currentProjectId)" in saved_hook
-    assert "chatCache.details[chatId] = chat;" in settled_hook
-    assert "chatCache.details[chatId] = chat;" in resync_hook
+    assert "onSettled: function" not in source
+    assert "context.chatCache.details[chatId] = chat;" in resync_hook
 
 
 def test_saved_assistant_messages_merge_reasoning_into_stale_background_chat():
@@ -3419,9 +3400,9 @@ process.stdout.write(JSON.stringify({{
     refresh = source.split("  function refreshChats(selectId) {", 1)[1].split(
         "\n  // Initial load + project switch.", 1
     )[0]
-    create = source.split("  function handleCreateChat() {", 1)[1].split(
-        "\n  // The shell-level menu/shortcut", 1
-    )[0]
+    create = frontend_module_source("features/chat/chat-action-controller.jsx").split(
+        "function wbcHandleCreateChat(context) {", 1
+    )[1].split("function wbcHandleRenameChat", 1)[0]
     assert "var selectionAtRequest = String(activeChatIdRef.current || \"\");" in refresh
     assert "var requestSequence = beginChatListRequest(requestedProjectId);" in refresh
     assert "isCurrentChatListRequest(requestedProjectId, requestSequence)" in refresh
@@ -3433,9 +3414,7 @@ process.stdout.write(JSON.stringify({{
 def test_workbench_chat_has_long_conversation_navigation_and_bottom_return():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     assert "function WbcConversationNavigator" in source
     assert 'data-wbc-nav-item={nav ? "true" : undefined}' in source
@@ -3443,15 +3422,22 @@ def test_workbench_chat_has_long_conversation_navigation_and_bottom_return():
     assert "scrollToConversationBottom" in source
     assert 'className="wbc-scroll-to-bottom"' in source
     assert 'navigation={msg.role === "user" ? wbcUserMessageNavigationMeta(msg) : null}' in source
-    assert "visible: markers.length > 5" in source
+    assert "var visible = markers.length > 5;" in source
     assert 'className="wbc-conversation-nav-trigger"' in source
     assert 'className="wbc-conversation-nav-panel"' in source
     assert 'className="wbc-conversation-nav-list"' in source
+    navigator = source.split("class WbcConversationNavigatorObserver", 1)[1].split(
+        "export { WbcConversationNavigator }", 1
+    )[0]
+    assert "this.itemsDirty = true;" in navigator
+    assert "if (this.itemsDirty) this.refreshItems();" in navigator
+    assert "this.centers[index] = this.items[index].offsetTop + this.items[index].offsetHeight / 2;" in navigator
+    assert "if (current.visible === visible && current.active === active" in navigator
     assert "hoveredIndex" not in source
     assert "var contentPreview = wbcNavigationPreview(msg.content || \"\");" in source
     assert "var attachmentPreview = attachmentTypes.slice(0, 2).join(\" · \");" in source
     assert "contentPreview ? prefix + \": \" + preview : preview" in source
-    assert '"workbenchChat.attachmentType.image": "图片"' in (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    assert '"workbenchChat.attachmentType.image": "图片"' in workbench_i18n_source()
     assert ".wbc-conversation-nav" in styles
     assert ".wbc-conversation-nav:hover .wbc-conversation-nav-panel" in styles
     assert ".wbc-conversation-nav-list" in styles
@@ -3469,9 +3455,7 @@ def test_workbench_chat_has_long_conversation_navigation_and_bottom_return():
 def test_maximized_browser_has_compact_agent_chat_with_transient_status():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     assert 'effectiveMode === "maximized" && !hasNativeChatOverlay && (' in source
     assert 'browserWindowMode === "maximized" ? " browser-window-maximized" : ""' in source
@@ -3482,19 +3466,34 @@ def test_maximized_browser_has_compact_agent_chat_with_transient_status():
     assert "transition: none;" in released_stage_css
     assert "will-change: auto;" in released_stage_css
     assert 'className="wbc-browser-fullscreen-chat"' in source
-    assert "fullscreenStatusRequested" in source
-    assert "fullscreenFinalReply" in source
-    assert "latestAssistantReplyText" in source
-    assert "fullscreenReplyBaselineRef" in source
-    assert "}, 5000);" in source
+    fullscreen_chat = source.split(
+        "function useWbcFullscreenBrowserChat", 1
+    )[1].split("function useWbcConversationRuntime", 1)[0]
+    reply_effects = source.split(
+        "function useWbcFullscreenReplyEffects", 1
+    )[1].split("function wbcNativeChatOverlayColors", 1)[0]
+    native_overlay_effects = source.split(
+        "function useWbcNativeChatOverlayEffects", 1
+    )[1].split("function useWbcFullscreenBrowserChat", 1)[0]
+    assert "fullscreenStatusRequested" in fullscreen_chat
+    assert "fullscreenFinalReply" in fullscreen_chat
+    assert "latestAssistantReplyText" in fullscreen_chat
+    # The baseline now belongs to the fullscreen-chat hook. Verify the reply
+    # identity contract instead of freezing its former parent-local name.
+    assert 'var replyBaselineRef = useWbcRef("");' in fullscreen_chat
+    assert 'replyBaselineRef.current = String(latestAssistantReplyId || "");' in fullscreen_chat
+    assert "replyId !== options.replyBaselineRef.current" in reply_effects
+    assert "}, 5000);" in reply_effects
     assert "wbcBrowserFullscreenStatusText(runtime)" in source
     assert "setChatOverlay" in source
     assert "onChatOverlayAction" in source
     assert "hasNativeChatOverlay" in source
     assert 'document.querySelector(".workbench-shell") || document.documentElement' in source
     assert 'attributeFilter: ["data-theme", "style"]' in source
-    assert 'window.addEventListener("cyrene-tweak-accent-change", refreshOverlayTheme)' in source
-    assert "chatOverlayThemeRevision" in source
+    assert 'window.addEventListener("cyrene-tweak-accent-change", refreshTheme)' in native_overlay_effects
+    assert "var [themeRevision, setThemeRevision] = useWbcState(0);" in fullscreen_chat
+    assert "options.setThemeRevision(function (value) { return value + 1; });" in native_overlay_effects
+    assert "options.completedReply, options.themeRevision]" in native_overlay_effects
     assert ".wbc-browser-fullscreen-composer" in styles
     composer = styles.split(".wbc-browser-fullscreen-composer {", 1)[1].split("}", 1)[0]
     focused_composer = styles.split(".wbc-browser-fullscreen-composer:focus-within {", 1)[1].split("}", 1)[0]
@@ -3534,12 +3533,20 @@ def test_electron_browser_chat_overlay_floats_above_native_page():
 def _run_workbench_model_js(expression: str):
     root = Path(__file__).resolve().parent.parent
     runtime_path = root / "src" / "webui" / "frontend" / "platform" / "runtime.jsx"
-    model_path = root / "src" / "webui" / "frontend" / "workbench-model.jsx"
+    model_source = re.sub(
+        r"^(?:import|export)\s+.*$",
+        "",
+        (root / "src/webui/frontend/workbench-model.jsx").read_text(encoding="utf-8"),
+        flags=re.MULTILINE,
+    )
     script = f"""
 const fs = require("fs");
 global.window = {{}};
 eval(fs.readFileSync({json.dumps(str(runtime_path))}, "utf8"));
-eval(fs.readFileSync({json.dumps(str(model_path))}, "utf8"));
+var workbenchServices = new Proxy({{}}, {{
+  get: (_target, name) => () => window.CyreneUI.require(String(name))
+}});
+eval({json.dumps(model_source)});
 window.WorkbenchModel = window.CyreneUI.require("model");
 const result = ({expression});
 process.stdout.write(JSON.stringify(result));
@@ -3551,7 +3558,13 @@ process.stdout.write(JSON.stringify(result));
 def _run_workbench_i18n_js(expression: str):
     root = Path(__file__).resolve().parent.parent
     runtime_path = root / "src" / "webui" / "frontend" / "platform" / "runtime.jsx"
-    i18n_path = root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
+    i18n_source = re.sub(
+        r"^import\s+.*$",
+        "",
+        workbench_i18n_source(),
+        flags=re.MULTILINE,
+    )
+    i18n_source = re.sub(r"^export\s+", "", i18n_source, flags=re.MULTILINE)
     script = f"""
 const fs = require("fs");
 global.window = {{}};
@@ -3560,8 +3573,7 @@ global.navigator = {{ language: "zh-CN" }};
 global.document = {{ documentElement: {{ dataset: {{}} }} }};
 global.React = {{ useState: () => [0, () => {{}}], useEffect: () => {{}} }};
 eval(fs.readFileSync({json.dumps(str(runtime_path))}, "utf8"));
-eval(fs.readFileSync({json.dumps(str(i18n_path))}, "utf8")
-  .replace(/^export\\s+\\{{[^}}]+\\}}\\s*;?\\s*$/gm, ""));
+eval({json.dumps(i18n_source)});
 window.WorkbenchI18n = window.CyreneUI.require("i18n");
 window.WorkbenchI18n.setLang("zh");
 const result = ({expression});
@@ -3574,10 +3586,20 @@ process.stdout.write(JSON.stringify(result));
 def _run_workbench_trace_i18n_js(expression: str):
     root = Path(__file__).resolve().parent.parent
     runtime_path = root / "src" / "webui" / "frontend" / "platform" / "runtime.jsx"
-    i18n_path = root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
-    chat_source = workbench_chat_source()
-    helper_source = "function wbcT(" + chat_source.split(
+    i18n_source = re.sub(
+        r"^import\s+.*$",
+        "",
+        workbench_i18n_source(),
+        flags=re.MULTILINE,
+    )
+    i18n_source = re.sub(r"^export\s+", "", i18n_source, flags=re.MULTILINE)
+    core_source = frontend_module_source("features/chat/core.jsx")
+    presentation = frontend_module_source("features/chat/presentation.jsx")
+    helper_source = "function wbcT(" + core_source.split(
         "function wbcT(", 1
+    )[1].split("export {", 1)[0]
+    helper_source += "\nfunction wbcFormatToolParameter(" + presentation.split(
+        "function wbcFormatToolParameter(", 1
     )[1].split("function wbcThinkingPhrases", 1)[0]
     script = f"""
 const fs = require("fs");
@@ -3587,8 +3609,8 @@ global.navigator = {{ language: "zh-CN" }};
 global.document = {{ documentElement: {{ dataset: {{}} }} }};
 global.React = {{ useState: () => [0, () => {{}}], useEffect: () => {{}} }};
 eval(fs.readFileSync({json.dumps(str(runtime_path))}, "utf8"));
-eval(fs.readFileSync({json.dumps(str(i18n_path))}, "utf8")
-  .replace(/^export\\s+\\{{[^}}]+\\}}\\s*;?\\s*$/gm, ""));
+eval({json.dumps(i18n_source)});
+var workbenchServices = {{ i18n: () => window.CyreneUI.require("i18n") }};
 eval({json.dumps(helper_source)});
 window.WorkbenchI18n = window.CyreneUI.require("i18n");
 window.WorkbenchI18n.setLang("zh");
@@ -3600,18 +3622,18 @@ process.stdout.write(JSON.stringify(result));
 
 
 def _run_workbench_runtime_js(expression: str):
-    Path(__file__).resolve().parent.parent
-    source = workbench_chat_source()
-    args_preview_source = "function wbcFormatToolParameter(" + source.split(
+    presentation = frontend_module_source("features/chat/presentation.jsx")
+    timeline = frontend_module_source("features/chat/runtime-timeline.jsx")
+    runtime = frontend_module_source("features/chat/file-resources.jsx")
+    args_preview_source = "function wbcFormatToolParameter(" + presentation.split(
         "function wbcFormatToolParameter(", 1
     )[1].split("function wbcThinkingPhrases", 1)[0]
-    timeline_source = "function wbcConfirmOptimisticMessage(" + source.split(
+    timeline_source = "function wbcConfirmOptimisticMessage(" + timeline.split(
         "function wbcConfirmOptimisticMessage(", 1
-    )[1].split("function wbcCurrentModel(", 1)[0]
-    runtime_source = source.split(
-        "var WorkbenchChatRuntimes = (function () {", 1
+    )[1].split("export {", 1)[0]
+    runtime_source = "function wbcRuntimeToolEvent(" + runtime.split(
+        "function wbcRuntimeToolEvent(", 1
     )[1].split("// Page", 1)[0]
-    runtime_source = "var WorkbenchChatRuntimes = (function () {" + runtime_source
     script = f"""
 global.window = {{
   CyreneUI: {{
@@ -3619,6 +3641,9 @@ global.window = {{
       subscribe: (handler) => {{ global.__wbcSseHandler = handler; return () => {{}}; }}
     }})
   }}
+}};
+var workbenchServices = {{
+  events: () => window.CyreneUI.require("events")
 }};
 function wbcT(_key, fallback) {{ return fallback; }}
 function wbcSubagentStatusText(status) {{ return String(status || ""); }}
@@ -3633,11 +3658,10 @@ process.stdout.write(JSON.stringify(result));
 
 
 def _run_workbench_timeline_js(expression: str):
-    Path(__file__).resolve().parent.parent
-    source = workbench_chat_source()
+    source = frontend_module_source("features/chat/runtime-timeline.jsx")
     timeline_source = "function wbcConfirmOptimisticMessage(" + source.split(
         "function wbcConfirmOptimisticMessage(", 1
-    )[1].split("function wbcCurrentModel(", 1)[0]
+    )[1].split("export {", 1)[0]
     script = f"""
 eval({json.dumps(timeline_source)});
 const result = ({expression});
@@ -3840,15 +3864,16 @@ def test_workbench_hydration_cannot_remove_the_live_user_turn():
 
     Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
+    hooks = frontend_module_source("features/chat/runtime-page-hooks.jsx")
     selection_hydration = source.split(
         "var hydrationSequence = beginChatHydration(activeChatId);", 1
     )[1].split("model.getSubagents", 1)[0]
-    settled_hydration = source.split(
-        "onSettled: function (chatId) {", 1
-    )[1].split("onResync:", 1)[0]
+    resync_hydration = hooks.split(
+        "function wbcRuntimeResync(context, chatId) {", 1
+    )[1].split("function wbcRuntimePageHooks", 1)[0]
     assert "isCurrentChatHydration(activeChatId, hydrationSequence)" in selection_hydration
-    assert "var hydrationSequence = beginChatHydration(chatId);" in settled_hydration
-    assert "if (!isCurrentChatHydration(chatId, hydrationSequence)) return;" in settled_hydration
+    assert "var hydrationSequence = context.beginChatHydration(chatId);" in resync_hydration
+    assert "if (!context.isCurrentChatHydration(chatId, hydrationSequence)) return;" in resync_hydration
 
 
 def test_workbench_timeline_compares_real_instants_not_timestamp_strings():
@@ -4033,7 +4058,7 @@ def test_workbench_dependency_helpers_preserve_visible_order_and_block_unmet_ste
 
 def test_workbench_plan_ui_uses_step_ids_and_operation_endpoint():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
     model = (root / "src" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
 
     assert "function markStepById" in model
@@ -4047,7 +4072,7 @@ def test_workbench_plan_ui_uses_step_ids_and_operation_endpoint():
 
 def test_workbench_keeps_live_subagent_logs_across_silent_refreshes():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
 
     assert 'data.type === "subagent_update"' in source
     assert 'session_id = str(entry.get("session_id") or "")' in (
@@ -4059,8 +4084,9 @@ def test_workbench_keeps_live_subagent_logs_across_silent_refreshes():
 
 def test_workbench_uses_light_project_payload_and_lazy_session_detail():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
     model = (root / "src" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
+    project_controller = frontend_module_source("features/task/project-controller.jsx")
 
     assert 'apiJson("/api/projects?detail=summary")' in model
     assert "function fetchSession(sessionId)" in model
@@ -4068,24 +4094,67 @@ def test_workbench_uses_light_project_payload_and_lazy_session_detail():
     assert "mergeSessionPayload(prev, payload)" in source
     assert "if (session.isSummary) fetchAndMergeSession(session.id)" in source
     assert "if (nextSession && nextSession.isSummary) fetchAndMergeSession(nextSessionId)" not in source
-    assert "seq !== sessionLoadSeqRef.current" in source
+    assert "sequence !== sessionLoadSeqRef.current" in project_controller
+
+
+def test_data_refresh_cancels_superseded_requests_and_is_event_driven():
+    root = Path(__file__).resolve().parent.parent
+    source = (
+        root / "src" / "webui" / "frontend" / "platform" / "data-store.jsx"
+    ).read_text(encoding="utf-8")
+
+    for name, endpoint in (
+        ("sessions", "/api/sessions"),
+        ("status", "/api/status"),
+        ("dashboard", "/api/dashboard?tz="),
+    ):
+        assert f"if (__{name}RequestController) __{name}RequestController.abort();" in source
+        assert f"__{name}RequestController = controller;" in source
+        assert f"__{name}RequestController === controller" in source
+        request = source.split(f'fetch("{endpoint}', 1)[1].split(";", 1)[0]
+        assert "signal: controller.signal" in request
+
+    # Sequence guards reject stale responses. Runtime refreshes are driven by
+    # SSE; there are no delayed safety retries or periodic fallback fetches.
+    assert "seq !== __sessionsRequestSeq" in source
+    assert "seq !== __statusRequestSeq" in source
+    assert "seq !== __dashboardRequestSeq" in source
+    assert "scheduleRealtimeRefresh();" in source
+    # Conversation summaries are projected by their dedicated consumers; they
+    # must not fan out into unrelated sessions/status/dashboard readbacks.
+    assert '"workbench_chat_changed"' not in source
+    assert "__refreshSafetyTimer" not in source
+    assert "refreshFallbackData" not in source
+
+
+def test_persisted_workbench_state_uses_sse_instead_of_polling():
+    root = Path(__file__).resolve().parent.parent
+    shell = workbench_shell_source()
+    chat_page = (
+        root / "src" / "webui" / "frontend" / "features" / "chat" / "page.jsx"
+    ).read_text(encoding="utf-8")
+
+    assert '"notification_changed"' in shell
+    assert '"task_board_changed"' in shell
+    assert "INTERVAL_MS = 30000" not in shell
+    assert "INTERVAL_MS = 4000" not in shell
+    assert 'event.type !== "terminal_list_changed"' in chat_page
+    assert "}, 1500);" not in chat_page
 
 
 def test_workbench_auto_welcome_waits_for_backend_and_skips_existing_content():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
+    source = workbench_shell_source()
     data_store = (root / "src" / "webui" / "frontend" / "platform" / "data-store.jsx").read_text(
         encoding="utf-8"
     )
+    project_controller = frontend_module_source("features/task/project-controller.jsx")
 
     assert "function wbProjectStoreHasUserContent(store)" in source
     assert "autoWelcomePendingRef.current = true" in source
     assert "Promise.resolve(dataStore.ready)" in source
-    assert "!!onboardingState.hasExistingData" in source
-    assert "|| wbProjectStoreHasUserContent(next)" in source
-    assert 'current == null ? "welcome" : current' in source
+    assert "onboardingState.hasExistingData || hasUserContent(next)" in project_controller
+    assert 'current == null ? "welcome" : current' in project_controller
     assert 'hasExistingData: false' in data_store
 
     helper_source = "function wbProjectStoreHasUserContent(" + source.split(
@@ -4119,19 +4188,19 @@ process.stdout.write(JSON.stringify({{
 
 def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():
     root = Path(__file__).resolve().parent.parent
-    shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    shell = workbench_shell_source()
     chat = workbench_chat_source()
     library = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(encoding="utf-8")
 
     assert "mountedPages" in shell
     assert "var WorkbenchStableSurface = React.memo(" in shell
     assert "return !prev.active && !next.active;" in shell
-    assert "<WorkbenchStableSurface active={isChat}>" in shell
-    assert '<WorkbenchStableSurface active={isKnowledge} enterMotion={true}>' in shell
-    assert '<WorkbenchStableSurface active={isSchedule} enterMotion={true}>' in shell
-    assert '<WorkbenchStableSurface active={isMemory} enterMotion={true}>' in shell
-    assert '<WorkbenchStableSurface active={!isModulePage} enterMotion={true}>' in shell
-    assert "active={!isModulePage}" in shell
+    assert "<WorkbenchStableSurface active={presentation.isChat}>" in shell
+    assert '<WorkbenchStableSurface active={p.isKnowledge} enterMotion={true}>' in shell
+    assert '<WorkbenchStableSurface active={p.isSchedule} enterMotion={true}>' in shell
+    assert '<WorkbenchStableSurface active={p.isMemory} enterMotion={true}>' in shell
+    assert '<WorkbenchStableSurface active={!context.presentation.isModulePage} enterMotion={true}>' in shell
+    assert "active={!context.presentation.isModulePage}" in shell
     assert "var taskDropEnabled = !!(active && project && session && session.kind !== \"init\")" in shell
     assert "function WorkbenchChatPage({ active, project" in chat
     assert "!!(isActive && project)" in chat
@@ -4141,7 +4210,7 @@ def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():
 
 def test_workbench_task_controller_uses_current_session_from_returned_store():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
     controller = source.split("function useTaskController", 1)[1].split("function TaskPlanList", 1)[0]
 
     assert "function sessionFromStore" in controller
@@ -4153,12 +4222,11 @@ def test_workbench_task_controller_uses_current_session_from_returned_store():
     assert "(nextStore && nextStore.activeSession) || currentSession" not in controller
 
 
-def test_workbench_memory_skill_learning_selects_tool_chains():
+def test_workbench_memory_skill_learning_selects_tool_chains(monkeypatch, tmp_path):
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
-    routes = (root / "src" / "route" / "learning.py").read_text(encoding="utf-8")
+    styles = workbench_style_source()
+    i18n = workbench_i18n_source()
     pattern = (
         root / "src" / "cyrene" / "learning" / "facade.py"
     ).read_text(encoding="utf-8")
@@ -4203,10 +4271,48 @@ def test_workbench_memory_skill_learning_selects_tool_chains():
     assert 'var learningProject = (project && project.id) || workspace;' in source
     assert '"/api/evolution?project=" + encodeURIComponent(learningProject)' in source
     assert '"?project=" + encodeURIComponent(learningProject)' in source
-    assert "_learning_enrich_tool_chains" in routes
-    assert "_learning_is_known_media_path" in routes
-    assert "/api/tool-chain-media" in routes
-    assert "/api/scripts" not in routes
+    from cyrene import learning
+    from cyrene.learning.application_service import (
+        LearningApplicationService,
+        MediaRepository,
+        ProjectResolver,
+        ToolChainProjection,
+    )
+
+    image_path = tmp_path / "data" / "behavior-media" / "turn_1" / "capture.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    captured = {}
+
+    async def list_tool_chains(project_ids, limit):
+        captured.update(project_ids=project_ids, limit=limit)
+        return [{
+            "id": "chain_1",
+            "summary": {"total_steps": 1},
+            "chain": [{
+                "tool": "browser.screenshot",
+                "output_summary": json.dumps({"path": str(image_path)}),
+            }],
+        }]
+
+    async def status():
+        return {"phase": "evolve", "state": "ready"}
+
+    monkeypatch.setattr(learning, "list_tool_chains", list_tool_chains)
+    media = MediaRepository(tmp_path / "data")
+    service = LearningApplicationService(
+        ProjectResolver(lambda value: "project_1" if value == "workspace-key" else None),
+        media,
+        ToolChainProjection(media),
+        status,
+    )
+    payload = asyncio.run(service.chains("workspace-key", 80))
+
+    assert captured == {"project_ids": ["project_1", "workspace-key"], "limit": 80}
+    assert payload["tool_chains"][0]["id"] == "chain_1"
+    screenshot = payload["tool_chains"][0]["screenshots"][0]
+    assert screenshot["path"] == str(image_path)
+    assert screenshot["url"].startswith("/api/tool-chain-media?path=")
     assert "ListScripts" not in pattern
     assert "RunScript" not in pattern
     assert "LearnSkill" not in pattern
@@ -4246,7 +4352,7 @@ def test_workbench_chat_overview_i18n_has_zh_labels():
 def test_workbench_chat_supports_parallel_conversation_runtimes():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    i18n = workbench_i18n_source()
 
     assert "var WorkbenchChatRuntimes = (function () {" in source
     assert "var runtimes = {};" in source
@@ -4255,7 +4361,23 @@ def test_workbench_chat_supports_parallel_conversation_runtimes():
     assert "Runtimes: WorkbenchChatRuntimes" in source
     assert "var runtimeEngine = WorkbenchChatRuntimes;" in source
     assert "subscribeSummary: subscribeSummary" in source
-    assert "runtimeEngine.subscribe(applyRuntimeSnapshot)" in source
+    page = source.split("function WorkbenchChatPage(", 1)[1].split(
+        "// Conversation rail (column 2)", 1
+    )[0]
+    runtime_hook = source.split("function useWbcConversationRuntime(", 1)[1].split(
+        "function useWbcConversationProjection(", 1
+    )[0]
+    main = source.split("function WbcMain(", 1)[1].split(
+        "function wbcQuestionOptionValue(", 1
+    )[0]
+    assert "runtimeEngine.subscribeSummary(applyRuntimeSnapshot)" in page
+    assert "runtimeEngine.subscribe(applyRuntimeSnapshot)" not in page
+    assert "runtimeEngine.subscribe(applyRuntimeSnapshot)" in runtime_hook
+    assert "var running = !!runtime;" in main
+    main_props = page.split("<WbcMain", 1)[1].split("/>", 1)[0]
+    assert "runtimeEngine={runtimeEngine}" in main_props
+    assert "runtime={activeRuntime}" not in main_props
+    assert "running={activeRunning}" not in main_props
     assert "runtimeEngine.get(activeChatId)" in source
     assert "wbcSameRuntimePresence(current, nextPresence)" in source
     assert "runtimeEngine.start(chatId, preparedInput, model)" in source
@@ -4301,7 +4423,7 @@ def test_workbench_chat_renders_new_user_turn_before_live_thinking_card():
     ).read_text(encoding="utf-8")
 
     start_block = source.split("function start(chatId, input, model)", 1)[1].split(
-        "function reconnect(chatId, model)", 1
+        "function reconnect(chatId, model, preserveRuntime)", 1
     )[0]
     ack_block = source.split("onAck: function (event) {", 1)[1].split(
         "onReplyStart:", 1
@@ -4379,15 +4501,16 @@ def test_workbench_chat_renders_new_user_turn_before_live_thinking_card():
 def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    live_events = frontend_module_source("features/chat/live-event-controller.jsx")
+    styles = workbench_style_source()
 
     assert "browserActiveByChat" in source
-    assert 'event.type === "browser_frame" || event.type === "browser_takeover_request"' in source
-    assert "(!browserEventChatId || browserEventChatId === String(activeChatIdRef.current))" in source
-    assert "setBrowserActiveByChat(function (prev)" in source
+    assert 'event.type === "browser_frame" || event.type === "browser_takeover_request"' in live_events
+    assert "browserEventChatId !== String(context.activeChatIdRef.current)" in live_events
+    assert "setBrowserActiveByChat(function (prev)" in live_events
     assert "(browserState && browserState.active) || browserMarkedActive" in source
-    browser_event_block = source.split("var browserEventChatId", 1)[1].split(
-        "// Live tool/phase/subagent progress", 1
+    browser_event_block = live_events.split("function wbcApplyBrowserEvent", 1)[1].split(
+        "function wbcHandleLiveEvent", 1
     )[0]
     assert "setBrowserWindowModeByChat" in browser_event_block
     assert 'setSideTab("browser")' not in browser_event_block
@@ -4422,20 +4545,25 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     assert "bottom: calc(-34px * var(--wb-ui-font-scale, 1));" in styles
     assert "setBrowserSuppressedForSide(\n      !!(sidePanelTabExpanded && browserVisible" in source
     assert 'querySelector(":scope > .wbc-side .wbc-side-card")' in source
-    assert 'function alignFloatingBrowser(forceNativeSync, immediateNativeSync)' in source
+    assert "class WbcFloatingBrowserAlignment" in source
+    assert "align(forceNativeSync, immediateNativeSync)" in source
     assert 'sideRect.left - floatingRect.left' in source
     assert 'paneRect.bottom + userOffsetY - floatingRect.bottom' in source
     assert 'source: "pip-context-panel-alignment"' in source
     assert 'event.detail.source === "pip-context-panel-alignment"' in source
-    assert 'function publishNativeBounds(deferUntilMounted)' in source
-    assert 'alignFloatingBrowser(true);' in source
-    assert 'nativeBoundsCommitRaf = requestAnimationFrame' in source
+    alignment = source.split("class WbcFloatingBrowserAlignment", 1)[1].split(
+        "function useWbcFloatingBrowserAlignment", 1
+    )[0]
+    assert "publishNativeBounds(deferUntilMounted) {" in alignment
+    assert "this.dispatchNativeBounds();" in alignment
+    assert "this.nativeBoundsCommitRaf = requestAnimationFrame" in alignment
+    assert "if (geometryChanged || forceNativeSync) this.publishNativeBounds(!immediateNativeSync);" in alignment
     assert '--wbc-browser-pip-aligned-width' in source
     assert '--wbc-browser-pip-aligned-height' in source
     assert 'var maximumHeight = Math.max(0, Math.floor(paneRect.bottom - sideRect.bottom - 12));' in source
     assert 'var alignedHeight = Math.min(Math.round(alignedWidth * 3 / 4), maximumHeight);' in source
     assert 'var boundedOffsetY = Math.min(0, Math.max(minimumOffsetY, userOffsetY));' in source
-    assert 'window.addEventListener("workbench:right-resize", onRightResize);' in source
+    assert 'window.addEventListener("workbench:right-resize", this.onRightResize);' in alignment
     assert "aspect-ratio: 4 / 3;" in styles
     assert '--wbc-browser-pip-align-x' in styles
     assert '--wbc-browser-pip-align-y' in styles
@@ -4452,7 +4580,7 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     assert 'hasNoBrowserTabs && effectiveMode === "pip"' in source
     assert 'action_id: "set_frame"' not in surface
     assert 'action_id: "maximize"' in surface
-    assert "runModeTransition(onRestore, \"pip\")" in source
+    assert 'modeTransition.run(onRestore, "pip")' in surface
     assert "{WBC_ICONS.x}" in source
     assert 'close-fullscreen-rounded.svg' in styles
     assert "height: 58px;" in styles
@@ -4465,8 +4593,8 @@ def test_browser_floating_surfaces_use_pointer_shelf_hit_testing_and_favicon_sta
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     source = workbench_chat_source()
-    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    workbench = workbench_shell_source()
+    styles = workbench_style_source()
 
     assert "wc.on('page-favicon-updated'" in main
     assert "favicon: String(tab.favicon || '')" in main
@@ -4498,7 +4626,7 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     set_bounds_block = main.split("  setBounds(info = {}) {", 1)[1].split("\n  setObscured(", 1)[0]
     assert "this.syncAttachedView();" in set_bounds_block
@@ -4566,24 +4694,24 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "previewReady: false" in begin_block
     assert 'window.addEventListener("workbench:browser-window-preview-ready"' in begin_block
     assert 'window.removeEventListener("workbench:browser-window-preview-ready"' in stop_block
-    assert 'wbcNotifyBrowserWindowInteraction(true, "mode", browserSessionId, {' in source
-    assert 'wbcNotifyBrowserWindowInteraction(false, "mode", browserSessionId);' in source
+    assert 'wbcNotifyBrowserWindowInteraction(true, "mode", this.browserSessionId, {' in source
+    assert 'wbcNotifyBrowserWindowInteraction(false, "mode", this.browserSessionId);' in source
     mode_transition_block = source.split(
-        "  function runModeTransition(action, targetMode) {", 1
-    )[1].split("\n  function measuredFloatingFrame", 1)[0]
+        "  runModeTransition(action, targetMode) {", 1
+    )[1].split("\n}\n\nfunction useWbcBrowserModeTransition", 1)[0]
     assert 'window.addEventListener("workbench:browser-transition-target-ready"' in mode_transition_block
     assert "applyModeAfterPreview();" in mode_transition_block
     assert mode_transition_block.index(
         'window.addEventListener("workbench:browser-transition-target-ready"'
     ) < mode_transition_block.index(
-        'wbcNotifyBrowserWindowInteraction(true, "mode", browserSessionId, {'
+        'wbcNotifyBrowserWindowInteraction(true, "mode", this.browserSessionId, {'
     )
     assert "setTimeout(applyModeAfterPreview, 1800)" in mode_transition_block
-    assert "function measureBrowserSurfaceForMode(targetMode)" in source
+    assert "function wbcMeasureBrowserSurfaceForMode(shellRef, targetMode)" in source
     assert 'var measurementHost = targetMode === "maximized" ? document.body : host;' in source
     assert "measurementHost.appendChild(clone);" in source
     assert 'clone.querySelector(".browser-native-surface")' in source
-    assert "targetBounds: measureBrowserSurfaceForMode" in mode_transition_block
+    assert "targetBounds: wbcMeasureBrowserSurfaceForMode" in mode_transition_block
     assert "highResolution: false" in browser_view
     assert "targetWidth: 0" in browser_view
     assert "modeTargetPreviewRef.current = {" in browser_view
@@ -4702,11 +4830,8 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
 
 
 def test_workbench_reload_restores_native_browser_after_beforeunload_guard():
-    root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
-    reset_block = source.split(
-        "// A reload hides the native view from beforeunload", 1
-    )[1].split("// Any renderer overlay", 1)[0]
+    source = frontend_module_source("shared/browser/overlays.jsx")
+    reset_block = source.split("function wbResetBrowserOverlayObscured()", 1)[1].split("\n}", 1)[0]
     assert "wbBrowserOverlayCount = 0;" in reset_block
     assert "wbSetBrowserOverlayObscured(0);" in reset_block
     assert reset_block.index("wbBrowserOverlayCount = 0;") < reset_block.index(
@@ -4736,7 +4861,7 @@ def _run_conversation_stick_sequence(steps):
     source = workbench_chat_source()
     function_source = "function wbcShouldStickToConversationBottom" + source.split(
         "function wbcShouldStickToConversationBottom", 1
-    )[1].split("\nfunction WbcConversationNavigator", 1)[0]
+    )[1].split("\nfunction wbcSelectionTextRect", 1)[0]
     script = f"""
 {function_source}
 let sticking = true;
@@ -4788,9 +4913,7 @@ def test_browser_avoidance_plan_declines_centered_or_too_narrow_layouts():
 def test_workbench_chat_reflows_only_entries_intersecting_the_browser_pip():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     assert 'data-wbc-thread-item="true"' in source
     assert 'stage.querySelector(".wbc-browser-window.pip")' in source
@@ -4798,6 +4921,8 @@ def test_workbench_chat_reflows_only_entries_intersecting_the_browser_pip():
     assert "var scheduleStickyViewportRestore = useWbcCallback(function () {" in source
     assert source.count("scheduleStickyViewportRestore();") >= 6
     assert "new MutationObserver(function ()" in source
+    assert "mutationObserver.observe(thread, { childList: true });" in source
+    assert "mutationObserver.observe(thread, { childList: true, subtree: true, characterData: true });" not in source
     assert "for (var pass = 0; pass < 5; pass++)" in source
     assert 'item.offsetTop + item.offsetHeight <= contentTop' not in source
     assert 'candidate.offsetTop + candidate.offsetHeight <= contentTop' in source
@@ -4832,7 +4957,7 @@ def test_workbench_chat_reflows_only_entries_intersecting_the_browser_pip():
 
 def test_active_browser_tab_uses_standard_text_color():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     active_tab_styles = styles.split("\n.browser-tab.active {", 1)[1].split("}", 1)[0]
     assert "color: var(--wb-text, var(--text));" in active_tab_styles
@@ -4842,8 +4967,12 @@ def test_active_browser_tab_uses_standard_text_color():
 def test_electron_browser_video_fullscreen_is_platform_aware_and_shared_with_ui():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    chat = workbench_chat_source()
+    split = (
+        root / "src" / "webui" / "frontend" / "features" / "chat" / "split-pane.jsx"
+    ).read_text(encoding="utf-8")
     browser_view = (root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     create_view = main.split("  createView() {", 1)[1].split("\n  setContext(", 1)[0]
     assert "disableHtmlFullscreenWindowResize: true" in create_view
@@ -4891,6 +5020,8 @@ def test_electron_browser_video_fullscreen_is_platform_aware_and_shared_with_ui(
     assert "cancelId: 1" in session_guards
     assert "result.response === 0" in session_guards
     assert "pendingPointerLockPrompts" in session_guards
+    assert "allowedPointerLockOrigins.has(origin)" in session_guards
+    assert "if (allowed) allowedPointerLockOrigins.add(origin)" in session_guards
     assert "Press Esc at any time to release it." in main
     assert "你可随时按 Esc 退出" in main
 
@@ -5400,15 +5531,14 @@ def test_workbench_chat_delete_detaches_local_fork_markers():
 def test_workbench_chat_card_menu_can_rename_the_target_chat():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     rail = source.split("function WbcRail(", 1)[1].split(
         "// Conversation main (column 3)", 1
     )[0]
     rename_dialog = source.split("function WbcRenameDialog", 1)[1].split(
         "function WbcRail(", 1
     )[0]
+    rename_controller = frontend_module_source("features/chat/chat-action-controller.jsx")
 
     assert "onRename={handleRenameChat}" in source
     assert 'wbcT("workbenchChat.rename", "Rename chat")' in rail
@@ -5419,7 +5549,7 @@ def test_workbench_chat_card_menu_can_rename_the_target_chat():
     assert "setRenameChat(chat)" in rail
     assert "window.prompt(" not in rail
     assert "onRename(chat.id, nextTitle)" in rename_dialog
-    assert "prev && prev.id === chat.id" in source
+    assert "previous && previous.id === chat.id" in rename_controller
     assert '(menuId ? " menu-active" : "")' in rail
     menu_active_css = styles.split(".wbc-chat-list.menu-active {", 1)[1].split("}", 1)[0]
     assert "z-index: 200;" in menu_active_css
@@ -5433,9 +5563,7 @@ def test_workbench_chat_card_menu_can_rename_the_target_chat():
 def test_project_terminal_menu_is_above_the_outside_click_scrim():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     project_tools = source.split('<section\n          ref={projectToolsRef}', 1)[1].split(
         'aria-label={wbcT("rail.projectTools"', 1
@@ -5452,12 +5580,76 @@ def test_project_terminal_menu_is_above_the_outside_click_scrim():
     )[1].split("}", 1)[0]
 
 
+def test_project_tool_view_persists_per_project_and_restores_terminal_list():
+    source = frontend_module_source("features/chat/rail.jsx")
+    helpers = source.split(
+        'var WBC_PROJECT_TOOL_VIEW_STORAGE_PREFIX = "wbc-project-tool-view:";', 1
+    )[1].split("function WbcRail(", 1)[0]
+    helpers = (
+        'var WBC_PROJECT_TOOL_VIEW_STORAGE_PREFIX = "wbc-project-tool-view:";'
+        + helpers
+    )
+    script = f"""
+const values = new Map();
+global.localStorage = {{
+  getItem: key => values.has(key) ? values.get(key) : null,
+  setItem: (key, value) => values.set(key, String(value)),
+  removeItem: key => values.delete(key),
+}};
+eval({json.dumps(helpers)});
+wbcWriteProjectToolView("project-a", "terminal");
+wbcWriteProjectToolView("project-b", "file");
+const before = [wbcReadProjectToolView("project-a"), wbcReadProjectToolView("project-b")];
+wbcWriteProjectToolView("project-a", "");
+process.stdout.write(JSON.stringify({{
+  before,
+  after: wbcReadProjectToolView("project-a"),
+  storedNone: wbcHasStoredProjectToolView("project-a"),
+  invalid: wbcNormalizeProjectToolView("chat"),
+}}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    assert json.loads(completed.stdout) == {
+        "before": ["terminal", "file"],
+        "after": "",
+        "storedNone": True,
+        "invalid": "",
+    }
+    assert "return wbcReadProjectToolView(projectId);" in source
+    project_reset = source.split("var visibleFiles", 1)[1].split("useWbcEffect(function () {", 1)[1].split(
+        "}, [projectId]);", 1
+    )[0]
+    assert "setProjectToolViewState(wbcReadProjectToolView(projectId));" in project_reset
+    assert "setFileToolsExpanded(false);" not in project_reset
+    assert "setTerminalToolsExpanded(false);" not in project_reset
+    assert "var activeTerminalBelongsToProject" in source
+    assert 'String(terminal && terminal.projectId || "") === String(projectId)' in source
+    assert "!activeTerminalBelongsToProject || wbcHasStoredProjectToolView(projectId)" in source
+
+
+def test_project_terminal_cards_share_conversation_status_color_semantics():
+    source = frontend_module_source("features/chat/rail.jsx")
+    terminal_state = source.split("function terminalRailVisualState(terminal)", 1)[1].split(
+        "function renderTerminalCard", 1
+    )[0]
+    terminal_card = source.split("function renderTerminalCard(terminal)", 1)[1].split(
+        "function renderTerminalSection", 1
+    )[0]
+
+    assert '["command", "output"].indexOf(commandState) >= 0' in terminal_state
+    assert 'failed ? " status-failed"' in terminal_state
+    assert 'activityRunning ? " status-running"' in terminal_state
+    assert 'completed ? " status-completed"' in terminal_state
+    assert "var visualState = terminalRailVisualState(terminal);" in terminal_card
+    assert "+ visualState.tone}" in terminal_card
+
+
 def test_workbench_chat_card_menu_can_pin_and_sort_conversations():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
+    shell = workbench_shell_source()
     rail = source.split("function WbcRail(", 1)[1].split(
         "// Conversation main (column 3)", 1
     )[0]
@@ -5469,22 +5661,20 @@ def test_workbench_chat_card_menu_can_pin_and_sort_conversations():
     assert 'wbcT("workbenchChat.pin", "Pin chat")' in rail
     assert 'wbcT("workbenchChat.unpin", "Unpin chat")' in rail
     assert 'className="wbc-chat-card-pin"' in rail
-    assert "onTogglePinnedChat: function (chat, pinned)" in shell
+    assert "onToggleChat: function (chat, pinned)" in shell
     assert 'togglePinnedSession({ id: chat.id, kind: "chat" }, pinned)' in shell
 
 
 def test_workbench_chat_cards_reorder_and_open_when_dropped_on_conversation():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
+    i18n = workbench_i18n_source()
     rail = source.split("function WbcRail(", 1)[1].split(
         "// Conversation main (column 3)", 1
     )[0]
+    ordering = frontend_module_source("features/chat/rail-ordering.jsx")
+    task_rail = frontend_module_source("features/chat/rail-tasks.jsx")
     main = source.split("function WbcMain(", 1)[1].split(
         "function WbcAgentMessage", 1
     )[0]
@@ -5492,14 +5682,16 @@ def test_workbench_chat_cards_reorder_and_open_when_dropped_on_conversation():
     assert 'var WBC_CHAT_DRAG_MIME = "application/x-cyrene-chat+json";' in source
     assert "function wbcSetChatDrag(event, chat)" in source
     assert "function wbcReadChatDrag(event)" in source
-    assert "WBC_CHAT_ORDER_PREFIX" in rail
-    assert "localStorage.setItem(WBC_CHAT_ORDER_PREFIX" in rail
+    assert "WBC_CHAT_ORDER_PREFIX" in ordering
+    assert "localStorage.setItem(WBC_CHAT_ORDER_PREFIX" in ordering
     assert 'draggable="true"' in rail
     assert "wbcMoveChatOrder(order, dragState.movingId" in rail
     assert "transfer.setDragImage(" not in rail
     assert "function prepareRailDragImage(root, transfer, clientX, clientY)" in rail
-    # Chat, chat-group, terminal and task rows all reuse the same drag preview.
-    assert rail.count("prepareRailDragImage(") == 4
+    # Chat, chat-group and terminal rows call the helper directly; task cards
+    # receive the same helper through their focused rail module.
+    assert rail.count("prepareRailDragImage(") == 3
+    assert "prepareDragImage(event.currentTarget, event.dataTransfer" in task_rail
     assert "function wbcBuildRailCardDragPreview(root, extraClassName)" in source
     drag_preview_helper = source.split(
         "function wbcBuildRailCardDragPreview(root, extraClassName) {", 1
@@ -5521,7 +5713,7 @@ def test_workbench_chat_cards_reorder_and_open_when_dropped_on_conversation():
     assert "background: var(--wb-card-bg-strong);" in drag_image_css
     assert "border-radius: 11px;" in drag_image_css
     assert "box-shadow:" in drag_image_css
-    assert "event.altKey" in rail
+    assert "event.altKey" in ordering
     assert "onOpenDroppedChat={function (chatId)" in source
     assert "onDrop={handleChatDrop}" in main
     assert 'className="wbc-chat-open-drop-hint"' in main
@@ -5550,9 +5742,7 @@ def test_workbench_chat_cards_reorder_and_open_when_dropped_on_conversation():
 
 def test_workbench_chat_rename_dialog_uses_compact_vertical_spacing():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     body = styles.split(".wbc-rename-body {", 1)[1].split("}", 1)[0]
     foot = styles.rsplit(".wbc-rename-foot {", 1)[1].split("}", 1)[0]
 
@@ -5564,9 +5754,7 @@ def test_workbench_chat_rename_dialog_uses_compact_vertical_spacing():
 def test_workbench_branch_tree_uses_compact_git_history_layout():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     branch = source.split("function WbcBranchTab", 1)[1].split(
         "// ---------------------------------------------------------------------------\n// Right context panel", 1
     )[0]
@@ -5605,17 +5793,13 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "var hasRuntimeGuidance = running && !!draft.trim();" in composer
     assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in composer
     assert "if (running) { onInterrupt(); return; }" not in composer
-    assert "输入内容以引导正在运行的 Agent" in (
-        root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
-    ).read_text(encoding="utf-8")
+    assert "输入内容以引导正在运行的 Agent" in workbench_i18n_source()
     assert '<script type="module" src="compiled/app.js?v=0.7.13"></script>' in index
 
 
 def test_task_answer_resume_uses_interrupt_not_pause_and_suppresses_cancel_error():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
+    source = workbench_shell_source()
     answer = source.split("answer: function (questionId, optionText)", 1)[1].split(
         "promoteToPlan: function", 1
     )[0]
@@ -5631,18 +5815,20 @@ def test_task_answer_resume_uses_interrupt_not_pause_and_suppresses_cancel_error
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
     Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
+    action_controller = frontend_module_source("features/chat/chat-action-controller.jsx")
     guidance_model = source.split("function sendGuidance", 1)[1].split(
         "function answerChat", 1
     )[0]
-    guidance_handler = source.split("function handleGuidance", 1)[1].split(
-        "function handleAnswer", 1
+    guidance_handler = action_controller.split("function wbcHandleGuidance", 1)[1].split(
+        "function wbcAnswerLiveAgentRequest", 1
     )[0]
     trace_card = source.split("function WbcTraceCard", 1)[1].split(
         "function WbcAssistantMessage", 1
     )[0]
 
     assert "timeout: 0" in guidance_model
-    assert 'id: "guidance_pending_" + clientRequestId' in guidance_handler
+    assert 'id: "guidance_pending_" + requestId' in guidance_handler
+    assert "clientRequestId: requestId" in guidance_handler
     assert "optimistic: true" in guidance_handler
     assert "response.userMessage" in guidance_handler
     assert "item.clientRequestId" in guidance_handler
@@ -5656,8 +5842,8 @@ def test_workbench_tool_start_is_rendered_then_completed_in_place():
     Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
 
-    runtime = source.split("function onSseEvent(event)", 1)[1].split(
-        'window.CyreneUI.require("events").subscribe(onSseEvent)', 1
+    runtime = source.split("function wbcRuntimeToolEvent(event, eventAt)", 1)[1].split(
+        'workbenchServices.events().subscribe(onSseEvent)', 1
     )[0]
     stream = source.split("function consumeEventStream(", 1)[1].split(
         "function streamChat", 1
@@ -5687,22 +5873,23 @@ def test_workbench_tool_start_is_rendered_then_completed_in_place():
     assert 'type === "tool_call_finished" && handlers.onToolCompleted' in stream
     assert "createdAt: Number.isFinite(parsedAt) ? parsedAt : Date.now()" in tool_payload
     assert "appendActivity(closeActivityTimeline(latest), { createdAt: eventAt })" in runtime
+    assert "errorMessage" in runtime
+    assert 'presentation: failed && error ? { kind: "error" } : undefined' in runtime
 
 
 def test_workbench_marks_run_finalizing_before_workspace_save():
-    Path(__file__).resolve().parents[1]
-    source = workbench_chat_route_source()
-    run_streaming = source.split("async def run_streaming", 1)[1].split(
-        "run, _is_new", 1
+    source = workbench_runtime_source()
+    completion = source.split("async def _finish_stream_reply", 1)[1].split(
+        "async def _settle_stream", 1
     )[0]
-    normal_completion = run_streaming.split("if not run.saw_reply_events:", 1)[1]
 
-    reply_done = normal_completion.index('"type": "reply_done"')
-    finalizing = normal_completion.index('"type": "run_finalizing"')
-    saved = normal_completion.index('"type": "saved"')
-    workspace_finalize = normal_completion.index("await _finalize_workspace_changes(")
+    reply_done = completion.index('"type": "reply_done"')
+    finalizing = completion.index('"type": "run_finalizing"')
+    durable_reply = completion.index("await request.finalize_reply(reply)")
+    saved = completion.index('"type": "saved"')
+    publish_saved = completion.index("await run.publish(saved_event)")
 
-    assert reply_done < finalizing < saved < workspace_finalize
+    assert reply_done < finalizing < durable_reply < saved < publish_saved
 
 
 def test_workbench_assistant_footer_formats_persisted_processing_duration():
@@ -5739,14 +5926,12 @@ process.stdout.write(JSON.stringify(values.map(wbcFormatProcessingDuration)));
 
 
 def test_workbench_terminal_reply_snapshot_is_authoritative_after_streamed_calls():
-    Path(__file__).resolve().parents[1]
-    source = workbench_chat_route_source()
-    run_streaming = source.split("async def run_streaming", 1)[1].split(
-        "run, _is_new", 1
+    source = workbench_runtime_source()
+    completion = source.split("async def _finish_stream_reply", 1)[1].split(
+        "async def _settle_stream", 1
     )[0]
-    normal_completion = run_streaming.split("if not run.saw_reply_events:", 1)[1]
-    fallback_body, after_fallback = normal_completion.split(
-        "# A streamed model call can finish", 1
+    fallback_body, after_fallback = completion.split(
+        "if not request.is_external_agent:", 1
     )
 
     assert '"type": "reply_delta"' in fallback_body
@@ -5757,9 +5942,7 @@ def test_workbench_terminal_reply_snapshot_is_authoritative_after_streamed_calls
 def test_workbench_pip_reflow_does_not_compete_with_scroll_anchor():
     root = Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     main = source.split("function WbcMain", 1)[1].split(
         "function WbcQuestionPrompt", 1
     )[0]
@@ -5786,9 +5969,7 @@ def test_workbench_permission_prompt_renders_every_scoped_option():
     assert "onAnswer(pq.id, wbcQuestionOptionValue(opt))" in prompt
     assert "options[options.length - 1]" not in prompt.split(") : (", 1)[0]
 
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     group_css = styles.split(".wbc-question-group {", 1)[1].split("}", 1)[0]
     question_css = styles.split(".wbc-question {", 1)[1].split("}", 1)[0]
     text_css = styles.split(".wbc-question-text {", 1)[1].split("}", 1)[0]
@@ -5805,12 +5986,8 @@ def test_workbench_permission_prompt_renders_every_scoped_option():
 def test_collapsed_chat_rail_maps_actionable_conversation_states():
     root = Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
+    i18n = workbench_i18n_source()
 
     rail = source.split("function WbcRail(", 1)[1].split(
         "// Conversation main (column 3)", 1
@@ -5955,9 +6132,7 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
     assert "{visualState.icon}" in drop_clone
     assert "{WBC_ICONS.file}" not in drop_clone
 
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     base_track = styles.split(".wbc-conversation-status-track {", 1)[1].split("}", 1)[0]
     collapsed_track = styles.split(
         ".workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail.is-collapsed .wbc-conversation-status-track {",
@@ -6036,7 +6211,8 @@ def test_collapsed_chat_rail_measures_expanded_row_centres_for_spatial_mapping()
 def test_status_preview_answers_the_target_background_chat_without_opening_it():
     Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
-    answer = source.split("function answerQuestionForChat", 1)[1].split(
+    answer = frontend_module_source("features/chat/chat-action-controller.jsx")
+    page_answer_bridge = source.split("function answerQuestionForChat", 1)[1].split(
         "// Regenerate the last assistant reply", 1
     )[0]
     preview = source.split("function WbcConversationStatusPreview", 1)[1].split(
@@ -6047,7 +6223,7 @@ def test_status_preview_answers_the_target_background_chat_without_opening_it():
     assert "runtimeEngine.update(chatId" in answer
     assert "setChats(function (previous)" in answer
     assert "chatCache.details[chatId]" in answer
-    assert "return answerQuestionForChat(chatId" in answer
+    assert "return answerQuestionForChat(chatId" in page_answer_bridge
     assert "isPermissionQuestionKind(kind)" in preview
     assert "pending.allowCustom" in preview
     assert "onAnswer(pending.id, text, resumeMode)" in preview
@@ -6057,9 +6233,7 @@ def test_status_preview_answers_the_target_background_chat_without_opening_it():
 
 def test_agent_tab_hides_search_filter_and_header_install_button():
     root = Path(__file__).resolve().parents[1]
-    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(
-        encoding="utf-8"
-    )
+    source = workbench_settings_source()
     panel = source.split("function ExtensionsPanel(", 1)[1].split(
         "function ShortcutsPanel(", 1
     )[0]
@@ -6091,9 +6265,7 @@ def test_permission_buttons_submit_original_option_id():
     option_value = source.split("function wbcQuestionOptionValue(", 1)[1].split(
         "function wbcIsLiveAgentRequest", 1
     )[0]
-    answer = source.split("function answerQuestionForChat(", 1)[1].split(
-        "// Regenerate the last assistant reply", 1
-    )[0]
+    answer = frontend_module_source("features/chat/chat-action-controller.jsx")
     question_buttons = source.split("function WbcQuestionPrompt", 1)[1].split(
         "function WbcErrorNotice", 1
     )[0]
@@ -6160,9 +6332,9 @@ def test_workbench_split_chat_renders_and_answers_pending_question():
 def test_permission_prompt_localizes_capability_ids_and_hides_internal_fingerprint():
     root = Path(__file__).resolve().parents[1]
     chat = workbench_chat_source()
-    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    i18n = workbench_i18n_source()
     model = (root / "src/webui/frontend/workbench-model.jsx").read_text(encoding="utf-8")
-    runtime = (root / "src/cyrene/workbench/runtime.py").read_text(encoding="utf-8")
+    runtime = workbench_runtime_source()
 
     assert "function wbcPermissionQuestionText(pending)" in chat
     assert "i18n.permissionQuestionText(pending, i18n.getLang())" in chat
@@ -6191,8 +6363,8 @@ def test_permission_prompt_localizes_capability_ids_and_hides_internal_fingerpri
 def test_agent_chat_flow_glint_is_semantic_transient_and_reduced_motion_safe():
     root = Path(__file__).resolve().parents[1]
     chat = workbench_chat_source()
-    css = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
-    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    css = workbench_style_source()
+    i18n = workbench_i18n_source()
     surface = (root / "src/webui/frontend/platform/ui-surface.jsx").read_text(encoding="utf-8")
 
     assert 'WBC_AGENT_CHAT_FLOW_EVENT = "cyrene:agent-chat-flow"' in chat
@@ -6241,9 +6413,7 @@ def test_agent_terminal_control_reuses_surface_glint_and_visible_terminal_is_una
 def test_workbench_context_tab_has_live_session_inbox_card():
     root = Path(__file__).resolve().parents[1]
     source = workbench_chat_source()
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    css = workbench_style_source()
     context_tab = source.split("function WbcContextTab", 1)[1].split(
         "function WbcArtifactsTab", 1
     )[0]
@@ -6314,16 +6484,10 @@ def test_workbench_context_tab_has_live_session_inbox_card():
 
 def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
     root = Path(__file__).resolve().parents[1]
-    overlay = (
-        root / "src" / "webui" / "frontend" / "settings-overlay.jsx"
-    ).read_text(encoding="utf-8")
+    overlay = workbench_settings_source()
     chat = workbench_chat_source()
-    i18n = (
-        root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
-    ).read_text(encoding="utf-8")
-    css = (
-        root / "src" / "webui" / "frontend" / "workbench.css"
-    ).read_text(encoding="utf-8")
+    i18n = workbench_i18n_source()
+    css = workbench_style_source()
     classic_settings = root / "src" / "webui" / "static" / "app" / "settings.jsx"
 
     capabilities = overlay.split("function CapabilitiesPanel", 1)[1].split(
@@ -6357,9 +6521,19 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
     assert '"cyrene-tool-packages-change"' not in context_tab
     assert "wbcUsedToolPackages(chat, runtime)" in context_tab
     assert "message.tools" in disclosure
+    assert "message.trace" in disclosure
     assert "runtime.activities" in disclosure
     assert "runtime.segments" in disclosure
+    assert "activity && activity.trace" in disclosure
+    assert "segment && segment.trace" in disclosure
     assert "WBC_PROGRESSIVE_TOOL_PACKAGES.has(name)" in disclosure
+    for package_id in (
+        "cyrene_tools",
+        "office_tools",
+        "plugin_tools",
+        "custom_tools",
+    ):
+        assert f'"{package_id}"' in chat
     assert "workbenchChat.usedToolPackages" in context_tab
     assert "usedToolPackages.length === 0" in context_tab
     assert "workbenchChat.noUsedToolPackages" in context_tab
@@ -6384,6 +6558,9 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
         "environment_tools",
         "skill_tools",
         "remote_tools",
+        "cyrene_tools",
+        "office_tools",
+        "plugin_tools",
         "custom_tools",
         "integration_tools",
     ):
@@ -6401,26 +6578,20 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
 
 def test_custom_tool_status_is_located_under_extensions_and_system():
     root = Path(__file__).resolve().parents[1]
-    settings = (
-        root / "src" / "webui" / "frontend" / "settings-overlay.jsx"
-    ).read_text(encoding="utf-8")
+    settings = workbench_settings_source()
     settings_index = (
         root / "src" / "webui" / "frontend" / "shared" / "settings-index.jsx"
     ).read_text(encoding="utf-8")
-    i18n = (
-        root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
-    ).read_text(encoding="utf-8")
+    i18n = workbench_i18n_source()
     app_entry = (root / "src" / "webui" / "frontend" / "entry" / "app.jsx").read_text(
         encoding="utf-8"
     )
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    css = workbench_style_source()
 
     assert "function CustomToolsPanel" in settings
     assert 'request("/api/custom-tools/status")' in settings
     assert '{ id: "custom-tools", labelKey: "settings.customTools", icon: "code" }' in settings
-    assert '{ labelKey: "settings.group.extensionsSystem", ids: ["extensions", "custom-tools", "integrations"] }' in settings
+    assert '{ labelKey: "settings.group.extensionsSystem", ids: ["extensions", "custom-plugins", "custom-tools", "integrations"] }' in settings
     assert 'tab === "custom-tools" && React.createElement(' in settings
     assert 'className: "settings-panel wb-custom-tools-page"' in settings
     assert 'var categories = ["recommended", "skills", "mcp", "cli", "toolchains", "agent"]' in settings
@@ -6469,6 +6640,45 @@ def test_custom_tool_status_is_located_under_extensions_and_system():
 
     assert 'import "../settings-overlay.jsx"' in app_entry
     assert 'import "../shared/settings-index.jsx"' in app_entry
+
+
+def test_project_plugin_toggle_controls_tool_contributions_and_tools_label():
+    root = Path(__file__).resolve().parents[1]
+    settings = workbench_settings_source()
+    styles = workbench_style_source()
+    rail = (
+        root / "src" / "webui" / "frontend" / "features" / "chat" / "rail.jsx"
+    ).read_text(encoding="utf-8")
+    zh = (
+        root / "src" / "webui" / "frontend" / "shared" / "i18n" / "catalog-zh.jsx"
+    ).read_text(encoding="utf-8")
+    plugin_view = (
+        root / "src" / "webui" / "frontend" / "platform" / "plugins.jsx"
+    ).read_text(encoding="utf-8")
+
+    assert '{ id: "custom-plugins", labelKey: "settings.customPlugins", icon: "package" }' in settings
+    assert settings.count('icon: "package"') == 1
+    assert settings.count('icon: "plug-connected"') == 1
+    assert 'tab === "custom-plugins" && React.createElement(CustomPluginsPanel' in settings
+    assert 'function CustomPluginsPanel(props)' in settings
+    assert '"/api/plugins/" + encodeURIComponent(item.id) + "/enabled"' in settings
+    assert 'enabled: !item.enabled' in settings
+    extensions_panel = settings.split("function ExtensionsPanel(p) {", 1)[1].split(
+        "function ShortcutsPanel(p) {", 1
+    )[0]
+    assert '"plugins"' not in extensions_panel
+    assert 'String(item && item.point || "") === "cyrene.projectTool"' in rail
+    assert 'workbenchServices.plugins().subscribe(String(projectId)' in rail
+    assert 'onOpenPluginView({' in rail
+    assert 'detail: { tab: "custom-plugins" }' in plugin_view
+    assert '"rail.projectTools": "工具"' in zh
+    plugin_pane_css = styles.split(".wbc-plugin-view-pane {", 1)[1].split("}", 1)[0]
+    plugin_frame_css = styles.split(".wbc-plugin-view-frame {", 1)[1].split("}", 1)[0]
+    assert "color: inherit;" in plugin_pane_css
+    assert "background: transparent;" in plugin_pane_css
+    assert "background: transparent;" in plugin_frame_css
+    assert 'html[data-theme="dark"] .wbc-plugin-view-frame { color-scheme: dark; }' in styles
+    assert 'html[data-theme="light"] .wbc-plugin-view-frame { color-scheme: light; }' in styles
 
 
 def test_workbench_inbox_cleanup_aborts_and_ignores_a_late_response():
@@ -6548,9 +6758,7 @@ def test_workbench_chat_does_not_render_previous_transcript_during_switch():
 def test_workbench_chat_loading_keeps_lightweight_overview_visible():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    i18n = workbench_i18n_source()
 
     assert "var selectedChatSummary = chats.find" in source
     assert "chatSummary={selectedChatSummary}" in source
@@ -6564,9 +6772,7 @@ def test_workbench_chat_loading_keeps_lightweight_overview_visible():
 def test_workbench_chat_loading_is_centered_in_the_rail():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     assert '"wbc-chat-list workbench-integrated-rail-body" + (loading ? " is-loading" : "")' in source
     assert 'className="workbench-muted wbc-rail-loading" role="status"' in source
@@ -6580,67 +6786,27 @@ def test_workbench_chat_loading_is_centered_in_the_rail():
 
 def test_every_workspace_sidebar_card_can_swipe_between_module_tabs():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
+    source = workbench_shell_source()
+    navigation = frontend_module_source("features/shell/navigation-controller.jsx")
 
     grid_markup = source.split('className={"workbench-grid integrated-sidebars"', 1)[1]
-    assert "function handleSidebarModuleWheel(event)" in source
-    sidebar_wheel = source.split("function handleSidebarModuleWheel(event) {", 1)[1].split(
-        "function toggleWorkspaceSidebar()", 1
+    assert "var handleSidebarModuleWheel = navigationActions.onModuleWheel" in source
+    sidebar_wheel = navigation.split("function onModuleWheel(event) {", 1)[1].split(
+        "return { openPage:", 1
     )[0]
     assert 'target.closest(".workbench-integrated-rail, .workbench-sidebar-dock.is-persistent")' in sidebar_wheel
     assert 'var moduleOrder = ["schedule", "board", "work", "knowledge", "memory"];' in sidebar_wheel
     assert "Math.abs(deltaX) <= Math.abs(deltaY) * 1.15" in sidebar_wheel
     assert "Math.abs(gesture.delta) < 44" in sidebar_wheel
     assert "gesture.lockedUntil = now + 420" in sidebar_wheel
-    assert "handleOpenPage(moduleOrder[nextIndex])" in sidebar_wheel
+    assert "openPage(moduleOrder[nextIndex])" in sidebar_wheel
     assert "onWheel={handleSidebarModuleWheel}" in grid_markup
-
-
-def test_sidebar_account_card_has_balanced_vertical_spacing():
-    root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
-
-    account_css = styles.split(".workbench-rail-account {", 1)[1].split("}", 1)[0]
-    assert "transform: translateY(5px);" in account_css
-    collapsed_account_css = styles.split(
-        ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-rail-account {",
-        1,
-    )[1].split("}", 1)[0]
-    assert "transform: translateY(4px);" in collapsed_account_css
-    collapsed_button_css = styles.split(
-        ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-rail-account-button {",
-        1,
-    )[1].split("}", 1)[0]
-    assert "grid-template-columns: 32px minmax(0, 0fr) 0fr;" in collapsed_button_css
-    assert "justify-content: center;" not in collapsed_button_css
-    assert "justify-items: center;" not in collapsed_button_css
-    assert "padding: 3px 4px;" in collapsed_button_css
-    assert ".workbench-rail-account-button .workbench-account-avatar {" in styles
-    base_avatar_css = styles.split(
-        ".workbench-rail-account-button .workbench-account-avatar {",
-        1,
-    )[1].split("}", 1)[0]
-    assert "transform: translateX(0);" in base_avatar_css
-    assert "transition: transform var(--wb-sidebar-motion-duration)" in base_avatar_css
-    collapsed_avatar_css = styles.split(
-        ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-rail-account-button .workbench-account-avatar {",
-        1,
-    )[1].split("}", 1)[0]
-    assert "transform: translateX(2px);" in collapsed_avatar_css
 
 
 def test_collapsed_workspace_headers_center_their_expand_button_and_hide_task_empty_state():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    source = workbench_chat_source()
+    styles = workbench_style_source()
 
     collapsed_head_css = styles.split(
         ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-integrated-rail-head {",
@@ -6649,12 +6815,10 @@ def test_collapsed_workspace_headers_center_their_expand_button_and_hide_task_em
     assert "justify-content: center;" in collapsed_head_css
     assert "gap: 0;" in collapsed_head_css
     assert "padding: 0;" in collapsed_head_css
-    task_rail = source.split("function TaskRail(", 1)[1].split(
-        "function TaskBoard(", 1
-    )[0]
-    assert 'className="wb-task-rail-empty"' in task_rail
-    assert 't("rail.emptyTasksHint"' in task_rail
-    assert task_rail.index('className="wb-task-rail-empty"') > task_rail.index("workbench-integrated-rail-body")
+    task_rail = frontend_module_source("features/chat/rail-tasks.jsx")
+    assert 'className={"wbc-chat-list workbench-integrated-rail-body wbc-task-list"' in task_rail
+    assert '!loading && state.ordered.length === 0 ? " is-empty" : ""' in task_rail
+    assert 'wbcT("rail.noTasks", "No tasks yet.")' in task_rail
     collapsed_body_css = styles.split(
         ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-integrated-rail-body {",
         1,
@@ -6662,44 +6826,28 @@ def test_collapsed_workspace_headers_center_their_expand_button_and_hide_task_em
     assert "visibility: hidden;" in collapsed_body_css
 
 
-def test_task_rail_delete_menu_is_above_the_outside_click_scrim():
+def test_active_task_rail_and_board_use_their_current_menu_dismissal_surfaces():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    source = workbench_shell_source()
+    chat = workbench_chat_source()
 
-    open_actions_css = styles.split(
-        ".workbench-task-card.menu-open .wb-card-actions {", 1
-    )[1].split("}", 1)[0]
-    assert "z-index: 200;" in open_actions_css
-
-
-def test_task_menus_use_document_click_away_without_a_blocking_scrim():
-    root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
-
-    task_rail = source.split("function TaskRail(", 1)[1].split(
-        "function TaskBoard(", 1
+    task_rail = chat.split("function WbcRail(", 1)[1].split(
+        "function WbcProjectRail(", 1
     )[0]
     task_board = source.split("function TaskBoard(", 1)[1].split(
         "function TaskBoardCard(", 1
     )[0]
-    for component in (task_rail, task_board):
-        assert 'document.addEventListener("pointerdown", closeOnOutside, true);' in component
-        assert 'target.closest(".wb-card-menu")' in component
-        assert 'className="wb-card-menu-scrim"' not in component
+    assert '{menuId && <div className="wb-card-menu-scrim"' in task_rail
+    assert 'className="wb-card-menu" role="menu"' in task_rail
+    assert 'document.addEventListener("pointerdown", closeOnOutside, true);' in task_board
+    assert 'target.closest(".wb-card-menu")' in task_board
+    assert 'className="wb-card-menu-scrim"' not in task_board
 
 
 def test_board_new_button_opens_chat_or_task_creation_menu():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    source = workbench_shell_source()
+    styles = workbench_style_source()
     task_board = source.split("function TaskBoard(", 1)[1].split(
         "function TaskBoardCard(", 1
     )[0]
@@ -6717,9 +6865,9 @@ def test_board_new_button_opens_chat_or_task_creation_menu():
 
 def test_board_search_filters_conversations_and_tasks():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
-    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
+    styles = workbench_style_source()
+    translations = workbench_i18n_source()
     task_board = source.split("function TaskBoard(", 1)[1].split("function TaskBoardCard(", 1)[0]
 
     assert 'var [query, setQuery] = useWorkbenchState("");' in task_board
@@ -6743,32 +6891,53 @@ def test_board_search_filters_conversations_and_tasks():
 
 def test_board_chat_cards_share_task_card_background():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     board_card_css = styles.split(".wb-board-card {", 1)[1].split("}", 1)[0]
     assert "background: var(--wb-card-bg);" in board_card_css
     assert ".wb-board-card.is-chat {" not in styles
 
 
+def test_board_cards_use_a_consistent_compact_height():
+    root = Path(__file__).resolve().parent.parent
+    styles = workbench_style_source()
+
+    board_card_css = styles.split(".wb-board-card {", 1)[1].split("}", 1)[0]
+    title_css = styles.split(".wb-board-card-title b {", 1)[1].split("}", 1)[0]
+    meta_css = styles.split(".wb-board-card-meta {", 1)[1].split("}", 1)[0]
+
+    assert "height: calc(140px * var(--wb-ui-font-scale, 1));" in board_card_css
+    assert "box-sizing: border-box;" in board_card_css
+    assert "text-overflow: ellipsis;" in title_css
+    assert "white-space: nowrap;" in title_css
+    assert "margin-top: auto;" in meta_css
+    assert "flex-wrap: nowrap;" in meta_css
+
+
 def test_task_rail_menu_reuses_chat_pin_and_rename_actions():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
-    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
-    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    workbench = workbench_shell_source()
+    translations = workbench_i18n_source()
 
-    task_card = chat.split("function renderTaskCard(task) {", 1)[1].split("var terminalMap", 1)[0]
+    task_card = frontend_module_source("features/chat/rail-tasks.jsx").split(
+        "function WbcTaskRailCard(", 1
+    )[1].split("function WbcTaskRailCards", 1)[0]
+    project_rail = frontend_module_source("features/shell/project-rail-controller.jsx")
     assert 'className="wbc-chat-pin-action"' in task_card
     assert 'onTogglePinnedTask(task, !isPinned)' in task_card
-    assert 'setRenameTask(task);' in task_card
+    assert "onRenameTask(task)" in task_card
     assert 'wbcT("task.rename", "Rename task")' in task_card
     assert 'wbcT("rail.deleteTask", "Delete task")' in task_card
     assert 'entity="task"' in chat
     assert 'chat={renameTask}' in chat
     assert 'onRename={onRenameTask}' in chat
-    assert 'pinnedTasks.map(renderTaskCard)' in chat
-    assert 'recentTasks.map(renderTaskCard)' in chat
-    assert 'function renameProjectRailTask(taskId, title)' in workbench
-    assert 'model.patchSession(taskId, { title: title })' in workbench
+    task_rail_source = frontend_module_source("features/chat/rail-tasks.jsx")
+    assert "cards(state.pinned)" in task_rail_source
+    assert "cards(state.recent)" in task_rail_source
+    assert "var renameProjectRailTask = projectRailActions.renameTask" in workbench
+    assert "function renameTask(taskId, title)" in project_rail
+    assert 'model.patchSession(taskId, { title: title })' in project_rail
     assert 'onTogglePinnedTask' in workbench
     assert '"task.pin": "置顶任务"' in translations
     assert '"task.rename": "重命名任务"' in translations
@@ -6776,9 +6945,7 @@ def test_task_rail_menu_reuses_chat_pin_and_rename_actions():
 
 def test_expanded_task_detail_rail_uses_its_own_lane_and_hides_scrollbar():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     detail_grid_css = styles.split(
         ".workbench-grid.integrated-sidebars.is-task-detail {", 1
@@ -6822,9 +6989,7 @@ def test_expanded_task_detail_rail_uses_its_own_lane_and_hides_scrollbar():
 
 def test_non_chat_floating_cards_share_the_chat_topbar_baseline():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     library_styles = (
         root / "src" / "webui" / "frontend" / "workbench-library.css"
     ).read_text(encoding="utf-8")
@@ -6867,19 +7032,11 @@ def test_non_chat_floating_cards_share_the_chat_topbar_baseline():
 
 def test_task_and_chat_empty_rail_states_center_vertically():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     chat_source = workbench_chat_source()
 
-    task_empty_css = styles.split(".workbench-task-list.is-empty {", 1)[1].split(
-        "}", 1
-    )[0]
-    assert "flex-direction: column;" in task_empty_css
-    assert "justify-content: center;" in task_empty_css
-    task_card_css = styles.split(".wb-task-rail-empty {", 1)[1].split("}", 1)[0]
-    assert "margin-top: 0;" in task_card_css
-
+    assert '!loading && state.ordered.length === 0 ? " is-empty" : ""' in chat_source
+    assert 'wbcT("rail.noTasks", "No tasks yet.")' in chat_source
     assert '!loading && visibleRailItemCount === 0 ? " is-empty" : ""' in chat_source
     chat_empty_css = styles.split(
         ".wbc-chat-list.is-empty .wbc-chat-list-primary {", 1
@@ -6889,32 +7046,32 @@ def test_task_and_chat_empty_rail_states_center_vertically():
     assert "justify-content: center;" in chat_empty_css
 
 
-def test_sidebar_account_menu_keeps_codex_and_custom_model_limits_independent():
+def test_workbench_uses_wbc_project_rail_without_legacy_rail_components():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+    source = workbench_shell_source()
+    chat = workbench_chat_source()
+    chat_index = (
+        root / "src" / "webui" / "frontend" / "features" / "chat" / "index.jsx"
+    ).read_text(
         encoding="utf-8"
     )
 
-    account = source.split("function WorkbenchRailAccount(", 1)[1].split(
-        "function WorkbenchSidebarDock(", 1
+    for component in (
+        "WorkbenchRailAccount",
+        "WorkbenchProfileRail",
+        "ProjectRail",
+        "TaskRail",
+    ):
+        assert f"function {component}(" not in source
+    assert "React.createElement(context.chat.module.Rail" in source
+    assert "function WbcRail(" in chat
+    assert "function WbcProjectRail(props)" in chat
+    project_rail = chat.split("function WbcProjectRail(props)", 1)[1].split(
+        "// ---------------------------------------------------------------------------\n// Conversation main",
+        1,
     )[0]
-    quota_loader = account.split("function fetchCodexQuotaSummary() {", 1)[1].split(
-        "function formatTimeDiff(", 1
-    )[0]
-    assert 'fetch("/api/settings/openai-oauth/limits")' in quota_loader
-    assert 'fetch("/api/settings/models")' in quota_loader
-    assert 'primary.provider !== "codex_oauth"' in quota_loader
-    assert "codexQuotaState.primary && codexQuotaState.connected && codexQuotaState.windows.length > 0" in account
-    assert "codexQuotaState.windows.map" in account
-    assert 'fetch("/api/budget/status")' in account
-    assert "budgetState && budgetState.monthly_budget > 0" in account
-    assert 'className="wb-budget-progress-bar"' in account
-    config_store = (root / "src" / "cyrene" / "runtime" / "config_store.py").read_text(
-        encoding="utf-8"
-    )
-    assert '"budget_enabled": False' in config_store
-    assert '"budget_monthly": 50.0' in config_store
-    assert '"codex_budget_enabled": True' in config_store
+    assert "return <WbcRail" in project_rail
+    assert "Rail: WbcProjectRail" in chat_index
 
 
 def test_budget_limits_use_existing_toast_and_inline_error_surfaces():
@@ -6923,20 +7080,19 @@ def test_budget_limits_use_existing_toast_and_inline_error_surfaces():
     events = (root / "src" / "webui" / "frontend" / "platform" / "events.jsx").read_text(
         encoding="utf-8"
     )
+    runtime_hooks = frontend_module_source("features/chat/runtime-page-hooks.jsx")
 
     assert 'String(err.code || "").startsWith("budget_")' in chat
     assert 'showToast(wbcErrorText(err), "error")' in chat
     assert 'event.type === "budget_warning"' in chat
     assert 'showToast(wbcErrorText(warningError), "warning")' in chat
-    assert 'var budgetError = errorCode.startsWith("budget_");' in chat
+    assert 'var budgetError = String(error && error.code || "").startsWith("budget_");' in runtime_hooks
     assert '"budget_warning"' in events
 
 
 def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
+    source = workbench_shell_source()
     chat = workbench_chat_source()
     library = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(
         encoding="utf-8"
@@ -6947,15 +7103,13 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     memory = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(
         encoding="utf-8"
     )
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     grid_markup = source.split('className={"workbench-grid integrated-sidebars"', 1)[1]
     assert "<WorkbenchModuleRail" not in grid_markup
     assert "function WorkbenchSidebarDock(" in source
     module_dock = source.split("function WorkbenchSidebarDock(", 1)[1].split(
-        "// Temporarily keep sign-out", 1
+        "var WB_TASK_BOARD_COLUMNS", 1
     )[0]
     for module_id in ("board", "work", "knowledge", "schedule", "memory"):
         assert f'id: "{module_id}"' in module_dock
@@ -6968,19 +7122,22 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "function renderSidebarDockSlot()" in source
     assert 'return <div className="workbench-sidebar-dock-slot" aria-hidden="true" />;' in source
     assert "var [railCollapsed, setRailCollapsed] = useWorkbenchState" in source
-    assert "function toggleWorkspaceSidebar()" in source
-    assert 'localStorage.setItem("wb-rail-collapsed", next ? "1" : "0")' in source
+    navigation = frontend_module_source("features/shell/navigation-controller.jsx")
+    assert "var toggleWorkspaceSidebar = navigationActions.toggleSidebar" in source
+    assert "function toggleSidebar()" in navigation
+    assert 'localStorage.setItem("wb-rail-collapsed", next ? "1" : "0")' in navigation
     assert '(railCollapsed ? " rail-collapsed" : "")' in source
+    assert 'ref={wbApplyStoredRightWidth}' in source
     assert grid_markup.count("<WorkbenchSidebarDock") == 1
     assert "persistent={true}" in grid_markup
     assert "collapsed={railCollapsed}" in grid_markup
-    assert "moduleDock: isChat ? renderSidebarDockSlot() : null" in source
-    assert "moduleDock: isKnowledge ? renderSidebarDockSlot() : null" in source
-    assert "moduleDock: isSchedule ? renderSidebarDockSlot() : null" in source
-    assert "moduleDock: isMemory ? renderSidebarDockSlot() : null" in source
-    assert "moduleDock: !isModulePage ? renderSidebarDockSlot() : null" in source
-    assert "navCollapsed: railCollapsed" in source
-    assert "sidebarCollapsed: railCollapsed" in source
+    assert "moduleDock: presentation.isChat ? context.navigation.renderDockSlot() : null" in source
+    assert "moduleDock: p.isKnowledge ? navigation.renderDockSlot() : null" in source
+    assert "moduleDock: p.isSchedule ? navigation.renderDockSlot() : null" in source
+    assert "moduleDock: p.isMemory ? navigation.renderDockSlot() : null" in source
+    assert "moduleDock: !context.presentation.isModulePage ? context.navigation.renderDockSlot() : null" in source
+    assert "navCollapsed: context.navigation.railCollapsed" in source
+    assert "sidebarCollapsed: navigation.railCollapsed" in source
     assert "collapsed={railCollapsed}" in source
     assert 'className="wbc-module-nav"' not in chat
     assert "{moduleDock}" in chat
@@ -7001,7 +7158,6 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
         ".workbench-grid.integrated-sidebars.is-chat > "
         ".workbench-sidebar-dock.is-persistent {" not in styles
     )
-    assert ".workbench-sidebar-dock.is-persistent:has(.workbench-module-account-menu) {" in styles
     assert ".workbench-sidebar-dock::before {" in styles
     dock_separator = styles.split(".workbench-sidebar-dock::before {", 1)[1].split("}", 1)[0]
     assert "content: none;" in dock_separator
@@ -7067,8 +7223,6 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     shared_body_css = styles.split(".workbench-integrated-rail-body {", 1)[1].split("}", 1)[0]
     assert "flex: 1 1 auto;" in shared_body_css
     assert "overflow-y: auto;" in shared_body_css
-    assert 'className="workbench-integrated-rail-head workbench-integrated-rail-search-head"' in source
-    assert 'className={"wbc-chat-list workbench-integrated-rail-body wbc-task-list"' in source
     assert "workbench-integrated-rail-head workbench-integrated-rail-search-head" in chat
     assert "wbc-chat-list workbench-integrated-rail-body" in chat
     assert "wb-lib-sidebar-head workbench-integrated-rail-head" in library
@@ -7088,7 +7242,6 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
         ".workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button.active {",
         1,
     )[1].split("}", 1)[0]
-    account_button_css = styles.split(".workbench-rail-account-button {", 1)[1].split("}", 1)[0]
     assert "grid-template-rows: 56px 46px;" in dock_css
     assert "height: var(--wb-sidebar-dock-height);" in dock_css
     assert "min-height: var(--wb-sidebar-dock-height);" in dock_css
@@ -7118,7 +7271,6 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "stroke-width: 2;" in dock_icon_css
     assert "font-size: calc(10px * var(--wb-ui-font-scale, 1));" in dock_label_css
     assert "font-weight: 680;" in dock_label_css
-    assert "height: 46px;" in account_button_css
     assert "grid-template-rows: 48px;" in dock_nav_css
     assert "grid-template-columns var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease)" in dock_nav_css
     collapsed_dock_nav_css = styles.split(
@@ -7133,46 +7285,9 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
             1,
         )[1].split("}", 1)[0]
         assert f"transform: translateY({y}px);" in row_rule
-    account_row_css = styles.split(".workbench-rail-account {", 1)[1].split("}", 1)[0]
-    assert "grid-row: 2;" in account_row_css
-    assert "height var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease)," in account_row_css
-    assert "transform var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);" in account_row_css
-    assert "grid-template-columns var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease)" in account_button_css
-    collapsed_account_button_css = styles.split(
-        ".workbench-grid.integrated-sidebars > .workbench-sidebar-dock.is-persistent.is-collapsed .workbench-rail-account-button {",
-        1,
-    )[1].split("}", 1)[0]
-    assert "width: 100%;" in collapsed_account_button_css
-    assert "grid-template-columns: 32px minmax(0, 0fr) 0fr;" in collapsed_account_button_css
-    assert "padding: 3px 4px;" in collapsed_account_button_css
-    assert "function WorkbenchRailAccount(" in source
-    assert "<WorkbenchRailAccount" not in module_dock
-    assert 'className="workbench-rail-account-button"' in source
-    account_summary_css = styles.split(".workbench-rail-account-summary {", 1)[1].split("}", 1)[0]
-    account_name_css = styles.split(".workbench-rail-account-summary b {", 1)[1].split("}", 1)[0]
-    assert 'className="workbench-rail-account-summary"' in source
-    assert '<small>{codexQuotaState.plan || modelLabel}</small>' not in source
-    assert "align-self: stretch;" in account_summary_css
-    assert "justify-content: center;" in account_summary_css
-    assert "font-size: calc(14px * var(--wb-ui-font-scale, 1));" in account_name_css
-    assert 'className="workbench-account-menu workbench-module-account-menu"' in source
-    assert 't("settings.codexQuota")' in source
-    assert 't("rail.settings")' in source
-    assert 't("rail.profile")' in source
-    assert ".workbench-rail-account {" in styles
-    assert ".workbench-module-account-menu {" in styles
-    raised_menu_css = styles.split(
-        ".workbench-grid.integrated-sidebars .workbench-integrated-rail:has(.workbench-module-account-menu) {",
-        1,
-    )[1].split("}", 1)[0]
-    assert "z-index: 90;" in raised_menu_css
-    assert "overflow: visible;" in raised_menu_css
     project_menu_styles = styles.split(".workbench-top-project-menu {", 1)[1].split("}", 1)[0]
-    account_menu_styles = styles.split(".workbench-module-account-menu {", 1)[1].split("}", 1)[0]
     assert "background: var(--wb-flyout-bg);" in project_menu_styles
-    assert "background: var(--wb-card-bg-strong);" in account_menu_styles
     assert "backdrop-filter: none;" in project_menu_styles
-    assert "backdrop-filter: none;" in account_menu_styles
     assert ".workbench-top-project-menu-list:has(.workbench-top-project-row.menu-open) {" in styles
     project_row_active_styles = styles.split(
         ".workbench-top-project-row.active {", 1
@@ -7236,12 +7351,10 @@ def test_chat_rail_show_all_expands_recent_items_without_removed_filter_state():
 
 def test_active_module_dock_item_is_not_a_toggle_back_to_board_or_work():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
+    source = frontend_module_source("features/shell/navigation-controller.jsx")
 
-    handler = source.split("function handleOpenPage(page) {", 1)[1].split(
-        "function toggleWorkspaceSidebar()", 1
+    handler = source.split("function openPage(page) {", 1)[1].split(
+        "function toggleSidebar()", 1
     )[0]
     assert 'if (page === "board" || page === "task") {' in handler
     assert 'if (!fullPage && taskView === "board") return;' in handler
@@ -7254,20 +7367,16 @@ def test_active_module_dock_item_is_not_a_toggle_back_to_board_or_work():
 
 def test_primary_workspace_pages_replay_the_conversation_style_enter_motion():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    source = workbench_shell_source()
+    styles = workbench_style_source()
 
     assert "function WorkbenchStableSurface({ active, enterMotion, children })" in source
     assert source.count("enterMotion={true}") == 4
-    assert '<WorkbenchStableSurface active={isChat}>' in source
-    assert '<WorkbenchStableSurface active={isKnowledge} enterMotion={true}>' in source
-    assert '<WorkbenchStableSurface active={isSchedule} enterMotion={true}>' in source
-    assert '<WorkbenchStableSurface active={isMemory} enterMotion={true}>' in source
-    assert '<WorkbenchStableSurface active={!isModulePage} enterMotion={true}>' in source
+    assert '<WorkbenchStableSurface active={presentation.isChat}>' in source
+    assert '<WorkbenchStableSurface active={p.isKnowledge} enterMotion={true}>' in source
+    assert '<WorkbenchStableSurface active={p.isSchedule} enterMotion={true}>' in source
+    assert '<WorkbenchStableSurface active={p.isMemory} enterMotion={true}>' in source
+    assert '<WorkbenchStableSurface active={!context.presentation.isModulePage} enterMotion={true}>' in source
     enter_css = styles.split(
         ".workbench-stable-surface.has-page-enter-motion.is-active :is(", 1
     )[1].split("}", 1)[0]
@@ -7315,9 +7424,7 @@ def test_knowledge_sidebar_is_persistent_at_compact_desktop_widths():
 def test_workbench_chat_plan_confirmation_can_continue_in_auto_mode():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    i18n = workbench_i18n_source()
 
     assert "function answerChat(chatId, questionId, answerText, options)" in source
     assert 'mode: options.mode || undefined' in source
@@ -7348,9 +7455,7 @@ def test_workbench_permission_mode_is_preserved_across_secondary_entry_points():
 def test_workbench_surfaces_permission_reviews_and_describes_auto_accurately():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    i18n = workbench_i18n_source()
 
     assert 'event.type === "auto_review" || event.type === "permission_decision"' in source
     assert 'kind: "permission"' in source
@@ -7361,9 +7466,7 @@ def test_workbench_surfaces_permission_reviews_and_describes_auto_accurately():
 def test_workbench_attachment_preview_falls_back_without_overflowing():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     assert "failedImagePreviews" in source
     assert "onError={function () {" in source
@@ -7385,7 +7488,7 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
     assert "WBC_ICONS.openExternal" in message_attachment
     assert 'className: "wbc-inline-image-action"' in message_attachment
     assert source.count("<WbcMessageAttachment key=") == 3
-    assert 'window.CyreneUI.require("library").FileVisual' in source
+    assert "workbenchServices.library().FileVisual" in source
     assert 'className="wbc-attach-file"' in message_attachment
     assert 'wbcT("workbenchChat.openPreview", "Open preview")' in message_attachment
     assert 'className={"wbc-msg-attachments" + (msg.content ? " after-copy" : "")}' in source
@@ -7445,9 +7548,7 @@ def test_workbench_agent_images_render_inline_with_viewer_and_file_actions():
 def test_workbench_execution_card_uses_collapsible_activity_summary():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     trace_rule = styles.split(".wbc-trace {", 1)[1].split("}", 1)[0]
     summary_rule = styles.split(".wbc-trace-summary {", 1)[1].split("}", 1)[0]
@@ -7506,15 +7607,11 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
     assert "var seen = new Set();" in source
     assert "seen.has(key)" in source
 
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    i18n = workbench_i18n_source()
     assert '"workbenchChat.thinkingProcess": "Thinking process"' in i18n
     assert '"workbenchChat.thinkingProcess": "思考过程"' in i18n
 
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
     trace_mark = styles.split(".wbc-trace-mark {", 1)[1].split("}", 1)[0]
     trace_mark_icon = styles.split(".wbc-trace-mark > svg {", 1)[1].split("}", 1)[0]
     assert "font-size: calc(11.5px * var(--wb-ui-font-scale, 1));" in trace_mark
@@ -7546,10 +7643,10 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
     assert "{previewText ? <small>（{previewText}）</small> : null}" in source
     assert ".wbc-trace-details .wbc-trace-mark" not in styles
     assert 'className="wbc-trace-mark"' in source
-    assert "编辑了文件" in (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    assert "编辑了文件" in workbench_i18n_source()
+    i18n = workbench_i18n_source()
     assert '"workbenchChat.traceAction.usedSkill": "使用了技能工具"' in i18n
-    assert '"workbenchChat.traceAction.usedTool": "使用了 {tool}"' in i18n
+    assert '"workbenchChat.traceAction.usedTool": "使用了{tool}"' in i18n
     assert '"workbenchChat.traceAction.conjunction": "并"' in i18n
     assert '"workbenchChat.traceAction.executed"' not in i18n
 
@@ -7564,7 +7661,7 @@ def test_workbench_trace_summary_adds_a_verb_before_named_application_tools():
 const WBC_ICONS = new Proxy({{}}, {{ get: (_target, name) => String(name) }});
 const messages = {{
   "workbenchChat.traceAction.browsed": "操作了浏览器",
-  "workbenchChat.traceAction.usedTool": "使用了 {{tool}}",
+  "workbenchChat.traceAction.usedTool": "使用了{{tool}}",
   "workbenchChat.traceAction.conjunction": "并",
   "workbenchChat.traceAction.listSeparator": "、",
   "toolName.browser_navigate": "浏览器导航",
@@ -7577,6 +7674,10 @@ function wbcT(key, fallback, params) {{
   }});
   return value;
 }}
+function wbcLocalizedToolName(toolName) {{
+  const raw = String(toolName || "").trim();
+  return wbcT("toolName." + raw, raw);
+}}
 eval({json.dumps(helpers)});
 const summary = wbcTraceCollapsedSummary([
   {{ kind: "tool", tool: "browser_navigate" }},
@@ -7588,7 +7689,7 @@ process.stdout.write(summary.label);
         ["node", "-e", script], check=True, capture_output=True, text=True
     )
 
-    assert completed.stdout == "操作了浏览器并使用了 Cyrene 应用工具"
+    assert completed.stdout == "操作了浏览器并使用了Cyrene 应用工具"
 
 
 def test_workbench_trace_timeline_removes_blank_lines_and_interleaves_tools():
@@ -7646,6 +7747,8 @@ def test_workbench_chat_splits_live_tools_around_intermediate_messages():
 def test_workbench_chat_retry_clears_model_output_before_start_and_reconciles_terminal_event():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
+    action_controller = frontend_module_source("features/chat/chat-action-controller.jsx")
+    runtime_hooks = frontend_module_source("features/chat/runtime-page-hooks.jsx")
 
     selection_helper = source.split("function wbcRetryTurnSelection(chat, messageId) {", 1)[1].split(
         "function wbcClearModelOutputForRetry", 1
@@ -7653,8 +7756,8 @@ def test_workbench_chat_retry_clears_model_output_before_start_and_reconciles_te
     clear_helper = source.split("function wbcClearModelOutputForRetry(chat, messageId) {", 1)[1].split(
         "function wbcPreserveLiveTimelineAnchors", 1
     )[0]
-    retry_block = source.split("function handleRetryMessage(messageId) {", 1)[1].split(
-        "function handleEditMessage", 1
+    retry_block = action_controller.split("function wbcHandleRetryMessage(context, messageId) {", 1)[1].split(
+        "function wbcHandleEditMessage", 1
     )[0]
     saved_block = source.split("onSaved: function (event) {", 1)[1].split(
         "onAwaitingUser:", 1
@@ -7667,25 +7770,25 @@ def test_workbench_chat_retry_clears_model_output_before_start_and_reconciles_te
     assert 'messages[nextIndex].role === "user"' in selection_helper
     assert "messages.slice(userIndex + 1, endIndex)" in selection_helper
     assert "chat.messages.slice(0, selection.userIndex + 1).concat(chat.messages.slice(selection.endIndex))" in clear_helper
-    assert "wbcClearModelOutputForRetry(cachedChat, retryMessageId)" in retry_block
-    assert "wbcClearModelOutputForRetry(prev, retryMessageId)" in retry_block
+    assert "wbcClearModelOutputForRetry(cached, targetMessageId)" in retry_block
+    assert "wbcClearModelOutputForRetry(previous, targetMessageId)" in retry_block
     assert "setRetryClearingMessageIds(selection.outputIds);" in retry_block
-    assert "retrySuppressedTurnRef.current = suppressedTurn;" in retry_block
-    assert "setRetrySuppressedTurn(suppressedTurn);" in retry_block
-    assert "retryClearCommitRef.current = startRetryAfterClear;" in retry_block
+    assert "context.retrySuppressedTurnRef.current = suppressed;" in retry_block
+    assert "context.setRetrySuppressedTurn(suppressed);" in retry_block
+    assert "context.retryClearCommitRef.current = startRetryAfterClear;" in retry_block
     assert "setTimeout(startRetryAfterClear" not in retry_block
     assert 'event.animationName === "wbc-retry-output-clear"' in source
     assert "onRetryClearAnimationEnd();" in source
-    assert 'runtimeEngine.start(retryChatId, { retry: true, mode: retryMode }, model);' in retry_block
+    assert 'context.runtimeEngine.start(chatId, { retry: true, mode: retryMode }, context.model);' in retry_block
     assert 'className={retryClearing ? "retry-clearing" : ""}' in source
     assert "retrySuppressedIds.has(String(message && message.id || \"\"))" in source
-    retry_truncate = source.split("onRetryTruncate: function (chatId, truncateInfo) {", 1)[1].split(
-        "onReplyStream:", 1
+    retry_truncate = runtime_hooks.split("function wbcRuntimeRetryTruncate(context, chatId, truncateInfo) {", 1)[1].split(
+        "function wbcRuntimeReplyStream", 1
     )[0]
     assert "retrySuppressedTurnRef.current" in retry_truncate
     assert ".concat(locallySuppressedIds)" in retry_truncate
     assert 'retrySuppressedTurnRef.current = { chatId: "", messageIds: [] };' in retry_truncate
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
     clear_animation = styles.split(".wbc-thread-item.retry-clearing {", 1)[1].split("}", 1)[0]
     assert "animation: wbc-retry-output-clear 180ms" in clear_animation
     assert "grid-template-rows: 1fr" in clear_animation
@@ -7705,12 +7808,12 @@ def test_workbench_chat_error_retry_replays_failed_message_instead_of_reloading(
     Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
-    runtime_error = source.split(
-        'onError: function (chatId, err, failureState) {', 1
-    )[1].split("onSettled:", 1)[0]
+    runtime_error = frontend_module_source("features/chat/runtime-page-hooks.jsx").split(
+        "function wbcRuntimeError(context, chatId, error, failureState) {", 1
+    )[1].split("function wbcRuntimeResync", 1)[0]
     main_props = source.split("<WbcMain", 1)[1].split("/>", 1)[0]
 
-    assert 'setErrorKind("message");' in runtime_error
+    assert 'context.setErrorKind("message");' in runtime_error
     assert 'onRetry={errorKind === "message" ? handleRetryMessage : (errorKind === "memory" ? handleGenerateMemory : retryLoad)}' in main_props
     assert 'errorKind={errorKind}' in main_props
     assert '<WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} />' in source
@@ -7725,12 +7828,12 @@ def test_workbench_chat_waits_for_terminal_failure_and_retains_it_until_retry():
     stream_failure = source.split("function failRun(chatId, err) {", 1)[1].split(
         "function appendActivity", 1
     )[0]
-    stream_owner = source.split("function ownStream(chatId, streamPromise, ac) {", 1)[1].split(
+    stream_owner = source.split("function ownStream(chatId, streamPromise, ac, model) {", 1)[1].split(
         "// Begin a streamed send", 1
     )[0]
-    page_error = source.split(
-        "onError: function (chatId, err, failureState) {", 1
-    )[1].split("onSettled:", 1)[0]
+    page_error = frontend_module_source("features/chat/runtime-page-hooks.jsx").split(
+        "function wbcRuntimeError(context, chatId, error, failureState) {", 1
+    )[1].split("function wbcRuntimeResync", 1)[0]
     selection_load = source.split(
         "// Load the full transcript when the selection changes.", 1
     )[1].split("model.getChat(activeChatId", 1)[0]
@@ -7744,8 +7847,8 @@ def test_workbench_chat_waits_for_terminal_failure_and_retains_it_until_retry():
     assert 'fire("onError", chatId, failures[chatId], { terminal: true })' in stream_failure
     assert "if (terminal)" in page_error
     assert 'runStatus: "failed"' in page_error
-    assert 'wbcSettleChatListItem(chat, "failed", err)' in page_error
-    assert "if (terminal && String(activeChatIdRef.current" in page_error
+    assert 'wbcSettleChatListItem(chat, "failed", error)' in page_error
+    assert "if (terminal && String(context.activeChatIdRef.current" in page_error
     assert "runtimeEngine.getFailure(activeChatId)" in selection_load
     assert "clearFailure(chatId);" in start_run
 
@@ -7756,9 +7859,7 @@ def test_workbench_chat_errors_keep_i18n_metadata_and_localize_known_codes():
     api = (root / "src" / "webui" / "frontend" / "platform" / "api.jsx").read_text(
         encoding="utf-8"
     )
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    i18n = workbench_i18n_source()
 
     assert 'streamError.code = event.code || event.failure_kind || ""' in source
     assert 'streamError.detailKey = event.detail_key || event.detailKey || ""' in source
@@ -7778,14 +7879,12 @@ def test_workbench_chat_errors_keep_i18n_metadata_and_localize_known_codes():
 
 def test_workbench_uses_the_library_as_the_only_knowledge_page():
     root = Path(__file__).resolve().parent.parent
-    shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
+    shell = workbench_shell_source()
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(
         encoding="utf-8"
     )
 
-    assert 'window.CyreneUI.require("library").Page' in shell
+    assert "workbenchServices.library().Page" in shell
     assert 'window.CyreneUI.require("knowledge").Page' not in shell
     assert "compiled/workbench-knowledge.js" not in index
     assert not (root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx").exists()
@@ -7794,10 +7893,11 @@ def test_workbench_uses_the_library_as_the_only_knowledge_page():
 def test_workbench_chat_plan_tab_uses_durable_plan_and_live_step_events():
     Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
+    live_events = frontend_module_source("features/chat/live-event-controller.jsx")
 
     assert "function wbcActivePlan(chat)" in source
     assert "var active = chat && chat.activePlan;" in source
-    assert 'event.type === "plan_progress" || event.type === "plan"' in source
+    assert 'event.type !== "plan_progress" && event.type !== "plan"' in live_events
     assert 'className={"wbc-plan-step " + status}' in source
     assert "wbcPlanStepStatusText(status)" in source
 
@@ -7805,9 +7905,7 @@ def test_workbench_chat_plan_tab_uses_durable_plan_and_live_step_events():
 def test_workbench_chat_tool_trace_preserves_i18n_metadata():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    i18n = workbench_i18n_source()
 
     live_message = chat.split("function WbcLiveMessage(", 1)[1].split(
         "var WBC_DRAFT_PREFIX", 1
@@ -7837,9 +7935,7 @@ def test_workbench_chat_tool_trace_preserves_i18n_metadata():
 def test_workbench_live_trace_keeps_each_llm_activity_independent():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    css = workbench_style_source()
     assert 'type === "reasoning_start" && handlers.onReasoningStart' in chat
     assert 'type === "reasoning_delta" && handlers.onReasoningDelta' in chat
     assert 'type === "reasoning_done" && handlers.onReasoningDone' in chat
@@ -7866,11 +7962,19 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert "toggleReasoning" not in activity_card
     assert 'provider: String(event.provider || activity.provider || "")' in chat
     assert '!String(activity.reasoning || "").trim()' in chat
-    assert "!msg.runtimeActivityActive\n              && activityEntries.length === 0" in chat
+    assert "!msg.runtimeActivityActive" in chat
+    assert "activityEntries.length === 0" in chat
     assert "wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder }))" in chat
     assert "if (msg.runtimeActivity || msg.activityCard)" in chat
-    assert "if (msg.runtimeHeartbeat) {\n            return null;" in chat
-    assert "if (item.runtimeHeartbeat) {\n          return null;" in chat
+    history_renderer = chat.split("function wbcRenderHistoryMessage", 1)[1].split(
+        "function WbcConversationTimeline", 1
+    )[0]
+    runtime_transcript = chat.split("function WbcRuntimeTranscript", 1)[1].split(
+        "function WbcLiveMessage", 1
+    )[0]
+    assert "if (msg.runtimeHeartbeat) return null;" in history_renderer
+    assert "if (item.runtimeHeartbeat)" in runtime_transcript
+    assert "return null;" in runtime_transcript
     assert "<WbcHeartbeat startedAt=" not in chat
     assert "activity={activity}" in chat
     assert "reasoning={visibleReasoning}" in activity_card
@@ -7978,17 +8082,17 @@ process.stdout.write(JSON.stringify({{
 def test_workbench_activity_group_has_live_and_completed_disclosure_states():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    css = workbench_style_source()
+    i18n = workbench_i18n_source()
     group_component = chat.split("function WbcActivityGroup", 1)[1].split(
         "var WBC_LIVE_MARKDOWN_INTERVAL_MS", 1
     )[0]
     assert "wbcGroupConsecutiveActivityMessages(messages, runtime)" in chat
     assert "displayMessages.map(function (msg)" in chat
+    assert "var renderedHistory = useWbcMemo(function ()" in chat
+    assert "}, [chatMessages, runtimeUserMessages]);" in chat
+    assert "runtimeHasReplyText" in chat
+    assert "{renderedHistory}" in chat
     assert "if (msg.activityGroup)" in chat
     assert 'className="wbc-activity-group-summary"' in group_component
     assert "aria-expanded={expanded}" in group_component
@@ -8012,9 +8116,7 @@ def test_workbench_activity_group_has_live_and_completed_disclosure_states():
 
 def test_codex_reasoning_effort_updates_the_primary_candidate_without_stale_state():
     root = Path(__file__).resolve().parent.parent
-    settings = (
-        root / "src" / "webui" / "frontend" / "settings-overlay.jsx"
-    ).read_text(encoding="utf-8")
+    settings = workbench_settings_source()
 
     assert "setCodexCandidate(normalizeModel({" in settings
     assert "selectedEffort != null ? selectedEffort : codexEffort" in settings
@@ -8025,9 +8127,7 @@ def test_codex_reasoning_effort_updates_the_primary_candidate_without_stale_stat
 def test_workbench_deepseek_reasoning_effort_matches_provider_capabilities():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     assert 'if (!efforts.length && wbcIsDeepSeekModel(model)) efforts = ["high", "max"];' in chat
     assert 'else if (["xhigh", "max"].indexOf(effort) >= 0) effort = "max";' in chat
@@ -8049,15 +8149,14 @@ def test_workbench_deepseek_reasoning_effort_matches_provider_capabilities():
 def test_workbench_chat_context_and_browser_trace_have_dynamic_i18n_labels():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    i18n = workbench_i18n_source()
 
     # Dynamic context block and tool IDs must resolve through the same
     # translation table as the surrounding labels instead of leaking raw IDs.
     assert 'var key = "workbenchChat.ctxBlock." + id;' in chat
     assert "if (label && label !== key) return label;" in chat
-    assert 'wbcT("toolName." + toolKey, toolKey)' in chat
+    assert "if (isToolEntry) return wbcLocalizedToolName(toolKey);" in chat
+    assert "function wbcLocalizedToolName(toolName)" in chat
     assert '"workbenchChat.ctxBlock.skills.learned": "Learned skills"' in i18n
     assert '"workbenchChat.ctxBlock.skills.learned": "已学习技能"' in i18n
     assert (
@@ -8079,9 +8178,7 @@ def test_progressive_capability_ids_resolve_to_existing_tool_name_i18n():
     from cyrene.tooling.packs import CAPABILITY_BINDINGS
 
     root = Path(__file__).resolve().parent.parent
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    i18n = workbench_i18n_source()
 
     # Runtime traces intentionally publish model-facing IDs such as
     # browser.navigate. Every native progressive capability must map back to
@@ -8114,6 +8211,9 @@ def test_tool_i18n_fallbacks_do_not_leak_internal_keys_after_classic_removal():
   askUserEn: window.WorkbenchI18n.toolName("Ask User", "en"),
   globZh: window.WorkbenchI18n.toolName("Glob", "zh"),
   appSnapshot: window.WorkbenchI18n.toolName("AppUISnapshot", "zh"),
+  powerPointShapesZh: window.WorkbenchI18n.toolName("PowerPointListShapes", "zh"),
+  powerPointShapesEn: window.WorkbenchI18n.toolName("PowerPointListShapes", "en"),
+  powerPointCapabilityZh: window.WorkbenchI18n.toolName("ppt.list_shapes", "zh"),
   showSidebar: window.WorkbenchI18n.t("workbenchChat.showSidebar"),
   hideSidebar: window.WorkbenchI18n.t("workbenchChat.hideSidebar"),
   download: window.WorkbenchI18n.t("workbenchChat.download")
@@ -8131,6 +8231,9 @@ def test_tool_i18n_fallbacks_do_not_leak_internal_keys_after_classic_removal():
         "askUserEn": "Ask user",
         "globZh": "查找文件",
         "appSnapshot": "快照应用界面",
+        "powerPointShapesZh": "列出页面元素",
+        "powerPointShapesEn": "List slide elements",
+        "powerPointCapabilityZh": "列出页面元素",
         "showSidebar": "显示侧边栏",
         "hideSidebar": "隐藏侧边栏",
         "download": "下载",
@@ -8148,11 +8251,9 @@ def test_profile_top_tools_use_shared_tool_name_i18n():
     profile = (root / "src/webui/frontend/workbench-profile.jsx").read_text(
         encoding="utf-8"
     )
-    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    i18n = workbench_i18n_source()
 
-    assert 'require("i18n").toolName(tool, lang)' in profile
+    assert 'workbenchServices.i18n().toolName(tool, lang)' in profile
     assert '"Ask User": "ask_user"' in i18n
     assert i18n.count('"toolName.ask_user"') == 2
     assert i18n.count('"toolName.Glob"') == 2
@@ -8160,9 +8261,7 @@ def test_profile_top_tools_use_shared_tool_name_i18n():
 
 def test_settings_storage_keeps_last_snapshot_across_tab_remounts():
     root = Path(__file__).resolve().parent.parent
-    overlay = (root / "src/webui/frontend/settings-overlay.jsx").read_text(
-        encoding="utf-8"
-    )
+    overlay = workbench_settings_source()
     storage = overlay.split("var DATA_PANEL_STORAGE_TTL_MS", 1)[1].split(
         "function resetData()", 1
     )[0]
@@ -8192,15 +8291,9 @@ def test_settings_storage_keeps_last_snapshot_across_tab_remounts():
 
 def test_session_export_uses_balanced_responsive_action_layout():
     root = Path(__file__).resolve().parent.parent
-    overlay = (root / "src/webui/frontend/settings-overlay.jsx").read_text(
-        encoding="utf-8"
-    )
-    styles = (root / "src/webui/frontend/workbench.css").read_text(
-        encoding="utf-8"
-    )
-    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    overlay = workbench_settings_source()
+    styles = workbench_style_source()
+    i18n = workbench_i18n_source()
     session_export = overlay.split("// Session export", 1)[1].split(
         "// ── About Panel", 1
     )[0]
@@ -8218,12 +8311,8 @@ def test_session_export_uses_balanced_responsive_action_layout():
 
 def test_session_export_button_has_distinct_enabled_and_disabled_states():
     root = Path(__file__).resolve().parent.parent
-    overlay = (root / "src/webui/frontend/settings-overlay.jsx").read_text(
-        encoding="utf-8"
-    )
-    styles = (root / "src/webui/frontend/workbench.css").read_text(
-        encoding="utf-8"
-    )
+    overlay = workbench_settings_source()
+    styles = workbench_style_source()
     session_export = overlay.split("// Session export", 1)[1].split(
         "// ── About Panel", 1
     )[0]
@@ -8305,7 +8394,7 @@ def test_workbench_phase_events_publish_translation_keys():
     planning = (root / "src" / "cyrene" / "agent" / "planning.py").read_text(encoding="utf-8")
     guidance = (root / "src" / "cyrene" / "agent" / "guidance.py").read_text(encoding="utf-8")
     reflection = (root / "src" / "cyrene" / "agent" / "deep_reflection.py").read_text(encoding="utf-8")
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    i18n = workbench_i18n_source()
 
     assert '"detail_key": "phase.planning"' in planning
     assert '"detail_key": "phase.applyingGuidanceToSubagents"' in guidance
@@ -8320,20 +8409,22 @@ def test_workbench_phase_events_publish_translation_keys():
 def test_workbench_chat_last_user_message_has_retry_action():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    i18n = workbench_i18n_source()
 
-    main = source.split("function WbcMain(", 1)[1].split(
-        "function WbcQuestionPrompt(", 1
+    projection = source.split("function useWbcConversationProjection(", 1)[1].split(
+        "function wbcRenderHistoryMessage(", 1
+    )[0]
+    history = source.split("function wbcRenderHistoryMessage(", 1)[1].split(
+        "function useWbcComposerReserveHeight(", 1
     )[0]
     user_message = source.split("function WbcUserMessage(", 1)[1].split(
         "function WbcAgentFiles(", 1
     )[0]
 
-    assert 'var lastUserId = "";' in main
-    assert 'String(msg.id || "") === lastUserId' in main
-    assert "onRetryMessage={canRetryUser ? onRetryMessage : null}" in main
+    assert 'var user = "";' in projection
+    assert 'lastUserId: lastMessageIds.user' in projection
+    assert 'String(msg.id || "") === context.lastUserId' in history
+    assert "onRetryMessage={canRetryUser && context.onRetryMessage ? context.retryHistoryMessage : null}" in history
     assert "function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessage })" in source
     assert "onClick={function () { onRetryMessage(msg.id); }}" in user_message
     assert "WBC_ICONS.retry" in user_message
@@ -8345,11 +8436,71 @@ def test_workbench_chat_uses_explicit_run_reconnect_without_resubmitting_message
     Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
 
-    assert 'function reconnectRun(chatId, handlers, signal)' in source
+    assert 'function reconnectRun(chatId, handlers, signal, cursor)' in source
     assert '"/run-stream"' in source
-    assert 'function reconnect(chatId, model)' in source
+    assert '"?cursor=" + encodeURIComponent(eventCursor)' in source
+    assert 'function reconnect(chatId, model, preserveRuntime)' in source
     assert 'runtimeEngine.reconnect(activeChat.id, model)' in source
     assert 'activeChat.status === "running"' in source
+
+
+def test_workbench_chat_reconnect_keeps_live_timeline_and_resumes_from_cursor():
+    source = workbench_chat_source()
+    stream_owner = source.split(
+        "function ownStream(chatId, streamPromise, ac, model) {", 1
+    )[1].split("// Begin a streamed send", 1)[0]
+
+    assert "scheduleReconnect(chatId, model);" in stream_owner
+    assert "update(chatId, null);" not in stream_owner
+    assert "onEventCursor: function (cursor)" in source
+
+    result = _run_workbench_runtime_js(
+        """
+(() => {
+  let handlers = null;
+  let reconnectCursor = -1;
+  const pending = new Promise(() => {});
+  const model = {
+    sendMessage: (_chatId, _input, nextHandlers) => {
+      handlers = nextHandlers;
+      return pending;
+    },
+    reconnectRun: (_chatId, _handlers, _signal, cursor) => {
+      reconnectCursor = cursor;
+      return pending;
+    }
+  };
+  WorkbenchChatRuntimes.start("chat-1", { message: "hello" }, model);
+  handlers.onEventCursor(41);
+  handlers.onReasoningDone("reasoning that must stay");
+  handlers.onToolStarted({ toolCallId: "tool-1", name: "Read", status: "running" });
+  const before = WorkbenchChatRuntimes.get("chat-1");
+  WorkbenchChatRuntimes.reconnect("chat-1", model, true);
+  const after = WorkbenchChatRuntimes.get("chat-1");
+  const result = {
+    reconnectCursor,
+    eventCursor: after.eventCursor,
+    reasoning: after.activities[0].reasoning,
+    toolCallId: after.activities[1].progress[0].toolCallId,
+    activityCountBefore: before.activities.length,
+    activityCountAfter: after.activities.length,
+    reconnecting: after.reconnecting
+  };
+  WorkbenchChatRuntimes.clear("chat-1");
+  return result;
+})()
+"""
+    )
+
+    assert result == {
+        "reconnectCursor": 41,
+        "eventCursor": 41,
+        "reasoning": "reasoning that must stay",
+        "toolCallId": "tool-1",
+        "activityCountBefore": 2,
+        "activityCountAfter": 2,
+        "reconnecting": True,
+    }
 
 
 def test_workbench_copy_uses_electron_clipboard_bridge():
@@ -8392,15 +8543,30 @@ def test_code_blocks_use_declared_language_and_resilient_clipboard_actions():
     assert 'translate("workbenchChat.codeBlock.copy", "Copy")' in actions
     assert 'translate("workbenchChat.codeBlock.edit", "Edit")' in actions
     assert 'window.addEventListener("cyrene:i18n-changed", localizeActions)' in actions
+    assert 'if (!codeElement || codeElement.tagName !== "CODE") return;' in actions
     assert "padding-top: 52px;" in styles
     assert "top: 0;" in styles
     assert "bottom: 0;" not in styles.split(".code-block-actions", 1)[1].split("}", 1)[0]
 
 
+def test_tool_error_previews_do_not_render_as_code_blocks_or_show_a_left_rule():
+    root = Path(__file__).resolve().parent.parent
+    messages = (
+        root / "src" / "webui" / "frontend" / "features" / "chat" / "messages.jsx"
+    ).read_text(encoding="utf-8")
+    styles = (
+        root / "src" / "webui" / "frontend" / "features" / "chat" / "conversation.css"
+    ).read_text(encoding="utf-8")
+    error_rule = styles.split(".wbc-tool-presentation-body.error", 1)[1].split("}", 1)[0]
+
+    assert '<pre className={"wbc-tool-presentation-body " + presentationKind}' in messages
+    assert "border-inline-start" not in error_rule
+
+
 def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
 
     assert 'split(";", 1)[0].trim().toLowerCase()' in source
@@ -8479,19 +8645,18 @@ def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
 
 def test_workbench_acceptance_button_calls_agent_endpoint():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
     model = (root / "src" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
 
-    assert 'window.CyreneUI.require("model").generateAcceptance(session.id)' in source
+    assert "workbenchServices.model().generateAcceptance(session.id)" in source
     assert '"/acceptance/generate"' in model
 
 
 def test_workbench_artifact_rows_download_registered_files():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
     model = (root / "src" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
-    routes = (root / "src" / "route" / "workbench" / "task_sessions.py").read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     assert "WorkbenchModel.ensureArtifacts(session)" in source
     artifacts_tab = source.split("function ArtifactsTab", 1)[1].split(
@@ -8506,15 +8671,13 @@ def test_workbench_artifact_rows_download_registered_files():
     assert 'name: "task-summary.md"' not in model
     assert ".wb-task-detail-tab-panel:last-child.open" in styles
     assert ".wb-task-artifact-list" in styles
-    assert '@router.get("/api/task-sessions/{session_id}/artifacts/{artifact_id}/download")' in routes
-    assert "_workbench_artifact_download_target(project, session, artifact_id)" in routes
 
 
 def test_workbench_task_panel_reuses_conversation_panel_structure_and_styles():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
+    styles = workbench_style_source()
+    i18n = workbench_i18n_source()
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     panel = source.split("function RightContextPanel", 1)[1].split("function ReflectionSection", 1)[0]
@@ -8618,7 +8781,7 @@ def test_workbench_task_panel_reuses_conversation_panel_structure_and_styles():
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     nav_rule = styles.split("\n.workbench-nav-button {", 1)[1].split("}", 1)[0]
@@ -8640,7 +8803,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     collapsed_prefix = (
         ".workbench-grid.rail-collapsed "
@@ -8664,7 +8827,7 @@ def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
 
 def test_workbench_narrow_window_forces_project_rail_into_stable_icon_strip():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     title_rule = styles.split("\n.wb-rail-title {", 1)[1].split("}", 1)[0]
     actions_rule = styles.split("\n.workbench-rail-head-actions {", 1)[1].split("}", 1)[0]
@@ -8693,9 +8856,9 @@ def test_workbench_narrow_window_forces_project_rail_into_stable_icon_strip():
 
 def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     root = Path(__file__).resolve().parent.parent
-    settings = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
-    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    settings = workbench_settings_source()
+    translations = workbench_i18n_source()
+    styles = workbench_style_source()
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     assert "function WeChatConnectionPanel" in settings
@@ -8748,7 +8911,7 @@ def test_topbar_theme_toggle_persists_to_the_appearance_namespace():
 
 def test_split_opening_keeps_elastic_motion_off_layout_sizing():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     pane_layout = styles.split("\n.wbc-pane-layout {", 1)[1].split("}", 1)[0]
     pane_single = styles.split(".wbc-pane-layout.single {", 1)[1].split("}", 1)[0]
@@ -8763,15 +8926,17 @@ def test_split_opening_keeps_elastic_motion_off_layout_sizing():
     assert all("scale(" not in block for block in right_keyframes)
 
 
-def test_backup_actions_use_native_file_pickers_and_comfortable_density_only():
+def test_backup_actions_use_native_file_pickers_and_comfortable_density_only(
+    monkeypatch,
+    tmp_path,
+):
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
-    settings = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    settings = workbench_settings_source()
+    data_panel = frontend_module_source("features/settings/data.jsx")
     bootstrap = (root / "src" / "webui" / "frontend" / "entry" / "bootstrap.jsx").read_text(encoding="utf-8")
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
-    route = (root / "src" / "route" / "backup.py").read_text(encoding="utf-8")
-    session_route = (root / "src" / "route" / "agent" / "sessions.py").read_text(encoding="utf-8")
 
     assert "ipcMain.handle('dialog:pick-backup-save-path'" in main
     assert "ipcMain.handle('dialog:pick-backup-file'" in main
@@ -8779,22 +8944,66 @@ def test_backup_actions_use_native_file_pickers_and_comfortable_density_only():
     assert "filters: [{ name: 'Cyrene backup', extensions: ['zip'] }]" in main
     assert "ipcRenderer.invoke('dialog:pick-backup-save-path'" in preload
     assert "ipcRenderer.invoke('dialog:pick-backup-file'" in preload
-    assert "await bridge.pickBackupSavePath" in settings
-    assert "await bridge.pickBackupFile" in settings
-    assert 'JSON.stringify({ path: selection.path })' in settings
-    assert 't("settings.backupRestoreBtn")' in settings
-    assert 't("settings.backupHint")' in settings
+    assert "await bridge.pickBackupSavePath" in data_panel
+    assert "await bridge.pickBackupFile" in data_panel
+    assert 'settingsFetch("/api/backup/export"' in data_panel
+    assert 'settingsFetch("/api/backup/restore"' in data_panel
+    assert 'JSON.stringify({ path: selection.path })' in data_panel
+    assert 't("settings.backupRestoreBtn")' in data_panel
+    assert 't("settings.backupHint")' in data_panel
     assert 'var [exportSids, setExportSids] = useStateSt([])' in settings
     assert 'settingsFetch("/api/workbench/chats")' in settings
-    assert "(workbenchExportSessions || []).concat(dataState.sessions || [])" in settings
-    assert "exportSessions.map(function (s)" in settings
-    assert 'className: "wb-export-session-list"' in settings
-    assert 'type: "checkbox", checked: selected' in settings
-    assert 't("settings.sessionExportHint")' in settings
-    assert 'exportSids.forEach(function (sessionId)' in settings
-    assert 'target_path=target_path or None' in route
-    assert "from cyrene.workbench.chat import get_workbench_chat" in session_route
-    assert "chat = await asyncio.to_thread(get_workbench_chat, session_id)" in session_route
+    assert "(workbenchExportSessions || []).concat(dataState.sessions || [])" in data_panel
+    assert "exportSessions.map(function (s)" in data_panel
+    assert 'className: "wb-export-session-list"' in data_panel
+    assert 'type: "checkbox", checked: selected' in data_panel
+    assert 't("settings.sessionExportHint")' in data_panel
+    assert 'exportSids.forEach(function (sessionId)' in data_panel
+    assert '"/api/sessions/" + encodeURIComponent(sessionId) + "/export?format="' in data_panel
+
+    from cyrene.agent.session_services import (
+        SessionApplicationService,
+        SessionRepository,
+    )
+    from cyrene.runtime import backup as backup_runtime
+
+    captured = {}
+
+    async def export_backup(*, include_db=True, target_path=None):
+        captured.update(include_db=include_db, target_path=target_path)
+        return {"ok": True, "path": str(target_path)}
+
+    monkeypatch.setattr(backup_runtime, "export_backup", export_backup)
+    selected_backup = tmp_path / "selected-backup.zip"
+    backup_result = asyncio.run(
+        backup_runtime.BackupRepository(tmp_path).export(str(selected_backup))
+    )
+    assert backup_result == {"ok": True, "path": str(selected_backup)}
+    assert captured == {"include_db": True, "target_path": str(selected_backup)}
+
+    chat = {
+        "id": "chat_1",
+        "title": "Exported chat",
+        "createdAt": "2026-08-23T01:00:00Z",
+        "updatedAt": "2026-08-23T01:01:00Z",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    sessions = SessionApplicationService(
+        "",
+        repository=SessionRepository(
+            state_file=tmp_path / "state.json",
+            conversations_dir=tmp_path / "conversations",
+            chat_reader=lambda session_id: chat if session_id == "chat_1" else None,
+        ),
+    )
+    exported = asyncio.run(sessions.export_session("chat_1", "json"))
+    exported_payload = json.loads(exported.content)
+    assert exported.media_type == "application/json"
+    assert exported_payload["id"] == "chat_1"
+    assert exported_payload["title"] == "Exported chat"
+    assert exported_payload["messages"] == [
+        {"role": "user", "content": "hello", "time": ""}
+    ]
 
     assert 'document.documentElement.dataset.density = "cozy"' in settings
     assert 'localStorage.removeItem("cyrene-tweak-density")' in settings
@@ -8829,9 +9038,7 @@ def test_electron_browser_panel_uses_native_browser_bridge():
 
 def test_native_browser_yields_to_model_confirm_and_topbar_overlays():
     root = Path(__file__).resolve().parent.parent
-    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
+    workbench = workbench_shell_source()
     chat = workbench_chat_source()
     feedback = (
         root / "src" / "webui" / "frontend" / "shared" / "feedback" / "service.jsx"
@@ -8841,7 +9048,7 @@ def test_native_browser_yields_to_model_confirm_and_topbar_overlays():
     assert "if (!sessionMenu && !resourceMenu)" in workbench
     assert "if (!overflowMenu && !hoverPreview) return undefined;" in workbench
     assert "if (!modelOpen) return undefined;" in workbench
-    assert 'window.CyreneUI.require("browser-overlays")' in chat
+    assert "workbenchServices.browserOverlays()" in chat
     assert 'platform.require("browser-overlays")' in feedback
     assert "overlays.adjust(1);" in feedback
     assert "return function () { overlays.adjust(-1); };" in feedback
@@ -8895,7 +9102,8 @@ def test_electron_browser_tabs_are_per_session_while_login_state_is_shared():
     assert 'String(next.sessionId || "") === electronSessionId' in view
     assert "bridge.getState(chatId)" in chat
     assert "Array.isArray(next.tabs)" in view
-    assert "await close_electron_browser_session(chat_id)" in chat_routes
+    assert "await close_electron_browser_session(removed_chat_id)" in chat_routes
+    assert "await close_electron_browser_session(session_id)" in chat_routes
 
 
 def test_browser_snapshot_filters_non_interactable_page_nodes():
@@ -8937,11 +9145,22 @@ def test_agent_browser_tabs_are_owned_reused_and_finalized_per_round():
     assert "finish_electron_browser_round(_current_session_id.get(), round_id)" in coordinator
 
 
-def test_electron_browser_user_events_are_recorded_for_learning():
+async def test_electron_browser_user_events_are_recorded_for_learning(monkeypatch):
+    from cyrene.workbench import browser_live_service
+
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
-    routes = (root / "src" / "route" / "agent" / "browser.py").read_text(encoding="utf-8")
     view = (root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
+    recorded = []
+
+    async def record_browser_user_event(**event):
+        recorded.append(event)
+
+    monkeypatch.setattr(
+        browser_live_service.behavior_learning,
+        "record_browser_user_event",
+        record_browser_user_event,
+    )
 
     assert "BROWSER_USER_EVENT_CONSOLE_PREFIX" in main
     assert "installUserEventCapture" in main
@@ -8949,12 +9168,28 @@ def test_electron_browser_user_events_are_recorded_for_learning():
     assert "postBackendJson('/api/browser/user-event'" in main
     assert "recordUserEvent('navigate'" in main
     assert "browser:set-context" in main
-    assert '"/api/browser/user-event"' in routes
-    assert "record_browser_user_event" in routes
-    # Browser telemetry is persisted here; completed agent turns own the
-    # learning barrier so an event cannot race an incomplete tool chain.
-    assert "process_unprocessed_turns" not in routes
     assert "bridge.setContext({ sessionId: electronSessionId, roundId: rid })" in view
+
+    result = await browser_live_service.BrowserLiveApplicationService().record_user_event({
+        "sessionId": "session_1",
+        "roundId": "round_1",
+        "eventKind": "navigate",
+        "payload": {"source": "address_bar"},
+        "browserUrl": "https://example.test/page",
+        "browserTitle": "Example",
+        "target": {"selector": "body"},
+    })
+
+    assert result == {"ok": True}
+    assert recorded == [{
+        "session_id": "session_1",
+        "round_id": "round_1",
+        "event_kind": "navigate",
+        "payload": {"source": "address_bar"},
+        "browser_url": "https://example.test/page",
+        "browser_title": "Example",
+        "target": {"selector": "body"},
+    }]
 
 
 def test_electron_browser_panel_does_not_restore_closed_tabs_from_stale_state():
@@ -8971,7 +9206,7 @@ def test_electron_browser_panel_does_not_restore_closed_tabs_from_stale_state():
 def test_workbench_chat_directory_picker_falls_back_on_macos_and_lists_default_workspace():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    i18n = workbench_i18n_source()
 
     assert 'window.cyrene.platform === "linux"' in chat
     assert 'fetch("/api/context/pick-directory", { method: "POST" })' in chat
@@ -9040,7 +9275,7 @@ def test_workbench_chat_workspace_chip_follows_project_until_user_overrides_it()
 def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     tools_rule = styles.split(".wbc-tools-menu {", 1)[1].split("}", 1)[0]
@@ -9080,23 +9315,19 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
     model = (root / "src" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
-    routes = (root / "src" / "route" / "workbench" / "projects.py").read_text(encoding="utf-8")
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     assert 'window.prompt("后续任务标题"' not in source
     assert "model.createFollowUp(sid, options)" in source
     assert '"/follow-up"' in model
-    assert '"/api/task-sessions/{session_id}/follow-up"' in routes
-    assert 'session["parentSessionId"] = session_id' in routes
-    assert "followUpContext" in routes
     assert '<script type="module" src="compiled/app.js?v=0.7.13"></script>' in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
     regenerate_block = source.split("regeneratePlan: function ()", 1)[1].split("approvePlan: function ()", 1)[0]
 
     assert "plan: Array.isArray(session.plan) ? session.plan : []" in regenerate_block
@@ -9106,7 +9337,7 @@ def test_workbench_regenerate_plan_failure_preserves_current_plan():
 
 def test_workbench_plan_conflict_does_not_apply_client_fallback():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
     api = (root / "src" / "webui" / "frontend" / "platform" / "api.jsx").read_text(encoding="utf-8")
 
     assert 'err.code === "stale_plan_revision"' in source
@@ -9209,7 +9440,7 @@ def test_workbench_init_answer_updates_do_not_set_parent_state_inside_local_upda
 
 def test_workbench_model_settings_preserve_form_on_failed_response():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    source = workbench_settings_source()
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
     save_block = source.split("function saveModels()", 1)[1].split("function saveTools()", 1)[0]
 
@@ -9225,7 +9456,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
 def test_workbench_chat_subagent_page_is_independent_and_localized():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
     classic_chat = root / "src" / "webui" / "static" / "app" / "chat.jsx"
 
     assert 'id: "subagents"' in source
@@ -9288,14 +9519,15 @@ def test_workbench_chat_quick_actions_include_manual_context_compaction():
 def test_workbench_chat_exposes_browser_live_view_and_takeover():
     Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
+    live_events = frontend_module_source("features/chat/live-event-controller.jsx")
 
-    assert 'event.type === "browser_frame" || event.type === "browser_takeover_request"' in source
-    browser_switch_block = source.split('event.type === "browser_frame" || event.type === "browser_takeover_request"', 1)[1].split('// Live tool/phase/subagent progress', 1)[0]
+    assert 'event.type === "browser_frame" || event.type === "browser_takeover_request"' in live_events
+    browser_switch_block = live_events.split("function wbcApplyBrowserEvent", 1)[1].split("function wbcHandleLiveEvent", 1)[0]
     assert 'setSideTab("browser")' not in browser_switch_block
     assert "setBrowserWindowModeByChat" in browser_switch_block
     assert "runtimeEngine.isRunning" not in browser_switch_block
     assert 'id: "browser", label: wbcT("chat.side.browser", "Browser")' in source
-    assert 'window.CyreneUI.require("browser").ViewportPanel' in source
+    assert "workbenchServices.browser().ViewportPanel" in source
     assert "function WbcBrowserSplit(" in source
     assert "onTakeoverComplete: onTakeoverComplete" in source
     browser_split = source.split("function WbcBrowserSplit(", 1)[1].split("function WbcSubagentsSplitHost", 1)[0]
@@ -9313,7 +9545,7 @@ def test_workbench_chat_exposes_browser_live_view_and_takeover():
 
 def test_warning_toast_has_no_colored_left_accent():
     root = Path(__file__).resolve().parent.parent
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    css = workbench_style_source()
 
     assert ".workbench-toast.is-warning { border-left: 1px solid var(--wb-line); }" in css
     assert ".workbench-toast.is-warning { border-left-color: var(--wb-amber); }" not in css
@@ -9321,7 +9553,7 @@ def test_warning_toast_has_no_colored_left_accent():
 
 def test_agent_error_notice_keeps_its_content_inside_a_uniform_border():
     root = Path(__file__).resolve().parent.parent
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    css = workbench_style_source()
 
     error_card_css = css.split(".wbc-error-card {", 1)[1].split("}", 1)[0]
     agent_error_css = css.split(".wbc-error-card.is-agent-error {", 1)[1].split("}", 1)[0]
@@ -9384,7 +9616,12 @@ def test_workbench_subagent_payload_recovers_chat_scoped_snapshot(monkeypatch):
 def _run_workbench_shortcuts_js(expression: str):
     root = Path(__file__).resolve().parent.parent
     runtime_path = root / "src" / "webui" / "frontend" / "platform" / "runtime.jsx"
-    shortcuts_path = root / "src" / "webui" / "frontend" / "workbench-shortcuts.jsx"
+    shortcuts_source = re.sub(
+        r"^(?:import|export)\s+.*$",
+        "",
+        (root / "src/webui/frontend/workbench-shortcuts.jsx").read_text(encoding="utf-8"),
+        flags=re.MULTILINE,
+    )
     script = f"""
     const fs = require("fs");
     const store = {{}};
@@ -9399,7 +9636,10 @@ def _run_workbench_shortcuts_js(expression: str):
         removeItem: (k) => {{ delete store[k]; }},
     }};
     eval(fs.readFileSync({json.dumps(str(runtime_path))}, "utf8"));
-    eval(fs.readFileSync({json.dumps(str(shortcuts_path))}, "utf8"));
+    var workbenchServices = new Proxy({{}}, {{
+      get: (_target, name) => () => window.CyreneUI.require(String(name))
+    }});
+    eval({json.dumps(shortcuts_source)});
     const result = ({expression});
     process.stdout.write(JSON.stringify(result));
     """
@@ -9437,9 +9677,7 @@ def test_workbench_shortcuts_module_exposes_actions_and_platform_aware_mod():
 
 def test_workbench_shortcut_labels_use_tab_terminology_in_both_locales():
     root = Path(__file__).resolve().parent.parent
-    translations = (
-        root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
-    ).read_text(encoding="utf-8")
+    translations = workbench_i18n_source()
 
     for expected in (
         '"shortcut.action.switchSession1": "Open topbar tab 1"',
@@ -9531,7 +9769,7 @@ def test_workbench_shortcuts_capture_event_converts_ctrl_to_mod_on_windows():
 
 def test_workbench_task_composer_uses_enter_to_send_via_shortcut_module():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
 
     # The old Cmd/Ctrl+Enter to send behavior is replaced by the shortcut module
     # so Enter sends directly (matching the chat composer).
@@ -9542,7 +9780,7 @@ def test_workbench_task_composer_uses_enter_to_send_via_shortcut_module():
 
 def test_workbench_task_composer_includes_model_and_reasoning_picker():
     root = Path(__file__).resolve().parent.parent
-    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    workbench = workbench_shell_source()
     model = (root / "src" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
 
     composer = workbench.split("function TaskComposer(", 1)[1].split(
@@ -9566,7 +9804,7 @@ def test_workbench_task_composer_includes_model_and_reasoning_picker():
 
 def test_settings_models_use_the_shared_settings_typography():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     typography = styles.split(
         "/* Models is a Settings page, not a code editor.", 1
@@ -9579,7 +9817,7 @@ def test_settings_models_use_the_shared_settings_typography():
 
 def test_workbench_task_composer_reuses_chat_voice_input_flow():
     root = Path(__file__).resolve().parent.parent
-    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    workbench = workbench_shell_source()
     chat = workbench_chat_source()
 
     composer = workbench.split("function TaskComposer(", 1)[1].split(
@@ -9596,8 +9834,8 @@ def test_workbench_task_composer_reuses_chat_voice_input_flow():
 
 def test_workbench_task_composer_matches_chat_floating_card_material():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    source = workbench_shell_source()
+    styles = workbench_style_source()
 
     task_box = styles.split(".workbench-composer-box {", 1)[1].split("}", 1)[0]
     task_header = source.split("function TaskHeader", 1)[1].split(
@@ -9678,9 +9916,7 @@ def test_workbench_task_composer_matches_chat_floating_card_material():
 
 def test_workbench_task_detail_max_height_aligns_with_main_card_bottom():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     detail_shell = styles.split(
         ".workbench-grid.integrated-sidebars.is-task-detail .wb-task-detail-shell {",
@@ -9701,16 +9937,23 @@ def test_workbench_task_detail_max_height_aligns_with_main_card_bottom():
     assert "100vh" not in open_panel
 
 
+def test_project_memory_failed_status_shows_attempt_details():
+    source = frontend_module_source("features/shell/support.jsx")
+    styles = workbench_style_source()
+
+    assert 'learningPhase === "failed"' in source
+    assert "wbProjectMemoryDate(learningStatus.updatedAt)" in source
+    assert "learningStatus.model && learningStatus.model.model" in source
+    assert "learningStatus.error ||" in source
+    assert ".workbench-project-memory-learning-status small {" in styles
+
+
 def test_composer_disclaimer_is_not_rendered_or_styled():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     chat = workbench_chat_source()
-    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
+    workbench = workbench_shell_source()
 
     assert "wb-composer-disclaimer" not in styles
     assert "wb-composer-disclaimer" not in chat
@@ -9720,12 +9963,11 @@ def test_composer_disclaimer_is_not_rendered_or_styled():
 def test_pending_question_disables_chat_and_task_composers():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
-    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
+    workbench = workbench_shell_source()
     chat_composer = chat.split("function WbcComposer(", 1)[1].split(
         "function wbcClearComposerDraft", 1
     )[0]
+    chat_attachments = frontend_module_source("features/chat/composer-attachments.jsx")
     task_composer = workbench.split("function TaskComposer(", 1)[1].split(
         "function RightContextPanel", 1
     )[0]
@@ -9736,7 +9978,7 @@ def test_pending_question_disables_chat_and_task_composers():
     assert "disabled={awaitingAnswer || !capText" in chat_composer
     assert "disabled={uploading || running || awaitingAnswer}" in chat_composer
     assert "disabled={awaitingAnswer || voicePhase" in chat_composer
-    assert "if (awaitingAnswer) return;\n      var detail" in chat_composer
+    assert "if (awaitingAnswer) return\n      var detail" in chat_attachments
 
     assert "var awaitingAnswer = !!(session.pendingQuestion && session.pendingQuestion.id);" in task_composer
     assert "var disabled = controller.busy || running || awaitingAnswer;" in task_composer
@@ -9748,9 +9990,7 @@ def test_pending_question_disables_chat_and_task_composers():
 
 def test_workbench_model_picker_compacts_without_overlapping_send_button():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     composer_rule = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
     anchor_rule = styles.split(".wbc-model-anchor {", 1)[1].split("}", 1)[0]
@@ -9765,9 +10005,7 @@ def test_workbench_model_picker_compacts_without_overlapping_send_button():
     assert "min-width: 0;" in anchor_rule
     assert "max-width: 100%;" in button_rule
     assert 'className="wbc-model-button-icon" aria-hidden="true"' in workbench_chat_source()
-    assert 'className="wbc-model-button-icon" aria-hidden="true"' in (
-        root / "src" / "webui" / "frontend" / "workbench.jsx"
-    ).read_text(encoding="utf-8")
+    assert 'className="wbc-model-button-icon" aria-hidden="true"' in workbench_shell_source()
     assert ".wbc-model-button-icon" in compact_rule
     assert "display: inline-flex;" in compact_rule
     assert ".wbc-model-button-name" in compact_rule
@@ -9777,10 +10015,10 @@ def test_workbench_model_picker_compacts_without_overlapping_send_button():
 
 def test_workbench_file_drop_routes_files_to_task_chat_and_knowledge():
     root = Path(__file__).resolve().parent.parent
-    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    workbench = workbench_shell_source()
     chat = workbench_chat_source()
     library = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     # The shared document-level target prevents Chromium's default file
     # navigation and forwards the real DataTransfer FileList.
@@ -9811,7 +10049,7 @@ def test_workbench_file_drop_routes_files_to_task_chat_and_knowledge():
 
 def test_workbench_file_drop_hook_prevents_navigation_and_delivers_files():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
     hook_source = "function useWorkbenchFileDrop" + source.split(
         "function useWorkbenchFileDrop", 1
     )[1].split("function WorkbenchFileDropOverlay", 1)[0]
@@ -9863,10 +10101,11 @@ process.stdout.write(JSON.stringify({{
 
 def test_workbench_settings_page_has_shortcuts_tab_and_no_legacy_overlay_mode():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
-    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
-    index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
+    source = workbench_settings_source()
+    settings_entry = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
+    settings_index = (root / "src/webui/frontend/features/settings/index.jsx").read_text(encoding="utf-8")
+    translations = workbench_i18n_source()
+    styles = workbench_style_source()
 
     assert '{ id: "shortcuts", labelKey: "settings.shortcuts", icon: "keyboard" }' in source
     assert "function ShortcutsPanel" in source
@@ -9879,7 +10118,7 @@ def test_workbench_settings_page_has_shortcuts_tab_and_no_legacy_overlay_mode():
     assert 'role: "region"' in source
     assert "settings-overlay-fadein" not in styles
     assert "settings-panel-slide" not in styles
-    assert 'window.CyreneUI.require("shortcuts")' in source
+    assert 'workbenchServices.shortcuts()' in source
     assert "captureEvent" in source
     # The panel groups bindings and offers a reset-all action.
     assert "settings.shortcutGroupGlobal" in source
@@ -9893,17 +10132,17 @@ def test_workbench_settings_page_has_shortcuts_tab_and_no_legacy_overlay_mode():
     assert ".wb-shortcuts-panel" in styles
     assert ".wb-shortcut-row" in styles
     assert ".wb-shortcut-capture" in styles
-    # The new module is loaded before the panels that consume it
-    assert '<script type="module" src="compiled/app.js?v=0.7.13">' in index
-    assert 'import "../workbench-shortcuts.jsx"' in (
-        root / "src/webui/frontend/entry/app.jsx"
-    ).read_text(encoding="utf-8")
+    # Architecture guard: Settings consumes the domain barrel and the barrel
+    # exposes the real shortcuts panel; app-entry loading is covered by the
+    # executable ESM bundle contract.
+    assert 'from "./features/settings/index.jsx"' in settings_entry
+    assert 'export { ShortcutsPanel } from "./shortcuts.jsx"' in settings_index
 
 
 def test_workbench_about_hero_owns_update_action_and_download_progress():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    source = workbench_settings_source()
+    styles = workbench_style_source()
 
     about_block = source.split("function UpdateSection({ t, config }) {", 1)[1].split(
         "// ── Skills Panel", 1
@@ -9935,9 +10174,9 @@ def test_workbench_about_hero_owns_update_action_and_download_progress():
 
 def test_extension_center_uses_fixed_settings_geometry_and_localized_catalog_copy():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
-    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    source = workbench_settings_source()
+    translations = workbench_i18n_source()
+    styles = workbench_style_source()
 
     assert '.settings-overlay-panel:has([data-settings-active-tab="extensions"])' not in styles
     assert 'if (props.id === "github-cli") return AboutRelatedIcon("github");' in source
@@ -9987,15 +10226,9 @@ def test_extension_center_uses_fixed_settings_geometry_and_localized_catalog_cop
 
 def test_remote_settings_keeps_compatibility_on_and_persists_package_checkboxes():
     root = Path(__file__).resolve().parent.parent
-    source = (
-        root / "src" / "webui" / "frontend" / "settings-overlay.jsx"
-    ).read_text(encoding="utf-8")
-    i18n = (
-        root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
-    ).read_text(encoding="utf-8")
-    styles = (
-        root / "src" / "webui" / "frontend" / "workbench.css"
-    ).read_text(encoding="utf-8")
+    source = workbench_settings_source()
+    i18n = workbench_i18n_source()
+    styles = workbench_style_source()
 
     remote_panel = source.split("function RemotePanel(p) {", 1)[1].split(
         "function RemotePeerCard", 1
@@ -10059,7 +10292,7 @@ def test_remote_settings_keeps_compatibility_on_and_persists_package_checkboxes(
     assert "remoteEventLabel(t, event.event_type)" in remote_panel
     assert "remoteOutcomeLabel(t, event.outcome)" in remote_panel
     assert "remoteEventTime(event.created_at)" in remote_panel
-    assert 'window.CyreneUI.require("feedback")' in remote_panel
+    assert 'workbenchServices.feedback()' in remote_panel
     assert 'className: "remote-notice"' not in remote_panel
     assert ".remote-notice {" not in styles
     assert "justify-content: center;" in styles
@@ -10092,19 +10325,19 @@ def test_remote_settings_keeps_compatibility_on_and_persists_package_checkboxes(
 
 def test_workbench_about_panel_reads_app_version_from_registered_data_store():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    source = workbench_settings_source()
 
     update_section = source.split("function UpdateSection({ t, config }) {", 1)[1].split(
-        "function SettingsVersionIcon", 1
+        "\nexport { AboutPanel }", 1
     )[0]
 
-    assert 'var dataState = window.CyreneUI.require("data").state;' in update_section
+    assert 'var dataState = workbenchServices.data().state;' in update_section
     assert "dataState.appVersion" in update_section
 
 
 def test_workbench_settings_dynamic_lists_have_stable_react_keys():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    source = workbench_settings_source()
 
     shortcuts_panel = source.split("function ShortcutsPanel(p) {", 1)[1].split(
         "function BudgetPanel", 1
@@ -10120,38 +10353,16 @@ def test_workbench_settings_dynamic_lists_have_stable_react_keys():
 
 def test_workbench_help_center_lists_shortcuts_from_module_with_customize_link():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
 
     # Help center reads the binding list from the registered shortcuts service instead of
     # hardcoding the keys array, so customizations surface there too.
     help_block = source.split("function WorkbenchHelpCenter", 1)[1].split("function WorkbenchEditProjectModal", 1)[0]
-    assert 'window.CyreneUI.require("shortcuts")' in help_block
+    assert "workbenchServices.shortcuts()" in help_block
     assert "shortcutList" in help_block
     assert "help.customizeShortcuts" in help_block
     # The old hardcoded list is gone.
     assert '{ id: "search", label: t("help.shortcut.search"), keys: ["mod", "K"] }' not in help_block
-
-
-def test_workbench_global_shortcut_handler_wired_in_workbench_app():
-    root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
-
-    app_block = source.split("function WorkbenchApp", 1)[1].split("function WorkbenchTopbar", 1)[0]
-    # A keydown listener dispatches the global shortcuts.
-    assert 'addEventListener("keydown"' in app_block
-    assert 'sc.matches(event, "search")' in app_block
-    assert 'sc.matches(event, "new-chat")' in app_block
-    assert 'sc.matches(event, "new-task")' in app_block
-    new_chat_block = app_block.split('sc.matches(event, "new-chat")', 1)[1].split(
-        'sc.matches(event, "new-task")', 1
-    )[0]
-    assert "createChat();" in new_chat_block
-    assert 'setFullPage("chat");' not in new_chat_block
-    assert '"new-chat":       function () { acts.createChat(); }' in app_block
-    assert '"new-chat":       function () { acts.createSession(); }' not in app_block
-    assert 'sc.matches(event, "settings")' in app_block
-    assert 'sc.matches(event, "toggle-sidebar")' in app_block
-    assert 'sc.matches(event, "switch-project")' in app_block
 
 
 def test_workbench_memory_cite_tab_renders_actual_citations_not_placeholder():
@@ -10183,7 +10394,7 @@ def test_workbench_memory_history_tab_renders_events_not_hardcoded():
 def test_workbench_memory_combines_overview_into_source_card():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    css = workbench_style_source()
 
     rail_block = source.split("// ── category rail ──", 1)[1].split("// ── memory card list ──", 1)[0]
     assert rail_block.count('h("div", { className: "wb-mem-card" }') == 1
@@ -10201,7 +10412,7 @@ def test_workbench_memory_combines_overview_into_source_card():
 
 def test_workbench_memory_detail_wraps_long_content_without_horizontal_overflow():
     root = Path(__file__).resolve().parent.parent
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    css = workbench_style_source()
 
     detail_block = css.split("\n.wb-mem-detail {", 1)[1].split("}", 1)[0]
     scroll_block = css.split("\n.wb-mem-detail-scroll {", 1)[1].split("}", 1)[0]
@@ -10220,7 +10431,7 @@ def test_workbench_memory_detail_wraps_long_content_without_horizontal_overflow(
 
 def test_workbench_schedule_timeline_items_do_not_use_left_accent_bar():
     root = Path(__file__).resolve().parent.parent
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    css = workbench_style_source()
 
     block = css.split("\n.wb-sched-block {", 1)[1].split("}", 1)[0]
     assert "border-left" not in block
@@ -10230,7 +10441,7 @@ def test_workbench_schedule_timeline_items_do_not_use_left_accent_bar():
 
 def test_workbench_memory_list_contains_long_content_and_uses_neutral_selection():
     root = Path(__file__).resolve().parent.parent
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    css = workbench_style_source()
 
     scroll_block = css.split("\n.wb-mem-scroll {", 1)[1].split("}", 1)[0]
     item_block = css.split("\n.wb-mem-item {", 1)[1].split("}", 1)[0]
@@ -10258,7 +10469,7 @@ def test_workbench_memory_list_contains_long_content_and_uses_neutral_selection(
 def test_workbench_skill_learning_uses_actionable_candidate_status_only():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
-    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    translations = workbench_i18n_source()
 
     assert 'chainCandidate ? h("div", { className: "wb-learning-review-pill "' in source
     assert "candidateNextStepText(chainCandidate, t)" in source
@@ -10298,7 +10509,7 @@ def test_workbench_skill_learning_moves_full_content_into_right_inspector():
 def test_workbench_skill_delete_matches_memory_detail_header_action():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    css = workbench_style_source()
 
     panel = source.split("function SkillLearningPanel", 1)[1].split("function SkillLearningMain", 1)[0]
     header = panel.split('className: "wb-detail-accordion-head wb-mem-detail-nav-head"', 1)[1].split(
@@ -10319,8 +10530,8 @@ def test_workbench_skill_delete_matches_memory_detail_header_action():
 def test_workbench_skill_candidates_open_complete_keyboard_accessible_details():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    i18n = workbench_i18n_source()
+    css = workbench_style_source()
 
     panel = source.split("function SkillLearningPanel", 1)[1].split("function SkillLearningMain", 1)[0]
     main = source.split("function SkillLearningMain", 1)[1].split("// ── main page", 1)[0]
@@ -10354,7 +10565,7 @@ def test_workbench_skill_candidates_open_complete_keyboard_accessible_details():
 
 def test_workbench_skill_learning_keeps_right_inspector_on_compact_widths():
     root = Path(__file__).resolve().parent.parent
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    css = workbench_style_source()
 
     learning_responsive = css.split("@media (min-width: 761px) and (max-width: 980px)", 1)[1]
     compact = learning_responsive.split("@media", 1)[0]
@@ -10374,7 +10585,7 @@ def test_workbench_skill_learning_keeps_right_inspector_on_compact_widths():
 def test_workbench_skill_steps_adapt_to_narrow_inspector_without_omitting_content():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    css = workbench_style_source()
 
     assert 'className: "wb-learning-step-content"' in source
     assert 'h("code", { title: String(item.value) }, item.value)' in source
@@ -10394,7 +10605,7 @@ def test_workbench_skill_steps_adapt_to_narrow_inspector_without_omitting_conten
 def test_workbench_behavior_analysis_stays_compact_in_narrow_inspector():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    css = workbench_style_source()
 
     assert 'className: "wb-replay-duplicates wb-learning-duplicate-status"' in source
     metrics = css.split(".wb-replay-metrics {", 1)[1].split("}", 1)[0]
@@ -10410,14 +10621,14 @@ def test_workbench_behavior_analysis_stays_compact_in_narrow_inspector():
 def test_workbench_skill_learning_i18n_covers_visible_labels_and_tool_parameters():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    i18n = workbench_i18n_source()
+    en_catalog = frontend_module_source("shared/i18n/catalog-en.jsx")
+    zh_catalog = frontend_module_source("shared/i18n/catalog-zh.jsx")
 
     learning = source.split("function SkillLearningPanel", 1)[1].split("// ── main page", 1)[0]
     used_keys = set(re.findall(r't\("(memory\.learning\.[^"]+)"', learning))
-    translations = i18n.split("var WORKBENCH_TRANSLATIONS = {", 1)[1]
-    en_block, zh_block = translations.split("  zh: {", 1)
-    en_keys = set(re.findall(r'"(memory\.learning\.[^"]+)"\s*:', en_block))
-    zh_keys = set(re.findall(r'"(memory\.learning\.[^"]+)"\s*:', zh_block))
+    en_keys = set(re.findall(r'"(memory\.learning\.[^"]+)"\s*:', en_catalog))
+    zh_keys = set(re.findall(r'"(memory\.learning\.[^"]+)"\s*:', zh_catalog))
     assert used_keys <= en_keys
     assert used_keys <= zh_keys
     assert en_keys == zh_keys
@@ -10442,8 +10653,8 @@ def test_workbench_skill_learning_i18n_covers_visible_labels_and_tool_parameters
 def test_workbench_skill_learning_remains_operable_in_short_windows():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
-    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
-    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    css = workbench_style_source()
+    translations = workbench_i18n_source()
 
     scroll_block = css.split(".wb-mem-scroll {", 1)[1].split("}", 1)[0]
     assert "overflow-y: auto;" in scroll_block
@@ -10501,7 +10712,7 @@ def test_workbench_library_content_tab_renders_markdown():
     renderer = (root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx").read_text(encoding="utf-8")
 
     assert "renderMarkdownHtml" in source
-    assert 'window.CyreneUI.require("markdown").render' in source
+    assert "workbenchServices.markdown().render" in source
     assert "root.marked.parse(source)" in renderer
     assert "root.DOMPurify.sanitize" in renderer
     assert "dangerouslySetInnerHTML" in source
@@ -10680,7 +10891,7 @@ process.stdout.write(JSON.stringify({{
 def test_workbench_live_reply_disables_interactive_markdown_until_done():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
     contract = (root / "src" / "cyrene" / "tool_impl" / "renderer" / "load_contract.py").read_text(encoding="utf-8")
 
     live_message = chat.split("function WbcLiveMessage", 1)[1].split("// ---------------------------------------------------------------------------", 1)[0]
@@ -10698,7 +10909,7 @@ def test_workbench_live_reply_disables_interactive_markdown_until_done():
 def test_workbench_agent_transport_notice_has_structured_event_and_durable_bubble():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
     events = (root / "src" / "cyrene" / "agent_runtime" / "events.py").read_text(encoding="utf-8")
     route = workbench_chat_route_source()
 
@@ -10716,8 +10927,8 @@ def test_model_retry_and_switch_use_one_durable_system_status_card():
     chat = workbench_chat_source()
     quick = (root / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx").read_text(encoding="utf-8")
     backend = (root / "src" / "cyrene" / "workbench" / "chat.py").read_text(encoding="utf-8")
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
-    page = (root / "src" / "webui" / "frontend" / "features" / "chat" / "page.jsx").read_text(encoding="utf-8")
+    i18n = workbench_i18n_source()
+    live_events = frontend_module_source("features/chat/live-event-controller.jsx")
 
     assert "function WbcModelStatusMessage" in chat
     assert 'className={"wbc-model-status-message "' in chat
@@ -10734,7 +10945,18 @@ def test_model_retry_and_switch_use_one_durable_system_status_card():
     assert "workbenchChat.modelRetryCountCard" in chat
     assert '"workbenchChat.modelRetryCountCard": "正在重试 {model}（{count}/{limit}）"' in i18n
     assert '"workbenchChat.modelSwitchedCard": "已切换到 {model}"' in i18n
-    assert "wbcPublishChatModelChanged(fallbackChatId" in page
+    assert "wbcPublishChatModelChanged(chatId, { model: fallbackModel }, { refresh: false })" in live_events
+
+
+def test_custom_model_connection_protocol_does_not_select_a_brand_icon():
+    source = (Path(__file__).resolve().parent.parent / "src" / "webui" / "frontend" / "settings-model-configuration.jsx").read_text(encoding="utf-8")
+
+    start = source.index("function connectionProviderIcon(connection)")
+    end = source.index("function connectionProviderMark(connection)", start)
+    resolver = source[start:end]
+    assert "provider_preset" in resolver
+    assert "presetIcons[preset]" in resolver
+    assert "connectionAdapter(connection)" not in resolver
 
 
 def test_quick_chat_renders_live_and_durable_agent_notifications():
@@ -10804,41 +11026,29 @@ def test_packaged_electron_preserves_explicit_runtime_path_overrides():
 
 def test_workbench_composers_upload_files_pasted_from_clipboard():
     root = Path(__file__).resolve().parent.parent
-    chat = workbench_chat_source()
-    task = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    chat = "\n".join((
+        frontend_module_source("features/chat/composer-attachments.jsx"),
+        frontend_module_source("features/chat/composer.jsx"),
+    ))
+    task = workbench_shell_source()
 
     for source in (chat, task):
         assert "onPaste={onPaste}" in source
         assert "clipboard.files" in source
         assert "clipboard.items" in source
         assert 'item.kind === "file" ? item.getAsFile() : null' in source
-        assert "if (!files.length) return; // Preserve the browser's normal text paste." in source
+        assert "if (!files.length) return" in source
         assert "event.preventDefault();" in source
-        assert "addFiles(files);" in source
+        assert "addFiles(files)" in source
 
 
-def test_account_menu_codex_quota_requires_primary_oauth_and_login():
+def test_settings_codex_quota_uses_the_shared_duration_parser():
     root = Path(__file__).resolve().parent.parent
-    shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
     model = (root / "src" / "webui" / "frontend" / "workbench-model.jsx").read_text(
         encoding="utf-8"
     )
-    settings = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(
-        encoding="utf-8"
-    )
+    settings = workbench_settings_source()
 
-    assert 'primary.provider !== "codex_oauth"' in shell
-    assert "quotaPayload.connected === true" in shell
-    assert "codexQuotaState.primary && codexQuotaState.connected" in shell
-    assert 'fetch("/api/settings/openai-oauth/limits")' in shell
-    assert "WorkbenchModel.codexQuotaWindows(quotaPayload.limits)" in shell
-    assert "WorkbenchModel.readCodexQuotaCache()" in shell
-    assert "WorkbenchModel.writeCodexQuotaCache(quotaPayload)" in shell
-    assert "WorkbenchModel.codexPlanLabel(quotaPayload.account, quotaPayload.limits)" in shell
-
-    # The settings panel and account menu share one duration-based parser.
     assert "function codexQuotaWindows(limits)" in model
     assert "function codexPlanLabel(account, limits)" in model
     assert 'if (normalized === "prolite") return "pro 5x"' in model
@@ -10851,8 +11061,8 @@ def test_account_menu_codex_quota_requires_primary_oauth_and_login():
 
 def test_external_agent_probe_and_install_help_are_actionable():
     root = Path(__file__).resolve().parent.parent
-    settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
-    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    settings = workbench_settings_source()
+    i18n = workbench_i18n_source()
 
     assert 'if (payload && payload.agent) props.onChanged(payload.agent);' in settings
     assert 'not_started: t("settings.agentRuntime.notStarted"' in settings
@@ -10868,7 +11078,7 @@ def test_external_agent_probe_and_install_help_are_actionable():
 def test_agent_picker_rebinds_empty_chat_and_confirms_new_nonempty_chat():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     assert "function handleSwitchAgent(binding)" in source
     assert 'model.createChatWithBinding(projectId, "", binding)' in source
@@ -10890,7 +11100,7 @@ def test_agent_picker_rebinds_empty_chat_and_confirms_new_nonempty_chat():
 def test_agent_owned_model_picker_uses_acp_config_options():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    i18n = workbench_i18n_source()
 
     assert '"/agent-config-options"' in source
     assert "agentModelConfig.options" in source
@@ -10906,22 +11116,19 @@ def test_agent_owned_model_picker_uses_acp_config_options():
 
 
 def test_external_agent_usage_is_shared_with_the_reply_finalizer():
-    Path(__file__).resolve().parent.parent
     route = workbench_chat_route_source()
-    state_capture = route.index("state_ids_before: set[str] = set()")
-    runner = route.index("async def _run(run: ChatRun) -> str:", state_capture)
-    finalizer = route.index("def _finalize(reply_text: str)", runner)
-    usage_definition = route.index("external_usage: dict[str, int] = {}", state_capture)
+    services = workbench_runtime_source()
 
-    assert state_capture < usage_definition < runner < finalizer
-    assert "external_usage: dict[str, int] = {}" not in route[runner:finalizer]
-    assert "effective_usage.update(external_usage)" in route[finalizer:]
+    assert "external = ExternalTurnProjection()" in route
+    assert "projection=self.external" in route
+    assert "projection: ExternalTurnProjection" in services
+    assert "effective_usage.update(request.projection.usage)" in services
 
 
 def test_agent_diagnostics_note_is_localized_from_a_stable_code():
     root = Path(__file__).resolve().parent.parent
-    settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
-    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    settings = workbench_settings_source()
+    i18n = workbench_i18n_source()
     runtime = (root / "src/cyrene/extensions/agent_runtime.py").read_text(encoding="utf-8")
 
     assert 'payload.noteCode || payload.reason' in settings
@@ -10933,8 +11140,8 @@ def test_agent_diagnostics_note_is_localized_from_a_stable_code():
 
 def test_agent_settings_show_composer_usability_and_localized_reasons():
     root = Path(__file__).resolve().parent.parent
-    settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
-    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    settings = workbench_settings_source()
+    i18n = workbench_i18n_source()
 
     assert "function agentUsabilityMeta(agent, t)" in settings
     assert 't("settings.agentComposerAvailability"' in settings
@@ -10948,8 +11155,8 @@ def test_agent_settings_show_composer_usability_and_localized_reasons():
 def test_agent_network_errors_render_full_actionable_details():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
-    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    styles = workbench_style_source()
+    i18n = workbench_i18n_source()
 
     assert "function wbcAgentErrorPresentation(detail, failureKind)" in source
     assert "invalid peer certificate" in source
@@ -10964,12 +11171,8 @@ def test_agent_network_errors_render_full_actionable_details():
 def test_phase1_stream_is_rendered_as_a_distinct_execution_card():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
-    styles = (
-        root / "src" / "webui" / "frontend" / "workbench.css"
-    ).read_text(encoding="utf-8")
-    translations = (
-        root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
-    ).read_text(encoding="utf-8")
+    styles = workbench_style_source()
+    translations = workbench_i18n_source()
 
     assert 'String(item.llmPhase || "") === "phase1"' in source
     assert 'kind: "phase1"' in source
@@ -11218,7 +11421,7 @@ def test_chart_mount_builds_option_and_recomputes_series():
 def test_workbench_assistant_message_mounts_charts_and_contract_teaches_chart():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
     contract = (root / "src" / "cyrene" / "tool_impl" / "renderer" / "load_contract.py").read_text(encoding="utf-8")
     index_html = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
     build_script = (root / "src" / "webui" / "build-jsx.mjs").read_text(encoding="utf-8")
@@ -11361,7 +11564,7 @@ def test_workbench_button_wiring_and_protocol_surface():
     chat = workbench_chat_source()
     mount = (root / "src" / "webui" / "frontend" / "shared" / "chart" / "mount.jsx").read_text(encoding="utf-8")
     renderer = (root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
     contract = (root / "src" / "cyrene" / "tool_impl" / "renderer" / "load_contract.py").read_text(encoding="utf-8")
 
     assert 'chatId: String(chatId || "")' in chat
@@ -11471,7 +11674,7 @@ def test_markdown_containers_reject_invalid_nesting_and_depth():
 def test_workbench_actions_grid_wiring_and_contract_rules():
     root = Path(__file__).resolve().parent.parent
     renderer = (root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
     contract = (root / "src" / "cyrene" / "tool_impl" / "renderer" / "load_contract.py").read_text(encoding="utf-8")
 
     assert "findClosingLine" in renderer
@@ -11501,7 +11704,7 @@ def test_workbench_button_model_mode_forwards_to_runtime_endpoint():
     assert '/actions"' in mount
     assert 'actionId: spec.action_id' in mount
     assert 'chatId: String(chatId || "")' in wbc
-    assert 'chatId={String(chat && chat.id || "")}' in wbc
+    assert 'chatId={String(context.chat && context.chat.id || "")}' in wbc
     assert "@router.post(\"/api/workbench/chats/{chat_id}/actions\")" in chat_route or '@router.post("/api/workbench/chats/{chat_id}/actions")' in chat_route
     assert "action_duplicate" in chat_route
     assert "disable_button_block" in chat_route
@@ -11514,8 +11717,8 @@ def test_workbench_button_model_mode_forwards_to_runtime_endpoint():
 def test_unsupported_file_viewer_uses_centered_accessible_empty_state():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
-    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    styles = workbench_style_source()
+    i18n = workbench_i18n_source()
 
     unsupported = chat.split('className="wbc-viewer-unsupported"', 1)[1].split("</div>\n    );", 1)[0]
     assert 'role="status"' in chat
@@ -11531,8 +11734,8 @@ def test_unsupported_file_viewer_uses_centered_accessible_empty_state():
 
 def test_settings_controls_share_memory_floating_material():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
-    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    styles = workbench_style_source()
+    source = workbench_settings_source()
 
     assert "--wb-settings-control-bg: color-mix(in srgb, var(--wb-card-bg) 88%, var(--wb-surface))" in styles
     assert "--wb-settings-control-radius: 12px" in styles
@@ -11560,48 +11763,10 @@ def test_settings_controls_share_memory_floating_material():
     assert ".settings-overlay .wb-export-session-select" not in styles
 
 
-def test_profile_rail_displays_budget_in_existing_spacer():
-    root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
-    i18n = (
-        root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
-    ).read_text(encoding="utf-8")
-
-    profile_rail = source[source.index("function WorkbenchProfileRail"):source.index("// Temporarily keep sign-out")]
-    assert 'fetch("/api/budget/status")' in profile_rail
-    assert 'fetch("/api/settings/openai-oauth/limits")' in profile_rail
-    assert "WorkbenchModel.codexQuotaWindows(payload.limits)" in profile_rail
-    assert "codexQuotaState.connected" in profile_rail
-    assert 'className="workbench-profile-codex-quota"' in profile_rail
-    assert 'window.addEventListener("budget-saved", onBudgetSaved)' in profile_rail
-    assert 'window.addEventListener("cyrene:codex-auth-changed", onCodexAuthChanged)' in profile_rail
-    assert 'className="workbench-profile-rail-spacer"' in profile_rail
-    assert 'className="workbench-profile-budget-stack"' in profile_rail
-    assert profile_rail.count('className="workbench-profile-budget workbench-profile-') == 2
-    assert 'workbench-profile-codex-card' in profile_rail
-    assert 'workbench-profile-currency-card' in profile_rail
-    assert 't("profile.budgetDisabled")' in profile_rail
-    assert ".workbench-profile-budget {" in styles
-    budget_stack_rule = styles.split(".workbench-profile-budget-stack {", 1)[1].split("}", 1)[0]
-    assert "position: absolute;" in budget_stack_rule
-    assert "gap: 12px;" in budget_stack_rule
-    assert '"profile.budgetDisabled": "Budget is not enabled"' in i18n
-    assert '"profile.budgetDisabled": "未开启预算功能"' in i18n
-
-
 def test_task_board_scroll_canvas_reaches_behind_floating_rail_gutter():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    source = workbench_shell_source()
+    styles = workbench_style_source()
 
     columns_rule = styles.split(
         ".workbench-grid.integrated-sidebars.is-task-board .wb-board-columns {", 1
@@ -11630,9 +11795,7 @@ def test_task_board_scroll_canvas_reaches_behind_floating_rail_gutter():
 
 def test_conversation_status_preview_controls_share_floating_material():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     option_rule = styles.split(
         ".wbc-conversation-status-preview-option {", 1
@@ -11662,9 +11825,9 @@ def test_conversation_status_preview_controls_share_floating_material():
 
 def test_performance_mode_disables_renderer_effects_and_is_boot_persistent():
     frontend = Path("src/webui/frontend")
-    overlay = (frontend / "settings-overlay.jsx").read_text(encoding="utf-8")
-    workbench = (frontend / "workbench.jsx").read_text(encoding="utf-8")
-    css = (frontend / "workbench.css").read_text(encoding="utf-8")
+    overlay = workbench_settings_source()
+    workbench = workbench_shell_source()
+    css = workbench_style_source()
     index = (frontend / "index.html").read_text(encoding="utf-8")
 
     assert 'JSON.stringify({ performance_mode: next })' in overlay
@@ -11683,11 +11846,10 @@ def test_performance_mode_disables_renderer_effects_and_is_boot_persistent():
 
 
 def _run_workbench_durable_trace_js(expression: str):
-    Path(__file__).resolve().parent.parent
-    source = workbench_chat_source()
+    source = frontend_module_source("features/chat/runtime-timeline.jsx")
     durable_source = "var WBC_DURABLE_TRACE_FIELDS" + source.split(
         "var WBC_DURABLE_TRACE_FIELDS", 1
-    )[1].split("function wbcToolPresentationKind(entry)", 1)[0]
+    )[1].split("export {", 1)[0]
     script = f"""
 eval({json.dumps(durable_source)});
 const result = ({expression});

@@ -1,15 +1,17 @@
 from pathlib import Path
 
+from conftest import workbench_i18n_source, workbench_settings_source, workbench_style_source
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_workbench_background_preferences_are_exposed_and_applied_before_paint():
-    settings = (ROOT / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
+    settings = workbench_settings_source()
     bootstrap = (ROOT / "src/webui/frontend/entry/bootstrap.jsx").read_text(encoding="utf-8")
     index = (ROOT / "src/webui/frontend/index.html").read_text(encoding="utf-8")
-    styles = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
-    translations = (ROOT / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    styles = workbench_style_source()
+    translations = workbench_i18n_source()
 
     for key in ("backgroundLight", "backgroundDark"):
         assert f'readTweak("{key}", null)' in settings

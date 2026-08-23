@@ -1,3 +1,4 @@
+import { workbenchServices } from "./shared/runtime/services.jsx"
 // Project-scoped literature library for the Workbench.
 //
 // The page intentionally owns no sample data. Every count, collection, tag and
@@ -12,7 +13,7 @@
   var useRef = React.useRef;
 
   function L(key, fallback, params) {
-    return window.CyreneUI.require("i18n").t(key, params || null, fallback);
+    return workbenchServices.i18n().t(key, params || null, fallback);
   }
 
   var PAGE_SIZE = 120;
@@ -214,7 +215,7 @@
 
   function renderMarkdownHtml(content) {
     if (!window.marked || !window.DOMPurify) return "";
-    return window.CyreneUI.require("markdown").render(content, {
+    return workbenchServices.markdown().render(content, {
       sanitizeOptions: {
         ADD_ATTR: ["data-line", "data-language"],
       },
@@ -225,7 +226,7 @@
   function renderSafeHtmlDocument(content) {
     var source = String(content || "").replace(/<meta\b[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*>/gi, "");
     if (!window.DOMPurify) return source;
-    return window.CyreneUI.require("markdown").sanitizeHtml(source, {
+    return workbenchServices.markdown().sanitizeHtml(source, {
         WHOLE_DOCUMENT: true,
         FORBID_TAGS: ["script", "iframe", "object", "embed", "form"],
         FORBID_ATTR: ["onerror", "onload", "onclick", "onfocus", "onmouseenter"],
@@ -288,7 +289,7 @@
   }
 
   function requestJson(url, options) {
-    return window.CyreneUI.require("api").json(url, options || {});
+    return workbenchServices.api().json(url, options || {});
   }
 
   function libraryApi(workspace) {
@@ -327,8 +328,8 @@
       },
       zoteroStatus: function () { return json("/zotero/status", { toast: false }); },
       zoteroSync: function (value) { return json("/zotero/sync", Object.assign(body("POST", value), { timeout: 0 })); },
-      embeddingStatus: function () { return requestJson("/api/workbench/knowledge/embedding/status?workspace=" + ws, { toast: false }); },
-      vectorizeAll: function () { return requestJson("/api/workbench/knowledge/reembed?workspace=" + ws, { method: "POST" }); },
+      embeddingStatus: function () { return requestJson("/api/workbench/library/embedding/status?workspace=" + ws, { toast: false }); },
+      vectorizeAll: function () { return requestJson("/api/workbench/library/reembed?workspace=" + ws, { method: "POST" }); },
       citation: function (id, style) { return json("/items/" + encodeURIComponent(id) + "/citation", { toast: false }, { style: style || "ieee" }); },
       rawUrl: function (id) { return root + "/items/" + encodeURIComponent(id) + "/raw?workspace=" + ws; },
     };
@@ -348,7 +349,7 @@
   function Spinner() { return h("span", { className: "wb-lib-spinner", "aria-hidden": "true" }); }
 
   function Toast(message, type) {
-    if (window.CyreneUI.require("feedback").showToast) window.CyreneUI.require("feedback").showToast(message, type || "success");
+    if (workbenchServices.feedback().showToast) workbenchServices.feedback().showToast(message, type || "success");
   }
 
   function StopClick(props) {
@@ -614,7 +615,7 @@
       var content = value.trim();
       if (!content || busy) return;
       setBusy(true);
-      props.onAdd({ title: "研究笔记", content: content, author: (window.CyreneUI.require("data").state.user || {}).name || "我" }).then(function () { setValue(""); setBusy(false); }, function () { setBusy(false); });
+      props.onAdd({ title: "研究笔记", content: content, author: (workbenchServices.data().state.user || {}).name || "我" }).then(function () { setValue(""); setBusy(false); }, function () { setBusy(false); });
     }
     return h("div", { className: "wb-lib-editor-layout" },
       h("div", { className: "wb-lib-note-compose" }, h("textarea", { value: value, onChange: function (event) { setValue(event.target.value); }, placeholder: "记录这篇文献的发现、疑问或下一步…" }), h("button", { type: "button", className: "wb-lib-primary", disabled: busy || !value.trim(), onClick: submit }, busy ? h(Spinner) : icon("plus", 14), " 添加笔记")),
@@ -751,7 +752,7 @@
     }
     useEffect(function () {
       if (!window.CyreneUI.has("uiSurface")) return undefined;
-      var uiSurface = window.CyreneUI.require("uiSurface");
+      var uiSurface = workbenchServices.uiSurface();
       return uiSurface.register({
         node_id: "library_detail_separator",
         parent_id: "root",
@@ -1026,7 +1027,7 @@
   }
 
   function LibraryPdfPreview(props) {
-    var pdf = window.CyreneUI.require("pdf");
+    var pdf = workbenchServices.pdf();
     var containerRef = useRef(null);
     var viewerRef = useRef(null);
     var loadingState = useState(true); var loading = loadingState[0]; var setLoading = loadingState[1];
@@ -1227,7 +1228,7 @@
   }
 
   function WorkbenchLibraryPage(props) {
-    window.CyreneUI.require("i18n").use();
+    workbenchServices.i18n().use();
     var workspace = props.project && props.project.id ? String(props.project.id) : "";
     var client = useMemo(function () { return workspace ? libraryApi(workspace) : null; }, [workspace]);
     var scopeState = useState({ type: "all" }); var scope = scopeState[0]; var setScope = scopeState[1];
@@ -1475,7 +1476,7 @@
           reload();
         });
       };
-      var confirmModal = window.CyreneUI.require("feedback").confirmModal;
+      var confirmModal = workbenchServices.feedback().confirmModal;
       if (confirmModal) {
         confirmModal({ title: "移至回收站？", body: "文献会保留在当前项目的回收站中。", confirmLabel: "移至回收站", danger: true })
           .then(function (ok) { if (ok) run(); });
@@ -1497,7 +1498,7 @@
           reload();
         }).catch(function (err) { Toast(String(err.message || err), "error"); });
       };
-      var confirmModal = window.CyreneUI.require("feedback").confirmModal;
+      var confirmModal = workbenchServices.feedback().confirmModal;
       if (confirmModal) {
         confirmModal({ title: "永久删除此知识？", body: "此操作不可撤销。", confirmLabel: "永久删除", danger: true })
           .then(function (ok) { if (ok) run(); });
@@ -1571,8 +1572,8 @@
           setBatchDeleting(false);
         });
       };
-      if (window.CyreneUI.require("feedback").confirmModal) {
-        window.CyreneUI.require("feedback").confirmModal({ title: title, body: bodyText, confirmLabel: confirmLabel, danger: true }).then(function (ok) { if (ok) run(); });
+      if (workbenchServices.feedback().confirmModal) {
+        workbenchServices.feedback().confirmModal({ title: title, body: bodyText, confirmLabel: confirmLabel, danger: true }).then(function (ok) { if (ok) run(); });
       } else {
         run();
       }
@@ -1607,7 +1608,7 @@
     function toggleChecked(id) { setChecked(function (prev) { var key = String(id); return prev.indexOf(key) >= 0 ? prev.filter(function (v) { return v !== key; }) : prev.concat([key]); }); }
     function toggleAll() { setChecked(checked.length === data.items.length ? [] : data.items.map(function (item) { return String(item.id); })); }
     function startLibraryItemDrag(event, item) {
-      var resourceApi = window.CyreneUI.require("resources");
+      var resourceApi = workbenchServices.resources();
       if (!resourceApi || !client || !item) {
         event.preventDefault();
         return;

@@ -1,3 +1,5 @@
+import { workbenchServices } from "../runtime/services.jsx"
+
 // Cyrene UI — live browser viewport (M2 screencast + S3 user control)
 // Renders the agent's browser screencast (via the /ws/browser WebSocket) plus a
 // ribbon describing the latest action. The user can TAKE CONTROL of the live
@@ -30,20 +32,20 @@ function browserErrorText(err, key, fallback) {
   }
   if (raw) {
     try {
-      var api = window.CyreneUI.require("api");
+      var api = workbenchServices.api();
       if (api && typeof api.errorText === "function") return api.errorText(err);
     } catch (e) {}
     return raw;
   }
   try {
-    return window.CyreneUI.require("i18n").t(key, null, fallback);
+    return workbenchServices.i18n().t(key, null, fallback);
   } catch (e) {
     return fallback;
   }
 }
 
 function browserLabel(key, fallback) {
-  try { return window.CyreneUI.require("i18n").t(key, null, fallback); } catch (e) { return fallback; }
+  try { return workbenchServices.i18n().t(key, null, fallback); } catch (e) { return fallback; }
 }
 
 function BrowserIcon({ name, size }) {
@@ -73,7 +75,7 @@ function BrowserIcon({ name, size }) {
 }
 
 function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, browserState, desiredTabId, zoomEnabled = true, resizeEdgeHintEnabled = false, hideTabStrip = false, hideReload = false, hideMute = false, splitChrome = false }) {
-  browserState = browserState || window.CyreneUI.require("data").state.browser;
+  browserState = browserState || workbenchServices.data().state.browser;
   const bridge = window.cyrene && window.cyrene.browser;
   const electronSessionId = String(browserSessionId || (browserState && browserState.sessionId) || "").trim();
   const hostRef = React.useRef(null);
@@ -1039,7 +1041,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
 }
 
 function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, browserState, browserSessionId }) {
-  const dataStore = window.CyreneUI.require("data");
+  const dataStore = workbenchServices.data();
   dataStore.useVersion();
   const browser = browserState || (dataStore.state.browser || {});
   const imgRef = React.useRef(null);
@@ -1343,7 +1345,7 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json().catch(function () { return {}; });
     }).then(function () {
-      window.CyreneUI.require("data").refreshSessions();
+      workbenchServices.data().refreshSessions();
     }).catch(function (e) {
       setTakeoverError(browserErrorText(e, "browser.error.submitFailed", "Could not submit the browser action. Please retry."));
     }).finally(function () {

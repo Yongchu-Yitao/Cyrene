@@ -2,6 +2,8 @@ import json
 import subprocess
 from pathlib import Path
 
+from conftest import workbench_shell_source
+
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -31,7 +33,7 @@ def test_launch_screen_is_static_minimal_and_theme_aware():
 def test_launch_screen_waits_for_initial_workbench_content():
     data = (ROOT / "src/webui/frontend/platform/data-store.jsx").read_text(encoding="utf-8")
     app = (ROOT / "src/webui/frontend/entry/bootstrap.jsx").read_text(encoding="utf-8")
-    workbench = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    workbench = workbench_shell_source()
     ui_surface = (ROOT / "src/webui/frontend/platform/ui-surface.jsx").read_text(encoding="utf-8")
     markdown_actions = (ROOT / "src/webui/frontend/shared/markdown/actions.jsx").read_text(encoding="utf-8")
 
@@ -49,7 +51,7 @@ def test_launch_screen_waits_for_initial_workbench_content():
     ).read_text(encoding="utf-8")
     assert "if (loading || launchReadyRef.current) return undefined" in workbench
     assert "Promise.resolve(dataStore.ready)" in workbench
-    assert 'window.CyreneUI.require("readiness").markReady()' in workbench
+    assert "workbenchServices.readiness().markReady()" in workbench
     assert "workbenchReactRoot.unmount()" in app
     assert '"cyrene:page-invalidated"' in app
     assert 'window.addEventListener("pagehide", disposePageData' in data
@@ -67,6 +69,9 @@ def test_terminal_frontend_preserves_tui_controls_and_large_scrollback():
     terminal = (ROOT / "src/webui/frontend/terminal/entry.jsx").read_text(
         encoding="utf-8"
     )
+    shell_integration = (
+        ROOT / "src/webui/frontend/terminal/shell-integration.mjs"
+    ).read_text(encoding="utf-8")
     styles = (ROOT / "src/webui/frontend/terminal/terminal.css").read_text(
         encoding="utf-8"
     )
@@ -74,10 +79,12 @@ def test_terminal_frontend_preserves_tui_controls_and_large_scrollback():
     assert "TERMINAL_SCROLLBACK_LINES = 100000" in terminal
     assert "terminal.onData" in terminal
     assert "terminal.onBinary" in terminal
-    assert "terminal.attachCustomKeyEventHandler" in terminal
-    assert 'event.key === "Escape"' in terminal
-    assert 'event.key.startsWith("Arrow")' in terminal
+    assert "terminal.attachCustomKeyEventHandler" in shell_integration
+    assert 'event.key === "Escape"' in shell_integration
+    assert 'event.key.startsWith("Arrow")' in shell_integration
     assert 'socket.send(JSON.stringify({ type: "resize"' in terminal
+    assert 'message.type === "resync_required"' in terminal
+    assert 'socket.close(4001, "terminal output backlog")' in terminal
     assert 'setFullscreen(function (value) { return !value; })' in terminal
     assert ".wbc-terminal-pane.is-fullscreen" in styles
 

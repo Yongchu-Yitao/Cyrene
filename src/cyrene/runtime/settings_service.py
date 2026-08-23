@@ -14,7 +14,7 @@ _NAMESPACES = frozenset({"runtime", "desktop", "appearance", "profile", "shortcu
 
 NON_MODEL_SETTINGS_TABS = (
     "general", "channels", "remote", "agents", "appearance", "capabilities",
-    "skills", "shortcuts", "data", "budget", "about",
+    "skills", "shortcuts", "search", "data", "budget", "about",
 )
 AGENT_VISIBLE_SETTINGS_TABS = ("models",) + NON_MODEL_SETTINGS_TABS
 
@@ -117,6 +117,7 @@ def _spec(
 SETTING_SPECS: tuple[SettingSpec, ...] = (
     _spec("spawn_policy", "string", "conservative", tab="agents", enum=("aggressive", "conservative", "off"), apply_mode="next_run"),
     _spec("heartbeat_interval", "integer", 1800, tab="agents", minimum=60, maximum=86400),
+    _spec("background_skill_learning", "boolean", True, tab="agents"),
     _spec("agent_proactive", "boolean", True, tab="agents", apply_mode="next_run"),
     _spec("app_language", "string", "", agent=True, risk="R1", enum=("", "en", "zh")),
     _spec("timezone", "string", "Asia/Shanghai", agent=True, risk="R1", enum=tuple(sorted(SUPPORTED_TIMEZONES))),
@@ -202,6 +203,7 @@ SETTING_CONTROL_SPECS: tuple[SettingControlSpec, ...] = (
     SettingControlSpec("skills.install_picker", "skills", "user_ceremony", "cyrene.file_picker", "R2"),
     SettingControlSpec("shortcuts.workbench_bindings", "shortcuts", "direct", "cyrene.settings.update", "R2"),
     SettingControlSpec("shortcuts.quick_chat", "shortcuts", "direct", "cyrene.settings.update", "R2"),
+    SettingControlSpec("search.providers", "search", "current_ui", "cyrene.ui.inspect", "R3", secret=True),
     SettingControlSpec("data.backup_export", "data", "current_ui", "cyrene.ui.inspect", "R2"),
     SettingControlSpec("data.restore_reset", "data", "current_ui", "cyrene.ui.inspect", "R3"),
     SettingControlSpec("data.file_destination", "data", "user_ceremony", "cyrene.file_picker", "R2"),

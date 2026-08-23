@@ -70,7 +70,7 @@ def test_electron_browser_overlays_load_the_same_origin_bundled_fonts():
 def test_low_dpi_windows_uses_native_hinted_fonts_and_quantized_weights():
     index = (FRONTEND / "index.html").read_text(encoding="utf-8")
     base_css = (FRONTEND / "shared/theme/base.css").read_text(encoding="utf-8")
-    workbench_css = (FRONTEND / "workbench.css").read_text(encoding="utf-8")
+    workbench_css = (FRONTEND / "features/chat/workspace.css").read_text(encoding="utf-8")
     main = (ROOT / "electron/main.js").read_text(encoding="utf-8")
 
     assert "(window.cyrene && window.cyrene.platform)" in index

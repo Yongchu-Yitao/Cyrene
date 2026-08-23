@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -310,9 +311,16 @@ async def _upload_file(
     remote_path: str,
     *,
     conflict_policy: str,
+    known_sha256: str = "",
+    known_identity: tuple[int, int, int, int, int] | None = None,
 ) -> dict[str, Any]:
-    size = local_path.stat().st_size
-    sha256 = await _hash_file(local_path)
+    current_identity = _file_identity(local_path)
+    size = current_identity[2]
+    sha256 = (
+        known_sha256
+        if known_sha256 and known_identity == current_identity
+        else await _hash_file(local_path)
+    )
     transfer_identity = json_result({
         "device_id": str(args.get("device_id") or ""),
         "project_id": str(args.get("project_id") or ""),
@@ -433,6 +441,9 @@ async def _download(args: dict[str, Any], db_path: str, chat_id: object) -> dict
     if offset > total:
         partial.unlink(missing_ok=True)
         offset = 0
+    download_digest = hashlib.sha256()
+    if offset:
+        await asyncio.to_thread(_update_hash_from_file, partial, download_digest)
     try:
         with partial.open("ab") as handle:
             while True:
@@ -452,6 +463,7 @@ async def _download(args: dict[str, Any], db_path: str, chat_id: object) -> dict
                 if hashlib.sha256(chunk).hexdigest() != str(result.get("chunk_sha256") or ""):
                     raise RuntimeError("remote transfer chunk checksum mismatch")
                 handle.write(chunk)
+                download_digest.update(chunk)
                 offset += len(chunk)
                 if int(result.get("size") or 0) != total:
                     raise RuntimeError("remote file changed during transfer")
@@ -461,7 +473,7 @@ async def _download(args: dict[str, Any], db_path: str, chat_id: object) -> dict
                     break
                 if int(result.get("next_offset") or -1) != offset or not chunk:
                     raise RuntimeError("remote transfer made no forward progress")
-        actual_sha = await _hash_file(partial)
+        actual_sha = download_digest.hexdigest()
         if expected_sha and actual_sha != expected_sha:
             raise RuntimeError("remote transfer final checksum mismatch")
         filename = safe_attachment_filename(Path(remote_path).name, fallback_stem="remote-file")
@@ -484,6 +496,7 @@ async def _sync(args: dict[str, Any], db_path: str, chat_id: object) -> dict[str
         remote_root = remote_root.rstrip("/") or "."
     entries = []
     local_files: dict[str, Path] = {}
+    local_hashes: dict[str, tuple[str, tuple[int, int, int, int, int] | None]] = {}
     directories = [] if remote_root == "." else [remote_root]
     for path in sorted(local_root.rglob("*")):
         if path.is_symlink():
@@ -494,9 +507,13 @@ async def _sync(args: dict[str, Any], db_path: str, chat_id: object) -> dict[str
             entries.append({"path": remote, "kind": "directory"})
             directories.append(remote)
         elif path.is_file():
+            identity_before = _file_identity(path)
             digest = await _hash_file(path)
-            entries.append({"path": remote, "kind": "file", "size": path.stat().st_size, "sha256": digest})
+            identity_after = _file_identity(path)
+            stable_identity = identity_after if identity_before == identity_after else None
+            entries.append({"path": remote, "kind": "file", "size": identity_after[2], "sha256": digest})
             local_files[remote] = path
+            local_hashes[remote] = (digest, stable_identity)
     sync_id = "sync_" + uuid4().hex
     diff = await _request(
         args,
@@ -528,7 +545,17 @@ async def _sync(args: dict[str, Any], db_path: str, chat_id: object) -> dict[str
         local = local_files.get(str(remote))
         if local is None:
             continue
-        result = await _upload_file(args, db_path, chat_id, local, str(remote), conflict_policy="overwrite")
+        known_sha256, known_identity = local_hashes[str(remote)]
+        result = await _upload_file(
+            args,
+            db_path,
+            chat_id,
+            local,
+            str(remote),
+            conflict_policy="overwrite",
+            known_sha256=known_sha256,
+            known_identity=known_identity,
+        )
         if result.get("ok") is False:
             return {**result, "sync_id": sync_id, "uploaded": uploaded}
         uploaded.append(str(remote))
@@ -544,16 +571,29 @@ async def _sync(args: dict[str, Any], db_path: str, chat_id: object) -> dict[str
 
 
 async def _hash_file(path: Path) -> str:
-    import asyncio
-
     def calculate() -> str:
         digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
+        _update_hash_from_file(path, digest)
         return digest.hexdigest()
 
     return await asyncio.to_thread(calculate)
+
+
+def _update_hash_from_file(path: Path, digest: Any) -> None:
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+
+
+def _file_identity(path: Path) -> tuple[int, int, int, int, int]:
+    stat = path.stat()
+    return (
+        int(stat.st_dev),
+        int(stat.st_ino),
+        int(stat.st_size),
+        int(stat.st_mtime_ns),
+        int(stat.st_ctime_ns),
+    )
 
 
 __all__ = ["TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler"]

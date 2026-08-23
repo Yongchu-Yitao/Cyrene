@@ -216,6 +216,96 @@ async def test_terminal_metadata_and_scrollback_survive_manager_restart(
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX PTY behavior")
+async def test_durable_history_exceeds_memory_window_and_remains_searchable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    manager = TerminalManager(output_limit=64 * 1024, state_dir=state_dir)
+
+    async def fake_spawn(session):
+        session.status = "running"
+
+    monkeypatch.setattr(manager, "_spawn_posix", fake_spawn)
+    terminal = await manager.create_resolved(
+        "project-1", cwd=str(tmp_path), shell="sh", argv=["/bin/sh"]
+    )
+    expected = b"EARLY_HISTORY\r\n" + (b"x" * (70 * 1024)) + b"\r\nLATE_HISTORY\r\n"
+    manager._append_output(manager.get(terminal["id"]), expected)
+
+    session = manager.get(terminal["id"])
+    assert session.output_bytes == 64 * 1024
+    assert session.public()["oldestSeq"] == 0
+    pages: list[bytes] = []
+    cursor = 0
+    while cursor < session.next_seq:
+        page = manager.scrollback_snapshot(
+            terminal["id"], cursor=cursor, max_bytes=32 * 1024
+        )
+        pages.append(base64.b64decode(page["data"]))
+        cursor = page["endSeq"]
+    assert b"".join(pages) == expected
+    assert b"".join(
+        base64.b64decode(event["data"])
+        for event in manager.iter_replay(terminal["id"], 0, chunk_size=16 * 1024)
+    ) == expected
+
+    matches = manager.search_history("project-1", "early_history")
+    assert matches[0]["terminalId"] == terminal["id"]
+    assert matches[0]["createdAt"]
+
+    manager.flush()
+    restored = TerminalManager(output_limit=64 * 1024, state_dir=state_dir)
+    restored_page = restored.scrollback_snapshot(
+        terminal["id"], cursor=0, max_bytes=32 * 1024
+    )
+    assert base64.b64decode(restored_page["data"]).startswith(b"EARLY_HISTORY")
+    assert restored_page["oldestSeq"] == 0
+    assert restored.search_history("project-1", "late_history")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX PTY behavior")
+async def test_osc133_command_output_has_stable_bounds_status_and_timestamps(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manager = TerminalManager(output_limit=64 * 1024, state_dir=tmp_path / "state")
+
+    async def fake_spawn(session):
+        session.status = "running"
+
+    monkeypatch.setattr(manager, "_spawn_posix", fake_spawn)
+    terminal = await manager.create_resolved(
+        "project-1", cwd=str(tmp_path), shell="sh", argv=["/bin/sh"]
+    )
+    manager._append_output(
+        manager.get(terminal["id"]),
+        (
+            b"\x1b]133;A\x07$ \x1b]133;B\x07printf hello\r\n"
+            b"\x1b]133;C\x07hello\r\n\x1b]133;D;0\x07"
+        ),
+    )
+
+    commands = manager.commands(terminal["id"])
+    assert len(commands) == 1
+    command = commands[0]
+    assert command["command"] == "printf hello"
+    assert command["exitCode"] == 0
+    assert command["startedAt"]
+    assert command["finishedAt"]
+    assert command["running"] is False
+
+    output = manager.command_output(terminal["id"], command["id"])
+    assert output["text"] == "hello\n"
+    assert base64.b64decode(output["data"]) == b"hello\r\n"
+
+    manager._append_output(manager.get(terminal["id"]), b"next prompt")
+    assert manager.commands(terminal["id"])[0]["id"] == command["id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX PTY behavior")
 async def test_interrupted_interactive_shell_is_restored_without_rerunning_one_shots(
     tmp_path: Path,
 ) -> None:

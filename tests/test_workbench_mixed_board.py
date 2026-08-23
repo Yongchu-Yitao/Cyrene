@@ -1,4 +1,10 @@
-from conftest import workbench_chat_source
+from conftest import (
+    frontend_module_source,
+    workbench_chat_source,
+    workbench_i18n_source,
+    workbench_shell_source,
+    workbench_style_source,
+)
 import json
 import subprocess
 from pathlib import Path
@@ -8,9 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_mixed_board_keeps_user_placement_until_task_status_changes():
-    source = (ROOT / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
+    source = workbench_shell_source()
     helpers = source.split("var WB_TASK_BOARD_COLUMNS = [", 1)[1].split(
         "function wbChatBoardTone", 1
     )[0]
@@ -45,13 +49,9 @@ process.stdout.write(JSON.stringify({{stable, changed}}));
 
 
 def test_work_menu_task_split_and_project_tools_expand_existing_surfaces_inline():
-    workbench = (ROOT / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
+    workbench = workbench_shell_source()
     chat = workbench_chat_source()
-    css = (ROOT / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    css = workbench_style_source()
 
     dock = workbench.split("function WorkbenchSidebarDock", 1)[1].split(
         "var WB_TASK_BOARD_COLUMNS", 1
@@ -66,7 +66,7 @@ def test_work_menu_task_split_and_project_tools_expand_existing_surfaces_inline(
     assert 'else openPaneContent("chat", droppedChatId, { side: "right" });' in chat
     assert 'var activeTaskWorkspaceRef = useWbcRef("");' in chat
     assert "function openTaskWorkspace(taskId)" in chat
-    assert 'ownerChatId: projectPaneOwnerKey()' in chat
+    assert "ownerChatId: wbcProjectPaneOwnerKey(context)" in chat
     assert 'var [railSelectionSuppressed, setRailSelectionSuppressed] = useWbcState(false);' in chat
     assert 'activeChatId={railSelectionSuppressed ? "" : activeChatId}' in chat
     assert 'activeTaskId={railSelectionSuppressed ? "" : activeTaskId}' in chat
@@ -97,6 +97,10 @@ def test_work_menu_task_split_and_project_tools_expand_existing_surfaces_inline(
     assert 'className="wbc-project-file-list"' in chat
     assert 'className={"wbc-project-terminal-list"' in chat
     assert "function handleProjectToolWheel(event)" in chat
+    assert "function openHoveredProjectToolFromPull(tool)" in chat
+    assert 'event.target.closest("[data-project-tool]")' in chat
+    assert 'data-project-tool="file"' in chat
+    assert 'data-project-tool="terminal"' in chat
     assert "pull.wheelDistance >= 72" in chat
     assert "function handleProjectToolTouchMove(event)" in chat
     assert "distanceY >= 56 && distanceY > distanceX" in chat
@@ -123,7 +127,7 @@ def test_work_menu_task_split_and_project_tools_expand_existing_surfaces_inline(
     assert "flex: 0 0 0%;" in css
     assert "grid-template-rows: auto auto minmax(0, 1fr);" in css
     assert ".wbc-project-terminal-list .wbc-chat-card {" not in css
-    assert "React.createElement(chatModule.Rail" in workbench
+    assert "React.createElement(context.chat.module.Rail" in workbench
     assert "Rail: WbcProjectRail" in chat
     shared_rail_host = chat.split("function WbcProjectRail(props)", 1)[1].split(
         "// ---------------------------------------------------------------------------\n// Conversation main",
@@ -131,13 +135,13 @@ def test_work_menu_task_split_and_project_tools_expand_existing_surfaces_inline(
     )[0]
     assert "return <WbcRail" in shared_rail_host
     assert "terminals={terminals}" in shared_rail_host
-    assert 'onRailModeChange: setProjectRailMode' in workbench
-    assert 'onOpenFile: function (entry) { openProjectRailResource("file", entry); }' in workbench
-    assert 'onOpenTerminal: function (terminalId) { openProjectRailResource("terminal", terminalId); }' in workbench
-    task_visual = chat.split("function taskRailVisualState(task)", 1)[1].split(
-        "function storeTaskOrder", 1
-    )[0]
-    assert 'var planning = raw === "planning";' in task_visual
+    assert "onRailModeChange: rail.setMode" in workbench
+    assert 'onOpenFile: function (entry) { rail.openResource("file", entry); }' in workbench
+    assert 'onOpenTerminal: function (terminalId) { rail.openResource("terminal", terminalId); }' in workbench
+    task_visual = frontend_module_source("features/chat/rail-tasks.jsx").split(
+        "function wbcTaskRailVisualState(task)", 1
+    )[1].split("function WbcTaskRailCard", 1)[0]
+    assert 'var planning = raw === "planning"' in task_visual
     assert 'planning ? WBC_ICONS.planning : WBC_ICONS.file' in task_visual
     assert 'planning ? " status-planning"' in task_visual
     assert 'planning: <svg viewBox="0 0 24 24"' in chat
@@ -145,9 +149,7 @@ def test_work_menu_task_split_and_project_tools_expand_existing_surfaces_inline(
 
 
 def test_persistent_dock_has_equal_visible_side_and_bottom_insets():
-    css = (ROOT / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    css = workbench_style_source()
 
     dock_override = css.rsplit(".workbench-sidebar-dock.is-persistent {", 1)[1].split(
         "}", 1
@@ -156,18 +158,12 @@ def test_persistent_dock_has_equal_visible_side_and_bottom_insets():
 
 
 def test_task_workspace_reuses_right_panel_visibility_and_split_contracts():
-    workbench = (ROOT / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
+    workbench = workbench_shell_source()
     chat = workbench_chat_source()
-    css = (ROOT / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
-    i18n = (ROOT / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    css = workbench_style_source()
+    i18n = workbench_i18n_source()
 
-    assert "TaskContextPanelComponent: RightContextPanel" in workbench
+    assert "ContextPanelComponent: RightContextPanel" in workbench
     assert 'isChat && !activeChatId && taskView === "detail" && store.activeSessionId' in workbench
     assert "onRightTab={openRightTab}" in workbench
     assert 'window.addEventListener("cyrene:open-task-context-panel"' in workbench

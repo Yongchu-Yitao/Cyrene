@@ -4,23 +4,13 @@ Covers document CRUD, chunking, FTS search, relations, and cascade deletion.
 All tests run with embeddings UNCONFIGURED to exercise FTS5 only.
 """
 
-import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import MagicMock
 
 import pytest
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-
-# Patch missing PIL dependency before any cyrene import
-pil_mock = MagicMock()
-pil_mock.__version__ = "9.0.0"
-sys.modules["PIL"] = pil_mock
-pil_mock.Image = MagicMock()
-
 from cyrene.runtime import database as db
+from cyrene.runtime.file_hashing import sha256_file
 from cyrene.knowledge import store, embeddings
 from cyrene.knowledge.splitter import split_text
 
@@ -41,6 +31,33 @@ def temp_db():
 
         asyncio.run(db.init_db(db_path))
         yield db_path
+
+
+def test_content_hash_file_reuses_unchanged_identity_and_invalidates_changes(tmp_path):
+    path = tmp_path / "cached.txt"
+    path.write_bytes(b"alpha")
+    store._content_hash_file_cached.cache_clear()
+
+    first = store.content_hash_file(path)
+    after_first = store._content_hash_file_cached.cache_info()
+    second = store.content_hash_file(path)
+    after_second = store._content_hash_file_cached.cache_info()
+
+    assert second == first
+    assert after_second.hits == after_first.hits + 1
+
+    path.write_bytes(b"bravo")
+    changed = store.content_hash_file(path)
+    assert changed != first
+    assert store._content_hash_file_cached.cache_info().misses == after_second.misses + 1
+
+
+def test_strict_file_hash_does_not_fall_back_to_path_metadata(tmp_path):
+    missing = tmp_path / "missing.txt"
+
+    with pytest.raises(FileNotFoundError):
+        sha256_file(missing)
+    assert store.content_hash_file(missing) == ""
 
 
 class TestDocumentCRUD:

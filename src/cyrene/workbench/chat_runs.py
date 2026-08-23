@@ -670,6 +670,10 @@ class ChatRunManager:
         if self._coordinator.active_leases(owner_type="conversation"):
             raise RuntimeError("cannot reconfigure ChatRunManager while runs are active")
         self._db_path = str(db_path or "")
+        if self._db_path:
+            from cyrene.workbench.persistence.schema import ensure_schema
+
+            ensure_schema(self._db_path)
         self._coordinator = (
             run_coordinator_for(self._db_path)
             if self._db_path

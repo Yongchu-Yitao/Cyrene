@@ -8,7 +8,7 @@ from types import ModuleType
 
 def runtime_service() -> ModuleType:
     """Return the legacy Workbench composition module on demand."""
-    return import_module("cyrene.workbench.runtime")
+    return import_module("cyrene.workbench.runtime_implementation")
 
 
 def chat_service() -> ModuleType:

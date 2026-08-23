@@ -1,7 +1,16 @@
-from conftest import workbench_chat_source
+from conftest import (
+    frontend_module_source,
+    workbench_chat_source,
+    workbench_i18n_source,
+    workbench_shell_source,
+    workbench_style_source,
+)
 import json
 import subprocess
 from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -127,7 +136,7 @@ def test_native_browser_tab_picker_dismisses_and_syncs_actions_to_both_hosts():
     assert "browser-tab-picker:action" in picker_preload
     assert "browser-tab-picker:hidden-ready" in picker_preload
     assert "browser-tab-picker:ready" in picker_preload
-    assert "browserBridge.onTabPickerAction" in chat
+    assert "options.bridge.onTabPickerAction" in chat
     assert "bridge.onTabPickerAction" in split
     assert 'action.type === "select"' in split
     assert 'action.type === "close"' in split
@@ -151,23 +160,30 @@ def test_composer_tools_menu_closes_on_outside_pointerdown():
 
 
 def test_existing_item_action_menus_are_available_from_right_click():
-    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    shell = workbench_shell_source()
     chat = workbench_chat_source()
     library = (ROOT / "src/webui/frontend/workbench-library.jsx").read_text(
         encoding="utf-8"
     )
 
-    project_card = shell.split('className={"workbench-project-card"', 1)[1].split(
-        "</div>", 1
-    )[0]
+    # Project cards were consolidated into the top-bar switcher. Its current
+    # entry exposes the project actions through a visible per-project button;
+    # cards that still support context menus retain their right-click contract.
+    project_entry = shell.split(
+        'className={"workbench-top-project-row"', 1
+    )[1].split("</div>", 1)[0]
+    assert 'className="workbench-top-project-more"' in project_entry
+    assert "event.stopPropagation();" in project_entry
+    assert "setProjectActionId(actionsOpen ? \"\" : project.id);" in project_entry
+    assert 'className="workbench-top-project-actions" role="menu"' in project_entry
     task_board_card = shell.split('className={"wb-board-card is-"', 1)[1].split(
         "</article>", 1
     )[0]
-    task_rail_card = shell.split('className={"wbc-chat-card wbc-task-card"', 1)[1].split(
+    task_rail_card = chat.split('className={"wbc-chat-card wbc-task-card"', 1)[1].split(
         "</div>", 1
     )[0]
     chat_card = chat.split('className={"wbc-chat-card"', 1)[1].split("</div>", 1)[0]
-    for item in (project_card, task_board_card, task_rail_card, chat_card):
+    for item in (task_board_card, task_rail_card, chat_card):
         assert "onContextMenu=" in item
         assert "event.preventDefault();" in item
         assert "event.stopPropagation();" in item
@@ -191,7 +207,7 @@ def test_existing_item_action_menus_are_available_from_right_click():
 
 def test_chat_page_blank_area_context_menu_reuses_quick_actions():
     chat = workbench_chat_source()
-    css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    css = workbench_style_source()
 
     page = chat.split("function WorkbenchChatPage(", 1)[1].split(
         "function WbcRenameDialog(", 1
@@ -205,7 +221,7 @@ def test_chat_page_blank_area_context_menu_reuses_quick_actions():
     assert "onContextMenu=" not in page_root
     assert "onConversationContextMenu={openPageContextMenu}" in page
     main = chat.split("function WbcMain(", 1)[1].split(
-        "function WbcConversationNavigator(", 1
+        "function wbcQuestionOptionValue(", 1
     )[0]
     assert "onContextMenu={onConversationContextMenu}" in main
     eligibility = chat.split("function wbcCanOpenPageContextMenu(", 1)[1].split(
@@ -236,6 +252,7 @@ def test_chat_page_blank_area_context_menu_reuses_quick_actions():
 
 def test_chat_quick_rename_uses_existing_dialog_instead_of_native_prompt():
     chat = workbench_chat_source()
+    rename_controller = frontend_module_source("features/chat/chat-action-controller.jsx")
     page = chat.split("function WorkbenchChatPage(", 1)[1].split(
         "function WbcRenameDialog(", 1
     )[0]
@@ -244,7 +261,7 @@ def test_chat_quick_rename_uses_existing_dialog_instead_of_native_prompt():
     )[0]
 
     assert "function openQuickRename()" in page
-    assert "setQuickRenameChat(activeChat);" in page
+    assert "context.setQuickRenameChat(context.activeChat);" in rename_controller
     assert "chat={quickRenameChat}" in page
     assert "onRename={handleRenameChat}" in page
     assert "window.prompt" not in overview
@@ -299,7 +316,7 @@ def test_all_chat_action_menu_items_have_icons():
 
 
 def test_floating_menus_and_modals_share_the_conversation_surface_tokens():
-    styles = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
     library_styles = (ROOT / "src/webui/frontend/workbench-library.css").read_text(
         encoding="utf-8"
     )
@@ -361,7 +378,7 @@ def test_floating_menus_and_modals_share_the_conversation_surface_tokens():
 
 
 def test_remaining_live_flyouts_use_shared_tokens_and_legacy_picker_css_is_removed():
-    styles = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     for selector in (".wb-accent-popover {", ".wbc-model-menu {", ".wbq-picker {"):
         block = styles.split(selector, 1)[1].split("}", 1)[0]
@@ -387,7 +404,7 @@ def test_remaining_live_flyouts_use_shared_tokens_and_legacy_picker_css_is_remov
 
 
 def test_composer_popmenus_hide_scrollbar_chrome_without_disabling_scrolling():
-    styles = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     for selector in (".wb-popmenu {", ".wbc-popmenu {"):
         block = styles.split(selector, 1)[1].split("}", 1)[0]
@@ -431,9 +448,7 @@ def test_memory_and_library_flyouts_expose_accessible_state():
 
 def test_chat_page_context_menu_preserves_native_browser_surface():
     chat = workbench_chat_source()
-    opener = chat.split("function openPageContextMenu(event)", 1)[1].split(
-        "function handleDelete()", 1
-    )[0]
+    opener = frontend_module_source("features/chat/page-context-menu.jsx")
     preview = chat.split("function onBrowserPreviewReady(event)", 1)[1].split(
         'window.addEventListener("workbench:browser-window-preview-ready"', 1
     )[0]
@@ -446,14 +461,21 @@ def test_chat_page_context_menu_preserves_native_browser_surface():
 
 
 def test_project_memory_editor_and_manual_chat_trigger_are_wired_end_to_end():
-    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    chat = workbench_chat_source()
+    support = frontend_module_source("features/shell/support.jsx")
+    topbar = frontend_module_source("features/shell/topbar.jsx")
+    shell_composition = frontend_module_source("features/shell/shell-composition.jsx")
+    model_api = frontend_module_source("features/chat/model-api.jsx")
+    chat_page = frontend_module_source("features/chat/page.jsx")
+    context_panel = frontend_module_source("features/chat/context-panel.jsx")
+    error_mapping = frontend_module_source("features/chat/errors.jsx")
+    messages = frontend_module_source("features/chat/messages.jsx")
     memory_page = (ROOT / "src/webui/frontend/workbench-memory.jsx").read_text(encoding="utf-8")
-    css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
-    i18n = (ROOT / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    memory_css = frontend_module_source("features/memory/memory.css")
+    css = workbench_style_source()
+    i18n = workbench_i18n_source()
 
-    assert "function WorkbenchProjectMemoryModal(" in shell
-    modal = shell.split("function WorkbenchProjectMemoryModal(", 1)[1].split(
+    assert "function WorkbenchProjectMemoryModal(" in support
+    modal = support.split("function WorkbenchProjectMemoryModal(", 1)[1].split(
         "function WorkbenchSidebarCollapseControl", 1
     )[0]
     assert '["prompt", "memories", "history"]' not in modal
@@ -461,23 +483,23 @@ def test_project_memory_editor_and_manual_chat_trigger_are_wired_end_to_end():
     assert 'method: "PATCH"' in modal
     assert '"/memory-prompt/restore"' in modal
     assert "baseModifiedAt" in modal
-    assert "WorkbenchProjectMemoryItem" not in shell
+    assert "WorkbenchProjectMemoryItem" not in support
     assert "selectedModifiedAt" in modal
     assert 't("projectMemory.versionSelector")' in modal
     assert "readOnly={!!selectedVersion}" in modal
 
-    top_actions = shell.split('className="workbench-top-project-actions"', 1)[1].split(
+    top_actions = topbar.split('className="workbench-top-project-actions"', 1)[1].split(
         "</div>", 1
     )[0]
     assert top_actions.index('t("rail.editProject")') < top_actions.index(
         't("rail.editMemory")'
     ) < top_actions.index('t("rail.deleteProject")')
-    assert "onEditMemory={setEditMemoryProject}" in shell
-    assert "onEditProjectMemory:" in shell
+    assert "onEditMemory={dialogs.setEditMemoryProject}" in shell_composition
+    assert "onEditProjectMemory: context.dialogs.editActiveProjectMemory" in shell_composition
     assert "props.onEditProjectMemory" in memory_page
     assert "props.onEditProjectMemory && !props.sidebarCollapsed" in memory_page
     assert 'className: "wb-mem-project-memory-btn"' in memory_page
-    assert ".wb-mem-rail.is-collapsed .wb-mem-project-memory-btn" in css
+    assert ".wb-mem-rail.is-collapsed .wb-mem-project-memory-btn" in memory_css
     assert 't("memory.editProjectMemory"' in memory_page
     assert ".workbench-project-memory-scrim" in css
     assert "width: min(900px" in css
@@ -487,11 +509,12 @@ def test_project_memory_editor_and_manual_chat_trigger_are_wired_end_to_end():
     assert ".workbench-project-memory-toolbar" not in css
     assert ".workbench-project-memory-tabs" not in css
 
-    assert 'function generateMemory(chatId, lang)' in chat
-    assert '"/memory-learning"' in chat
-    assert 'body: JSON.stringify({ lang: lang === "zh" ? "zh" : "en" })' in chat
-    assert 'model.generateMemory(activeChat.id, memoryLanguage)' in chat
-    assert "onGenerateMemory={handleGenerateMemory}" in chat
+    assert "function generateMemory(chatId, lang)" in model_api
+    assert '"/memory-learning"' in model_api
+    assert 'body: JSON.stringify({ lang: lang === "zh" ? "zh" : "en" })' in model_api
+    assert "model.generateMemory(activeChat.id, memoryLanguage)" in chat_page
+    assert "onGenerateMemory={handleGenerateMemory}" in chat_page
+    assert "onClick={run(onGenerateMemory)}" in context_panel
     for text in (
         '"rail.editMemory": "Edit memory"',
         '"rail.editMemory": "编辑记忆"',
@@ -505,10 +528,30 @@ def test_project_memory_editor_and_manual_chat_trigger_are_wired_end_to_end():
         '"memory.editProjectMemory": "编辑项目记忆"',
     ):
         assert text in i18n
-    assert 'setErrorKind("memory")' in chat
-    assert 'kind === "memory"' in chat
-    assert 'no_completed_context: "workbenchChat.error.memoryContextUnavailable"' in chat
-    assert 'wbcNotifyBrowserWindowInteraction(false, "context-menu"' in chat
+    assert 'setErrorKind("memory")' in chat_page
+    assert 'kind === "memory"' in messages
+    assert 'no_completed_context: "workbenchChat.error.memoryContextUnavailable"' in error_mapping
+    assert 'wbcNotifyBrowserWindowInteraction(false, "context-menu"' in chat_page
+
+    from route.workbench.project_memory import register_project_memory_routes
+
+    class MemoryService:
+        calls = []
+
+        async def learn_from_chat(self, chat_id, *, language=""):
+            self.calls.append((chat_id, language))
+            return {"status": "queued", "job": {"id": "job_1"}}
+
+    service = MemoryService()
+    app = FastAPI()
+    register_project_memory_routes(app, service)
+    response = TestClient(app).post(
+        "/api/workbench/chats/chat_1/memory-learning",
+        json={"lang": "zh"},
+    )
+    assert response.status_code == 202
+    assert response.json() == {"status": "queued", "job": {"id": "job_1"}}
+    assert service.calls == [("chat_1", "zh")]
 
 
 def test_chat_page_context_menu_placement_avoids_browser_window():
@@ -602,9 +645,7 @@ def test_library_table_title_header_is_localized_and_aligned_to_filenames():
     css = (ROOT / "src/webui/frontend/workbench-library.css").read_text(
         encoding="utf-8"
     )
-    i18n = (ROOT / "src/webui/frontend/workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    i18n = workbench_i18n_source()
 
     assert 'className: "wb-lib-title-head"' in library
     title_rule = css.split(".wb-lib-title-head {", 1)[1].split("}", 1)[0]
@@ -658,9 +699,7 @@ def test_native_browser_tabs_support_reload_mute_and_close_from_right_click():
     browser = (
         ROOT / "src/webui/frontend/shared/browser/viewport.jsx"
     ).read_text(encoding="utf-8")
-    i18n = (ROOT / "src/webui/frontend/workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
+    i18n = workbench_i18n_source()
 
     assert "onContextMenu={function (event) { openTabContextMenu(tab, event); }}" in browser
     assert "function openTabContextMenu(tab, event)" in browser

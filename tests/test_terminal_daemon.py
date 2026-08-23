@@ -349,7 +349,7 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert 'TerminalClient.restart(terminalId)' in source
     assert 'Math.min(15000, 400 * Math.pow(2' in source
     assert 'window.addEventListener("online", handleOnline)' in source
-    assert 'window.CyreneUI.require("feedback")' in source
+    assert "workbenchServices.feedback()" in source
     assert 'showTerminalRecoveryToast(message.terminal)' in source
     assert 'showTerminalExitToast(message.terminal, restartTerminal)' in source
     assert '"终端已退出：" + terminalExitMessage(terminal)' in source

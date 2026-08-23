@@ -2155,7 +2155,7 @@ async def _run_subagent(
 - Complete only the assigned task. Keep its acceptance criteria in view.
 - Success criteria:
 {criteria_block}
-- Concrete deferred capabilities are behind module gateways. Use operation=discover, then describe, then invoke.
+- Deferred capabilities use the stable `toolbox` gateway. Use operation=search, then describe only selected IDs, then invoke with the disclosed schema and guidance.
 - You cannot ask the user, spawn subagents, query the parent round, or deliver the parent agent's final answer.
 - If your task produces a file, write it inside the workspace and report the path in normal assistant content.
 - For a normal round, write the complete result in normal assistant content, then call `quit` only as the terminal signal. Do not put the result in quit's arguments. The parent collects the assistant content.
@@ -2192,13 +2192,9 @@ You are a **participant** in this discussion. Rules:
 """
 
     wire_tool_defs = get_subagent_wire_tool_defs()
-    enabled_wire_names = {
-        str((tool_def.get("function") or {}).get("name") or "")
-        for tool_def in wire_tool_defs
-        if str((tool_def.get("function") or {}).get("name") or "").endswith(
-            "_tools"
-        )
-    }
+    from cyrene.tooling.wire import enabled_module_tool_names
+
+    enabled_wire_names = set(enabled_module_tool_names("subagent"))
     subagent_prompt = prompt_for_enabled_tool_packs(
         subagent_prompt,
         enabled_wire_names,

@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from conftest import workbench_shell_source
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from route.registry import register_routes
@@ -75,8 +77,8 @@ async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path
     _patch_paths(monkeypatch, tmp_path, default_soul, default_soul)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(onboarding, "write_env_keys", lambda updates: True)
-    monkeypatch.setattr(onboarding, "_test_llm_connection", AsyncMock(return_value="OK"))
-    monkeypatch.setattr(onboarding, "_test_llm_vision_capability", AsyncMock(return_value={
+    monkeypatch.setattr(onboarding, "test_llm_connection", AsyncMock(return_value="OK"))
+    monkeypatch.setattr(onboarding, "test_llm_vision_capability", AsyncMock(return_value={
         "vision_capable": True,
         "vision_checked_at": "2026-07-12T00:00:00+00:00",
         "vision_check_error": "",
@@ -176,6 +178,7 @@ async def test_save_codex_oauth_setup_persists_model_and_effort(monkeypatch, tmp
 
 async def test_vision_capability_probe_sends_an_image(monkeypatch):
     from cyrene.runtime import onboarding
+    from cyrene.runtime import model_probe_service
 
     calls = []
 
@@ -197,9 +200,9 @@ async def test_vision_capability_probe_sends_an_image(monkeypatch):
             calls.append({"endpoint": endpoint, "headers": headers, "json": json})
             return FakeResponse()
 
-    monkeypatch.setattr(onboarding.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+    monkeypatch.setattr(model_probe_service.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
 
-    result = await onboarding._test_llm_vision_capability("sk-test", "https://example.test/v1", "vision-model")
+    result = await onboarding.test_llm_vision_capability("sk-test", "https://example.test/v1", "vision-model")
 
     assert result["vision_capable"] is True
     content = calls[0]["json"]["messages"][0]["content"]
@@ -220,6 +223,7 @@ async def test_text_connection_probe_normalizes_official_provider_endpoint(
     expected,
 ):
     from cyrene.runtime import onboarding
+    from cyrene.runtime import model_probe_service
 
     calls = []
 
@@ -241,9 +245,9 @@ async def test_text_connection_probe_normalizes_official_provider_endpoint(
             calls.append(endpoint)
             return FakeResponse()
 
-    monkeypatch.setattr(onboarding.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+    monkeypatch.setattr(model_probe_service.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
 
-    assert await onboarding._test_llm_connection("sk-test", base_url, "model") == "OK"
+    assert await onboarding.test_llm_connection("sk-test", base_url, "model") == "OK"
     assert calls == [expected]
 
 
@@ -253,22 +257,23 @@ def test_settings_model_save_persists_vision_probe_result(monkeypatch, tmp_path)
     from fastapi.testclient import TestClient
 
     from cyrene import config
-    from cyrene.runtime import onboarding, settings_store
+    from cyrene.runtime import settings_store
+    from cyrene.runtime.model_probe_service import ModelProbeService
 
     saved = {}
 
-    async def fake_text_probe(api_key, base_url, model):
+    async def fake_text_probe(self, api_key, base_url, model):
         return "OK"
 
-    async def fake_vision_probe(api_key, base_url, model):
+    async def fake_vision_probe(self, api_key, base_url, model):
         return {
             "vision_capable": model == "visual-primary",
             "vision_checked_at": "2026-07-12T00:00:00+00:00",
             "vision_check_error": "" if model == "visual-primary" else "image input unsupported",
         }
 
-    monkeypatch.setattr(onboarding, "_test_llm_connection", fake_text_probe)
-    monkeypatch.setattr(onboarding, "_test_llm_vision_capability", fake_vision_probe)
+    monkeypatch.setattr(ModelProbeService, "test_connection", fake_text_probe)
+    monkeypatch.setattr(ModelProbeService, "probe_vision", fake_vision_probe)
     monkeypatch.setattr(settings_store, "save_models", lambda models: saved.setdefault("models", models))
     monkeypatch.setattr(settings_store, "save_custom_models", lambda models: saved.setdefault("custom_models", models))
     monkeypatch.setattr(settings_store, "save_model_source", lambda source: saved.setdefault("model_source", source))
@@ -351,22 +356,23 @@ def test_settings_keeps_custom_and_codex_models_in_parallel(monkeypatch, tmp_pat
     from fastapi.testclient import TestClient
 
     from cyrene import config
-    from cyrene.runtime import onboarding, settings_store
+    from cyrene.runtime import settings_store
+    from cyrene.runtime.model_probe_service import ModelProbeService
 
     saved = {}
 
-    async def fake_text_probe(api_key, base_url, model):
+    async def fake_text_probe(self, api_key, base_url, model):
         return "OK"
 
-    async def fake_vision_probe(api_key, base_url, model):
+    async def fake_vision_probe(self, api_key, base_url, model):
         return {
             "vision_capable": False,
             "vision_checked_at": "2026-07-30T00:00:00+00:00",
             "vision_check_error": "unsupported",
         }
 
-    monkeypatch.setattr(onboarding, "_test_llm_connection", fake_text_probe)
-    monkeypatch.setattr(onboarding, "_test_llm_vision_capability", fake_vision_probe)
+    monkeypatch.setattr(ModelProbeService, "test_connection", fake_text_probe)
+    monkeypatch.setattr(ModelProbeService, "probe_vision", fake_vision_probe)
     monkeypatch.setattr(settings_store, "save_models", lambda models: saved.__setitem__("models", models))
     monkeypatch.setattr(settings_store, "save_custom_models", lambda models: saved.__setitem__("custom_models", models))
     monkeypatch.setattr(settings_store, "save_codex_model", lambda model: saved.__setitem__("codex_model", model))
@@ -442,9 +448,7 @@ def test_completed_onboarding_enters_chat_instead_of_welcome():
     welcome_source = (
         root / "src" / "webui" / "frontend" / "workbench-welcome.jsx"
     ).read_text(encoding="utf-8")
-    workbench_source = (
-        root / "src" / "webui" / "frontend" / "workbench.jsx"
-    ).read_text(encoding="utf-8")
+    workbench_source = workbench_shell_source()
 
     assert (
         "p.onboarding && !p.onboarding.needsOnboarding && props.onComplete"
@@ -458,4 +462,4 @@ def test_completed_onboarding_enters_chat_instead_of_welcome():
     )[1].split("}", 1)[0]
     assert "wbRememberWelcomeHandled();" in completion_handler
     assert 'setFullPage("chat");' in completion_handler
-    assert "onComplete: handleOnboardingComplete" in workbench_source
+    assert "onComplete={handleOnboardingComplete}" in workbench_source

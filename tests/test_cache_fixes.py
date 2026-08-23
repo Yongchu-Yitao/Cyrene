@@ -1,16 +1,7 @@
 """Verify cache-hit improvements don't break any behavior."""
 import asyncio
 import json
-import sys
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-
-# Patch missing deps before any cyrene import
-sys.modules.setdefault("PIL", MagicMock())
-sys.modules["PIL"].Image = MagicMock()
-sys.modules.setdefault("pypdf", MagicMock())
+from unittest.mock import AsyncMock
 
 from cyrene.agent import state as _agent_state
 from cyrene.agent import agent as _agent_core
@@ -243,6 +234,10 @@ def _patch(obj, attr, replacement):
 async def test_phase1_retry_with_unified_system_prompt():
     """Phase 1 retry still works with DECISION as separate user message."""
     from cyrene import agent
+    from cyrene.agent.prompts import (
+        _MAIN_AGENT_PROMPT_TEMPLATE,
+        prompt_for_enabled_tool_packs,
+    )
 
     calls = []
     responses = iter([
@@ -254,7 +249,10 @@ async def test_phase1_retry_with_unified_system_prompt():
         },
         {
             "content": "No suitable tool. Use use_tools to enter full tool phase.",
-            "tool_calls": [],
+            "tool_calls": [{
+                "id": "q1",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
         },
     ])
 
@@ -270,15 +268,19 @@ async def test_phase1_retry_with_unified_system_prompt():
         _patch(_agent_core, "_call_llm", _orig_llm)
         _patch(_agent_core, "_save_session_messages", _orig_save)
 
-    # Phase 1 system prompt is MAIN only
+    # Phase 1 and its retry must use the exact prompt bundle selected by the
+    # current tool-pack settings.
+    expected_main_prompt = prompt_for_enabled_tool_packs(
+        _MAIN_AGENT_PROMPT_TEMPLATE
+    )
     phase1_msgs, _ = calls[0]
-    assert phase1_msgs[0]["content"] == agent._MAIN_AGENT_PROMPT, "Phase 1 system should be MAIN only"
+    assert phase1_msgs[0]["content"] == expected_main_prompt
     # DECISION is last user message
     assert phase1_msgs[-1]["role"] == "user"
     assert phase1_msgs[-1]["content"] == agent._PHASE1_DECISION_PROMPT
     # Retry uses same system prompt
     retry_msgs, _ = calls[1]
-    assert retry_msgs[0]["content"] == agent._MAIN_AGENT_PROMPT
+    assert retry_msgs[0]["content"] == expected_main_prompt
     # Retry includes DECISION
     assert any(
         m.get("content") == agent._PHASE1_DECISION_PROMPT
@@ -747,15 +749,16 @@ async def test_fixed_ephemeral_stays_before_user_across_tool_rounds():
         _patch(_agent_core, "_save_session_messages", _orig_save)
 
     assert result == "final answer"
+    effective_main_prompt = llm_inputs[0][0]["content"]
     phase2_first = llm_inputs[1]
     phase2_second = llm_inputs[2]
     assert [m["content"] for m in phase2_first[:3]] == [
-        agent._MAIN_AGENT_PROMPT,
+        effective_main_prompt,
         "FIXED_CONTEXT",
         "inspect",
     ]
     assert [m["content"] for m in phase2_second[:3]] == [
-        agent._MAIN_AGENT_PROMPT,
+        effective_main_prompt,
         "FIXED_CONTEXT",
         "inspect",
     ]

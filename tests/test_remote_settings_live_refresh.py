@@ -1,12 +1,10 @@
-from conftest import workbench_chat_source
+from conftest import workbench_chat_source, workbench_settings_source
 from pathlib import Path
 
 
 def test_remote_pairing_refreshes_devices_without_reentering_loading_state():
     root = Path(__file__).resolve().parent.parent
-    source = (
-        root / "src" / "webui" / "frontend" / "settings-overlay.jsx"
-    ).read_text(encoding="utf-8")
+    source = workbench_settings_source()
     remote_panel = source.split("function RemotePanel(p) {", 1)[1].split(
         "function RemotePeerCard", 1
     )[0]
@@ -23,9 +21,7 @@ def test_remote_pairing_refreshes_devices_without_reentering_loading_state():
 def test_remote_context_catalog_refreshes_live_without_restart():
     root = Path(__file__).resolve().parent.parent
     workbench = workbench_chat_source()
-    settings = (
-        root / "src" / "webui" / "frontend" / "settings-overlay.jsx"
-    ).read_text(encoding="utf-8")
+    settings = workbench_settings_source()
     events = (
         root / "src" / "webui" / "frontend" / "platform" / "events.jsx"
     ).read_text(encoding="utf-8")

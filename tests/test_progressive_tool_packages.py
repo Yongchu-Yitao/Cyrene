@@ -11,6 +11,7 @@ def _names(defs):
 
 def test_main_wire_bundle_has_stable_progressive_tool_contract(monkeypatch):
     from cyrene.runtime import settings_store
+    from cyrene.tooling import wire
     from cyrene.tooling import get_main_wire_tool_defs
 
     monkeypatch.setattr(
@@ -18,17 +19,16 @@ def test_main_wire_bundle_has_stable_progressive_tool_contract(monkeypatch):
         "get_models",
         lambda: [{"provider": "openai_compatible", "model": "custom-model"}],
     )
+    monkeypatch.setattr(wire, "_powerpoint_addin_installed", lambda: True)
+    wire.invalidate_wire_tool_cache()
     defs = get_main_wire_tool_defs()
     assert _names(defs) == [
         "use_tools", "send_message", "ask_user", "quit", "enter_plan_mode",
         "update_plan_progress", "DeepReflect", "Read", "read_tool_result", "Write", "Edit",
         "Glob", "Grep", "Bash", "WebSearch", "WebFetch",
-        "AnalyzeAttachment", "code_tools", "browser_tools",
-        "desktop_tools", "memory_tools", "knowledge_tools", "task_tools",
-        "entity_tools", "map_tools", "subagent_tools", "delivery_tools",
-        "environment_tools", "skill_tools", "remote_tools", "cyrene_tools",
-        "integration_tools",
-        "custom_tools",
+        "AnalyzeAttachment", "PowerPointGetContext", "PowerPointInspect",
+        "PowerPointApplyBatch", "PowerPointRenderSlide", "PowerPointToolSearch",
+        "toolbox",
     ]
     assert json.dumps(defs, sort_keys=True) == json.dumps(
         get_main_wire_tool_defs(),
@@ -66,11 +66,31 @@ def test_renderer_contract_tool_is_exposed_only_for_workbench_surface():
         state.response_capabilities.reset(token)
 
 
-def test_cyrene_self_management_gateway_is_main_only():
-    from cyrene.tooling import get_main_wire_tool_defs, get_subagent_wire_tool_defs
+def test_universal_gateway_keeps_main_only_capabilities_in_catalog(monkeypatch):
+    from cyrene.tooling import get_main_wire_tool_defs, get_subagent_wire_tool_defs, wire
+    from cyrene.tooling.snapshot import build_catalog_snapshot
 
-    assert "cyrene_tools" in _names(get_main_wire_tool_defs())
-    assert "cyrene_tools" not in _names(get_subagent_wire_tool_defs())
+    monkeypatch.setattr(wire, "_powerpoint_addin_installed", lambda: True)
+    wire.invalidate_wire_tool_cache()
+
+    assert "toolbox" in _names(get_main_wire_tool_defs())
+    assert "toolbox" in _names(get_subagent_wire_tool_defs())
+    assert "cyrene.ui.snapshot" in build_catalog_snapshot("main").enabled_capability_ids
+    assert "cyrene.ui.snapshot" not in build_catalog_snapshot("subagent").enabled_capability_ids
+    assert set(wire.POWERPOINT_CORE_TOOL_NAMES) <= set(_names(get_main_wire_tool_defs()))
+    assert "office_tools" not in _names(get_main_wire_tool_defs())
+    assert set(wire.POWERPOINT_CORE_TOOL_NAMES).isdisjoint(_names(get_subagent_wire_tool_defs()))
+
+
+def test_powerpoint_core_tools_are_hidden_until_addin_is_installed(monkeypatch):
+    from cyrene.tooling import wire
+
+    monkeypatch.setattr(wire, "_powerpoint_addin_installed", lambda: False)
+    wire.invalidate_wire_tool_cache()
+    assert set(wire.POWERPOINT_CORE_TOOL_NAMES).isdisjoint(_names(wire.get_main_wire_tool_defs()))
+
+    monkeypatch.setattr(wire, "_powerpoint_addin_installed", lambda: True)
+    assert set(wire.POWERPOINT_CORE_TOOL_NAMES) <= set(_names(wire.get_main_wire_tool_defs()))
 
 
 def test_browser_click_text_is_not_exposed_to_agents():
@@ -251,6 +271,53 @@ def test_settings_and_dynamic_integrations_do_not_mutate_cached_wire_defs(monkey
     ] == ["integration.late_mcp_tool"]
 
 
+def test_non_direct_package_switch_does_not_change_universal_wire_schema(monkeypatch):
+    from cyrene.tooling import wire
+
+    monkeypatch.setattr(wire, "_powerpoint_addin_installed", lambda: False)
+    monkeypatch.setattr(wire, "is_tool_pack_enabled", lambda _wire_name: True)
+    wire.invalidate_wire_tool_cache()
+    before = json.dumps(wire.get_main_wire_tool_defs(), sort_keys=True)
+
+    monkeypatch.setattr(
+        wire,
+        "is_tool_pack_enabled",
+        lambda wire_name: wire_name != "browser_tools",
+    )
+    wire.invalidate_wire_tool_cache()
+    after = json.dumps(wire.get_main_wire_tool_defs(), sort_keys=True)
+
+    assert after == before
+
+
+def test_workbench_trace_attributes_toolbox_invoke_to_owning_package():
+    from cyrene.workbench.chat import _accumulate_tools
+
+    def message(arguments):
+        return {
+            "tool_calls": [{
+                "id": "call_browser",
+                "function": {
+                    "name": "toolbox",
+                    "arguments": arguments,
+                },
+            }],
+        }
+
+    invocation = {
+        "operation": "invoke",
+        "capability_id": "browser.navigate",
+        "arguments": {"url": "https://example.com"},
+    }
+    trace = []
+    _accumulate_tools(message(json.dumps(invocation)), trace)
+    dict_trace = []
+    _accumulate_tools(message(invocation), dict_trace)
+
+    assert trace[0]["tool"] == "browser_tools"
+    assert dict_trace[0]["tool"] == "browser_tools"
+
+
 def test_knowledge_pack_has_exact_boundary():
     from cyrene.tooling import discover_capabilities
 
@@ -280,42 +347,28 @@ def test_memory_pack_exposes_inventory_listing():
     assert "memory.list" in ids
 
 
-def test_static_memory_prompt_exposes_selective_save_triggers_before_discovery():
-    from cyrene.agent.prompts import (
-        _MAIN_AGENT_PROMPT_TEMPLATE,
-        _TOOL_PACK_PROMPT_TERMS,
-        prompt_for_enabled_tool_packs,
-    )
+def test_memory_guidance_is_disclosed_on_demand_not_in_static_prompt():
+    from cyrene.agent.prompts import _MAIN_AGENT_PROMPT_TEMPLATE
+    from cyrene.tooling.guidance import pack_guidance
 
-    rendered = prompt_for_enabled_tool_packs(
-        _MAIN_AGENT_PROMPT_TEMPLATE,
-        set(_TOOL_PACK_PROMPT_TERMS),
-    )
-
-    assert "Save or update durable, confirmed preferences" in rendered
-    assert "useful successes or dead ends" in rendered
-    assert "Never save secrets, guesses, transient results, or noisy details" in rendered
+    assert "Save or update durable, confirmed preferences" not in _MAIN_AGENT_PROMPT_TEMPLATE
+    guidance = pack_guidance("memory_tools")
+    assert "durable confirmed preferences" in guidance
+    assert "useful successes or dead ends" in guidance
+    assert "Never save secrets, guesses, transient results, or noisy details" in guidance
 
 
-def test_static_entity_prompt_requires_foreground_extraction_with_steward_fallback():
-    from cyrene.agent.prompts import (
-        _MAIN_AGENT_PROMPT_TEMPLATE,
-        _TOOL_PACK_PROMPT_TERMS,
-        prompt_for_enabled_tool_packs,
-    )
+def test_entity_procedure_is_disclosed_on_demand_not_in_static_prompt():
+    from cyrene.agent.prompts import _MAIN_AGENT_PROMPT_TEMPLATE
+    from cyrene.tooling.guidance import pack_guidance
 
-    rendered = prompt_for_enabled_tool_packs(
-        _MAIN_AGENT_PROMPT_TEMPLATE,
-        set(_TOOL_PACK_PROMPT_TERMS),
-    )
-
-    assert "Foreground extraction is responsible for immediate tracking" in rendered
-    assert "Always `entity.query` first to deduplicate" in rendered
-    assert '`source="extracted"` with evidence-based confidence' in rendered
-    assert "the hourly Steward is only a fallback and does not replace it" in rendered
+    assert "Foreground extraction is responsible for immediate tracking" not in _MAIN_AGENT_PROMPT_TEMPLATE
+    guidance = pack_guidance("entity_tools")
+    assert "query existing records before acting" in guidance
+    assert "Query first to deduplicate" in guidance
 
 
-def test_package_switch_omits_gateway_and_member_metadata_from_model_context(
+def test_package_switch_omits_member_metadata_from_model_context(
     monkeypatch,
 ):
     from cyrene.agent.prompts import (
@@ -342,7 +395,8 @@ def test_package_switch_omits_gateway_and_member_metadata_from_model_context(
     )
     wire_defs = wire.get_main_wire_tool_defs()
     assert "browser_tools" not in _names(wire_defs)
-    assert "code_tools" in _names(wire_defs)
+    assert "code_tools" not in _names(wire_defs)
+    assert "toolbox" in _names(wire_defs)
     rendered = json.dumps(wire_defs, ensure_ascii=False)
     assert "Persistent browser navigation" not in rendered
     filtered_prompt = prompt_for_enabled_tool_packs(
@@ -353,12 +407,12 @@ def test_package_switch_omits_gateway_and_member_metadata_from_model_context(
     assert "browser.navigate" not in filtered_prompt
     assert "Prefer clicking visible page UI" not in filtered_prompt
     assert "browser file uploads" not in filtered_prompt
-    assert "code_tools" in filtered_prompt
-    assert "Progressive gateways" in filtered_prompt
+    assert "code_tools" not in filtered_prompt
+    assert "single stable `toolbox` gateway" in filtered_prompt
     assert "[[CYRENE_TOOL_PACK:" not in filtered_prompt
 
 
-def test_disabled_package_prompt_blocks_are_removed_as_complete_sections():
+def test_static_tool_prompt_is_independent_of_package_switches():
     from cyrene.agent.prompts import (
         _MAIN_AGENT_PROMPT_TEMPLATE,
         _TOOL_PACK_PROMPT_TERMS,
@@ -374,15 +428,14 @@ def test_disabled_package_prompt_blocks_are_removed_as_complete_sections():
     filtered = prompt_for_enabled_tool_packs(_MAIN_AGENT_PROMPT_TEMPLATE, enabled)
 
     assert "the first tool call MUST be `send_message`" in filtered
-    assert "## Memory" not in filtered
-    assert "## Learned Skills" not in filtered
-    assert "## Entity Tracking" not in filtered
-    assert "code_tools" in filtered
-    assert "browser_tools" in filtered
-    assert "delivery_tools" not in filtered
+    full = prompt_for_enabled_tool_packs(
+        _MAIN_AGENT_PROMPT_TEMPLATE,
+        set(_TOOL_PACK_PROMPT_TERMS),
+    )
+    assert filtered == full
+    assert "single stable `toolbox` gateway" in filtered
+    assert "browser_tools" not in filtered
     assert "memory_tools" not in filtered
-    assert "skill_tools" not in filtered
-    assert "entity_tools" not in filtered
     assert "[[CYRENE" not in filtered
 
 
@@ -446,6 +499,48 @@ async def test_gateway_discover_describe_invoke_routes_to_concrete_handler(monke
     concrete.assert_awaited_once_with(
         "SearchKnowledge", {"query": "cache"}, None, 0, "db.sqlite3", None,
     )
+
+
+@pytest.mark.asyncio
+async def test_universal_toolbox_search_describe_invoke_and_jit_guidance(monkeypatch):
+    from cyrene.tooling import execute_wire_tool
+    from cyrene.tooling import executor as tool_executor
+
+    concrete = AsyncMock(return_value="matched passage")
+    monkeypatch.setattr(tool_executor, "_execute_tool", concrete)
+
+    searched = json.loads(await execute_wire_tool(
+        "toolbox",
+        {"operation": "search", "query": "project knowledge search"},
+        None, 0, "", None,
+    ))
+    assert searched["gateway"] == "toolbox"
+    assert any(item["id"] == "knowledge.search" for item in searched["capabilities"])
+
+    described = json.loads(await execute_wire_tool(
+        "toolbox",
+        {"operation": "describe", "capability_ids": ["knowledge.search"]},
+        None, 0, "", None,
+    ))
+    assert described["gateway"] == "toolbox"
+    assert "knowledge_tools" in described["module_guidance"]
+    assert described["capabilities"][0]["id"] == "knowledge.search"
+    assert "input_schema" in described["capabilities"][0]
+
+    invoked = json.loads(await execute_wire_tool(
+        "toolbox",
+        {
+            "operation": "invoke",
+            "capability_id": "knowledge.search",
+            "arguments": {"query": "cache"},
+        },
+        None, 0, "db.sqlite3", None,
+    ))
+    assert invoked == {
+        "status": "success",
+        "capability_id": "knowledge.search",
+        "result": "matched passage",
+    }
 
 
 @pytest.mark.parametrize("actor", ["main", "subagent"])
@@ -904,7 +999,7 @@ def test_subagent_spawn_metadata_allows_independent_batch_launches():
     assert first["resource_keys"] != second["resource_keys"]
 
 
-def test_prompts_use_new_module_names_and_keep_deep_research_specialized():
+def test_prompts_use_universal_toolbox_and_keep_deep_research_specialized():
     from cyrene.agent.prompts import (
         _DEEP_RESEARCH_PROMPT,
         _EXECUTION_SYSTEM_PROMPT,
@@ -912,27 +1007,14 @@ def test_prompts_use_new_module_names_and_keep_deep_research_specialized():
     )
 
     combined = _MAIN_AGENT_PROMPT + _EXECUTION_SYSTEM_PROMPT
-    for module_name in (
-        "code_tools",
-        "browser_tools",
-        "desktop_tools",
-        "memory_tools",
-        "knowledge_tools",
-        "task_tools",
-        "entity_tools",
-        "map_tools",
-        "subagent_tools",
-        "delivery_tools",
-        "environment_tools",
-        "skill_tools",
-        "remote_tools",
-        "custom_tools",
-        "integration_tools",
-    ):
-        assert module_name in combined
+    assert "single stable `toolbox` gateway" in combined
+    assert "operation=search" in combined
+    assert "operation=describe" in combined
+    assert "operation=invoke" in combined
+    assert "browser_tools" not in combined
+    assert "memory_tools" not in combined
     assert "AnalyzeAttachment" in combined
     assert "always direct" in combined
-    assert "Call the owning gateway" in combined
     assert "`capability_id`" in combined
     assert "research_tools" not in combined
     assert "work_tools" not in combined
@@ -1039,7 +1121,7 @@ async def test_normal_phase1_and_phase2_receive_identical_wire_defs(monkeypatch)
     assert "browser_tools" not in calls[0]
     assert "browser_tools" not in system_prompts[0]
     assert "browser.navigate" not in system_prompts[0]
-    assert "code_tools" in calls[0]
+    assert '"name": "toolbox"' in calls[0]
 
 
 def test_deep_research_length_handshake_remains_cache_exception():

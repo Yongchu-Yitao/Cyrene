@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="cyrene-office-token" content="__CYRENE_OFFICE_TOKEN__">
+  <title>Cyrene for PowerPoint</title>
+  <link rel="stylesheet" href="/assets/cyrene-theme.css?token=__CYRENE_OFFICE_TOKEN__">
+  <link rel="stylesheet" href="/assets/cyrene-fonts.css?token=__CYRENE_OFFICE_TOKEN__">
+  <link rel="stylesheet" href="/taskpane.css?token=__CYRENE_OFFICE_TOKEN__">
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</head>
+<body>
+  <main class="taskpane-shell">
+    <header class="brand-bar">
+      <div class="brand-lockup">
+        <img class="brand-mark" src="/assets/icon-80.png?token=__CYRENE_OFFICE_TOKEN__&amp;v=__CYRENE_OFFICE_BUILD_HASH__" alt="">
+        <div class="brand-copy">
+          <h1>Cyrene</h1>
+          <p>PowerPoint</p>
+        </div>
+      </div>
+      <span class="product-pill" data-i18n="liveBadge">实时</span>
+    </header>
+
+    <section class="status-card" aria-live="polite" aria-atomic="true">
+      <span id="status-dot" class="status-indicator pending" aria-hidden="true">
+        <svg viewBox="0 0 20 20" fill="none"><path d="M10 5.2v4.9l3.2 1.9"/><circle cx="10" cy="10" r="7.25"/></svg>
+      </span>
+      <div class="status-copy">
+        <span class="eyebrow" data-i18n="liveConnection">实时连接</span>
+        <strong id="status-title">正在连接…</strong>
+        <p id="status-detail">等待 PowerPoint 初始化</p>
+      </div>
+    </section>
+
+    <section class="document-card" aria-labelledby="document-label">
+      <div class="document-heading">
+        <span id="document-label" class="eyebrow" data-i18n="currentPresentation">当前演示文稿</span>
+        <span class="document-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" fill="none"><path d="M6.2 2.75h5.1l3.5 3.5v10.9H6.2z"/><path d="M11.3 2.75v3.5h3.5M8.5 10h4M8.5 12.8h4"/></svg>
+        </span>
+      </div>
+      <h2 id="document-name">未命名演示文稿</h2>
+      <div class="document-meta">
+        <span><small data-i18n="revision">修订</small><strong id="revision">0</strong></span>
+        <span><small>PowerPoint API</small><strong id="api-version">检测中</strong></span>
+      </div>
+    </section>
+
+    <section class="usage-card" aria-labelledby="usage-title">
+      <div class="section-heading">
+        <span class="spark-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" fill="none"><path d="M10 2.6c.5 3.8 2.1 5.4 5.9 5.9-3.8.5-5.4 2.1-5.9 5.9-.5-3.8-2.1-5.4-5.9-5.9C7.9 8 9.5 6.4 10 2.6Z"/><path d="M15.7 13.1c.2 1.5.8 2.1 2.3 2.3-1.5.2-2.1.8-2.3 2.3-.2-1.5-.8-2.1-2.3-2.3 1.5-.2 2.1-.8 2.3-2.3Z"/></svg>
+        </span>
+        <h2 id="usage-title" data-i18n="readyTitle">现在可以开始了</h2>
+      </div>
+      <ol class="usage-steps">
+        <li><span>1</span><p data-i18n="stepKeepOpen">保持当前演示文稿和此任务窗格打开</p></li>
+        <li><span>2</span><p data-i18n="stepAskCyrene">回到 Cyrene，直接描述你想新增或修改的内容</p></li>
+        <li><span>3</span><p data-i18n="stepWatchChanges">Agent 的每批编辑都会立即显示在幻灯片上</p></li>
+      </ol>
+    </section>
+
+    <footer class="taskpane-footer">
+      <button id="reconnect" type="button">
+        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M15.8 7.3A6.5 6.5 0 1 0 16.1 12"/><path d="M15.8 3.9v3.4h-3.4"/></svg>
+        <span data-i18n="reconnect">重新连接</span>
+      </button>
+      <p data-i18n="localOnly">连接仅在此设备本地运行</p>
+    </footer>
+  </main>
+  <script src="/taskpane.js?token=__CYRENE_OFFICE_TOKEN__&amp;build=__CYRENE_OFFICE_BUILD_HASH__"></script>
+</body>
+</html>

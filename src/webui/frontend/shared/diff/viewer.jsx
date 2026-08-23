@@ -1,3 +1,5 @@
+import { workbenchServices } from "../runtime/services.jsx"
+
 // Diff viewer panel for the right sidebar.
 // Registered as the shared Workbench diff service.
 
@@ -10,7 +12,7 @@
   var createElement = React.createElement;
 
   function diffT(key, fallback, vars) {
-    return window.CyreneUI.require("i18n").t(key, vars, fallback);
+    return workbenchServices.i18n().t(key, vars, fallback);
   }
 
   function isBinaryDiff(text) {

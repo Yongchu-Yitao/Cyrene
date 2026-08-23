@@ -1,14 +1,45 @@
-from conftest import workbench_chat_source
+from conftest import (
+    workbench_chat_source,
+    workbench_i18n_source,
+    workbench_shell_source,
+    workbench_style_source,
+)
 from pathlib import Path
 import json
 import subprocess
 
 
 ROOT = Path(__file__).resolve().parent.parent
+FRONTEND = ROOT / "src/webui/frontend"
+
+
+def _frontend_source(relative_path: str) -> str:
+    return (FRONTEND / relative_path).read_text(encoding="utf-8")
+
+
+def _session_activity_script(body: str, setup: str = "") -> str:
+    """Execute the actual pure-JS session activity module without JSX bundling."""
+    source = _frontend_source("features/session/activity.jsx")
+    source = "\n".join(
+        line for line in source.splitlines() if not line.startswith("import ")
+    )
+    source = source.rsplit("\nexport {", 1)[0]
+    services = (
+        "const workbenchServices={i18n:()=>({t:(key,params,fallback)=>fallback||key})};\n"
+    )
+    return services + setup + source + "\n" + body
 
 
 def test_topbar_uses_three_recent_task_and_conversation_tabs():
-    source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    source = "\n".join([
+        _frontend_source("features/session/activity.jsx"),
+        _frontend_source("features/session/tabs-controller.jsx"),
+        _frontend_source("features/shell/app-lifecycle.jsx"),
+        _frontend_source("features/shell/topbar.jsx"),
+        _frontend_source("features/shell/shell-navigation.jsx"),
+        _frontend_source("features/shell/shell-composition.jsx"),
+        _frontend_source("workbench.jsx"),
+    ])
 
     assert (
         "function wbRecentSessionTabs(projects, chatsByProject, recentOpenedKeys, pinnedKeys, hiddenKeys, limit)"
@@ -18,24 +49,18 @@ def test_topbar_uses_three_recent_task_and_conversation_tabs():
     assert 'kind: "chat"' in source
     assert "right.updatedAt.localeCompare(left.updatedAt)" in source
     assert "recentOpenedSessionKeys" in source
-    assert 'localStorage.setItem("wb-recent-opened-sessions"' in source
+    assert 'writeSessionKeys("wb-recent-opened-sessions", next)' in source
     assert 'rememberOpenedSession("chat", activeChatId)' in source
-    assert 'rememberOpenedSession("task", store.activeSessionId)' in source
+    assert 'rememberOpenedSession("task", activeSessionId)' in source
     assert 'className={"workbench-session-tab" + (isActive ? " active" : "")}' in source
-    assert 'navigateFromSearch({ type: "chat"' in source
-    assert 'navigateFromSearch({ type: "task"' in source
+    assert 'item.kind === "chat"' in source
+    assert '{ type: "chat", projectId: item.projectId, chatId: item.id }' in source
+    assert '{ type: "task", projectId: item.projectId, sessionId: item.id }' in source
     assert 'className="workbench-crumbs"' not in source
 
 
 def test_recent_session_merger_orders_mixed_items_and_caps_at_three():
-    source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    helper = source.split("function wbRecentSessionTabs", 1)[1].split(
-        "\nfunction WorkbenchSessionMenuFileName", 1
-    )[0]
-    script = (
-        "function wbRecentSessionTabs"
-        + helper
-        + """
+    script = _session_activity_script("""
 const projects = [
   {id: "p1", name: "One", sessions: [
     {id: "t1", title: "Older task", updatedAt: "2026-07-01T00:00:00Z"},
@@ -73,14 +98,7 @@ process.stdout.write(JSON.stringify(wbRecentSessionTabs(projects, chats, opened,
 
 
 def test_pinned_sessions_are_not_dropped_by_the_recent_tab_limit():
-    source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    helper = source.split("function wbRecentSessionTabs", 1)[1].split(
-        "\nfunction WorkbenchSessionMenuFileName", 1
-    )[0]
-    script = (
-        "function wbRecentSessionTabs"
-        + helper
-        + """
+    script = _session_activity_script("""
 const projects = [{id: "p1", sessions: []}];
 const chats = {p1: [
   {id: "c1", title: "One"}, {id: "c2", title: "Two"},
@@ -105,7 +123,7 @@ process.stdout.write(JSON.stringify(wbRecentSessionTabs(
 
 
 def test_existing_topbar_session_keeps_order_until_an_unshown_session_is_opened():
-    source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
     helper = source.split("function wbRememberOpenedSessionKey", 1)[1].split(
         "\nfunction wbDeliverResourceToChat", 1
     )[0]
@@ -152,16 +170,22 @@ process.stdout.write(JSON.stringify({
 
 
 def test_recent_conversation_lists_stay_in_sync_with_chat_page():
-    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    chat = workbench_chat_source()
+    lifecycle = _frontend_source("features/shell/app-lifecycle.jsx")
+    shell = "\n".join([
+        _frontend_source("workbench.jsx"),
+        _frontend_source("features/shell/shell-composition.jsx"),
+    ])
+    chat = _frontend_source("features/chat/page.jsx")
 
-    assert "reloadRecentChats(store.projects || [])" in shell
-    assert "onChatsChange: function (projectId, chats)" in shell
+    assert "useWorkbenchRecentChatLifecycle(" in shell
+    assert "reloadRecentChats(projects || [])" in lifecycle
+    assert "updateRecentChats: function (projectId, chats)" in shell
+    assert "onChatsChange: sessions.updateRecentChats" in shell
     assert "if (onChatsChange && projectId) onChatsChange(projectId, chats)" in chat
 
 
 def test_session_tabs_remain_interactive_inside_the_draggable_titlebar():
-    css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    css = workbench_style_source()
 
     assert ".workbench-session-tabs {" in css
     tabstrip = css.split(".workbench-session-tabs {", 1)[1].split("}", 1)[0]
@@ -181,7 +205,7 @@ def test_session_tabs_remain_interactive_inside_the_draggable_titlebar():
 
 
 def test_active_session_tab_stretches_with_an_accessible_transition():
-    css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    css = workbench_style_source()
 
     tab = css.split(".workbench-session-tab {", 1)[1].split("}", 1)[0]
     active = css.split(".workbench-session-tab.active {", 1)[1].split("}", 1)[0]
@@ -195,9 +219,9 @@ def test_active_session_tab_stretches_with_an_accessible_transition():
 
 
 def test_session_tab_context_menu_supports_pinning_resources_and_removal():
-    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    shell = workbench_shell_source()
     chat = workbench_chat_source()
-    css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    css = workbench_style_source()
 
     assert "openSessionMenu(event, item, activity, false)" in shell
     assert "onTogglePinnedSession" in shell
@@ -286,7 +310,7 @@ def test_session_tab_context_menu_supports_pinning_resources_and_removal():
 
 
 def test_session_activity_view_model_prioritizes_attention_and_preserves_active_tab():
-    source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
     helper = source.split("function wbVisibleSessionTabs", 1)[1].split(
         "\nfunction wbRememberOpenedSessionKey", 1
     )[0]
@@ -371,8 +395,10 @@ process.stdout.write(JSON.stringify({
 
 
 def test_topbar_activity_controls_hover_preview_and_overflow_are_separate():
-    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    shell = workbench_shell_source()
+    live_activity = _frontend_source("features/session/live-activity.jsx")
+    activity_model = _frontend_source("features/session/activity.jsx")
+    css = workbench_style_source()
 
     assert 'className="workbench-session-tab-more"' in shell
     assert "openSessionMenu(event, item, activity, true)" in shell
@@ -387,7 +413,15 @@ def test_topbar_activity_controls_hover_preview_and_overflow_are_separate():
     assert "scheduleSessionPreview(event, item, activity, true)" in shell
     assert 'morphUntil: state.phase === "completed"' in shell
     assert "setActivityClock(Date.now())" in shell
-    assert "replaceTitleForMorph" in shell
+    assert 'var visibleStatusText = "";' in shell
+    assert '<WbcHoverMarquee text={visibleStatusText}' in shell
+    assert "replaceTitleForMorph" not in shell
+    assert "workbench-session-tab-activity-copy" not in shell
+    assert 'labelKey: String(entry.detailKey || "")' in activity_model
+    assert 'localized.label = wbT(localized.labelKey, label, localized.labelParams || {})' in activity_model
+    assert 'localized.label = wbT("toolName." + label, label)' in activity_model
+    assert 'labelKey: "workbench.sessionStatus.thinking"' in activity_model
+    assert 'labelKey: "workbench.sessionStatus.finalizing"' in activity_model
     assert 'id="workbench-session-activity-preview"' in shell
     assert 'className={"workbench-session-overflow-button "' in shell
     assert 'className="workbench-session-overflow-stack"' in shell
@@ -438,18 +472,16 @@ def test_topbar_activity_controls_hover_preview_and_overflow_are_separate():
     assert 't("workbench.sessionStatus.step", {' in shell
     assert '}, "Step {current}/{total}")' in shell
     assert "`llm_call` is emitted as a completed accounting event" in shell
-    activity_reducer = shell.split("function onActivityEvent(data)", 1)[1].split(
-        'return window.CyreneUI.require("events").subscribe(onActivityEvent)', 1
-    )[0]
-    assert 'next.status = "failed"' not in activity_reducer
-    assert "Tool failure is local to this call" in activity_reducer
+    assert "var next = wbReduceSessionActivity(prior, data)" in live_activity
+    assert 'next.status = "failed"' not in activity_model
+    assert "failed: !!data.failed" in activity_model
     reduced_motion = css.split("@media (prefers-reduced-motion: reduce)", 1)[1]
     assert ".workbench-session-status-dot" in reduced_motion
     assert "animation: none" in reduced_motion
 
 
 def test_overflow_sessions_group_exceptions_last_and_sort_each_group_by_time():
-    source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
     helper = source.split("function wbOverflowSessionTime", 1)[1].split(
         "\nfunction wbRememberOpenedSessionKey", 1
     )[0]
@@ -489,8 +521,8 @@ process.stdout.write(JSON.stringify({
 
 
 def test_overflow_menu_keeps_internal_scroll_open_and_has_no_accent_outline():
-    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    shell = workbench_shell_source()
+    css = workbench_style_source()
 
     assert "function handleScroll(event)" in shell
     assert 'target.closest(\n        ".workbench-session-overflow-menu, .workbench-session-menu"' in shell
@@ -502,7 +534,7 @@ def test_overflow_menu_keeps_internal_scroll_open_and_has_no_accent_outline():
 
 
 def test_topbar_overlay_captures_browser_frame_before_hiding_native_view():
-    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    shell = workbench_shell_source()
     viewport = (
         ROOT / "src/webui/frontend/shared/browser/viewport.jsx"
     ).read_text(encoding="utf-8")
@@ -524,7 +556,7 @@ def test_topbar_overlay_captures_browser_frame_before_hiding_native_view():
 
 
 def test_overflow_count_uses_the_i18n_parameter_position():
-    i18n = (ROOT / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    i18n = workbench_i18n_source()
     helper = i18n.split("function workbenchInterpolate", 1)[1].split(
         "\nfunction workbenchToolName", 1
     )[0]
@@ -655,19 +687,7 @@ def test_chat_run_outcome_projection_is_persisted_for_list_and_topbar(monkeypatc
 
 
 def test_session_activity_reducer_tracks_parallel_work_and_resets_between_runs():
-    source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    status_helpers = source.split("function wbActivityStatusIsActive", 1)[1].split(
-        "\nfunction wbSessionActivityPhase", 1
-    )[0]
-    helper = source.split("function wbArgsPreview", 1)[1].split(
-        "\nfunction wbActorLabel", 1
-    )[0]
-    script = (
-        "function wbActivityStatusIsActive"
-        + status_helpers
-        + "function wbArgsPreview"
-        + helper
-        + """
+    script = _session_activity_script("""
 let state = {};
 state = wbReduceSessionActivity(state, {type:"tool_call_started", session_id:"c1", runId:"r1", tool_call_id:"a", tool:"shell", timestamp:"2026-08-08T10:00:00Z"});
 state = wbReduceSessionActivity(state, {type:"tool_call_started", session_id:"c1", runId:"r1", tool_call_id:"b", tool:"browser", timestamp:"2026-08-08T10:00:01Z"});
@@ -676,11 +696,13 @@ const afterOneFinished = {active:state.active, tools:Object.keys(state.activeToo
 state = wbReduceSessionActivity(state, {type:"subagent_update", session_id:"c1", runId:"r1", agent_id:"research", status:"running", task:"Search"});
 state = wbReduceSessionActivity(state, {type:"tool_call_finished", session_id:"c1", runId:"r1", tool_call_id:"b", tool:"browser"});
 const subagentSurvives = state.active;
+state = wbReduceSessionActivity(state, {type:"tool_call_finished", session_id:"c1", runId:"r1", tool_call_id:"failed", tool:"shell", failed:true});
+const failedToolDoesNotTerminate = {active:state.active, agent:state.agents.research.status};
 state = wbReduceSessionActivity(state, {type:"session_update", session_id:"c1", runId:"r1", status:"error"});
 const terminal = {active:state.active, tools:Object.keys(state.activeTools), activity:state.activity, agent:state.agents.research.status};
 state = wbReduceSessionActivity(state, {type:"session_update", session_id:"c1", runId:"r2", status:"running"});
 const nextRun = {active:state.active, activity:state.activity, agents:Object.keys(state.agents), status:state.status};
-process.stdout.write(JSON.stringify({afterOneFinished, subagentSurvives, terminal, nextRun}));
+process.stdout.write(JSON.stringify({afterOneFinished, subagentSurvives, failedToolDoesNotTerminate, terminal, nextRun}));
 """
     )
     completed = subprocess.run(
@@ -690,6 +712,10 @@ process.stdout.write(JSON.stringify({afterOneFinished, subagentSurvives, termina
 
     assert result["afterOneFinished"] == {"active": True, "tools": ["b"]}
     assert result["subagentSurvives"] is True
+    assert result["failedToolDoesNotTerminate"] == {
+        "active": True,
+        "agent": "running",
+    }
     assert result["terminal"] == {
         "active": False,
         "tools": [],
@@ -705,7 +731,7 @@ process.stdout.write(JSON.stringify({afterOneFinished, subagentSurvives, termina
 
 
 def test_session_activity_uses_newer_durable_status_and_maps_terminal_variants():
-    source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    source = workbench_shell_source()
     terminal_helper = source.split("function wbActivityStatusIsTerminal", 1)[1].split(
         "\nfunction wbSessionActivityPhase", 1
     )[0]
@@ -748,8 +774,14 @@ process.stdout.write(JSON.stringify({completed, sameRunLateEvent, mismatchedTool
 
 
 def test_chat_runtime_broadcasts_terminal_lifecycle_to_topbar():
-    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    chat = workbench_chat_source()
+    lifecycle = _frontend_source("features/shell/app-lifecycle.jsx")
+    live_activity = _frontend_source("features/session/live-activity.jsx")
+    workbench = _frontend_source("workbench.jsx")
+    chat = "\n".join([
+        _frontend_source("features/chat/file-resources.jsx"),
+        _frontend_source("features/chat/page.jsx"),
+        _frontend_source("features/chat/chat-action-controller.jsx"),
+    ])
 
     assert 'new CustomEvent("cyrene:wbc-chat-lifecycle"' in chat
     assert 'publishLifecycle(chatId, "completed", event)' in chat
@@ -757,16 +789,21 @@ def test_chat_runtime_broadcasts_terminal_lifecycle_to_topbar():
     assert 'publishLifecycle(chatId, "awaiting_user", event)' in chat
     assert 'publishLifecycle(chatId, "cancelled", event)' in chat
     assert "publishLifecycle: publishLifecycle" in chat
-    assert "runtimeEngine.publishLifecycle(chatId, terminalStatus, result || {})" in chat
-    assert 'window.addEventListener("cyrene:wbc-chat-lifecycle", onChatLifecycle)' in shell
-    assert 'setInterval(refreshLiveChats, 2500)' in shell
-    assert 'reloadRecentChats(store.projects || [])' in shell
-    assert 'chatRuntimeEngine.subscribeSummary' in shell
+    assert "context.runtimeEngine.publishLifecycle(chatId, status, result || {})" in chat
+    assert "wbApplyRecentChatSummary(setRecentChatsByProject, data)" in lifecycle
+    assert "setRecentChatsByProject(function (current)" in lifecycle
+    assert 'window.addEventListener("cyrene:wbc-chat-lifecycle", onChatLifecycle)' in live_activity
+    assert '"workbench_chat_changed"' in lifecycle
+    assert 'window.addEventListener("cyrene:wbc-chat-lifecycle", onChatLifecycle)' not in lifecycle
+    assert 'setInterval(refreshLiveChats, 2500)' not in lifecycle
+    assert 'reloadRecentChats(projects || [])' in lifecycle
+    assert 'chatRuntimeEngine.subscribeSummary' in live_activity
+    assert "useWorkbenchRecentChatLifecycle(" in workbench
 
 
 def test_tab_menus_use_cyrene_context_menu_surface():
-    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    shell = workbench_shell_source()
+    css = workbench_style_source()
 
     assert "workbench-session-context-menu" in shell
     assert ".workbench-session-context-menu" in css
@@ -783,7 +820,7 @@ def test_tab_menus_use_cyrene_context_menu_surface():
 
 
 def test_browser_can_be_copied_to_another_conversation_by_drop():
-    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    shell = workbench_shell_source()
     chat = workbench_chat_source()
 
     copy_helper = shell.split("function wbCopyBrowserToChat", 1)[1].split(
@@ -808,7 +845,7 @@ def test_browser_can_be_copied_to_another_conversation_by_drop():
 
 
 def test_conversation_drag_can_be_pinned_as_a_read_only_topbar_resource():
-    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    shell = workbench_shell_source()
     chat = workbench_chat_source()
 
     assert 'transfer.effectAllowed = "copyMove"' in chat
@@ -822,20 +859,15 @@ def test_conversation_drag_can_be_pinned_as_a_read_only_topbar_resource():
 
 
 def test_browser_copy_helper_creates_target_session_tab_without_reusing_owner():
-    source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    helper = source.split("function wbCopyBrowserToChat", 1)[1].split(
-        "\nfunction WorkbenchSessionMenuFileName", 1
-    )[0]
-    script = (
+    setup = (
         "const calls = [];"
         "global.CustomEvent = class { constructor(type, init) { this.type = type; this.detail = init.detail; } };"
         "global.window = {"
         " cyrene: { browser: { createTab: (info) => { calls.push(info); return Promise.resolve({ok:true}); } } },"
         " dispatchEvent: (event) => calls.push({event:event.type, detail:event.detail})"
         "};"
-        "function wbCopyBrowserToChat"
-        + helper
-        + """
+    )
+    script = _session_activity_script("""
 (async function () {
   const copied = await wbCopyBrowserToChat("target-chat", {
     kind: "browser",
@@ -850,8 +882,7 @@ def test_browser_copy_helper_creates_target_session_tab_without_reusing_owner():
   });
   process.stdout.write(JSON.stringify({copied, sameOwner, calls}));
 })().catch(function (error) { console.error(error); process.exit(1); });
-"""
-    )
+""", setup=setup)
     completed = subprocess.run(
         ["node", "-e", script],
         check=True,
@@ -872,7 +903,7 @@ def test_browser_copy_helper_creates_target_session_tab_without_reusing_owner():
 
 
 def test_topbar_sessions_and_resources_have_keyboard_control():
-    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    shell = workbench_shell_source()
     shortcuts = (ROOT / "src/webui/frontend/workbench-shortcuts.jsx").read_text(
         encoding="utf-8"
     )
@@ -898,8 +929,8 @@ def test_topbar_sessions_and_resources_have_keyboard_control():
 
 
 def test_resource_shelf_fills_topbar_gap_with_a_left_aligned_pin_hint():
-    shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    shell = workbench_shell_source()
+    css = workbench_style_source()
 
     empty_hint = shell.split('className="workbench-resource-shelf-empty"', 1)[1].split(
         "</span>", 1

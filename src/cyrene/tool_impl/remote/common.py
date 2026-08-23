@@ -71,8 +71,7 @@ def selected_remote_devices(
     chat_id = str(get_current_session_id() or fallback_chat_id or "").strip()
     if not chat_id:
         raise ValueError("当前没有活动对话，无法解析远程设备上下文")
-    payload = chat_service._read_chats_store()
-    chat = chat_service._find_chat(payload, chat_id)
+    chat = chat_service.get_workbench_chat(chat_id)
     if chat is None:
         raise ValueError("当前对话不存在，无法解析远程设备上下文")
 

@@ -22,6 +22,12 @@ def test_behavior_media_route_rebases_restored_path_with_spaces(
     monkeypatch, tmp_path
 ):
     from cyrene import learning
+    from cyrene.learning.application_service import (
+        LearningApplicationService,
+        MediaRepository,
+        ProjectResolver,
+        ToolChainProjection,
+    )
     from route import learning as learning_routes
 
     data_dir = tmp_path / "Application Support" / "Cyrene" / "data"
@@ -41,11 +47,23 @@ def test_behavior_media_route_rebases_restored_path_with_spaces(
             }],
         }]
 
-    monkeypatch.setattr(learning_routes, "DATA_DIR", data_dir)
     monkeypatch.setattr(learning, "list_tool_chains", list_tool_chains)
     app = FastAPI()
     router = APIRouter()
-    learning_routes.register_learning_routes(router, None, "")
+    media = MediaRepository(data_dir)
+
+    async def status():
+        return {"phase": "evolve", "state": "进化"}
+
+    learning_routes.register_learning_routes(
+        router,
+        LearningApplicationService(
+            ProjectResolver(lambda _project: None),
+            media,
+            ToolChainProjection(media),
+            status,
+        ),
+    )
     app.include_router(router)
 
     response = TestClient(app).get(
@@ -110,6 +128,26 @@ async def _init_behavior(tmp_path, monkeypatch):
     await bl.init(tmp_path, tmp_path)
     monkeypatch.setattr(bl, "_call_llm_json", _fake_llm_json)
     return bl
+
+
+async def test_background_skill_learning_toggle_skips_automatic_scan(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    context = await bl.begin_turn(
+        session_id="background-toggle-session",
+        round_id="background-toggle-round",
+        user_message="完成一个可复用流程",
+        history=[],
+    )
+    process_turn = AsyncMock(return_value=True)
+    monkeypatch.setattr(bl, "_process_single_turn", process_turn)
+    monkeypatch.setattr(bl, "_background_skill_learning_enabled", lambda: False)
+
+    automatic = await bl.process_unprocessed_turns()
+    manual = await bl.process_unprocessed_turns(force=True)
+
+    assert automatic == bl._fresh_learning_stats()
+    process_turn.assert_awaited_once_with(context["turn_id"], manual)
+    assert manual["processed_turns"] == 1
 
 
 async def _record_code_fix_turn(bl, *, session_id: str, round_id: str, user_message: str):

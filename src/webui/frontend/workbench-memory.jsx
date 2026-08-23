@@ -1,3 +1,4 @@
+import { workbenchServices } from "./shared/runtime/services.jsx"
 // Workbench Memory page.
 //
 // This page owns its model, components and styles, and talks to the
@@ -62,7 +63,7 @@
   }
 
   function useMemoryT() {
-    var i18n = window.CyreneUI.require("i18n").use();
+    var i18n = workbenchServices.i18n().use();
     return function (key, fallback, params) {
       return i18n.t(key, params || null, fallback);
     };
@@ -411,7 +412,7 @@
     return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes());
   }
   function memRenderMarkdown(text) {
-    return window.CyreneUI.require("markdown").renderRich(text);
+    return workbenchServices.markdown().renderRich(text);
   }
 
   function chainTitle(chain, t) {
@@ -631,7 +632,7 @@
 
     function deleteLearnedSkill() {
       if (!skill || !skill.id) return;
-      window.CyreneUI.require("feedback").confirmModal({
+      workbenchServices.feedback().confirmModal({
         body: t("memory.learning.deleteSkillConfirm", "Delete skill \"{name}\"? This cannot be undone.", { name: skill.name || skill.id }),
         confirmLabel: t("memory.learning.deleteSkill", "Delete"),
         danger: true,
@@ -727,7 +728,7 @@
                 h("div", { className: "wb-detail-files" },
                   h("button", { type: "button", className: "wb-detail-file-row wb-mem-script-file", title: scriptPath, "aria-label": t("memory.learning.copyScriptPath", "Copy script path") + ": " + scriptName, onClick: function () {
                     navigator.clipboard.writeText(scriptPath).then(function () {
-                      window.CyreneUI.require("feedback").showToast(t("memory.learning.scriptPathCopied", "Script path copied to clipboard"), "info", { duration: 2000 });
+                      workbenchServices.feedback().showToast(t("memory.learning.scriptPathCopied", "Script path copied to clipboard"), "info", { duration: 2000 });
                     }).catch(function () {});
                   } },
                     h("span", null, toolIcon({ tool: "file" })),
@@ -1143,7 +1144,7 @@
         .finally(function () { setLearningBusy(""); });
     }
     function applyPendingMemorySelection() {
-      var navigation = window.CyreneUI.require("navigation");
+      var navigation = workbenchServices.navigation();
       var pending = navigation.getPending();
       var pendingMemId = pending && pending.type === "memory" ? (pending.memId || pending.id) : "";
       if (pendingMemId) {
@@ -1197,7 +1198,7 @@
       }
       window.addEventListener("focus", refreshSoon);
       document.addEventListener("visibilitychange", onVisibility);
-      var unsubscribe = window.CyreneUI.require("events").subscribe(onRuntimeEvent);
+      var unsubscribe = workbenchServices.events().subscribe(onRuntimeEvent);
       return function () {
         if (refreshTimer) clearTimeout(refreshTimer);
         window.removeEventListener("focus", refreshSoon);
@@ -1362,7 +1363,7 @@
         .finally(function () { setBusy(false); });
     }
     function handleDelete(m) {
-      window.CyreneUI.require("feedback").confirmModal({ body: t("memory.deleteConfirm", "Delete this memory? This cannot be undone."), confirmLabel: t("common.delete", "Delete"), danger: true }).then(function (ok) {
+      workbenchServices.feedback().confirmModal({ body: t("memory.deleteConfirm", "Delete this memory? This cannot be undone."), confirmLabel: t("common.delete", "Delete"), danger: true }).then(function (ok) {
         if (!ok) return;
         client.remove(m.id)
           .then(function (p) { applyPayload(p); if (selectedId === m.id) setSelectedId(""); })

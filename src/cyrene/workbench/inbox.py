@@ -20,18 +20,29 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from cyrene.observability.trace import trace_span
+from cyrene.workbench.persistence.schema import ensure_schema
 
 logger = logging.getLogger(__name__)
 
 ToolRunner = Callable[[], Awaitable[str]]
 _MAX_PARALLEL_TOOL_CALLS = 8
-_DURABLE_RETENTION_DAYS = 30
+_TELEMETRY_FLUSH_INTERVAL_SECONDS = 0.05
+_TELEMETRY_BATCH_MAX = 64
+_TELEMETRY_INSERT = """
+    INSERT OR IGNORE INTO workbench_agent_run_events
+    (event_id, session_id, run_id, round_id, batch_id, event_type,
+     tool_call_id, tool_name, queue_length, duration_ms,
+     tool_queue_wait_ms, tool_execution_ms, agent_wait_ms,
+     result_wait_ms, result_queue_delay_ms,
+     termination_reason, payload_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
 
 
 class GuidanceAdmissionClosed(RuntimeError):
@@ -99,7 +110,10 @@ class WorkbenchAgentInbox:
         self._live_events_claimed_early: set[str] = set()
         self._live_dedupe_events: dict[str, dict[str, Any]] = {}
         self._termination_reason = ""
-        self._telemetry_tail: asyncio.Task[Any] | None = None
+        self._telemetry_pending: list[tuple[Any, ...]] = []
+        self._telemetry_flush_signal = asyncio.Event()
+        self._telemetry_flush_lock = asyncio.Lock()
+        self._telemetry_flush_task: asyncio.Task[None] | None = None
         # Telemetry and queue acknowledgements can run concurrently in worker
         # threads. Serialize this inbox's short SQLite transactions so a
         # background trace write cannot hold up the agent's result path.
@@ -110,15 +124,13 @@ class WorkbenchAgentInbox:
         self._closed = False
         self._closing = False
         if self.db_path:
-            self._ensure_schema()
+            ensure_schema(self.db_path)
             self._recover_pending_guidance()
 
     def _connect(self) -> sqlite3.Connection:
         path = Path(self.db_path).expanduser().resolve()
-        path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(path), timeout=5)
         conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute("PRAGMA journal_mode = WAL")
         return conn
 
     @contextmanager
@@ -132,112 +144,6 @@ class WorkbenchAgentInbox:
             finally:
                 conn.close()
 
-    def _ensure_schema(self) -> None:
-        with self._db_connection() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS workbench_agent_inbox (
-                    event_id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    round_id TEXT NOT NULL DEFAULT '',
-                    event_type TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    priority INTEGER NOT NULL DEFAULT 0,
-                    dedupe_key TEXT NOT NULL DEFAULT '',
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    completed_at TEXT NOT NULL DEFAULT ''
-                )
-                """
-            )
-            columns = {
-                str(row[1]) for row in conn.execute("PRAGMA table_info(workbench_agent_inbox)")
-            }
-            for name, definition in (
-                ("run_id", "TEXT NOT NULL DEFAULT ''"),
-                ("batch_id", "TEXT NOT NULL DEFAULT ''"),
-                ("termination_reason", "TEXT NOT NULL DEFAULT ''"),
-            ):
-                if name not in columns:
-                    conn.execute(
-                        f"ALTER TABLE workbench_agent_inbox ADD COLUMN {name} {definition}"
-                    )
-            conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_workbench_agent_inbox_dedupe "
-                "ON workbench_agent_inbox(session_id, dedupe_key) WHERE dedupe_key <> ''"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_workbench_agent_inbox_pending "
-                "ON workbench_agent_inbox(session_id, status, priority, created_at)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_workbench_agent_inbox_completed "
-                "ON workbench_agent_inbox(status, completed_at)"
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS workbench_agent_run_events (
-                    event_id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    run_id TEXT NOT NULL,
-                    round_id TEXT NOT NULL DEFAULT '',
-                    batch_id TEXT NOT NULL DEFAULT '',
-                    event_type TEXT NOT NULL,
-                    tool_call_id TEXT NOT NULL DEFAULT '',
-                    tool_name TEXT NOT NULL DEFAULT '',
-                    queue_length INTEGER NOT NULL DEFAULT 0,
-                    duration_ms REAL,
-                    tool_queue_wait_ms REAL,
-                    tool_execution_ms REAL,
-                    agent_wait_ms REAL,
-                    result_wait_ms REAL,
-                    result_queue_delay_ms REAL,
-                    termination_reason TEXT NOT NULL DEFAULT '',
-                    payload_json TEXT NOT NULL DEFAULT '{}',
-                    created_at TEXT NOT NULL
-                )
-                """
-            )
-            trace_columns = {
-                str(row[1]) for row in conn.execute("PRAGMA table_info(workbench_agent_run_events)")
-            }
-            for name in (
-                "tool_queue_wait_ms", "tool_execution_ms", "agent_wait_ms",
-                "result_wait_ms", "result_queue_delay_ms",
-            ):
-                if name not in trace_columns:
-                    conn.execute(
-                        f"ALTER TABLE workbench_agent_run_events ADD COLUMN {name} REAL"
-                    )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_workbench_agent_run_events_run "
-                "ON workbench_agent_run_events(session_id, run_id, created_at)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_workbench_agent_run_events_created "
-                "ON workbench_agent_run_events(created_at)"
-            )
-            cutoff = (
-                datetime.now(timezone.utc)
-                - timedelta(days=_DURABLE_RETENTION_DAYS)
-            ).isoformat()
-            conn.execute(
-                """
-                DELETE FROM workbench_agent_inbox
-                WHERE status IN ('completed', 'failed', 'cancelled')
-                  AND completed_at GLOB '????-??-*'
-                  AND completed_at < ?
-                """,
-                (cutoff,),
-            )
-            conn.execute(
-                """
-                DELETE FROM workbench_agent_run_events
-                WHERE created_at GLOB '????-??-*' AND created_at < ?
-                """,
-                (cutoff,),
-            )
-
     def configure_storage(self, db_path: str) -> None:
         """Attach durable storage and recover events from a worker thread.
 
@@ -250,7 +156,7 @@ class WorkbenchAgentInbox:
             return
         self.db_path = str(db_path or "")
         if self.db_path:
-            self._ensure_schema()
+            ensure_schema(self.db_path)
             self._recover_pending_guidance()
 
     def _queue_length(self) -> int:
@@ -347,7 +253,7 @@ class WorkbenchAgentInbox:
             item["arguments"] = dict(visible_arguments)
         self._live_tool_states[str(tool_call_id)] = item
 
-    def _record_event(
+    def _telemetry_row(
         self,
         event_type: str,
         *,
@@ -362,8 +268,8 @@ class WorkbenchAgentInbox:
         result_queue_delay_ms: float | None = None,
         termination_reason: str = "",
         payload: dict[str, Any] | None = None,
-    ) -> None:
-        """Persist operational telemetry without placing it in the agent queue."""
+    ) -> tuple[Any, ...]:
+        """Materialize operational telemetry at the point where it occurs."""
         queue_length = self._queue_length()
         logger.info(
             "workbench_inbox event=%s session_id=%s run_id=%s round_id=%s "
@@ -376,32 +282,22 @@ class WorkbenchAgentInbox:
             tool_execution_ms, agent_wait_ms, result_wait_ms,
             result_queue_delay_ms, termination_reason,
         )
-        if not self.db_path:
+        return (
+            f"trace_{uuid4().hex}", self.session_id, self.run_id,
+            self.round_id, str(batch_id), str(event_type),
+            str(tool_call_id), str(tool_name), queue_length, duration_ms,
+            tool_queue_wait_ms, tool_execution_ms, agent_wait_ms,
+            result_wait_ms, result_queue_delay_ms,
+            str(termination_reason),
+            json.dumps(payload or {}, ensure_ascii=False), _now(),
+        )
+
+    def _record_events(self, rows: list[tuple[Any, ...]]) -> None:
+        """Persist one ordered telemetry batch in a single transaction."""
+        if not self.db_path or not rows:
             return
-        try:
-            with self._db_connection() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO workbench_agent_run_events
-                    (event_id, session_id, run_id, round_id, batch_id, event_type,
-                     tool_call_id, tool_name, queue_length, duration_ms,
-                     tool_queue_wait_ms, tool_execution_ms, agent_wait_ms,
-                     result_wait_ms, result_queue_delay_ms,
-                     termination_reason, payload_json, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        f"trace_{uuid4().hex}", self.session_id, self.run_id,
-                        self.round_id, str(batch_id), str(event_type),
-                        str(tool_call_id), str(tool_name), queue_length, duration_ms,
-                        tool_queue_wait_ms, tool_execution_ms, agent_wait_ms,
-                        result_wait_ms, result_queue_delay_ms,
-                        str(termination_reason),
-                        json.dumps(payload or {}, ensure_ascii=False), _now(),
-                    ),
-                )
-        except Exception:
-            logger.exception("Failed to persist Workbench inbox telemetry event")
+        with self._db_connection() as conn:
+            conn.executemany(_TELEMETRY_INSERT, rows)
 
     def _persist(self, event: dict[str, Any]) -> bool | None:
         if not self.db_path:
@@ -652,18 +548,76 @@ class WorkbenchAgentInbox:
         return task
 
     def _record_event_background(self, event_type: str, **kwargs: Any) -> None:
-        """Write ordered handoff telemetry without blocking inbox consumption."""
-        previous = self._telemetry_tail
-
-        async def record() -> None:
-            if previous is not None:
-                await asyncio.gather(previous, return_exceptions=True)
-            await asyncio.to_thread(self._record_event, event_type, **kwargs)
-
-        task = asyncio.create_task(record())
-        self._telemetry_tail = task
+        """Queue ordered telemetry without putting SQLite on the result path."""
+        if not self.db_path:
+            return
+        try:
+            self._telemetry_pending.append(self._telemetry_row(event_type, **kwargs))
+        except Exception:
+            logger.exception("Failed to prepare Workbench inbox telemetry event")
+            return
+        if len(self._telemetry_pending) >= _TELEMETRY_BATCH_MAX:
+            self._telemetry_flush_signal.set()
+        task = self._telemetry_flush_task
+        if task is not None and not task.done():
+            return
+        task = asyncio.create_task(self._telemetry_flush_loop())
+        self._telemetry_flush_task = task
         self._persistence_tasks.add(task)
-        task.add_done_callback(self._persistence_tasks.discard)
+
+        def settled(done: asyncio.Task[None]) -> None:
+            self._persistence_tasks.discard(done)
+            if self._telemetry_flush_task is done:
+                self._telemetry_flush_task = None
+
+        task.add_done_callback(settled)
+
+    async def _telemetry_flush_loop(self) -> None:
+        while self._telemetry_pending:
+            if len(self._telemetry_pending) < _TELEMETRY_BATCH_MAX:
+                try:
+                    await asyncio.wait_for(
+                        self._telemetry_flush_signal.wait(),
+                        timeout=_TELEMETRY_FLUSH_INTERVAL_SECONDS,
+                    )
+                except TimeoutError:
+                    pass
+            self._telemetry_flush_signal.clear()
+            try:
+                await self._flush_telemetry_batch()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Failed to persist Workbench inbox telemetry batch")
+                return
+
+    async def _flush_telemetry_batch(self) -> None:
+        async with self._telemetry_flush_lock:
+            if not self._telemetry_pending:
+                return
+            batch = self._telemetry_pending
+            self._telemetry_pending = []
+            try:
+                await asyncio.to_thread(self._record_events, batch)
+            except asyncio.CancelledError:
+                self._telemetry_pending = [*batch, *self._telemetry_pending]
+                raise
+            except Exception:
+                self._telemetry_pending = [*batch, *self._telemetry_pending]
+                raise
+
+    async def _flush_telemetry(self) -> None:
+        """Drain telemetry at a terminal boundary without waiting for the timer."""
+        task = self._telemetry_flush_task
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            self._telemetry_flush_signal.set()
+            await asyncio.gather(task, return_exceptions=True)
+        if not self._telemetry_pending:
+            return
+        try:
+            await self._flush_telemetry_batch()
+        except Exception:
+            logger.exception("Failed to flush Workbench inbox telemetry at close")
 
     def _run_persistence_background(
         self, operation: Callable[..., Any], *args: Any
@@ -1306,6 +1260,7 @@ class WorkbenchAgentInbox:
         self._record_event_background(
             "run_terminated", termination_reason=self._termination_reason
         )
+        await self._flush_telemetry()
         persistence = [
             task for task in self._persistence_tasks
             if task is not asyncio.current_task() and not task.done()

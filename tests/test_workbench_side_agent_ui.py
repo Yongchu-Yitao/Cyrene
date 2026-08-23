@@ -1,4 +1,4 @@
-from conftest import workbench_chat_source
+from conftest import workbench_chat_source, workbench_style_source
 import json
 import subprocess
 from pathlib import Path
@@ -9,9 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def test_selected_text_opens_independent_persistent_side_agent_tabs():
     source = workbench_chat_source()
-    styles = (
-        ROOT / "src/webui/frontend/workbench.css"
-    ).read_text(encoding="utf-8")
+    styles = workbench_style_source()
 
     assert 'className={"wbc-selection-menu "' in source
     assert "onAskSelection(selectedText);" in source
@@ -47,13 +45,13 @@ def test_selected_text_opens_independent_persistent_side_agent_tabs():
 
 
 def test_selection_menu_uses_text_fragments_and_sits_below_their_center():
-    source = workbench_chat_source()
-    styles = (
-        ROOT / "src/webui/frontend/workbench.css"
+    source = (
+        ROOT / "src/webui/frontend/features/chat/conversation.jsx"
     ).read_text(encoding="utf-8")
+    styles = workbench_style_source()
     helper = "function wbcSelectionTextRect(" + source.split(
         "function wbcSelectionTextRect(", 1
-    )[1].split("function WbcMain(", 1)[0]
+    )[1].split("function wbcSyncAgentCursorRunning(", 1)[0]
     script = f"""
 eval({json.dumps(helper)});
 const range = {{

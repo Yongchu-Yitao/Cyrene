@@ -1,23 +1,14 @@
-"""Log export routes — package the rolling log files for download."""
+"""Thin rolling-log export HTTP adapter."""
 
-# ruff: noqa: F403,F405
-
-import logging
-import os
-import tempfile
-import zipfile
-from datetime import datetime
-
-from cyrene.config import DATA_DIR
-from cyrene.workbench.runtime import *
+from fastapi import APIRouter
 from fastapi.responses import FileResponse
-from route.errors import error_response
 from starlette.background import BackgroundTask
 
-logger = logging.getLogger(__name__)
+from cyrene.runtime.log_repository import LogRepository, LogRepositoryError
+from route.errors import error_response
 
 
-def register_log_routes(router: APIRouter, bot: Any, db_path: str) -> None:
+def register_log_routes(router: APIRouter, repository: LogRepository) -> None:
     @router.get("/api/logs/export")
     async def api_export_logs():
         """Package the rolling log files (2h x 3-day window) into a zip.
@@ -27,38 +18,16 @@ def register_log_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         are intentionally excluded: they hold full prompt/response payloads
         and can be very large.
         """
-        log_dir = DATA_DIR / "logs"
-        if not log_dir.is_dir():
-            return error_response("No log files available", 404, "no_logs")
         try:
-            files = sorted(
-                (p for p in log_dir.glob("cyrene.log*") if p.is_file()),
-                key=lambda p: p.stat().st_mtime,
-            )
-        except OSError:
-            logger.warning("Failed to scan log directory %s", log_dir, exc_info=True)
-            return error_response("Failed to read log files", 500, "log_scan_failed")
-        if not files:
-            return error_response("No log files available", 404, "no_logs")
-
-        fd, tmp_path = tempfile.mkstemp(prefix="cyrene-logs-", suffix=".zip")
-        os.close(fd)
-        try:
-            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as archive:
-                for path in files:
-                    archive.write(path, arcname=path.name)
-        except Exception:
-            logger.warning("Failed to package log files into %s", tmp_path, exc_info=True)
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            return error_response("Failed to package log files", 500, "log_package_failed")
-
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            archive = repository.create_export()
+        except LogRepositoryError as exc:
+            return error_response(exc.message, exc.status_code, exc.code)
         return FileResponse(
-            tmp_path,
-            filename=f"cyrene-logs-{timestamp}.zip",
+            archive.path,
+            filename=archive.filename,
             media_type="application/zip",
-            background=BackgroundTask(os.unlink, tmp_path),
+            background=BackgroundTask(repository.remove_export, archive.path),
         )
+
+
+__all__ = ["register_log_routes"]

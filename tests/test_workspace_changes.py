@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 
 def test_workspace_watcher_stop_joins_native_thread(tmp_path):
@@ -13,6 +16,109 @@ def test_workspace_watcher_stop_joins_native_thread(tmp_path):
         watcher.stop()
 
     assert not watcher._thread.is_alive()
+
+
+def test_opened_workspace_prewarm_is_reused_by_the_first_run(monkeypatch, tmp_path):
+    from cyrene.workbench import chat as chat_service
+    from cyrene.workbench.workspace_changes import WorkspaceSnapshot
+
+    workspace_key = str(tmp_path.resolve())
+    captures = []
+
+    class FakeWatcher:
+        healthy = True
+
+        def wait_ready(self, timeout=0.5):
+            return True
+
+        def drain_settled(self, timeout=0.1):
+            return set()
+
+    def capture(workspace_root, *, previous=None, changed_paths=None):
+        snapshot = WorkspaceSnapshot(
+            root=Path(workspace_root),
+            files={},
+            captured_at=f"snapshot-{len(captures) + 1}",
+        )
+        captures.append((previous, changed_paths, snapshot))
+        return snapshot
+
+    monkeypatch.setattr(chat_service, "_workspace_watcher", lambda _key: FakeWatcher())
+    monkeypatch.setattr(chat_service, "capture_workspace_snapshot", capture)
+
+    async def exercise():
+        chat_service.prewarm_workspace_changes(tmp_path)
+        task = chat_service._WORKSPACE_SNAPSHOT_PREWARM_TASKS[workspace_key]
+        await task
+        baseline = await chat_service._capture_workspace_changes_baseline(
+            tmp_path, "run_first"
+        )
+        assert baseline.snapshot is captures[1][2]
+
+    try:
+        asyncio.run(exercise())
+        assert len(captures) == 2
+        assert captures[0][0] is None
+        assert captures[0][1] == set()
+        assert captures[1][0] is captures[0][2]
+        assert captures[1][1] == set()
+    finally:
+        chat_service._WORKSPACE_SNAPSHOT_PREWARM_TASKS.pop(workspace_key, None)
+        chat_service._WORKSPACE_SNAPSHOT_CACHE.pop(workspace_key, None)
+        chat_service._WORKSPACE_CHANGES_LOCKS.pop(workspace_key, None)
+
+
+async def test_chat_detail_starts_workspace_snapshot_prewarm(tmp_path):
+    from fastapi import APIRouter
+
+    from route.workbench.chat_routes.chats import register_chat_routes
+
+    workspace_dir = str(tmp_path.resolve())
+    chat = {
+        "id": "chat_1",
+        "projectId": "project_1",
+        "generatedFiles": [],
+    }
+    project = {"id": "project_1", "workspacePath": workspace_dir}
+    prewarm_started = asyncio.Event()
+
+    service = MagicMock()
+    service.repository.read_summaries.return_value = {"chats": [chat]}
+    service.repository.get.return_value = chat
+    service.prune_orphaned_fork_metadata.return_value = False
+    service.public_chat_full.side_effect = lambda value: value
+    service.resolve_chat_workspace_dir.return_value = workspace_dir
+    service.prewarm_workspace_changes.side_effect = (
+        lambda _workspace_dir: prewarm_started.set()
+    )
+
+    runtime = MagicMock()
+    runtime.read_store.return_value = {"projects": [project]}
+    runtime.find_project.return_value = project
+    context = SimpleNamespace(
+        service=service,
+        workbench_runtime=runtime,
+        runtime=lambda: runtime,
+        project_data_key=MagicMock(),
+        resolve_library_file_payload=MagicMock(),
+        public_pinned_resource=MagicMock(),
+    )
+    endpoints = register_chat_routes(
+        APIRouter(),
+        context,
+        send_chat_detached=MagicMock(),
+    )
+
+    response = await endpoints["get_chat"]("chat_1")
+    await asyncio.wait_for(prewarm_started.wait(), timeout=1)
+
+    assert response == {"chat": chat}
+    service.resolve_chat_workspace_dir.assert_called_once_with(
+        chat,
+        project,
+        runtime.resolve_workspace_dir,
+    )
+    service.prewarm_workspace_changes.assert_called_once_with(workspace_dir)
 
 
 def test_chat_generated_file_index_includes_nested_output_and_removes_deleted(monkeypatch):
@@ -30,6 +136,8 @@ def test_chat_generated_file_index_includes_nested_output_and_removes_deleted(mo
     }]
     monkeypatch.setattr(chat_service, "_read_chats_store", lambda: store)
     monkeypatch.setattr(chat_service, "_write_chats_store", lambda payload: None)
+    monkeypatch.setattr(chat_service, "_STORE_DB_PATH", "")
+    monkeypatch.setattr(chat_service, "_CONFIGURED_CHATS_STORE", None)
     monkeypatch.setattr(chat_service, "list_chat_change_sets", lambda _db, _chat: historical)
 
     chat_service._sync_chat_generated_files("chat_1", {

@@ -36,10 +36,11 @@ from typing import Any, Callable
 
 import httpx
 
-from cyrene.call_llm import NETWORK_RETRY_LIMIT
 from cyrene.config import DATA_DIR, WORKSPACE_DIR, cyrene_dir
 from cyrene.agent_runtime import builtin as _agent_runtime_builtin
 from cyrene.agent_runtime.capabilities import normalize_capabilities as _normalize_capabilities
+from cyrene.model_runtime.constants import NETWORK_RETRY_LIMIT
+from cyrene.model_runtime.status import register_model_status_persister
 from cyrene.runtime.memory.conversations import archive_session_exchange
 from cyrene.runtime.io import atomic_write_json, read_json_safe
 from cyrene.workbench.store import (
@@ -193,6 +194,7 @@ _WORKSPACE_SNAPSHOT_CACHE: OrderedDict[str, WorkspaceSnapshot] = OrderedDict()
 _WORKSPACE_SNAPSHOT_CACHE_LOCK = threading.Lock()
 _MAX_WORKSPACE_SNAPSHOT_CACHE_ENTRIES = 4
 _WORKSPACE_WATCHERS: dict[str, "_WorkspacePathWatcher"] = {}
+_WORKSPACE_SNAPSHOT_PREWARM_TASKS: dict[str, asyncio.Task[None]] = {}
 
 
 class _WorkspacePathWatcher:
@@ -338,6 +340,77 @@ def _remember_workspace_snapshot(
             watcher = _WORKSPACE_WATCHERS.pop(evicted_key, None)
             if watcher is not None:
                 watcher.stop()
+
+
+async def _prewarm_workspace_changes_snapshot(workspace_key: str) -> None:
+    """Populate the first workspace snapshot before a conversation run starts."""
+    try:
+        entry = _WORKSPACE_CHANGES_LOCKS.setdefault(
+            workspace_key, _WorkspaceChangesLockEntry()
+        )
+        watcher = _workspace_watcher(workspace_key)
+        await asyncio.to_thread(watcher.wait_ready)
+        async with entry.lock:
+            # A live run already owns the exact before-image for this workspace.
+            # Its completion will refresh the shared snapshot cache.
+            if entry.active:
+                return
+            changed_paths = await asyncio.to_thread(watcher.drain_settled)
+            snapshot = await asyncio.to_thread(
+                capture_workspace_snapshot,
+                workspace_key,
+                previous=_cached_workspace_snapshot(workspace_key),
+                changed_paths=changed_paths,
+            )
+            _remember_workspace_snapshot(workspace_key, snapshot)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception(
+            "Failed to prewarm Workbench workspace snapshot for %s",
+            workspace_key,
+        )
+
+
+def prewarm_workspace_changes(workspace_dir: str | Path | None) -> None:
+    """Start one background first-snapshot task for an opened workspace."""
+    if not workspace_dir:
+        return
+    try:
+        workspace_key = str(Path(workspace_dir).expanduser().resolve())
+    except OSError:
+        return
+    if _cached_workspace_snapshot(workspace_key) is not None:
+        return
+    existing = _WORKSPACE_SNAPSHOT_PREWARM_TASKS.get(workspace_key)
+    if existing is not None and not existing.done():
+        return
+    task = asyncio.create_task(_prewarm_workspace_changes_snapshot(workspace_key))
+    _WORKSPACE_SNAPSHOT_PREWARM_TASKS[workspace_key] = task
+
+    def settled(done: asyncio.Task[None]) -> None:
+        if _WORKSPACE_SNAPSHOT_PREWARM_TASKS.get(workspace_key) is done:
+            _WORKSPACE_SNAPSHOT_PREWARM_TASKS.pop(workspace_key, None)
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception(
+                "Workbench workspace snapshot prewarm crashed for %s",
+                workspace_key,
+            )
+
+    task.add_done_callback(settled)
+
+
+async def _cancel_workspace_snapshot_prewarms() -> None:
+    tasks = list(_WORKSPACE_SNAPSHOT_PREWARM_TASKS.values())
+    _WORKSPACE_SNAPSHOT_PREWARM_TASKS.clear()
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @dataclass
@@ -603,30 +676,41 @@ def persist_chat_plan(
     round_id: str = "",
     workspace_dir: str | Path | None = None,
 ) -> dict[str, Any]:
-    payload = _read_chats_store()
-    chat = _find_chat(payload, str(chat_id or ""))
-    if not chat:
+    stored = _normalize_chat_plan(
+        str(chat_id or ""),
+        plan,
+        round_id=round_id,
+        workspace_dir=workspace_dir,
+    )
+
+    def persist(chat: dict[str, Any]) -> None:
+        chat["activePlan"] = stored
+        chat["updatedAt"] = stored["updatedAt"]
+
+    if _mutate_chat_store(str(chat_id or ""), persist) is None:
         return plan
-    stored = _normalize_chat_plan(chat["id"], plan, round_id=round_id, workspace_dir=workspace_dir)
-    chat["activePlan"] = stored
-    chat["updatedAt"] = stored["updatedAt"]
-    _write_chats_store(payload)
     _write_plan_markdown(stored)
     return stored
 
 
 def _mutate_chat_plan(chat_id: str, mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any] | None:
-    payload = _read_chats_store()
-    chat = _find_chat(payload, str(chat_id or ""))
-    plan = chat.get("activePlan") if chat and isinstance(chat.get("activePlan"), dict) else None
-    if not chat or not plan:
+    updated_plan: dict[str, Any] | None = None
+
+    def mutate_chat(chat: dict[str, Any]) -> bool | None:
+        nonlocal updated_plan
+        plan = chat.get("activePlan")
+        if not isinstance(plan, dict):
+            return False
+        mutate(plan)
+        plan["updatedAt"] = _utc_now_iso()
+        chat["updatedAt"] = plan["updatedAt"]
+        updated_plan = dict(plan)
         return None
-    mutate(plan)
-    plan["updatedAt"] = _utc_now_iso()
-    chat["updatedAt"] = plan["updatedAt"]
-    _write_chats_store(payload)
-    _write_plan_markdown(plan)
-    return dict(plan)
+
+    _mutate_chat_store(str(chat_id or ""), mutate_chat)
+    if updated_plan is not None:
+        _write_plan_markdown(updated_plan)
+    return updated_plan
 
 
 def activate_chat_plan(chat_id: str, fallback_plan: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -957,6 +1041,7 @@ async def shutdown_chat_runs() -> None:
         await drain_post_reply_bookkeeping_tasks()
     except Exception:
         logger.exception("Workbench post-reply bookkeeping drain failed")
+    await _cancel_workspace_snapshot_prewarms()
     _stop_workspace_watchers()
 
 
@@ -978,6 +1063,9 @@ async def _capture_workspace_changes_baseline(
         workspace_key = str(Path(workspace_dir).expanduser().resolve())
     except OSError:
         return _WorkspaceChangesBaseline(snapshot=None)
+    prewarm_task = _WORKSPACE_SNAPSHOT_PREWARM_TASKS.get(workspace_key)
+    if prewarm_task is not None and prewarm_task is not asyncio.current_task():
+        await asyncio.shield(prewarm_task)
     entry = _WORKSPACE_CHANGES_LOCKS.setdefault(
         workspace_key, _WorkspaceChangesLockEntry()
     )
@@ -1171,50 +1259,55 @@ def _sync_chat_generated_files_locked(
     chat_id: str,
     change_set: dict[str, Any] | None = None,
 ) -> None:
-    payload = _read_chats_store()
-    chat = _find_chat(payload, chat_id)
-    if not chat:
-        return
-    existing: dict[str, dict[str, Any]] = {
-        str(item.get("path") or ""): dict(item)
-        for item in chat.get("generatedFiles") or []
-        if isinstance(item, dict) and str(item.get("path") or "")
-    }
-    change_sets: list[dict[str, Any]] = []
-    if "generatedFiles" not in chat:
-        # One-time migration for conversations created before the Files panel
-        # indexed workspace output. Apply oldest -> newest to preserve deletes.
-        change_sets.extend(reversed(list_chat_change_sets(_STORE_DB_PATH, chat_id)))
-    if change_set is not None:
-        change_sets.append(change_set)
-    changed_paths: list[str] = []
-    for item in change_sets:
-        for change in item.get("files") or []:
-            if not isinstance(change, dict):
-                continue
-            path = str(change.get("path") or "").strip().replace("\\", "/")
-            if not path:
-                continue
-            if path in changed_paths:
-                changed_paths.remove(path)
-            changed_paths.append(path)
-            if str(change.get("changeType") or "") == "deleted":
-                existing.pop(path, None)
-                continue
-            name = Path(path).name or path
-            existing[path] = {
-                "id": str(change.get("id") or f"workspace_{uuid.uuid4().hex[:12]}"),
-                "name": name,
-                "path": path,
-                "content_type": mimetypes.guess_type(name)[0] or "application/octet-stream",
-                "size": int(change.get("afterSize") or 0),
-                "kind": "file",
-                "source": "agent",
-            }
-    ordered = [existing[path] for path in changed_paths if path in existing]
-    ordered.extend(item for path, item in existing.items() if path not in changed_paths)
-    chat["generatedFiles"] = ordered[:200]
-    _write_chats_store(payload)
+    historical_change_sets: list[dict[str, Any]] = []
+    current = get_workbench_chat(chat_id)
+    if current is not None and "generatedFiles" not in current:
+        # Read the migration source before opening the point-mutation
+        # transaction; workspace changes share the same SQLite database.
+        historical_change_sets = list(reversed(list_chat_change_sets(_STORE_DB_PATH, chat_id)))
+
+    def update_files(chat: dict[str, Any]) -> None:
+        existing: dict[str, dict[str, Any]] = {
+            str(item.get("path") or ""): dict(item)
+            for item in chat.get("generatedFiles") or []
+            if isinstance(item, dict) and str(item.get("path") or "")
+        }
+        change_sets: list[dict[str, Any]] = []
+        if "generatedFiles" not in chat:
+            # One-time migration for conversations created before the Files panel
+            # indexed workspace output. Apply oldest -> newest to preserve deletes.
+            change_sets.extend(historical_change_sets)
+        if change_set is not None:
+            change_sets.append(change_set)
+        changed_paths: list[str] = []
+        for item in change_sets:
+            for change in item.get("files") or []:
+                if not isinstance(change, dict):
+                    continue
+                path = str(change.get("path") or "").strip().replace("\\", "/")
+                if not path:
+                    continue
+                if path in changed_paths:
+                    changed_paths.remove(path)
+                changed_paths.append(path)
+                if str(change.get("changeType") or "") == "deleted":
+                    existing.pop(path, None)
+                    continue
+                name = Path(path).name or path
+                existing[path] = {
+                    "id": str(change.get("id") or f"workspace_{uuid.uuid4().hex[:12]}"),
+                    "name": name,
+                    "path": path,
+                    "content_type": mimetypes.guess_type(name)[0] or "application/octet-stream",
+                    "size": int(change.get("afterSize") or 0),
+                    "kind": "file",
+                    "source": "agent",
+                }
+        ordered = [existing[path] for path in changed_paths if path in existing]
+        ordered.extend(item for path, item in existing.items() if path not in changed_paths)
+        chat["generatedFiles"] = ordered[:200]
+
+    _mutate_chat_store(chat_id, update_files)
 
 
 def _mark_user_activity(chat: dict[str, Any], timestamp: str) -> None:
@@ -1236,31 +1329,35 @@ async def append_proactive_message(chat_id: str, text: str) -> dict[str, str] | 
     from cyrene.observability import debug
     from cyrene.agent.state import sanitize_public_agent_text
 
-    payload = _read_chats_store()
-    chat = _find_chat(payload, str(chat_id or ""))
     content = sanitize_public_agent_text(text)
-    if not chat or not content:
+    if not content:
         return None
     now = _utc_now_iso()
-    message = {
-        "id": _short_id("msg"),
-        "role": "assistant",
-        "content": content,
-        "createdAt": now,
-        "model": str(chat.get("model") or ""),
-        "proactive": True,
-        "systemInitiated": True,
-    }
-    chat.setdefault("messages", []).append(message)
-    chat["status"] = "idle"
-    chat["updatedAt"] = now
-    _write_chats_store(payload)
+    message: dict[str, Any] = {}
+    result: dict[str, str] = {}
 
-    result = {
-        "chat_id": str(chat.get("id") or ""),
-        "project_id": str(chat.get("projectId") or ""),
-        "title": str(chat.get("title") or "新对话"),
-    }
+    def append(chat: dict[str, Any]) -> None:
+        nonlocal message, result
+        message = {
+            "id": _short_id("msg"),
+            "role": "assistant",
+            "content": content,
+            "createdAt": now,
+            "model": str(chat.get("model") or ""),
+            "proactive": True,
+            "systemInitiated": True,
+        }
+        chat.setdefault("messages", []).append(message)
+        chat["status"] = "idle"
+        chat["updatedAt"] = now
+        result = {
+            "chat_id": str(chat.get("id") or ""),
+            "project_id": str(chat.get("projectId") or ""),
+            "title": str(chat.get("title") or "新对话"),
+        }
+
+    if _mutate_chat_store(str(chat_id or ""), append) is None:
+        return None
     await debug.publish_event({
         "type": "workbench_proactive_message",
         "session_id": result["chat_id"],
@@ -1526,37 +1623,37 @@ def apply_chat_agent_binding(
     messages or a locked binding — the caller maps that to the ``409
     agent_binding_locked`` contract.  Returns the updated chat when applied.
     """
-    payload = _read_chats_store()
-    chat = _find_chat(payload, str(chat_id or ""))
-    if not chat:
+    applied = False
+
+    def apply(chat: dict[str, Any]) -> bool | None:
+        nonlocal applied
+        existing_agent = chat.get("agent") if isinstance(chat.get("agent"), dict) else {}
+        if bool(existing_agent.get("bindingLocked")) or bool(chat.get("messages")):
+            return False
+        _persist_agent_fields(
+            chat,
+            _agent_runtime_builtin.normalize_agent_fields(
+                agent,
+                model_access,
+                default_model=str(chat.get("model") or ""),
+            ),
+        )
+        applied = True
         return None
-    existing_agent = chat.get("agent") if isinstance(chat.get("agent"), dict) else {}
-    if bool(existing_agent.get("bindingLocked")) or bool(chat.get("messages")):
-        return None
-    _persist_agent_fields(
-        chat,
-        _agent_runtime_builtin.normalize_agent_fields(
-            agent,
-            model_access,
-            default_model=str(chat.get("model") or ""),
-        ),
-    )
-    _write_chats_store(payload)
-    return chat
+
+    updated = _mutate_chat_store(str(chat_id or ""), apply)
+    return updated if applied else None
 
 
 def lock_chat_agent_binding(chat_id: str) -> dict[str, Any] | None:
     """Lock the persisted agent binding after the first message is queued."""
-    payload = _read_chats_store()
-    chat = _find_chat(payload, str(chat_id or ""))
-    if not chat:
-        return None
-    agent = dict(_agent_runtime_builtin.chat_agent_fields(chat)["agent"])
-    agent["bindingLocked"] = True
-    chat["agent"] = agent
-    chat["updatedAt"] = _utc_now_iso()
-    _write_chats_store(payload)
-    return chat
+    def lock(chat: dict[str, Any]) -> None:
+        agent = dict(_agent_runtime_builtin.chat_agent_fields(chat)["agent"])
+        agent["bindingLocked"] = True
+        chat["agent"] = agent
+        chat["updatedAt"] = _utc_now_iso()
+
+    return _mutate_chat_store(str(chat_id or ""), lock)
 
 
 def set_chat_external_session_id(
@@ -1564,16 +1661,13 @@ def set_chat_external_session_id(
     external_session_id: str,
 ) -> dict[str, Any] | None:
     """Persist the Agent-side session id on the chat binding (§14)."""
-    payload = _read_chats_store()
-    chat = _find_chat(payload, str(chat_id or ""))
-    if not chat:
-        return None
-    agent = dict(_agent_runtime_builtin.chat_agent_fields(chat)["agent"])
-    agent["externalSessionId"] = str(external_session_id or "").strip()
-    chat["agent"] = agent
-    chat["updatedAt"] = _utc_now_iso()
-    _write_chats_store(payload)
-    return chat
+    def persist(chat: dict[str, Any]) -> None:
+        agent = dict(_agent_runtime_builtin.chat_agent_fields(chat)["agent"])
+        agent["externalSessionId"] = str(external_session_id or "").strip()
+        chat["agent"] = agent
+        chat["updatedAt"] = _utc_now_iso()
+
+    return _mutate_chat_store(str(chat_id or ""), persist)
 
 
 def update_chat_agent_context_report(
@@ -1581,11 +1675,6 @@ def update_chat_agent_context_report(
     report: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Persist a bounded context-window report supplied by an external Agent."""
-    payload = _read_chats_store()
-    chat = _find_chat(payload, str(chat_id or ""))
-    if not chat:
-        return None
-
     def safe_int(value: Any) -> int:
         try:
             return max(0, int(value or 0))
@@ -1614,11 +1703,13 @@ def update_chat_agent_context_report(
     if normalized["used"] <= 0 and normalized_segments:
         normalized["used"] = sum(item["tokens"] for item in normalized_segments)
     if normalized["used"] <= 0 and normalized["size"] <= 0 and not normalized_segments:
-        return chat
-    chat["agentContextReport"] = normalized
-    chat["updatedAt"] = _utc_now_iso()
-    _write_chats_store(payload)
-    return chat
+        return get_workbench_chat(chat_id)
+
+    def persist(chat: dict[str, Any]) -> None:
+        chat["agentContextReport"] = normalized
+        chat["updatedAt"] = _utc_now_iso()
+
+    return _mutate_chat_store(str(chat_id or ""), persist)
 
 
 def update_chat_capabilities(
@@ -1633,22 +1724,22 @@ def update_chat_capabilities(
     requires an increasing ``capabilitiesRevision`` (handoff §14).  When
     ``revision`` is omitted it is derived from the stored value + 1.
     """
-    payload = _read_chats_store()
-    chat = _find_chat(payload, str(chat_id or ""))
-    if not chat:
-        return None
-    stored = chat.get("capabilitiesRevision")
-    if not isinstance(revision, int) or revision < 0:
-        revision = (
-            stored
-            if isinstance(stored, int) and not isinstance(stored, bool) and stored >= 0
-            else 0
-        ) + 1
-    chat["capabilities"] = _normalize_capabilities(capabilities)
-    chat["capabilitiesRevision"] = revision
-    chat["updatedAt"] = _utc_now_iso()
-    _write_chats_store(payload)
-    return chat
+    def persist(chat: dict[str, Any]) -> None:
+        stored = chat.get("capabilitiesRevision")
+        next_revision = revision
+        if not isinstance(next_revision, int) or next_revision < 0:
+            next_revision = (
+                stored
+                if isinstance(stored, int)
+                and not isinstance(stored, bool)
+                and stored >= 0
+                else 0
+            ) + 1
+        chat["capabilities"] = _normalize_capabilities(capabilities)
+        chat["capabilitiesRevision"] = next_revision
+        chat["updatedAt"] = _utc_now_iso()
+
+    return _mutate_chat_store(str(chat_id or ""), persist)
 
 
 _FORK_METADATA_FIELDS = ("forkedFromChatId", "forkedAtMessageId", "forkMessage")
@@ -2075,6 +2166,9 @@ def persist_model_status_message(
         "modelStatusCard": True,
         "modelStatus": model_status,
     })
+
+
+register_model_status_persister(persist_model_status_message)
 
 
 def _pending_question_message(
@@ -2649,9 +2743,31 @@ def _accumulate_tools(
         name = str((fn or {}).get("name") or "").strip()
         if not name or name in _TRACE_SKIP_TOOLS:
             continue
+        argument_value = (fn or {}).get("arguments")
+        raw_arguments = (
+            json.dumps(argument_value, ensure_ascii=False)
+            if isinstance(argument_value, dict)
+            else str(argument_value or "")
+        )
+        if name == "toolbox":
+            if isinstance(argument_value, dict):
+                toolbox_arguments = argument_value
+            else:
+                try:
+                    toolbox_arguments = json.loads(raw_arguments)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    toolbox_arguments = {}
+            if str(toolbox_arguments.get("operation") or "") == "invoke":
+                from cyrene.tooling.guidance import wire_name_for_capability
+
+                owning_wire = wire_name_for_capability(
+                    str(toolbox_arguments.get("capability_id") or "")
+                )
+                if owning_wire:
+                    name = owning_wire
         entry: dict[str, Any] = {
             "tool": name,
-            "preview": _tool_args_preview(str((fn or {}).get("arguments") or "")),
+            "preview": _tool_args_preview(raw_arguments),
         }
         tcid = str(tool_call.get("id") or "").strip() if isinstance(tool_call, dict) else ""
         if result_map and tcid and _tool_result_is_error(result_map.get(tcid, "")):
@@ -3516,10 +3632,10 @@ async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: st
     if _CHAT_RUN_MANAGER.get(chat_id) is not None or is_session_running(chat_id):
         return "busy"
 
-    payload = await asyncio.to_thread(_read_chats_store)
-    chat = _find_chat(payload, chat_id)
+    chat = await asyncio.to_thread(get_workbench_chat, chat_id)
     if not chat:
         return "missing"
+    base_chat = copy.deepcopy(chat)
     wake_id = str(wake.get("wake_id") or "").strip()
     if wake_id and any(
         isinstance(item, dict) and str(item.get("wakeId") or "") == wake_id
@@ -3566,7 +3682,7 @@ async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: st
     chat["status"] = "running"
     chat["model"] = legacy_routes._get_model()
     chat["updatedAt"] = now
-    await asyncio.to_thread(_write_chats_store, payload)
+    await asyncio.to_thread(_write_chat_store, chat, base_chat=base_chat)
 
     state_ids_before: set[str] = set()
     for message in await asyncio.to_thread(_session_state_messages, chat_id):
@@ -3654,10 +3770,10 @@ async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: st
         timeline_entries, usage, files = _extract_exchange_timeline(
             state_messages, state_ids_before
         )
-        fresh = _read_chats_store()
-        fresh_chat = _find_chat(fresh, chat_id)
+        fresh_chat = get_workbench_chat(chat_id)
         if not fresh_chat:
             return {}
+        fresh_base = copy.deepcopy(fresh_chat)
         configured_model = str(fresh_chat.get("model") or "")
         model_name = _last_exchange_model(state_messages, state_ids_before) or configured_model
         for entry in timeline_entries:
@@ -3690,7 +3806,7 @@ async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: st
         fresh_chat["status"] = "idle"
         fresh_chat.pop("pendingQuestion", None)
         fresh_chat["updatedAt"] = assistant_entry["createdAt"]
-        _write_chats_store(fresh)
+        _write_chat_store(fresh_chat, base_chat=fresh_base)
         if agent_originated:
             try:
                 archive_session_exchange(
@@ -3732,11 +3848,13 @@ async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: st
         return result
 
     def _settle_status() -> None:
-        fresh = _read_chats_store()
-        fresh_chat = _find_chat(fresh, chat_id)
-        if fresh_chat and fresh_chat.get("status") == "running":
+        def settle(fresh_chat: dict[str, Any]) -> bool | None:
+            if fresh_chat.get("status") != "running":
+                return False
             fresh_chat["status"] = "idle"
-            _write_chats_store(fresh)
+            return None
+
+        _mutate_chat_store(chat_id, settle)
 
     async def runner(run: ChatRun) -> None:
         changes_before = await _capture_workspace_changes_baseline(workspace_dir)
@@ -3804,16 +3922,15 @@ async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: st
                 run=run,
             )
             pending = await asyncio.to_thread(legacy_routes._workbench_pending_question_for, chat_id)
-            fresh = await asyncio.to_thread(_read_chats_store)
-            fresh_chat = _find_chat(fresh, chat_id)
-            if fresh_chat:
+            def persist_pending(fresh_chat: dict[str, Any]) -> None:
                 fresh_chat["status"] = "idle"
                 if pending:
                     fresh_chat["pendingQuestion"] = pending
                 else:
                     fresh_chat.pop("pendingQuestion", None)
                 fresh_chat["updatedAt"] = _utc_now_iso()
-                await asyncio.to_thread(_write_chats_store, fresh)
+
+            await asyncio.to_thread(_mutate_chat_store, chat_id, persist_pending)
             run.outcome = {"kind": "awaiting", "pending": pending}
             awaiting_event = {
                 "type": "awaiting_user",
@@ -3857,22 +3974,20 @@ async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: st
     if not is_new:
         # Roll back the delegated user message if we lost the race.
         def _rollback() -> None:
-            fresh = _read_chats_store()
-            fresh_chat = _find_chat(fresh, chat_id)
-            if not fresh_chat:
-                return
-            messages = fresh_chat.get("messages") or []
-            if user_entry is not None:
-                fresh_chat["messages"] = [
-                    item for item in messages
-                    if not (
-                        isinstance(item, dict)
-                        and str(item.get("id") or "") == user_entry["id"]
-                    )
-                ]
-            if fresh_chat.get("status") == "running" and _CHAT_RUN_MANAGER.get(chat_id) is None:
-                fresh_chat["status"] = "idle"
-            _write_chats_store(fresh)
+            def rollback(fresh_chat: dict[str, Any]) -> None:
+                messages = fresh_chat.get("messages") or []
+                if user_entry is not None:
+                    fresh_chat["messages"] = [
+                        item for item in messages
+                        if not (
+                            isinstance(item, dict)
+                            and str(item.get("id") or "") == user_entry["id"]
+                        )
+                    ]
+                if fresh_chat.get("status") == "running" and _CHAT_RUN_MANAGER.get(chat_id) is None:
+                    fresh_chat["status"] = "idle"
+
+            _mutate_chat_store(chat_id, rollback)
 
         await asyncio.to_thread(_rollback)
         return "busy"
@@ -3922,10 +4037,10 @@ async def dispatch_agent_session_guidance(
     await run.ready.wait()
     if run.status != "running":
         return {"status": "not_running", "session_id": target_id, "run_id": run.run_id}
-    payload = await asyncio.to_thread(_read_chats_store)
-    chat = _find_chat(payload, target_id)
+    chat = await asyncio.to_thread(get_workbench_chat, target_id)
     if not chat:
         return {"status": "missing", "session_id": target_id, "run_id": run.run_id}
+    base_chat = copy.deepcopy(chat)
     now = _utc_now_iso()
     public_message_id = _short_id("msg")
     try:
@@ -3952,7 +4067,7 @@ async def dispatch_agent_session_guidance(
     if not event.get("duplicate"):
         chat.setdefault("messages", []).append(user_entry)
         chat["updatedAt"] = now
-        await asyncio.to_thread(_write_chats_store, payload)
+        await asyncio.to_thread(_write_chat_store, chat, base_chat=base_chat)
         await run.publish({
             "type": "guidance_received",
             "eventId": event["event_id"],
@@ -3982,19 +4097,17 @@ def _stash_chat_pending_for(
 ) -> None:
     """Module-level twin of the send handler's ``_stash_chat_pending`` (which is a
     closure): persist / clear a chat's pending question by id."""
-    payload = _read_chats_store()
-    chat = _find_chat(payload, chat_id)
-    if not chat:
-        return
-    chat["status"] = "idle"
-    if pending:
-        chat["pendingQuestion"] = pending
-    else:
-        chat.pop("pendingQuestion", None)
-    if additions:
-        _merge_chat_messages_chronologically(chat, additions)
-    chat["updatedAt"] = _utc_now_iso()
-    _write_chats_store(payload)
+    def persist(chat: dict[str, Any]) -> None:
+        chat["status"] = "idle"
+        if pending:
+            chat["pendingQuestion"] = pending
+        else:
+            chat.pop("pendingQuestion", None)
+        if additions:
+            _merge_chat_messages_chronologically(chat, additions)
+        chat["updatedAt"] = _utc_now_iso()
+
+    _mutate_chat_store(chat_id, persist)
 
 
 async def terminate_chat_agents(chat_ids: list[str] | set[str] | tuple[str, ...]) -> None:

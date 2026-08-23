@@ -1,21 +1,25 @@
 """SPA shell and bootstrap routes."""
 
-# ruff: noqa: F403,F405
+from pathlib import Path
+from fastapi import APIRouter, Request
+from fastapi.responses import FileResponse, HTMLResponse
 
-from cyrene.workbench.runtime import *
+from cyrene.workbench.presentation_service import PresentationQueryService
+
+_APP_DIR = Path(__file__).resolve().parents[2] / "webui" / "static" / "app"
 
 
-def register_shell_routes(router: APIRouter, bot: Any, db_path: str) -> None:
-    global _bot, _db_path
-    _bot = bot
-    _db_path = db_path
-
+def register_shell_routes(
+    router: APIRouter,
+    queries: PresentationQueryService,
+    app_dir: Path = _APP_DIR,
+) -> None:
     # ---- SPA root ----
 
     @router.get("/", response_class=HTMLResponse)
     async def spa_root(request: Request):
         return FileResponse(
-            _APP_DIR / "index.html",
+            app_dir / "index.html",
             headers={
                 "Cache-Control": "no-store, no-cache, must-revalidate",
                 "Pragma": "no-cache",
@@ -27,8 +31,8 @@ def register_shell_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/ui-data")
     async def api_ui_data(tz: str = ""):
-        return await _build_ui_data(tz)
+        return await queries.ui_data(tz)
 
     @router.get("/api/dashboard")
     async def api_dashboard(tz: str = ""):
-        return await _build_dashboard(_resolve_ui_tz(tz))
+        return await queries.dashboard(tz)

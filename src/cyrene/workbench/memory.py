@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -460,6 +461,181 @@ def _normalize_tags(value: Any) -> list[str]:
         if s and s not in out:
             out.append(s)
     return out[:12]
+
+
+@dataclass(frozen=True)
+class MemoryCreateDTO:
+    """Validated HTTP input for creating a workspace memory."""
+
+    content: str
+    category: str = ""
+    source: str = "manual"
+    confidence: str = ""
+    tags: Any = None
+
+
+@dataclass(frozen=True)
+class MemoryUpdateDTO:
+    """Partial workspace-memory mutation with explicit field presence."""
+
+    values: dict[str, Any]
+    provided: frozenset[str] = field(default_factory=frozenset)
+
+
+class MemoryApplicationError(RuntimeError):
+    """Stable application error consumed by the HTTP adapter."""
+
+    def __init__(self, message: str, status_code: int, code: str | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+
+
+class MemoryRepository:
+    """Workspace-memory persistence boundary owned by the memory domain."""
+
+    def load(self, workspace: str) -> list[dict]:
+        return _load(workspace)
+
+    def save(
+        self,
+        workspace: str,
+        entries: list[dict],
+        *,
+        base_value: list[dict] | None = None,
+    ) -> None:
+        _save(workspace, entries, base_value=base_value)
+
+    def payload(self, workspace: str, *, include_hidden: bool = False) -> dict:
+        if include_hidden:
+            return _build_payload(workspace, include_hidden=True)
+        return _build_payload(workspace)
+
+
+class MemoryApplicationService:
+    """Workspace-memory use cases, independent of HTTP concerns."""
+
+    def __init__(self, db_path: str = "", repository: MemoryRepository | None = None):
+        if db_path:
+            configure_store(db_path)
+        self.repository = repository or MemoryRepository()
+
+    def list(self, workspace: str, *, include_hidden: bool = False) -> dict:
+        try:
+            return self.repository.payload(workspace, include_hidden=include_hidden)
+        except Exception as exc:
+            logger.exception("Failed to list Workbench memory for %s", workspace)
+            raise MemoryApplicationError("List failed", 500, "memory_list_failed") from exc
+
+    def create(self, workspace: str, dto: MemoryCreateDTO) -> dict:
+        content = str(dto.content or "").strip()
+        if not content:
+            raise MemoryApplicationError("content is required", 400)
+        category = str(dto.category or "").strip().lower()
+        if category not in _CATEGORY_LABELS:
+            category = "fact"
+        source = str(dto.source or "manual").strip().lower()
+        if source not in _SOURCE_LABELS:
+            source = "manual"
+        today = _today()
+        entry = {
+            "id": "mem_" + uuid.uuid4().hex[:12],
+            "content": content,
+            "type": category,
+            "category": category,
+            "source": source,
+            "tags": _normalize_tags(dto.tags),
+            "first_seen": today,
+            "last_mentioned": today,
+            "mention_count": 1,
+            "emotional_valence": 0,
+        }
+        confidence = str(dto.confidence or "").strip().lower()
+        if confidence in _CONFIDENCE_LABELS:
+            entry["confidence"] = confidence
+        try:
+            entries = self.repository.load(workspace)
+            _append_history(entry, "created")
+            entries.append(entry)
+            self.repository.save(workspace, entries)
+            payload = self.repository.payload(workspace)
+            payload["id"] = entry["id"]
+            return payload
+        except Exception as exc:
+            logger.exception("Failed to create Workbench memory for %s", workspace)
+            raise MemoryApplicationError("Create failed", 500, "memory_create_failed") from exc
+
+    def update(self, workspace: str, memory_id: str, dto: MemoryUpdateDTO) -> dict:
+        try:
+            entries = self.repository.load(workspace)
+            target = next((entry for entry in entries if _entry_id(entry) == memory_id), None)
+            if target is None:
+                raise MemoryApplicationError("memory not found", 404)
+            self._apply_update(target, memory_id, dto)
+            self.repository.save(workspace, entries)
+            return self.repository.payload(workspace)
+        except MemoryApplicationError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "Failed to update Workbench memory %s for %s", memory_id, workspace
+            )
+            raise MemoryApplicationError("Update failed", 500, "memory_update_failed") from exc
+
+    def delete(self, workspace: str, memory_id: str) -> dict:
+        try:
+            entries = self.repository.load(workspace)
+            kept = [entry for entry in entries if _entry_id(entry) != memory_id]
+            if len(kept) == len(entries):
+                raise MemoryApplicationError("memory not found", 404)
+            self.repository.save(
+                workspace,
+                kept,
+                base_value=getattr(entries, "_workbench_base", entries),
+            )
+            return self.repository.payload(workspace)
+        except MemoryApplicationError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "Failed to delete Workbench memory %s for %s", memory_id, workspace
+            )
+            raise MemoryApplicationError("Delete failed", 500, "memory_delete_failed") from exc
+
+    @staticmethod
+    def _apply_update(target: dict, memory_id: str, dto: MemoryUpdateDTO) -> None:
+        body, provided = dto.values, dto.provided
+        target["id"] = memory_id
+        if "content" in provided:
+            content = str(body.get("content") or "").strip()
+            if not content:
+                raise MemoryApplicationError("content cannot be empty", 400)
+            target["content"] = content
+        if "category" in provided:
+            category = str(body.get("category") or "").strip().lower()
+            if category in _CATEGORY_LABELS or category in _HIDDEN_CATEGORIES:
+                target["category"] = category
+                target["type"] = category
+        if "source" in provided:
+            source = str(body.get("source") or "").strip().lower()
+            if source in _SOURCE_LABELS:
+                target["source"] = source
+        if "confidence" in provided:
+            confidence = str(body.get("confidence") or "").strip().lower()
+            if confidence in _CONFIDENCE_LABELS:
+                target["confidence"] = confidence
+            else:
+                target.pop("confidence", None)
+        if "tags" in provided:
+            target["tags"] = _normalize_tags(body.get("tags"))
+        if "stale" in provided:
+            old_stale, new_stale = bool(target.get("stale")), bool(body.get("stale"))
+            target["stale"] = new_stale
+            if new_stale != old_stale:
+                _append_history(target, "stale" if new_stale else "revived")
+        target["last_mentioned"] = _today()
+        if provided.intersection({"content", "category", "source", "confidence", "tags"}):
+            _append_history(target, "edited")
 
 
 def _split_memory_query(query: str) -> tuple[str, list[str]]:

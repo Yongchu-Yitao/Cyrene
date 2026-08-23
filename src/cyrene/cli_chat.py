@@ -2395,7 +2395,7 @@ class InteractiveChat:
         self.renderer.info(self._config_t("SOUL 已更新。", "SOUL updated."))
 
     async def _config_skills(self) -> None:
-        payload = await self.transport.get_setting("/api/skills/installed")
+        payload = await self.transport.get_setting("/api/extensions")
         skills = [
             dict(item)
             for item in payload.get("skills") or []
@@ -2421,7 +2421,7 @@ class InteractiveChat:
             )
             if install_path:
                 await self.transport.update_setting(
-                    "/api/skills/install",
+                    "/api/extensions/skills/install",
                     {"path": install_path},
                     method="POST",
                 )
@@ -2430,9 +2430,10 @@ class InteractiveChat:
                 )
             return
         skill_id = str(selected.get("id") or "")
+        enabled = not bool(selected.get("enabled", True))
         await self.transport.update_setting(
-            f"/api/skills/{skill_id}/toggle",
-            {},
+            f"/api/extensions/skill/{skill_id}/enabled",
+            {"enabled": enabled},
             method="POST",
         )
         name = selected.get("name") or skill_id

@@ -1,0 +1,755 @@
+/* ===================================================================
+   Welcome / get-started page (fullPage === "welcome")
+   Keeps the ProjectRail; the rest of the grid becomes a single scroll
+   surface. Mirrors the knowledge / schedule / memory 2-column layout.
+   =================================================================== */
+.workbench-grid.is-welcome {
+  grid-template-columns: var(--wb-rail-w) minmax(0, 1fr);
+}
+
+.wb-wel-page {
+  --wb-wel-blue: #3b82f6;
+  --wb-wel-green: #1f9d57;
+  --wb-wel-amber: #e0991a;
+  --wb-wel-violet: #8a5cf6;
+  --wb-wel-slate: var(--wb-muted);
+  min-width: 0;
+  min-height: 0;
+  background: var(--wb-surface);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.wb-wel-inner {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 40px 40px 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* ── header ── */
+.wb-wel-head h1 {
+  margin: 0 0 8px;
+  font-size: calc(28px * var(--wb-ui-font-scale, 1));
+  font-weight: 760;
+  letter-spacing: -0.01em;
+  color: var(--wb-text);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wb-wel-wave {
+  font-size: calc(26px * var(--wb-ui-font-scale, 1));
+  line-height: 1;
+  animation: wb-wel-wave 2.4s ease-in-out infinite;
+  transform-origin: 70% 80%;
+}
+
+@keyframes wb-wel-wave {
+  0%, 60%, 100% { transform: rotate(0deg); }
+  10% { transform: rotate(14deg); }
+  20% { transform: rotate(-8deg); }
+  30% { transform: rotate(14deg); }
+  40% { transform: rotate(-4deg); }
+  50% { transform: rotate(10deg); }
+}
+
+.wb-wel-head p {
+  margin: 0;
+  font-size: calc(15px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-muted);
+}
+
+/* ── stepper ── */
+.wb-wel-steps {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.wb-wel-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.wb-wel-step-dot {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 700;
+  background: var(--wb-control-bg);
+  color: var(--wb-faint);
+  border: 1px solid var(--wb-line);
+}
+
+.wb-wel-step.current .wb-wel-step-dot {
+  background: var(--wb-accent);
+  color: var(--accent-text, #fff);
+  border-color: transparent;
+}
+
+.wb-wel-step.done .wb-wel-step-dot {
+  background: color-mix(in srgb, var(--accent) 16%, var(--wb-card-bg));
+  color: var(--wb-accent);
+  border-color: var(--wb-active-border);
+}
+
+.wb-wel-step-label {
+  font-size: calc(14px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+  color: var(--wb-faint);
+}
+
+.wb-wel-step.current .wb-wel-step-label,
+.wb-wel-step.done .wb-wel-step-label {
+  color: var(--wb-text);
+}
+
+.wb-wel-step-line {
+  flex: 1 1 auto;
+  height: 1px;
+  min-width: 36px;
+  background: var(--wb-line);
+  margin: 0 8px;
+}
+
+.wb-wel-step-line.done {
+  background: var(--wb-active-border);
+}
+
+/* ── three feature cards ── */
+.wb-wel-cards {
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.wb-wel-card {
+  background: var(--wb-card-bg);
+  border: 1px solid var(--wb-line);
+  border-radius: 16px;
+  padding: 22px;
+  box-shadow: 0 1px 2px rgba(20, 28, 45, 0.04);
+  display: flex;
+  flex-direction: column;
+}
+
+.wb-wel-card h2 {
+  margin: 0 0 6px;
+  font-size: calc(16px * var(--wb-ui-font-scale, 1));
+  font-weight: 720;
+  color: var(--wb-text);
+}
+
+.wb-wel-card-sub {
+  margin: 0 0 16px;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  line-height: 1.5;
+  color: var(--wb-muted);
+}
+
+/* card 1 — create project (accent-tinted hero card) */
+.wb-wel-card-create {
+  position: relative;
+  background:
+    linear-gradient(155deg, color-mix(in srgb, var(--accent) 9%, var(--wb-card-bg)), var(--wb-card-bg) 62%);
+  border-color: var(--wb-active-border);
+  overflow: hidden;
+}
+
+.wb-wel-create-main { position: relative; z-index: 1; }
+
+.wb-wel-create-desc {
+  margin: 0 0 14px;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  line-height: 1.55;
+  color: var(--wb-muted);
+  max-width: 30ch;
+}
+
+.wb-wel-checklist {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  display: grid;
+  gap: 9px;
+}
+
+.wb-wel-checklist li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 560;
+  color: var(--wb-text);
+}
+
+.wb-wel-check {
+  flex: 0 0 auto;
+  width: 19px;
+  height: 19px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: var(--wb-accent);
+  color: var(--accent-text, #fff);
+}
+
+.wb-wel-create-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  flex-wrap: wrap;
+}
+
+.wb-wel-create-actions .wb-btn.primary { height: 38px; padding: 0 18px; }
+
+.wb-wel-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 12px;
+  border: none;
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background 0.12s, color 0.12s;
+}
+
+.wb-wel-link-btn:hover { background: var(--wb-control-hover-bg); color: var(--wb-text); }
+
+/* card 2 — capability rows */
+.wb-wel-rows { display: flex; flex-direction: column; gap: 6px; margin-top: auto; }
+
+.wb-wel-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.wb-wel-row:hover {
+  background: var(--wb-row-hover-bg);
+  border-color: var(--wb-line);
+}
+
+.wb-wel-row-ico {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+}
+
+.wb-wel-row-label {
+  font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 600;
+  color: var(--wb-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-wel-row-chevron { color: var(--wb-faint); display: grid; place-items: center; }
+.wb-wel-row:hover .wb-wel-row-chevron { color: var(--wb-muted); }
+
+/* card 3 — preference rows */
+.wb-wel-prefs { display: flex; flex-direction: column; gap: 6px; margin-top: auto; }
+
+.wb-wel-pref {
+  display: grid;
+  grid-template-columns: 30px minmax(0, auto) minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.wb-wel-pref:hover {
+  background: var(--wb-row-hover-bg);
+  border-color: var(--wb-line);
+}
+
+.wb-wel-pref-ico { width: 30px; height: 30px; display: grid; place-items: center; color: var(--wb-muted); }
+
+.wb-wel-pref-label { font-size: calc(13.5px * var(--wb-ui-font-scale, 1)); font-weight: 600; color: var(--wb-text); white-space: nowrap; }
+
+.wb-wel-pref-value {
+  min-width: 0;
+  width: 100%;
+  justify-self: end;
+  text-align: right;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 560;
+  color: var(--wb-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-wel-pref-caret { color: var(--wb-faint); display: grid; place-items: center; }
+
+/* ── bottom panels: templates + import ── */
+.wb-wel-bottom {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.wb-wel-panel {
+  background: var(--wb-card-bg);
+  border: 1px solid var(--wb-line);
+  border-radius: 16px;
+  padding: 22px;
+  box-shadow: 0 1px 2px rgba(20, 28, 45, 0.04);
+}
+
+.wb-wel-panel-head { margin-bottom: 16px; }
+
+.wb-wel-panel-head h3 {
+  margin: 0 0 4px;
+  font-size: calc(15px * var(--wb-ui-font-scale, 1));
+  font-weight: 720;
+  color: var(--wb-text);
+}
+
+.wb-wel-panel-head p {
+  margin: 0;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-muted);
+}
+
+.wb-wel-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.wb-wel-import-tiles {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.wb-wel-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 14px 12px;
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  background: var(--wb-card-bg);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s, transform 0.12s;
+}
+
+.wb-wel-tile:hover {
+  border-color: var(--wb-active-border);
+  background: var(--wb-row-hover-bg);
+  transform: translateY(-1px);
+}
+
+.wb-wel-tile-ico {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 2px;
+}
+
+.wb-wel-tile b {
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 660;
+  color: var(--wb-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-wel-tile small {
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-wel-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 16px auto 0;
+  padding: 6px 4px;
+  background: transparent;
+  border: none;
+  color: var(--wb-accent);
+  font-family: inherit;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 660;
+  line-height: 1.4;
+  cursor: pointer;
+  text-decoration: none;
+  width: fit-content;
+}
+
+.wb-wel-more:hover { gap: 9px; }
+.wb-wel-more svg { transition: transform 0.12s; }
+
+/* shared icon-tile tones (capabilities, templates, import) */
+.wb-wel-row-ico.blue,   .wb-wel-tile-ico.blue   { background: color-mix(in srgb, var(--wb-wel-blue) 15%, var(--wb-card-bg));   color: var(--wb-wel-blue); }
+.wb-wel-row-ico.green,  .wb-wel-tile-ico.green  { background: color-mix(in srgb, var(--wb-wel-green) 15%, var(--wb-card-bg));  color: var(--wb-wel-green); }
+.wb-wel-row-ico.amber,  .wb-wel-tile-ico.amber  { background: color-mix(in srgb, var(--wb-wel-amber) 17%, var(--wb-card-bg));  color: var(--wb-wel-amber); }
+.wb-wel-row-ico.violet, .wb-wel-tile-ico.violet { background: color-mix(in srgb, var(--wb-wel-violet) 15%, var(--wb-card-bg)); color: var(--wb-wel-violet); }
+.wb-wel-row-ico.slate,  .wb-wel-tile-ico.slate  { background: color-mix(in srgb, var(--wb-muted) 14%, var(--wb-card-bg));      color: var(--wb-muted); }
+
+/* ── footer ── */
+.wb-wel-foot {
+  text-align: center;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-faint);
+  padding-top: 4px;
+}
+
+/* ── responsive ── */
+@media (max-width: 1080px) {
+  .wb-wel-cards { grid-template-columns: 1fr; }
+  .wb-wel-bottom { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 560px) {
+  .wb-wel-inner { padding: 24px 18px 40px; }
+  .wb-wel-tiles { grid-template-columns: 1fr 1fr; }
+  .wb-wel-step-label { display: none; }
+}
+
+/* ===================================================================
+   First-run onboarding takeover — the workbench's own LLM + personality
+   setup. Full-shell focus (no rails).
+   =================================================================== */
+.wb-ob-shell {
+  display: flex;
+  flex-direction: column;
+}
+
+.wb-ob-topbar {
+  flex: 0 0 auto;
+  height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px 0 0;
+  border-bottom: 1px solid var(--wb-line);
+  background: var(--wb-topbar-bg);
+}
+
+.wb-ob-topbar .workbench-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-left: 6px;
+}
+
+.wb-ob-topbar .workbench-brand strong { font-size: calc(15px * var(--wb-ui-font-scale, 1)); font-weight: 760; }
+
+.wb-ob-page {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.wb-ob-inner {
+  max-width: 660px;
+  padding-top: 48px;
+}
+
+.wb-ob-head { text-align: center; }
+.wb-ob-head h1 { justify-content: center; }
+.wb-ob-head p { max-width: 46ch; margin-inline: auto; }
+
+.wb-ob-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  align-self: center;
+  margin: 0 auto 14px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--wb-card-bg));
+  border: 1px solid var(--wb-active-border);
+  color: var(--wb-accent);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 660;
+}
+
+.wb-ob-eyebrow-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--wb-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* two-up step progress (model → personality) */
+.wb-ob-steps {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.wb-ob-step {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 13px 15px;
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  background: var(--wb-card-bg);
+}
+
+.wb-ob-step.current {
+  border-color: var(--wb-active-border);
+  background: color-mix(in srgb, var(--accent) 6%, var(--wb-card-bg));
+}
+
+.wb-ob-step-index {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 700;
+  background: var(--wb-control-bg);
+  color: var(--wb-faint);
+  border: 1px solid var(--wb-line);
+}
+
+.wb-ob-step.current .wb-ob-step-index {
+  background: var(--wb-accent);
+  color: var(--accent-text, #fff);
+  border-color: transparent;
+}
+
+.wb-ob-step.done .wb-ob-step-index {
+  background: color-mix(in srgb, var(--accent) 16%, var(--wb-card-bg));
+  color: var(--wb-accent);
+  border-color: var(--wb-active-border);
+}
+
+.wb-ob-step-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.wb-ob-step-text b { font-size: calc(13.5px * var(--wb-ui-font-scale, 1)); font-weight: 680; color: var(--wb-text); }
+.wb-ob-step-text small { font-size: calc(11.5px * var(--wb-ui-font-scale, 1)); color: var(--wb-faint); }
+.wb-ob-step.done .wb-ob-step-text small { color: var(--wb-green); }
+
+/* setup form card */
+.wb-ob-panel {
+  background: var(--wb-card-bg);
+  border: 1px solid var(--wb-line);
+  border-radius: 16px;
+  padding: 26px;
+  box-shadow: 0 1px 2px rgba(20, 28, 45, 0.04);
+}
+
+.wb-ob-section h2 { margin: 0 0 5px; font-size: calc(17px * var(--wb-ui-font-scale, 1)); font-weight: 720; color: var(--wb-text); }
+.wb-ob-sub { margin: 0 0 20px; font-size: calc(13px * var(--wb-ui-font-scale, 1)); line-height: 1.5; color: var(--wb-muted); }
+
+.wb-ob-field { display: block; margin-bottom: 16px; }
+.wb-ob-field-block { display: block; }
+
+.wb-ob-label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 640;
+  color: var(--wb-text);
+}
+
+.wb-ob-label small {
+  display: block;
+  margin-top: 2px;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 500;
+  color: var(--wb-faint);
+}
+
+.wb-ob-input {
+  width: 100%;
+  height: 40px;
+  padding: 0 13px;
+  border: 1px solid var(--wb-line-2);
+  border-radius: 9px;
+  background: var(--wb-bg);
+  color: var(--wb-text);
+  font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.wb-ob-input:focus {
+  border-color: var(--wb-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.wb-ob-input.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: calc(12.5px * var(--wb-ui-font-scale, 1)); }
+
+.wb-ob-textarea {
+  height: auto;
+  min-height: 220px;
+  padding: 12px 13px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.wb-ob-seg {
+  display: inline-flex;
+  padding: 3px;
+  margin-bottom: 18px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-control-bg);
+  gap: 2px;
+}
+
+.wb-ob-seg-btn {
+  padding: 7px 16px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.wb-ob-seg-btn.active {
+  background: var(--wb-card-bg);
+  color: var(--wb-text);
+  box-shadow: 0 1px 2px rgba(20, 28, 45, 0.08);
+}
+
+.wb-ob-source-seg {
+  display: flex;
+  width: 100%;
+}
+
+.wb-ob-source-seg .wb-ob-seg-btn {
+  flex: 1 1 0;
+}
+
+.wb-ob-oauth {
+  padding-top: 2px;
+}
+
+.wb-ob-oauth-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 3px 0 20px;
+  border-bottom: 1px solid var(--wb-line);
+}
+
+.wb-ob-oauth-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 5px;
+}
+
+.wb-ob-oauth-copy strong {
+  color: var(--wb-text);
+  font-size: calc(14px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  overflow-wrap: anywhere;
+}
+
+.wb-ob-oauth-copy span {
+  color: var(--wb-muted);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.5;
+}
+
+.wb-ob-oauth-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(180px, 1fr);
+  gap: 18px;
+  padding-top: 20px;
+}
+
+.wb-ob-oauth-grid .wb-ob-field {
+  margin-bottom: 0;
+}
+
+.wb-ob-note {
+  padding: 14px 16px;
+  border-radius: 11px;
+  background: var(--wb-row-hover-bg);
+  border: 1px solid var(--wb-line);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  line-height: 1.55;
+  color: var(--wb-muted);
+}
+
+.wb-ob-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 22px;
+}
+
+.wb-ob-actions .wb-btn.primary { height: 40px; padding: 0 22px; }
+
+.wb-ob-feedback {
+  margin-top: 16px;
+  padding: 11px 14px;
+  border-radius: 10px;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  line-height: 1.5;
+}
+
+.wb-ob-feedback.ok {
+  background: color-mix(in srgb, var(--wb-green) 12%, var(--wb-card-bg));
+  border: 1px solid color-mix(in srgb, var(--wb-green) 35%, transparent);
+  color: var(--wb-green);
+}
+
+.wb-ob-feedback.err {
+  background: var(--wb-error-bg);
+  border: 1px solid color-mix(in srgb, var(--err) 35%, transparent);
+  color: var(--wb-error-text);
+}
+
+@media (max-width: 560px) {
+  .wb-ob-steps { grid-template-columns: 1fr; }
+  .wb-ob-inner { padding-top: 28px; }
+  .wb-ob-oauth-head { align-items: stretch; flex-direction: column; }
+  .wb-ob-oauth-grid { grid-template-columns: 1fr; }
+}
+

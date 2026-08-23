@@ -30,13 +30,14 @@ def test_workbench_project_modules_restore_project_scoped_cache_before_refresh()
     for source in (memory, schedule):
         assert "CACHE_TTL_MS" not in source
         assert 'window.addEventListener("focus", refreshSoon)' in source
-        assert 'window.CyreneUI.require("events").subscribe(onRuntimeEvent)' in source
+        assert "workbenchServices.events().subscribe(onRuntimeEvent)" in source
 
 
 def test_workbench_module_routes_use_lightweight_canonical_project_lookup(monkeypatch):
     from cyrene.workbench import runtime as routes
-    from cyrene.workbench import knowledge as knowledge
-    from route.workbench import schedule as schedule
+    from cyrene.workbench import context as workbench_context
+    from cyrene.knowledge import workspace as knowledge_workspace
+    from cyrene.workbench.schedule_repository import WorkspaceProjectResolver
 
     project = {"id": "project_fast", "dataKey": "schedule-fast"}
     monkeypatch.setattr(
@@ -44,11 +45,16 @@ def test_workbench_module_routes_use_lightweight_canonical_project_lookup(monkey
         "_workbench_find_project_lightweight",
         lambda project_id: project if project_id == project["id"] else None,
     )
+    monkeypatch.setattr(workbench_context, "read_projects", lambda: [project])
 
     def fail_full_read():
         raise AssertionError("canonical project ids must not trigger the full project-store scan")
 
     monkeypatch.setattr(routes, "_read_workbench_store", fail_full_read)
 
-    assert knowledge._resolve_workspace_id(project["id"]) == project["id"]
-    assert schedule._resolve_workspace_id(project["id"]) == project["dataKey"]
+    assert knowledge_workspace.resolve_workspace_id(project["id"]) == project["id"]
+    resolver = WorkspaceProjectResolver(
+        find_project_lightweight=routes._workbench_find_project_lightweight,
+        read_projects=workbench_context.read_projects,
+    )
+    assert resolver.resolve(project["id"]) == project["dataKey"]

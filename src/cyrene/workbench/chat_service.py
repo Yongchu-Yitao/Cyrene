@@ -117,6 +117,14 @@ class ChatService:
     async def capture_workspace_changes_baseline(self, *args: Any, **kwargs: Any):
         return await _legacy._capture_workspace_changes_baseline(*args, **kwargs)
 
+    async def run_external_agent_turn(self, *args: Any, **kwargs: Any):
+        from cyrene.agent_runtime import run_external_agent_turn
+
+        return await run_external_agent_turn(*args, **kwargs)
+
+    def prewarm_workspace_changes(self, *args: Any, **kwargs: Any) -> None:
+        _legacy.prewarm_workspace_changes(*args, **kwargs)
+
     def chat_preview(self, *args: Any, **kwargs: Any):
         return _legacy._chat_preview(*args, **kwargs)
 
@@ -140,6 +148,11 @@ class ChatService:
 
     def context_segment_tokens(self, *args: Any, **kwargs: Any):
         return _legacy._context_segment_tokens(*args, **kwargs)
+
+    async def compact_session(self, *args: Any, **kwargs: Any):
+        from cyrene import agent
+
+        return await agent.compact_session_if_needed(*args, **kwargs)
 
     def extract_exchange_timeline(self, *args: Any, **kwargs: Any):
         return _legacy._extract_exchange_timeline(*args, **kwargs)

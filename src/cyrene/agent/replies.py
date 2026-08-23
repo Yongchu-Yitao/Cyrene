@@ -80,6 +80,8 @@ async def _final_user_reply_from_history(
                 )
                 + "Do not call tools.\n"
                 + "Do not reply with only 'Done'.\n"
+                + "If a tool was unavailable or failed, state that explicitly "
+                + "and do not promise a future retry.\n"
                 + "If the tools extracted file or attachment contents, quote or "
                 "summarize those contents in your answer."
             ),

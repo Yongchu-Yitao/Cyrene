@@ -1,0 +1,4466 @@
+/* ---- thread ---- */
+
+.wbc-thread-stage {
+  --wbc-thread-inset-top: 76px;
+  --wbc-thread-inset-inline: 28px;
+  /* The composer is absolutely positioned over the transcript and can grow
+     when context chips, attachments, or controls wrap in a narrow window.
+     Reuse its measured composer height so the final message always scrolls fully
+     above the composer; the extra 34px preserves the existing visual gap. */
+  --wbc-thread-inset-bottom: calc(var(--wbc-composer-reserve-height) + 34px * var(--wb-ui-font-scale, 1));
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: visible;
+  width: calc(100% - var(--wbc-reclaimed-side-width));
+  left: var(--wbc-conversation-shift);
+  transition: width 420ms cubic-bezier(.22, 1.24, .36, 1), left 420ms cubic-bezier(.22, 1.24, .36, 1);
+  will-change: width, left;
+}
+
+/* Keep centring on the layout axis rather than transform so the maximized
+   browser is not trapped in the stage's local stacking context. */
+.wbc-thread-stage.browser-window-maximized {
+  width: 100%;
+  left: 0;
+  transition: none;
+  will-change: auto;
+}
+
+.wbc-thread {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  /* PiP avoidance preserves a deliberate message anchor in JS. Native scroll
+     anchoring would apply a second, competing correction during the same
+     reflow and can make the transcript bounce at its top boundary. */
+  overflow-anchor: none;
+  padding: var(--wbc-thread-inset-top) var(--wbc-thread-inset-inline) var(--wbc-thread-inset-bottom);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.wbc-thread::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* Chat split transcript: match the main conversation's thread look, with its
+   own scroll surface inside the split panel. */
+.wbc-chat-split-stage .wbc-thread {
+  height: 100%;
+  box-sizing: border-box;
+  overflow-y: auto;
+  /* Match the main thread's under-composer scroll runway. */
+  padding: 4px 18px var(--wbc-thread-inset-bottom);
+}
+
+/* Apply the compact, even transcript inset after both main and split thread
+   defaults so the lifted preview keeps readable space around its content. */
+.wbc-split-drag-ghost .wbc-thread {
+  padding-top: 24px;
+  padding-inline: 24px;
+}
+
+/* Every descendant in a narrow split must be allowed to yield inline space.
+   Without this chain, a table, code block or chart establishes the message's
+   min-content width and the panel's overflow clips the whole right side. */
+.wbc-chat-split-stage .wbc-thread-item,
+.wbc-chat-split-stage .wbc-msg,
+.wbc-chat-split-stage .wbc-msg-row,
+.wbc-chat-split-stage .wbc-bubble,
+.wbc-chat-split-stage .wbc-msg-body,
+.wbc-chat-split-stage .wbc-card,
+.wbc-chat-split-stage .wbc-fold,
+.wbc-chat-split-stage .wbc-chart,
+.wbc-chat-split-stage .wbc-chart-wrap {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.wbc-chat-split-stage .wbc-msg.assistant,
+.wbc-chat-split-stage .wbc-msg-body {
+  width: 100%;
+}
+
+.wbc-chat-split-stage .wbc-msg-body,
+.wbc-chat-split-stage .wbc-bubble {
+  overflow-wrap: anywhere;
+}
+
+.wbc-chat-split-stage .wbc-msg-body.markdown pre,
+.wbc-chat-split-stage .wbc-msg-body.markdown table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+}
+
+/* Selection belongs to the transcript rather than the whole shell: controls,
+   settings and embedded viewers retain their native/task-specific behavior. */
+.wbc-thread ::selection {
+  background: var(--wb-selection-bg);
+  color: var(--wb-selection-text);
+  text-shadow: none;
+}
+
+.wbc-selection-menu {
+  position: fixed;
+  z-index: 10110;
+  transform: translate(-50%, 0);
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 28%, var(--wb-line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 96%, transparent);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18), 0 2px 7px rgba(15, 23, 42, 0.1);
+  backdrop-filter: blur(14px);
+}
+
+.wbc-selection-menu button {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-text);
+  font: inherit;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.wbc-selection-menu button:hover {
+  background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
+  color: var(--wb-accent);
+}
+
+.wbc-selection-menu button:disabled {
+  color: var(--wb-faint);
+  cursor: wait;
+}
+
+.wbc-selection-menu svg {
+  width: 15px;
+  height: 15px;
+}
+
+html[data-theme="dark"] .wbc-selection-menu {
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.38);
+}
+
+/* Long-conversation navigation. At rest this is only a quiet message cluster;
+   hover or keyboard focus opens a compact list of the user's messages. */
+.wbc-conversation-nav {
+  position: absolute;
+  z-index: 20;
+  /* Centre the control in the visible conversation area rather than the
+     entire stage, whose lower portion is occupied by the composer. */
+  top: calc(50% - 48px);
+  right: 4px;
+  left: auto;
+  width: 20px;
+  height: 38px;
+  transform: translateY(-50%);
+  pointer-events: auto;
+}
+
+.wbc-conversation-nav-trigger {
+  position: absolute;
+  inset: 2px 3px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 42%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 56%, transparent);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+  backdrop-filter: blur(8px);
+  color: var(--wb-muted);
+  cursor: default;
+  opacity: 0.8;
+  transition: opacity 100ms ease, transform 140ms ease, border-color 120ms ease;
+}
+
+.wbc-conversation-nav-trigger:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 42%, transparent);
+  outline-offset: 2px;
+}
+
+.wbc-conversation-nav-trigger > span {
+  width: 5px;
+  height: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-muted) 62%, transparent);
+}
+
+.wbc-conversation-nav-trigger > span:nth-child(2),
+.wbc-conversation-nav-trigger > span:nth-child(4) {
+  width: 7px;
+}
+
+.wbc-conversation-nav-trigger > span:nth-child(3) {
+  width: 9px;
+  background: color-mix(in srgb, var(--wb-accent) 76%, var(--wb-muted));
+}
+
+.wbc-conversation-nav:hover .wbc-conversation-nav-trigger,
+.wbc-conversation-nav:focus-within .wbc-conversation-nav-trigger {
+  opacity: 0;
+  transform: scale(0.92);
+}
+
+.wbc-conversation-nav-panel {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: auto;
+  width: min(280px, calc(100vw - 96px));
+  max-height: min(420px, calc(100vh - 180px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--wb-line-2);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 97%, transparent);
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(16px);
+  opacity: 0;
+  transform: translateY(-50%) translateX(4px) scale(0.97);
+  transform-origin: right center;
+  pointer-events: none;
+  visibility: hidden;
+  transition: opacity 120ms ease, transform 160ms cubic-bezier(.2, .8, .2, 1), visibility 0s linear 160ms;
+}
+
+.wbc-conversation-nav:hover .wbc-conversation-nav-panel,
+.wbc-conversation-nav:focus-within .wbc-conversation-nav-panel {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0) scale(1);
+  pointer-events: auto;
+  visibility: visible;
+  transition-delay: 55ms, 55ms, 0s;
+}
+
+.wbc-conversation-nav-heading {
+  flex: 0 0 auto;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--wb-line);
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wbc-conversation-nav-heading > span:last-child {
+  min-width: 22px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-faint);
+  text-align: center;
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-conversation-nav-list {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  scrollbar-width: thin;
+}
+
+.wbc-conversation-marker {
+  width: 100%;
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px 6px 7px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-muted);
+  text-align: left;
+  cursor: pointer;
+  transition: color 100ms ease, background 100ms ease;
+}
+
+.wbc-conversation-marker:hover,
+.wbc-conversation-marker:focus-visible {
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+  outline: none;
+}
+
+.wbc-conversation-marker.active {
+  background: color-mix(in srgb, var(--wb-accent) 9%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-conversation-marker-index {
+  width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--wb-muted) 8%, transparent);
+  color: var(--wb-faint);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-conversation-marker.active .wbc-conversation-marker-index {
+  background: color-mix(in srgb, var(--wb-accent) 16%, transparent);
+  color: var(--wb-accent);
+}
+
+.wbc-conversation-marker-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  line-height: 1.35;
+}
+
+.wbc-scroll-to-bottom {
+  position: absolute;
+  z-index: 21;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: var(--wbc-composer-glass-border);
+  border-radius: 999px;
+  background: var(--wbc-composer-glass-background);
+  color: var(--wb-muted);
+  box-shadow: var(--wbc-composer-glass-shadow);
+  -webkit-backdrop-filter: var(--wbc-composer-glass-filter);
+  backdrop-filter: var(--wbc-composer-glass-filter);
+  transform: translateX(-50%);
+  cursor: pointer;
+  transition: color 120ms ease, transform 120ms ease;
+}
+
+.wbc-scroll-to-bottom > span {
+  display: inline-flex;
+  transform: rotate(90deg);
+}
+
+.wbc-scroll-to-bottom svg {
+  width: 18px;
+  height: 18px;
+}
+
+.wbc-scroll-to-bottom:hover {
+  /* Match the neutral hover treatment of the composer's icon controls. The
+     glass background, edge and elevation remain exactly those of the input. */
+  color: var(--wb-text);
+  transform: translateX(-50%) translateY(-1px);
+}
+
+.wbc-scroll-to-bottom:active {
+  transform: translateX(-50%) scale(0.96);
+}
+
+.wbc-scroll-to-bottom:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 42%, transparent);
+  outline-offset: 2px;
+}
+
+html[data-theme="dark"] .wbc-conversation-nav-panel {
+  box-shadow: 0 9px 24px rgba(0, 0, 0, 0.34);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-conversation-nav-trigger,
+  .wbc-conversation-nav-panel,
+  .wbc-conversation-marker,
+  .wbc-scroll-to-bottom {
+    transition: none;
+    animation: none;
+  }
+}
+
+/* ---- floating browser window ---- */
+
+/* This is the exact red-box region in the product spec. It deliberately
+   mirrors the transcript's content insets, so browser drag and resize bounds
+   stay aligned with the message/composer edges at every app size. Overflow is
+   left visible to preserve the floating window shadow at the boundary. */
+.wbc-browser-movement-region {
+  position: absolute;
+  top: var(--wbc-thread-inset-top);
+  right: var(--wbc-thread-inset-inline);
+  bottom: calc(34px * var(--wb-ui-font-scale, 1));
+  left: var(--wbc-thread-inset-inline);
+  z-index: 26;
+  pointer-events: none;
+}
+
+.wbc-browser-movement-region > * {
+  pointer-events: auto;
+}
+
+.wbc-browser-window {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 72%, transparent);
+  background: color-mix(in srgb, var(--wb-card-bg) 88%, transparent);
+  color: var(--wb-text);
+  box-shadow:
+    0 8px 22px rgba(9, 17, 30, 0.055),
+    inset 0 1px 0 color-mix(in srgb, #fff 9%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-line) 18%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(112%);
+  backdrop-filter: blur(18px) saturate(112%);
+  box-sizing: border-box;
+}
+
+.wbc-browser-window.pip {
+  position: absolute;
+  z-index: 24;
+  right: 0;
+  bottom: 0;
+  width: min(
+    max(240px, calc(var(--wbc-side-track-width) - (2 * var(--wbc-card-gutter)))),
+    calc(100% - 24px)
+  );
+  height: min(240px, calc(100% - 24px));
+  min-width: min(240px, 100%);
+  min-height: min(180px, 100%);
+  border-radius: 18px;
+  pointer-events: auto;
+}
+
+/* With the context panel visible, the browser preview belongs to that right
+   rail rather than covering the transcript. Its width already follows the
+   shared side-track variable; move the fixed preview into the same track and
+   cancel the movement region's bottom inset so its lower edge lands on the
+   conversation card baseline. */
+.wbc-page:not(.wbc-side-hidden) > .wbc-pane-layout.single
+  .wbc-pane-card-chat:has(.wbc-browser-window.pip) {
+  overflow: visible;
+}
+
+.wbc-page:not(.wbc-side-hidden) > .wbc-pane-layout.single:has(.wbc-browser-window.pip) {
+  z-index: 45;
+  overflow: visible;
+}
+
+.wbc-page:not(.wbc-side-hidden) > .wbc-pane-layout.single
+  .wbc-browser-window.pip {
+  right: calc(var(--wbc-card-gutter) - var(--wbc-side-track-width));
+  bottom: calc(-34px * var(--wb-ui-font-scale, 1));
+  width: var(
+    --wbc-browser-pip-aligned-width,
+    min(
+      max(240px, calc(var(--wbc-side-track-width) - (2 * var(--wbc-card-gutter)))),
+      calc(100% - 24px)
+    )
+  );
+  height: var(--wbc-browser-pip-user-height, var(--wbc-browser-pip-aligned-height, auto));
+  min-height: 0;
+  aspect-ratio: 4 / 3;
+  translate:
+    var(--wbc-browser-pip-align-x, 0px)
+    calc(var(--wbc-browser-pip-align-y, 0px) + var(--wbc-browser-pip-user-offset-y, 0px));
+}
+
+.wbc-browser-window.maximized {
+  position: fixed;
+  z-index: 10040;
+  inset: 0;
+  width: auto;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  background: var(--wb-right-bg);
+  box-shadow: none;
+}
+
+.wbc-browser-window-bar {
+  flex: 0 0 auto;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--wb-line);
+  border-radius: 11px 11px 0 0;
+  background: var(--wb-surface);
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.wbc-browser-window.pip .wbc-browser-window-bar {
+  position: relative;
+  z-index: 31;
+  height: 46px;
+  min-height: 46px;
+  flex-basis: 46px;
+  box-sizing: border-box;
+  padding: 0 9px 0 14px;
+  border-bottom-color: color-mix(in srgb, var(--wb-line) 82%, transparent);
+  border-radius: 17px 17px 0 0;
+  background: var(--wb-card-bg-strong);
+  color: var(--wb-text);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent);
+  touch-action: none;
+  cursor: grab;
+}
+
+.wbc-browser-window.pip .wbc-browser-window-bar:active { cursor: grabbing; }
+
+.wbc-browser-window.pip .wbc-browser-window-bar strong {
+  color: var(--wb-muted);
+  font-size: calc(11.75px * var(--wb-ui-font-scale, 1));
+  font-weight: 590;
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-bar {
+  height: 58px;
+  min-height: 58px;
+  flex-basis: 58px;
+  box-sizing: border-box;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--wb-line);
+  border-radius: 0;
+  background: var(--wb-card-bg-strong);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  cursor: default;
+  -webkit-app-region: drag;
+}
+
+.wbc-browser-maximized-picker-wrap {
+  position: relative;
+  z-index: 1100;
+  flex: 0 0 auto;
+  min-width: 0;
+  margin-bottom: 8px;
+}
+
+.wbc-browser-pip-head-wrap {
+  position: relative;
+  z-index: 30;
+  min-height: 46px;
+  display: block;
+  flex: 0 0 auto;
+  visibility: visible;
+  opacity: 1;
+  border-radius: 17px 17px 0 0;
+  background: var(--wb-card-bg-strong);
+}
+
+html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-bar {
+  padding-left: 92px;
+}
+
+.wbc-browser-window-bar:active {
+  cursor: grabbing;
+}
+
+.wbc-browser-window-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wbc-browser-window-bar strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 700;
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-title {
+  height: 34px;
+  align-items: flex-start;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.wbc-browser-maximized-picker {
+  min-width: 0;
+  height: 46px;
+  min-height: 46px;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.wbc-browser-maximized-picker:hover,
+.wbc-browser-maximized-picker[aria-expanded="true"] {
+  background: transparent;
+}
+
+.wbc-browser-maximized-picker:focus-visible {
+  outline: none;
+}
+
+.wbc-browser-maximized-chevron {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--wb-faint);
+  transform: rotate(90deg);
+  transition: transform 180ms ease;
+}
+
+.wbc-browser-maximized-picker[aria-expanded="true"] .wbc-browser-maximized-chevron {
+  transform: rotate(-90deg);
+}
+
+.wbc-browser-maximized-chevron svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-bar strong {
+  max-width: min(720px, calc(100vw - 210px));
+  color: var(--wb-text);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.wbc-browser-title-pill {
+  flex: 0 0 auto;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--wb-green, #1f9d57) 22%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-green, #1f9d57) 12%, var(--wb-card-bg));
+  color: color-mix(in srgb, var(--wb-green, #1f9d57) 88%, var(--wb-text));
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 760;
+  letter-spacing: 0.01em;
+  line-height: 1;
+}
+
+.wbc-browser-window.pip .wbc-browser-title-pill {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 560;
+}
+
+.wbc-browser-window.maximized .wbc-browser-title-pill {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--wb-faint);
+  font-size: calc(9.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+  letter-spacing: 0;
+}
+
+.wbc-browser-window-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  -webkit-app-region: no-drag;
+  position: relative;
+  z-index: 2;
+  pointer-events: auto;
+}
+
+.wbc-browser-window-actions button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.wbc-browser-window-actions button:hover {
+  border-color: var(--wb-line);
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-actions {
+  height: 46px;
+  gap: 3px;
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-actions button {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-actions button svg,
+.wbc-browser-split .wbc-side-agent-split-head > .wbc-browser-split-action svg,
+.wbc-browser-split .wbc-side-agent-split-head > .wbc-side-agent-split-close svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.9;
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-actions button:hover {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 30%, transparent);
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-actions button.active {
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 24%, transparent);
+}
+
+.wbc-browser-maximized-menu {
+  position: relative;
+  z-index: 1;
+  top: auto;
+  right: auto;
+  left: auto;
+  box-sizing: border-box;
+  width: min(560px, calc(100vw - 116px));
+  max-width: min(560px, calc(100vw - 116px));
+  margin-left: auto;
+  margin-right: auto;
+  margin-top: 6px;
+  max-height: min(340px, 44vh);
+  border-color: var(--wb-flyout-border);
+  background: var(--wb-flyout-bg);
+  box-shadow: var(--wb-flyout-shadow);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.wbc-browser-maximized-menu .wbc-browser-picker-row {
+  min-height: 48px;
+  color: var(--wb-muted);
+}
+
+.wbc-browser-maximized-menu .wbc-browser-picker-row:hover {
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-browser-maximized-menu .wbc-browser-picker-row.active {
+  background: var(--wb-card-bg);
+  color: var(--wb-text);
+  box-shadow: inset 0 0 0 1px var(--wb-line);
+}
+
+.wbc-browser-maximized-menu .wbc-browser-picker-select > b {
+  color: inherit;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wbc-material-icon {
+  width: 17px;
+  height: 17px;
+  display: block;
+  background: currentColor;
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+}
+
+.wbc-material-icon.close-fullscreen {
+  -webkit-mask-image: url("/static/app/icons/close-fullscreen-rounded.svg");
+  mask-image: url("/static/app/icons/close-fullscreen-rounded.svg");
+}
+
+.wbc-browser-window-actions button:focus-visible,
+.wbc-browser-restore-float:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 38%, transparent);
+  outline-offset: 2px;
+}
+
+.wbc-browser-window-content {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  border-radius: 0 0 11px 11px;
+  background: var(--wb-card-bg);
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-content {
+  background: var(--wb-right-bg);
+}
+
+.wbc-browser-window.pip .wbc-browser-window-content {
+  border-radius: 0 0 17px 17px;
+}
+
+.wbc-browser-window-content > .browser-view {
+  flex: 1 1 auto;
+}
+
+/* Maximized browser chrome follows the same restrained card hierarchy as the
+   conversation-panel browser split: quiet resource label, softly separated
+   tab list and navigation controls, and no accent-heavy selected state. */
+.wbc-browser-window.maximized .browser-view.native {
+  gap: 0;
+  padding: 0 12px 12px;
+  background: var(--wb-right-bg);
+}
+
+.wbc-browser-window.maximized .browser-tabs-strip,
+.wbc-browser-window.maximized .browser-nav-bar {
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 66%, transparent);
+  background: color-mix(in srgb, var(--wb-card-bg) 90%, transparent);
+  box-shadow: 0 3px 12px rgba(9, 17, 30, 0.025);
+}
+
+.wbc-browser-window.maximized .browser-tabs-strip {
+  min-height: 46px;
+  gap: 5px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 14px;
+}
+
+.wbc-browser-window.maximized .browser-nav-bar {
+  min-height: 48px;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 14px;
+}
+
+.wbc-browser-window.maximized .browser-tab {
+  height: 32px;
+  border-color: transparent;
+  border-radius: 9px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+}
+
+.wbc-browser-window.maximized .browser-tab:hover {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 24%, transparent);
+}
+
+.wbc-browser-window.maximized .browser-tab.active {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 72%, transparent);
+  color: var(--wb-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-line) 48%, transparent);
+}
+
+.wbc-browser-window.maximized .browser-icon-btn {
+  width: 32px;
+  height: 32px;
+  border-color: transparent;
+  border-radius: 9px;
+  background: transparent;
+}
+
+.wbc-browser-window.maximized .browser-icon-btn:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 28%, transparent);
+}
+
+.wbc-browser-window.maximized .browser-address {
+  height: 34px;
+  border-color: color-mix(in srgb, var(--wb-line) 72%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 88%, transparent);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 590;
+  box-shadow: none;
+}
+
+.wbc-browser-window.maximized .browser-address:focus {
+  border-color: color-mix(in srgb, var(--wb-accent) 38%, var(--wb-line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 8%, transparent);
+}
+
+.wbc-browser-window.maximized .browser-native-host {
+  margin-left: 0;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 62%, transparent);
+  border-radius: 14px;
+  background: var(--wb-surface);
+  box-shadow: 0 4px 16px rgba(9, 17, 30, 0.035);
+}
+
+.wbc-browser-window.maximized .browser-native-surface {
+  inset: 1px;
+  border-radius: 12px;
+}
+
+.wbc-browser-fullscreen-chat {
+  position: absolute;
+  z-index: 30;
+  left: 50%;
+  bottom: 49px;
+  width: min(520px, calc(100% - 24px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+.wbc-browser-fullscreen-status {
+  max-width: min(100%, 420px);
+  min-height: 28px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 11px;
+  border: 1px solid var(--wb-line-2);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 94%, transparent);
+  color: var(--wb-muted);
+  box-shadow: 0 5px 16px rgba(10, 18, 32, 0.12);
+  backdrop-filter: blur(12px);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  line-height: 1.2;
+  animation: wbc-browser-chat-enter 160ms ease-out both;
+}
+
+.wbc-browser-fullscreen-status > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-browser-fullscreen-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--wb-green);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--wb-green) 32%, transparent);
+  animation: wbc-browser-chat-pulse 1.45s ease-out infinite;
+}
+
+.wbc-browser-fullscreen-composer {
+  width: 100%;
+  height: 44px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 14px;
+  border: 1px solid var(--wb-line-2);
+  border-radius: 14px;
+  background: var(--wb-card-bg-strong);
+  box-shadow: 0 3px 12px rgba(9, 17, 30, 0.04);
+  backdrop-filter: none;
+}
+
+.wbc-browser-fullscreen-composer:focus-within {
+  border-color: color-mix(in srgb, var(--wb-accent) 36%, var(--wb-line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 7%, transparent);
+}
+
+.wbc-browser-fullscreen-status.completed .wbc-browser-fullscreen-status-dot {
+  animation: none;
+  box-shadow: none;
+}
+
+.wbc-browser-fullscreen-composer input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--wb-text);
+  font: inherit;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-browser-fullscreen-composer input::placeholder {
+  color: var(--wb-faint);
+}
+
+.wbc-browser-fullscreen-composer button {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 70%, transparent);
+  border-radius: 10px;
+  background: var(--wb-accent);
+  color: var(--wb-accent-text);
+  box-shadow: 0 2px 7px color-mix(in srgb, var(--wb-accent) 20%, transparent);
+  cursor: pointer;
+}
+
+.wbc-browser-fullscreen-composer button.stop {
+  border-color: color-mix(in srgb, var(--wb-red) 60%, transparent);
+  background: color-mix(in srgb, var(--wb-red) 14%, var(--wb-card-bg-strong));
+  color: var(--wb-red);
+  box-shadow: 0 2px 7px color-mix(in srgb, var(--wb-red) 16%, transparent);
+}
+
+.wbc-browser-fullscreen-composer button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-accent) 88%, white);
+}
+
+.wbc-browser-fullscreen-composer button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.wbc-browser-fullscreen-composer button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 42%, transparent);
+  outline-offset: 2px;
+}
+
+@keyframes wbc-browser-chat-enter {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes wbc-browser-chat-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--wb-green) 34%, transparent); }
+  70%, 100% { box-shadow: 0 0 0 5px transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-browser-fullscreen-status,
+  .wbc-browser-fullscreen-status-dot {
+    animation: none;
+  }
+}
+
+/* The shared browser panel normally reserves a left resize gutter. Floating
+   browser shells provide their own resize affordances, so neither PiP nor
+   maximized mode should sacrifice page width to that inherited gutter. */
+.wbc-browser-window.pip .browser-view.native,
+.wbc-browser-window.maximized .browser-view.native {
+  --browser-resize-gutter: 0px;
+}
+
+/* The sidebar-docked browser stays flush with the panel edge. Its native page
+   must never move aside for the resize handle, because that exposes a visible
+   strip and makes the page jump under a stationary pointer. */
+.wbc-side-body .browser-view.native {
+  --browser-resize-gutter: 0px;
+}
+
+.wbc-browser-window.pip .browser-tabs-strip,
+.wbc-browser-window.pip .browser-nav-bar {
+  display: none;
+}
+
+.wbc-browser-resize-handle {
+  position: absolute;
+  z-index: 40;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.wbc-browser-resize-handle.n,
+.wbc-browser-resize-handle.s {
+  left: 10px;
+  right: 10px;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.wbc-browser-resize-handle.n { top: -4px; }
+.wbc-browser-resize-handle.s { bottom: -4px; }
+
+.wbc-browser-resize-handle.e,
+.wbc-browser-resize-handle.w {
+  top: 10px;
+  bottom: 10px;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.wbc-browser-resize-handle.e { right: -4px; }
+.wbc-browser-resize-handle.w { left: -4px; }
+
+.wbc-browser-resize-handle.ne,
+.wbc-browser-resize-handle.nw,
+.wbc-browser-resize-handle.se,
+.wbc-browser-resize-handle.sw {
+  width: 14px;
+  height: 14px;
+}
+
+.wbc-browser-resize-handle.ne { top: -5px; right: -5px; cursor: nesw-resize; }
+.wbc-browser-resize-handle.nw { top: -5px; left: -5px; cursor: nwse-resize; }
+.wbc-browser-resize-handle.se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.wbc-browser-resize-handle.sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
+
+.wbc-browser-window-interacting,
+.wbc-browser-window-interacting * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+.wbc-browser-restore-float {
+  position: absolute;
+  z-index: 24;
+  right: 24px;
+  bottom: 32px;
+  width: 42px;
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--wb-green, #1f9d57) 24%, transparent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--wb-green, #1f9d57) 12%, var(--wb-card-bg));
+  color: color-mix(in srgb, var(--wb-green, #1f9d57) 88%, var(--wb-text));
+  box-shadow: 0 7px 18px rgba(10, 18, 32, 0.14), 0 2px 5px rgba(10, 18, 32, 0.07);
+  font: inherit;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 760;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: none;
+  transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+}
+
+.wbc-browser-restore-float:hover {
+  border-color: color-mix(in srgb, var(--wb-green, #1f9d57) 42%, transparent);
+  transform: translateY(-1px);
+  box-shadow: 0 9px 22px rgba(10, 18, 32, 0.16), 0 2px 6px rgba(10, 18, 32, 0.08);
+}
+
+.wbc-browser-restore-float:active {
+  transform: translateY(0) scale(0.985);
+}
+
+.wbc-browser-restore-float.dragging {
+  z-index: 10080;
+  cursor: grabbing;
+  transition: none;
+}
+
+.wbc-browser-restore-float.drag-source-hidden {
+  visibility: hidden;
+}
+
+/* The transcript stage intentionally clips its contents. During a minimized
+   browser drag, a fixed clone lives under <body> so it can visibly cross the
+   conversation header and reach the topbar instead of disappearing beneath
+   those clipping/stacking contexts. */
+.wbc-browser-restore-float.wbc-browser-drag-ghost {
+  position: fixed;
+  z-index: 10130;
+  right: auto;
+  bottom: auto;
+  margin: 0;
+  border: 1px solid color-mix(in srgb, var(--wb-text) 22%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 94%, var(--wb-text) 6%);
+  color: var(--wb-text);
+  box-shadow:
+    0 12px 30px rgba(8, 16, 28, 0.24),
+    0 3px 9px rgba(8, 16, 28, 0.14);
+  pointer-events: none;
+  visibility: visible;
+  transform: none;
+  transition: none;
+  opacity: 0.96;
+}
+
+.wbc-browser-restore-float.wbc-browser-drag-ghost:hover,
+.wbc-browser-restore-float.wbc-browser-drag-ghost:active {
+  transform: none;
+}
+
+.wbc-browser-restore-float.wbc-browser-drag-ghost.drop-ready {
+  border-color: color-mix(in srgb, var(--wb-green) 62%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-green) 16%, var(--wb-card-bg-strong));
+  color: color-mix(in srgb, var(--wb-green) 84%, var(--wb-text));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--wb-green) 14%, transparent),
+    0 12px 30px rgba(8, 16, 28, 0.24),
+    0 3px 9px rgba(8, 16, 28, 0.14);
+}
+
+.wbc-browser-restore-float.wbc-browser-drag-ghost .wbc-browser-restore-favicon {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+}
+
+.wbc-browser-restore-float.wbc-browser-drag-ghost .wbc-browser-restore-favicon .fallback {
+  width: 18px;
+  height: 18px;
+}
+
+.wbc-browser-restore-favicon {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 7px;
+}
+
+.wbc-browser-restore-favicon .fallback {
+  width: 20px;
+  height: 20px;
+}
+
+.wbc-browser-restore-favicon img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--wb-card-bg);
+}
+
+/* A scrollable column must overflow instead of distributing negative space by
+   shrinking transcript rows. In particular, a size-locked reasoning card has
+   overflow:hidden, which otherwise lets flexbox collapse its content box to
+   zero and leaves what looks like an empty, flattened card. */
+.wbc-thread > * {
+  flex-shrink: 0;
+}
+
+/* A transcript entry owns the horizontal space that can be yielded to a
+   floating browser. Padding the wrapper (rather than the message itself)
+   preserves the existing user-right / assistant-left alignment inside the
+   remaining readable lane. The values are updated only for vertically
+   intersecting entries. */
+.wbc-thread-item {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding-inline-start: var(--wbc-browser-avoid-start, 0px);
+  padding-inline-end: var(--wbc-browser-avoid-end, 0px);
+}
+
+.wbc-thread-item.retry-clearing {
+  display: grid;
+  grid-template-rows: 1fr;
+  overflow: clip;
+  pointer-events: none;
+  transform-origin: top left;
+  will-change: grid-template-rows, margin-block-end, opacity, transform;
+  animation: wbc-retry-output-clear 180ms cubic-bezier(.4, 0, 1, 1) forwards;
+}
+
+/* Collapse the complete retry range in the same layout transaction. The
+   negative end margin cancels the flex gap owned by each disappearing row, so
+   removing the rows after the animation does not cause a second jump. */
+.wbc-thread-item.retry-clearing > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+@keyframes wbc-retry-output-clear {
+  from {
+    grid-template-rows: 1fr;
+    margin-block-end: 0;
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    grid-template-rows: 0fr;
+    margin-block-end: -16px;
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-thread-item.retry-clearing {
+    animation: none;
+  }
+}
+
+/* Main and split conversations share the same shrink chain. Every message
+   layer must yield to the current grid column or its min-content width will
+   be painted underneath the adjacent split. */
+.wbc-thread .wbc-thread-item,
+.wbc-thread .wbc-msg,
+.wbc-thread .wbc-msg-row,
+.wbc-thread .wbc-bubble,
+.wbc-thread .wbc-msg-body {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.wbc-thread .wbc-msg.assistant,
+.wbc-thread .wbc-msg-body {
+  width: 100%;
+}
+
+.wbc-thread .wbc-msg-body,
+.wbc-thread .wbc-bubble {
+  overflow-wrap: anywhere;
+}
+
+.wbc-thread-item > .wbc-msg.user {
+  align-self: flex-end;
+}
+
+.wbc-thread-item > .wbc-msg.assistant {
+  align-self: stretch;
+}
+
+.wbc-empty-thread {
+  margin: auto;
+  max-width: 380px;
+  text-align: center;
+  color: var(--wb-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.wbc-empty-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--wb-accent) 14%, transparent);
+  color: var(--wb-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wbc-empty-thread b {
+  color: var(--wb-text);
+  font-size: calc(15px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-empty-thread p {
+  margin: 0;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.6;
+}
+
+.wbc-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 860px;
+}
+
+.wbc-msg.user {
+  align-self: flex-end;
+  align-items: flex-end;
+  max-width: 78%;
+}
+
+.wbc-msg.assistant {
+  align-self: stretch;
+}
+
+/* Model transport changes are durable transcript events, not authored chat
+   messages. Keep them centered and neutral so they cannot be mistaken for a
+   user bubble or for an assistant reply. */
+.wbc-model-status-message {
+  align-self: stretch;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  justify-content: center;
+  padding: 2px 0;
+  box-sizing: border-box;
+}
+
+.wbc-model-status-card {
+  display: inline-flex;
+  max-width: min(100%, 560px);
+  min-width: 0;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--wb-text) 11%, var(--wb-line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-card-bg) 94%, var(--wb-text) 6%);
+  color: var(--wb-muted);
+  padding: 7px 11px;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--wb-text) 5%, transparent);
+  box-sizing: border-box;
+}
+
+.wbc-model-status-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.wbc-agent-notification {
+  align-self: flex-start;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 44px;
+  align-items: start;
+  gap: 10px;
+  width: min(720px, 100%);
+  padding: 12px 10px 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--wb-amber) 42%, var(--wb-line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-amber) 8%, var(--wb-card-bg));
+  color: var(--wb-text);
+  box-sizing: border-box;
+}
+
+.wbc-agent-notification-icon {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-amber);
+}
+
+.wbc-agent-notification-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.wbc-agent-notification-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wbc-agent-notification-copy b {
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  line-height: 1.45;
+}
+
+.wbc-agent-notification-copy small {
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.55;
+}
+
+.wbc-agent-notification-copy code {
+  margin-top: 3px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--wb-amber) 18%, var(--wb-line));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--wb-bg) 66%, transparent);
+  color: var(--wb-text);
+  font: 500 calc(11.5px * var(--wb-ui-font-scale, 1))/1.55 var(--wb-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.wbc-agent-notification-action {
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--wb-muted);
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.wbc-agent-notification-action:hover {
+  background: color-mix(in srgb, var(--wb-amber) 12%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-agent-notification-action:focus-visible {
+  outline: 2px solid var(--wb-accent);
+  outline-offset: 2px;
+}
+
+.wbc-agent-notification-action svg {
+  width: 15px;
+  height: 15px;
+}
+
+@media (max-width: 560px) {
+  .wbc-agent-notification {
+    grid-template-columns: 20px minmax(0, 1fr) 44px;
+    gap: 8px;
+  }
+}
+
+.wbc-msg-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.wbc-msg-row time {
+  flex: 0 0 auto;
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-faint);
+  padding-bottom: 6px;
+}
+
+.wbc-bubble {
+  border: 0;
+  border-radius: 12px;
+  background: var(--wb-accent);
+  color: var(--wb-user-message-text);
+  padding: 7px 14px;
+  box-shadow: none;
+  font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 600;
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.wbc-bubble p {
+  margin: 0;
+}
+
+/* Image previews have their own bounded width. Size the surrounding user
+   bubble to the 280px preview plus its 14px horizontal padding instead of
+   leaving intrinsic flex sizing to stretch it across the message lane. The
+   percentage cap still lets the bubble yield in narrow conversation lanes. */
+.wbc-msg.user .wbc-bubble.with-inline-image {
+  width: min(calc(280px + 28px), 100%);
+  max-width: 100%;
+}
+
+.wbc-msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.wbc-msg-attachments.after-copy {
+  border-top: 1px solid color-mix(in srgb, var(--wb-text) 10%, transparent);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.wbc-attach-file {
+  appearance: none;
+  flex: 1 1 100%;
+  width: 100%;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  background: var(--wb-card-bg);
+  border: 1px solid var(--wb-line);
+  border-radius: 11px;
+  padding: 9px 12px;
+  color: var(--wb-text);
+  font: inherit;
+  text-align: left;
+  min-width: 0;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+button.wbc-attach-file { cursor: pointer; }
+button.wbc-attach-file:hover {
+  border-color: color-mix(in srgb, var(--wb-red) 34%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-red) 2.5%, var(--wb-card-bg));
+}
+button.wbc-attach-file:focus-visible {
+  outline: 2px solid var(--wb-active-border);
+  outline-offset: 2px;
+}
+
+.wbc-inline-image {
+  width: min(280px, 100%);
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  cursor: grab;
+}
+
+.wbc-inline-image:active {
+  cursor: grabbing;
+}
+
+.wbc-inline-image-preview {
+  appearance: none;
+  width: 100%;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--wb-blue) 28%, var(--wb-line));
+  border-radius: 12px;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  cursor: zoom-in;
+}
+
+.wbc-inline-image-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 11px;
+  object-fit: cover;
+}
+
+.wbc-inline-image-preview:hover img {
+  filter: brightness(.97);
+}
+
+.wbc-inline-image-preview:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--wb-active-border);
+  outline-offset: -2px;
+}
+
+.wbc-inline-image-footer {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+  padding: 2px 4px 2px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--wb-card-bg);
+  box-shadow: var(--wbc-control-shadow);
+}
+
+.wbc-inline-image-footer > b {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-inline-image-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.wbc-inline-image-actions .wbc-inline-image-action {
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px;
+  min-height: 28px;
+  max-width: 28px;
+  max-height: 28px;
+  box-sizing: border-box;
+  flex: 0 0 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 !important;
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: 0;
+  line-height: 0;
+  vertical-align: middle;
+  text-decoration: none;
+  transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
+}
+
+.wbc-inline-image-actions .wbc-inline-image-action svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wbc-inline-image-actions .wbc-inline-image-action:hover {
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-inline-image-actions .wbc-inline-image-action:focus-visible {
+  outline: 2px solid var(--wb-active-border);
+  outline-offset: 2px;
+}
+
+.wbc-file-visual,
+.wbc-composer-file-visual {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--wb-muted) 16%, var(--wb-card-bg));
+  color: var(--wb-muted);
+}
+
+.wbc-file-visual.red,
+.wbc-composer-file-visual.red { background: color-mix(in srgb, #ef4d57 16%, var(--wb-card-bg)); color: #e0454f; }
+.wbc-file-visual.purple,
+.wbc-composer-file-visual.purple { background: color-mix(in srgb, #8f5cff 16%, var(--wb-card-bg)); color: #8a5cf6; }
+.wbc-file-visual.blue,
+.wbc-composer-file-visual.blue { background: color-mix(in srgb, #3b82f6 15%, var(--wb-card-bg)); color: #3b82f6; }
+.wbc-file-visual.teal,
+.wbc-composer-file-visual.teal { background: color-mix(in srgb, #06b6d4 16%, var(--wb-card-bg)); color: #0a96b4; }
+.wbc-file-visual.green,
+.wbc-composer-file-visual.green { background: color-mix(in srgb, #1f9d57 16%, var(--wb-card-bg)); color: #1f9d57; }
+.wbc-file-visual.amber,
+.wbc-composer-file-visual.amber { background: color-mix(in srgb, #f2a51a 18%, var(--wb-card-bg)); color: #d68a08; }
+.wbc-file-visual.orange,
+.wbc-composer-file-visual.orange { background: color-mix(in srgb, #ef7e1a 17%, var(--wb-card-bg)); color: #e06f10; }
+.wbc-file-visual.indigo,
+.wbc-composer-file-visual.indigo { background: color-mix(in srgb, #6366f1 16%, var(--wb-card-bg)); color: #6366f1; }
+.wbc-file-visual.cyan,
+.wbc-composer-file-visual.cyan { background: color-mix(in srgb, #0891b2 17%, var(--wb-card-bg)); color: #0a91b0; }
+
+.wbc-attach-file-meta {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wbc-attach-file-meta b {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.wbc-attach-file-meta small {
+  color: var(--wb-faint);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.35;
+}
+
+.wbc-attach-file-open {
+  align-self: stretch;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  padding-left: 13px;
+  border-left: 1px solid var(--wb-line);
+  color: #e0454f;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.wbc-attach-file-open svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wbc-msg-body {
+  font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.7;
+  color: var(--wb-text);
+  word-break: break-word;
+  position: relative;
+}
+
+.wbc-msg-body.markdown p { margin: 0 0 8px; }
+.wbc-msg-body.markdown p:last-child { margin-bottom: 0; }
+.wbc-msg-body.markdown pre {
+  background: var(--wb-panel-2);
+  border: 1px solid var(--wb-line);
+  border-radius: 9px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+}
+.wbc-msg-body.markdown code {
+  font-family: var(--mono, "IBM Plex Mono", monospace);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  background: var(--wb-icon-bg);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.wbc-msg-body.markdown pre code { background: transparent; padding: 0; }
+.wbc-msg-body.markdown ul, .wbc-msg-body.markdown ol { margin: 4px 0 8px; padding-left: 20px; }
+.wbc-msg-body.markdown h1, .wbc-msg-body.markdown h2, .wbc-msg-body.markdown h3 { font-size: calc(14.5px * var(--wb-ui-font-scale, 1)); margin: 12px 0 6px; }
+.wbc-msg-body.markdown table { border-collapse: collapse; margin: 6px 0; }
+.wbc-msg-body.markdown th, .wbc-msg-body.markdown td { border: 1px solid var(--wb-line); padding: 4px 9px; font-size: calc(12.5px * var(--wb-ui-font-scale, 1)); }
+.wbc-msg-body.markdown th { background: color-mix(in srgb, var(--wb-muted) 8%, transparent); }
+/* Links (citations / TOC / external refs): theme-aware blue instead of the raw
+   browser default. Softened underline at rest, full-strength on hover; pin the
+   visited colour so references never decay to the default purple. */
+.wbc-msg-body.markdown a {
+  color: var(--wb-link);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--wb-link) 38%, transparent);
+  text-underline-offset: 2px;
+  transition: color 0.12s ease, text-decoration-color 0.12s ease;
+}
+.wbc-msg-body.markdown a:hover {
+  color: var(--wb-link-hover);
+  text-decoration-color: var(--wb-link-hover);
+}
+.wbc-msg-body.markdown a:visited { color: var(--wb-link); }
+.wbc-msg-body.markdown blockquote {
+  margin: 8px 0;
+  padding: 5px 14px;
+  border-left: 3px solid color-mix(in srgb, var(--wb-blue) 55%, var(--wb-line-2));
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--wb-blue) 6%, transparent);
+  color: var(--wb-muted);
+}
+
+/* Interactive Markdown blocks. These classes are emitted as standard HTML by
+   the shared renderer, so the same treatment applies in chat, memory,
+   knowledge, document viewers, and sub-agent results. */
+.wbc-fold,
+.wbc-card {
+  margin: 10px 0;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-panel-2) 72%, transparent);
+  color: var(--wb-text);
+  overflow: hidden;
+}
+
+.wbc-fold > summary {
+  min-height: 24px;
+  padding: 10px 12px;
+  cursor: pointer;
+  color: var(--wb-text);
+  font-weight: 650;
+  line-height: 1.5;
+  touch-action: manipulation;
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+.wbc-fold > summary:hover {
+  background: color-mix(in srgb, var(--wb-accent) 7%, transparent);
+}
+
+.wbc-fold > summary:focus-visible {
+  outline: 2px solid var(--wb-accent);
+  outline-offset: -3px;
+  border-radius: 8px;
+}
+
+.wbc-fold[open] > summary {
+  border-bottom: 1px solid var(--wb-line);
+  background: color-mix(in srgb, var(--wb-accent) 5%, transparent);
+}
+
+.wbc-fold-body,
+.wbc-card-body {
+  min-width: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+
+.wbc-card-title {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--wb-line);
+  color: var(--wb-text);
+  font-weight: 700;
+  line-height: 1.5;
+  background: color-mix(in srgb, var(--wb-accent) 7%, transparent);
+}
+
+.wbc-fold-body > :first-child,
+.wbc-card-body > :first-child { margin-top: 0; }
+.wbc-fold-body > :last-child,
+.wbc-card-body > :last-child { margin-bottom: 0; }
+.wbc-fold-body > table,
+.wbc-card-body > table { width: 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-fold > summary { transition: none; }
+}
+
+/* ── Declarative :::chart block ─────────────────────────────────────────────
+   The raw spec text is the default content (graceful fallback); the mount
+   script hides it and renders the ECharts widget in its place. */
+.wbc-chart {
+  margin: 10px 0;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-panel-2) 72%, transparent);
+  color: var(--wb-text);
+  overflow: hidden;
+}
+
+.wbc-chart-spec {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-family: var(--wb-mono-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--wb-text) 82%, transparent);
+  white-space: pre;
+}
+
+.wbc-chart-spec-hidden { display: none; }
+
+.wbc-chart-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.wbc-chart-canvas {
+  width: 100%;
+  height: 260px;
+  min-height: 160px;
+  box-sizing: border-box;
+}
+
+.wbc-chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 8px 12px 12px;
+  border-top: 1px solid var(--wb-line);
+}
+
+.wbc-chart-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--wb-text);
+  user-select: none;
+}
+
+.wbc-chart-control-name {
+  font-weight: 650;
+  min-width: 1ch;
+}
+
+.wbc-chart-control input[type="range"] {
+  width: 120px;
+  accent-color: var(--wb-accent);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.wbc-chart-control-value {
+  min-width: 3ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--wb-text) 75%, transparent);
+}
+
+.wbc-chart.wbc-chart-error::before {
+  content: attr(data-wbc-chart-error);
+  display: block;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--wb-danger, #e5484d) 85%, transparent);
+  border-bottom: 1px solid var(--wb-line);
+}
+
+/* ── Declarative :::button block ────────────────────────────────────────────
+   The fallback renders "[按钮: label]"; the mount script swaps in the real
+   <button> and dispatches `wbc:block-action` events on click. */
+.wbc-button {
+  margin: 10px 0;
+}
+
+.wbc-button-spec {
+  display: inline-block;
+  margin: 0;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: color-mix(in srgb, var(--wb-text) 80%, transparent);
+  background: color-mix(in srgb, var(--wb-panel-2) 72%, transparent);
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  white-space: pre-wrap;
+}
+
+.wbc-button-spec-hidden { display: none; }
+
+.wbc-button-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-panel-2) 72%, transparent);
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
+.wbc-button-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-accent) 8%, transparent);
+  border-color: color-mix(in srgb, var(--wb-accent) 35%, var(--wb-line));
+}
+
+.wbc-button-btn:focus-visible {
+  outline: 2px solid var(--wb-accent);
+  outline-offset: 2px;
+}
+
+.wbc-button-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.wbc-button-btn--primary {
+  color: #fff;
+  background: var(--wb-accent);
+  border-color: var(--wb-accent);
+}
+
+.wbc-button-btn--primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-accent) 88%, #000);
+  border-color: var(--wb-accent);
+}
+
+.wbc-button-btn--danger {
+  color: #fff;
+  background: var(--wb-danger, #e5484d);
+  border-color: var(--wb-danger, #e5484d);
+}
+
+.wbc-button-btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-danger, #e5484d) 88%, #000);
+}
+
+.wbc-button-btn.wbc-button-triggered {
+  opacity: 0.7;
+  transform: translateY(1px);
+}
+
+.wbc-button.wbc-button-error::before {
+  content: attr(data-wbc-button-error);
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--wb-danger, #e5484d) 85%, transparent);
+}
+
+/* ── Container blocks: :::actions row and :::grid columns ──────────────────
+   Children (buttons / cards / charts) keep their own block rendering; the
+   container only lays them out. Invalid nesting degrades to the raw body. */
+.wbc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.wbc-grid {
+  display: grid;
+  gap: 12px;
+  align-items: start;
+  margin: 10px 0;
+}
+
+.wbc-grid > .wbc-card,
+.wbc-grid > .wbc-chart {
+  min-width: 0;
+  margin: 0;
+}
+
+.wbc-actions-error,
+.wbc-grid-error {
+  display: block;
+}
+
+.wbc-actions-spec,
+.wbc-grid-spec {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--wb-text) 82%, transparent);
+  background: color-mix(in srgb, var(--wb-panel-2) 72%, transparent);
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 720px) {
+  .wbc-grid { grid-template-columns: 1fr !important; }
+}
+
+.wbc-caret {
+  display: inline-block;
+  width: 8px;
+  height: 15px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--wb-accent);
+  border-radius: 2px;
+  animation: wbc-blink 0.9s steps(2) infinite;
+}
+
+@keyframes wbc-blink {
+  50% { opacity: 0; }
+}
+
+.wbc-msg-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--wb-faint);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-msg-action {
+  border: 0;
+  background: transparent;
+  color: var(--wb-faint);
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.wbc-msg-action:hover {
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-msg-action.is-speaking {
+  background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
+  color: var(--wb-accent);
+}
+
+/* ---- user message edit (fork) ---- */
+
+/* Edit action sits in a footer below the bubble, right-aligned — mirrors the
+   assistant copy/regenerate footer but anchored to the right. It stays faint
+   and brightens on hover, like the other message actions. */
+.wbc-user-foot {
+  justify-content: flex-end;
+}
+
+.wbc-msg.user.editing {
+  max-width: none;
+  align-items: flex-end;
+}
+
+.wbc-edit-bubble {
+  width: 520px;
+  max-width: 100%;
+  box-sizing: border-box;
+  border-radius: 14px;
+  border-color: color-mix(in srgb, var(--wb-accent) 32%, transparent);
+  background: var(--wb-card-bg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  padding: 12px;
+}
+
+.wbc-edit-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 72px;
+  max-height: 260px;
+  resize: none;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-bg);
+  color: var(--wb-text);
+  padding: 10px 12px;
+  font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.6;
+  font-family: inherit;
+  outline: 0;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.wbc-edit-textarea::placeholder {
+  color: var(--wb-faint);
+}
+
+.wbc-edit-textarea:focus {
+  border-color: var(--wb-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 16%, transparent);
+}
+
+.wbc-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* ---- rail fork marker (inline, right of the chat title) ---- */
+
+.wbc-fork-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.5;
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 26%, transparent);
+  border-radius: 5px;
+  padding: 0 5px;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+
+.wbc-fork-marker:hover {
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-accent) 18%, transparent);
+}
+
+/* ---- branch tree (fork lineage navigator) ---- */
+
+.wbc-branch {
+  --wbc-branch-main: #58a6ff;
+  --wbc-branch-active: var(--wb-accent);
+  padding: 0 0 12px;
+}
+
+.wbc-branch-empty {
+  padding: 8px 2px;
+}
+
+.wbc-branch-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+
+.wbc-branch-row {
+  position: relative;
+  display: block;
+}
+
+.wbc-branch-button {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 56px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background 120ms ease;
+}
+
+/* Compact source-control lanes. Main and nested paths get independent tones,
+   but share the same one-pixel geometry so the graph stays visually quiet. */
+.wbc-branch-line {
+  position: absolute;
+  z-index: 0;
+  background: var(--wbc-branch-main);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.wbc-branch-line.v {
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+.wbc-branch-line.h {
+  height: 1px;
+}
+
+.wbc-branch-line.main-lane {
+  background: var(--wbc-branch-main);
+}
+
+.wbc-branch-line.fork-lane {
+  background: var(--wbc-branch-active);
+}
+
+/* Top-right rounded corner = the quarter turn that drops the horizontal lead
+   down into the fork node (horizontal tangent at the trunk side, vertical at
+   the node). */
+.wbc-branch-line.arc {
+  box-sizing: border-box;
+  background: transparent;
+  border-top: 1px solid var(--wbc-branch-active);
+  border-right: 1px solid var(--wbc-branch-active);
+  border-radius: 0;
+  border-top-right-radius: 14px 24px;
+}
+
+.wbc-branch-node {
+  position: absolute;
+  top: 28px;
+  z-index: 1;
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1.5px solid var(--wbc-branch-main);
+  background: var(--wb-right-bg);
+  transform: translate(-50%, -50%);
+  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.wbc-branch-node-core {
+  position: absolute;
+  inset: 2.5px;
+  border-radius: inherit;
+  background: transparent;
+}
+
+.wbc-branch-row.kind-root .wbc-branch-node,
+.wbc-branch-row.kind-fork .wbc-branch-node {
+  background: var(--wbc-branch-main);
+  border-color: var(--wbc-branch-main);
+}
+
+.wbc-branch-row.kind-tip.lane-fork .wbc-branch-node {
+  background: var(--wbc-branch-active);
+  border-color: var(--wbc-branch-active);
+}
+
+.wbc-branch-row.kind-tip.lane-main .wbc-branch-node-core {
+  background: var(--wbc-branch-main);
+}
+
+.wbc-branch-button:hover {
+  background: transparent;
+}
+
+.wbc-branch-button:hover .wbc-branch-node {
+  transform: translate(-50%, -50%) scale(1.12);
+}
+
+.wbc-branch-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) max-content;
+  align-items: center;
+  column-gap: 12px;
+  box-sizing: border-box;
+  height: 44px;
+  min-width: 0;
+  margin-left: var(--wbc-branch-rail, 32px);
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 78%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-card-bg) 42%, transparent);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.wbc-branch-button:hover .wbc-branch-card {
+  border-color: color-mix(in srgb, var(--wb-accent) 38%, var(--wb-border));
+  background: color-mix(in srgb, var(--wb-accent) 6%, var(--wb-card-bg));
+}
+
+.wbc-branch-button:focus-visible {
+  outline: none;
+  background: transparent;
+}
+
+.wbc-branch-button:focus-visible .wbc-branch-card {
+  border-color: color-mix(in srgb, var(--wb-accent) 74%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 12%, transparent);
+}
+
+.wbc-branch-kind {
+  min-width: 0;
+  overflow: hidden;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 560;
+  line-height: 1;
+  color: var(--wb-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-branch-text {
+  min-width: 0;
+  overflow: hidden;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 540;
+  line-height: 1.2;
+  color: var(--wb-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-branch-here {
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+  line-height: 1;
+  color: var(--wb-accent);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-branch-node,
+  .wbc-branch-button {
+    transition: none;
+  }
+}
+
+/* ---- tool trace card ---- */
+
+.wbc-activity-group {
+  width: 100%;
+  max-width: 720px;
+  min-width: 0;
+}
+
+.wbc-activity-group-summary {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 36px;
+  max-width: 100%;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-faint);
+  text-align: left;
+  cursor: pointer;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.wbc-activity-group-summary:hover {
+  color: var(--wb-text-strong, var(--wb-text));
+}
+
+.wbc-activity-group-summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 48%, transparent);
+  outline-offset: 2px;
+}
+
+.wbc-activity-group-state,
+.wbc-activity-group-chevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+}
+
+.wbc-activity-group-state {
+  width: 16px;
+  color: var(--wb-green);
+}
+
+.wbc-activity-group-state > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.wbc-activity-group-state .wb-spinner.small {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+}
+
+.wbc-activity-group-summary b {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-family: var(--mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 550;
+  letter-spacing: .01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-activity-group-chevron {
+  margin-left: 1px;
+  color: var(--wb-faint);
+  transition: transform 180ms cubic-bezier(.2, .8, .2, 1);
+}
+
+.wbc-activity-group.expanded .wbc-activity-group-chevron {
+  transform: rotate(90deg);
+}
+
+.wbc-activity-group-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  min-width: 0;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-3px);
+  pointer-events: none;
+  transition:
+    grid-template-rows 200ms cubic-bezier(.2, .8, .2, 1),
+    opacity 140ms ease,
+    transform 200ms cubic-bezier(.2, .8, .2, 1),
+    visibility 0s linear 200ms;
+}
+
+.wbc-activity-group-collapse.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+
+.wbc-activity-group-collapse-inner {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wbc-activity-group-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  margin: 3px 0 2px 22px;
+  padding: 2px 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-activity-group-summary,
+  .wbc-activity-group-chevron,
+  .wbc-activity-group-collapse {
+    transition: none;
+  }
+
+  .wbc-activity-group-collapse {
+    transform: none;
+  }
+}
+
+.wbc-trace {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  max-width: 720px;
+}
+
+.wbc-live-activities {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wbc-trace-summary {
+  order: 1;
+  align-self: flex-start;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--wb-text);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wbc-trace-summary:hover:not(:disabled) {
+  color: var(--wb-text-strong, var(--wb-text));
+}
+
+.wbc-trace-summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 48%, transparent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.wbc-trace-summary:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.wbc-trace-summary-icon,
+.wbc-trace-summary-chevron {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--wb-faint);
+}
+
+.wbc-trace-summary-items {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.wbc-trace-summary-item {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.wbc-trace-summary-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wbc-trace-summary b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wb-faint);
+  font-family: var(--mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 550;
+  letter-spacing: .01em;
+}
+
+.wbc-trace-summary .wb-spinner.small {
+  width: 12px;
+  height: 12px;
+  margin-left: 1px;
+  color: var(--wb-green);
+}
+
+.wbc-trace-summary-chevron {
+  margin-left: 1px;
+  transition: transform 0.14s ease;
+}
+
+.wbc-trace.expanded .wbc-trace-summary-chevron {
+  transform: rotate(90deg);
+}
+
+.wbc-trace-collapse {
+  order: 2;
+  align-self: stretch;
+  display: grid;
+  grid-template-rows: 0fr;
+  min-width: 0;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-3px);
+  pointer-events: none;
+  transition:
+    grid-template-rows 200ms cubic-bezier(.2, .8, .2, 1),
+    opacity 140ms ease,
+    transform 200ms cubic-bezier(.2, .8, .2, 1),
+    visibility 0s linear 200ms;
+}
+
+.wbc-trace-collapse.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+
+.wbc-trace-collapse-inner {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.wbc-trace-details {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: 4px 0 0;
+  padding: 3px 0 1px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--wb-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-trace-collapse,
+  .wbc-trace-summary-chevron {
+    transition: none;
+  }
+
+  .wbc-trace-collapse {
+    transform: none;
+  }
+}
+
+.wbc-trace-details .wbc-trace-list {
+  margin-top: 0;
+  padding-left: 0;
+  gap: 6px;
+}
+
+.wbc-trace-details .wbc-thinking-detail {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  font-family: var(--wb-font, var(--wb-sans, system-ui, sans-serif));
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 400;
+  line-height: 1.58;
+  color: var(--wb-faint);
+  height: auto;
+  overflow: visible;
+}
+
+.wbc-trace-details .wbc-thinking-detail-text {
+  display: block;
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  height: auto;
+  overflow: visible;
+  margin-right: 0;
+  padding-right: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.wbc-trace-timeline {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: visible;
+}
+
+.wbc-trace-timeline-reasoning {
+  margin: 0;
+  padding: 0;
+}
+
+.wbc-trace-timeline-reasoning > .wbc-trace-entry-icon {
+  height: calc(18.17px * var(--wb-ui-font-scale, 1));
+  margin-top: 0;
+  align-items: center;
+}
+
+.wbc-trace-view {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.wbc-trace-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-text);
+}
+
+.wbc-trace-head .wb-spinner {
+  color: var(--wb-green);
+  width: 14px;
+  height: 14px;
+}
+
+.wbc-trace-icon {
+  color: var(--wb-green);
+  display: inline-flex;
+}
+
+.wbc-trace-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0 0 0 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.wbc-trace-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-muted);
+}
+
+.wbc-trace-mark {
+  flex: 0 0 auto;
+  color: var(--wb-green);
+  display: inline-flex;
+  width: calc(11.5px * var(--wb-ui-font-scale, 1));
+  height: calc(1.5 * 11.5px * var(--wb-ui-font-scale, 1));
+  align-items: center;
+  justify-content: center;
+  margin-top: 0;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-trace-mark > svg {
+  width: 1em;
+  height: 1em;
+}
+
+.wbc-trace-entry-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0;
+  color: var(--wb-faint);
+}
+
+.wbc-trace-entry-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.wbc-trace-mark .wb-spinner.small {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+}
+
+.wbc-trace-list li.failed .wbc-trace-mark {
+  color: var(--wb-red);
+}
+
+.wbc-trace-list li.failed .wbc-trace-text {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--wb-red) 55%, transparent);
+}
+
+.wbc-trace-text {
+  min-width: 0;
+  word-break: break-all;
+  font-family: var(--mono, "IBM Plex Mono", monospace);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-trace-text small {
+  color: var(--wb-faint);
+  font-family: inherit;
+}
+
+.wbc-transfer-progress {
+  display: grid;
+  grid-template-columns: minmax(72px, 160px) 34px;
+  align-items: center;
+  gap: 7px;
+  margin-top: 5px;
+}
+
+.wbc-transfer-progress::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--wb-line);
+}
+
+.wbc-transfer-progress > span {
+  grid-column: 1;
+  grid-row: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--wb-accent);
+  transition: width 160ms ease;
+}
+
+.wbc-transfer-progress > small {
+  grid-column: 2;
+  margin: 0;
+  color: var(--wb-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-thinking-detail {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+}
+
+.wbc-thinking-detail .wb-spinner.small {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  margin-top: 3px;
+  border-width: 2px;
+  color: var(--wb-green);
+}
+
+.wbc-thinking-detail-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  /* Extend only the scrolling box toward the card edge. Matching padding keeps
+     the reasoning text at its existing measure while the scrollbar sits 8px
+     farther right, still safely inside the rounded border. */
+  margin-right: -8px;
+  padding-right: 8px;
+}
+
+/* ---- live heartbeat (elapsed + stall hint) ---- */
+.wbc-heartbeat {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 7px;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-muted);
+}
+
+.wbc-heartbeat-pulse {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--wb-green);
+  animation: wbc-pulse 1.1s ease-in-out infinite;
+}
+
+.wbc-heartbeat.finalizing {
+  color: var(--wb-muted);
+}
+
+.wbc-heartbeat-check {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--wb-green);
+}
+
+.wbc-heartbeat-elapsed {
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-heartbeat-still {
+  color: var(--wb-muted);
+}
+
+.wbc-heartbeat.stalled .wbc-heartbeat-still {
+  color: var(--wb-amber);
+}
+
+@keyframes wbc-still-leave {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-3px); }
+}
+
+@keyframes wbc-still-enter {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.wbc-heartbeat-still.wbc-still-leave {
+  animation: wbc-still-leave 0.6s ease-in both;
+}
+
+.wbc-heartbeat-still.wbc-still-enter {
+  animation: wbc-still-enter 0.6s ease-out both;
+}
+
+.wbc-heartbeat-still::before {
+  content: "·";
+  margin-right: 7px;
+  color: var(--wb-faint);
+}
+
+.wbc-heartbeat.stalled .wbc-heartbeat-pulse {
+  background: var(--wb-amber);
+}
+
+/* ---- composer ---- */
+
+/* Inline permission / clarification prompt at the bottom of the chat thread. */
+.wbc-question-group {
+  width: 100%;
+  min-width: 0;
+  align-self: stretch;
+  max-width: 760px;
+  box-sizing: border-box;
+  margin: 4px auto 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.wbc-question-group > .wbc-trace {
+  max-width: none;
+}
+.wbc-question {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 14px 16px;
+  background: var(--wb-main-bg, #fff);
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+.wbc-question-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  color: var(--wb-accent);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 600;
+}
+.wbc-question-head > b {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.wbc-question-ico { display: inline-flex; }
+.wbc-question-text {
+  min-width: 0;
+  max-width: 100%;
+  margin: 0 0 12px;
+  font-size: calc(14px * var(--wb-ui-font-scale, 1));
+  line-height: 1.6;
+  color: var(--wb-text, inherit);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.wbc-question-options {
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.wbc-question-opt {
+  min-width: 0;
+  max-width: 100%;
+  padding: 7px 14px;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 500;
+  color: var(--wb-text, inherit);
+  background: var(--wb-surface, #f5f6f8);
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.wbc-question-opt:hover:not(:disabled) { border-color: var(--wb-accent); }
+.wbc-question-opt.primary {
+  color: #fff;
+  background: var(--wb-accent);
+  border-color: var(--wb-accent);
+}
+.wbc-question-opt > span,
+.wbc-question-opt > small {
+  display: block;
+  text-align: left;
+}
+.wbc-question-opt > small {
+  margin-top: 3px;
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 400;
+  opacity: 0.78;
+}
+.wbc-question-protocol-error {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--wb-red) 32%, var(--wb-line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-red) 6%, var(--wb-surface));
+  color: var(--wb-text);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  line-height: 1.5;
+}
+.wbc-agent-schema-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.wbc-agent-schema-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--wb-text);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+}
+.wbc-agent-schema-field > span { font-weight: 600; }
+.wbc-agent-schema-field > span > b { color: var(--wb-red); }
+.wbc-agent-schema-help,
+.wbc-agent-schema-error {
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  line-height: 1.45;
+}
+.wbc-agent-schema-help { color: var(--wb-muted); }
+.wbc-agent-schema-error { color: var(--wb-red); }
+.wbc-agent-schema-field input:not([type="checkbox"]),
+.wbc-agent-schema-field select {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 9px 11px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  color: var(--wb-text);
+  background: var(--wb-surface);
+  font: inherit;
+  outline: none;
+}
+.wbc-agent-schema-field input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--wb-accent);
+}
+.wbc-agent-schema-field input:focus,
+.wbc-agent-schema-field select:focus { border-color: var(--wb-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 16%, transparent); }
+.wbc-agent-schema-field.invalid input,
+.wbc-agent-schema-field.invalid select { border-color: var(--wb-red); }
+.wbc-agent-schema-submit { grid-column: 1 / -1; justify-self: start; min-height: 44px; }
+@media (max-width: 640px) {
+  .wbc-agent-schema-form { grid-template-columns: minmax(0, 1fr); }
+}
+.wbc-question-opt:disabled { opacity: 0.5; cursor: default; }
+.wbc-question-custom {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+.wbc-question-custom input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 11px;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-text, inherit);
+  background: var(--wb-surface, #f5f6f8);
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  outline: none;
+}
+.wbc-question-custom input:focus { border-color: var(--wb-accent); }
+.wbc-question-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  color: #fff;
+  background: var(--wb-accent);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.wbc-question-send:disabled { opacity: 0.45; cursor: default; }
+
+.wbc-tool-structured {
+  margin-top: 6px;
+  max-width: min(620px, 100%);
+  color: var(--wb-muted);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+}
+.wbc-tool-structured > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--wb-accent);
+}
+.wbc-tool-structured > pre {
+  max-height: 260px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 9px 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-surface);
+  color: var(--wb-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.wbc-tool-presentation-kind {
+  display: inline-flex;
+  margin-inline-start: 7px;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--wb-border) 78%, transparent);
+  border-radius: 999px;
+  color: var(--wb-muted);
+  font-size: calc(9px * var(--wb-ui-font-scale, 1));
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.wbc-tool-presentation-body {
+  max-height: 220px;
+  overflow: auto;
+  margin: 7px 0 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--wb-bg) 86%, #000);
+  color: var(--wb-text);
+  font-family: var(--mono, "IBM Plex Mono", monospace);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wbc-tool-presentation-body.error {
+  color: var(--wb-danger, #e06c75);
+}
+
+.wbc-composer {
+  /* Main conversations, split conversations and detached chat windows share
+     one composer geometry. The three visible card edges must stay optically
+     equal even when a narrower window activates container queries. */
+  --wbc-composer-top-inset: 10px;
+  --wbc-composer-edge-inset: 14px;
+  flex: 0 0 auto;
+  padding: 10px 22px 8px;
+}
+
+/* The main conversation composer sits on the shared bottom glass plane. Its
+   input card adds one restrained translucent layer so the selected Workbench
+   background can show through without reducing text contrast. */
+.wbc-main > .wbc-composer {
+  position: absolute;
+  z-index: 24;
+  inset: auto 0 0;
+  box-sizing: border-box;
+  width: calc(100% - var(--wbc-reclaimed-side-width));
+  transform: translateX(var(--wbc-conversation-shift));
+  transition: width 420ms cubic-bezier(.22, 1.24, .36, 1), transform 420ms cubic-bezier(.22, 1.24, .36, 1);
+  will-change: width, transform;
+  isolation: isolate;
+  padding-bottom: 0;
+}
+
+.wbc-command-row {
+  margin-bottom: 6px;
+}
+
+.wbc-command-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 28%, transparent);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.wbc-command-chip button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  display: inline-flex;
+  cursor: pointer;
+  padding: 0;
+}
+
+.wbc-composer-box {
+  --wbc-composer-glass-border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);
+  --wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);
+  --wbc-composer-glass-drop-shadow: var(--wbc-control-shadow);
+  --wbc-composer-glass-top-highlight: color-mix(in srgb, #fff 10%, transparent);
+  --wbc-composer-glass-inner-edge: color-mix(in srgb, var(--wb-line) 14%, transparent);
+  --wbc-composer-glass-shadow:
+    var(--wbc-composer-glass-drop-shadow),
+    inset 0 1px 0 var(--wbc-composer-glass-top-highlight),
+    inset 0 0 0 1px var(--wbc-composer-glass-inner-edge);
+  position: relative;
+  container-name: wbc-composer;
+  container-type: inline-size;
+  border: var(--wbc-composer-glass-border);
+  border-radius: 14px;
+  background: var(--wbc-composer-glass-background);
+  padding: 10px 12px 8px;
+  box-shadow: var(--wbc-composer-glass-shadow);
+  -webkit-backdrop-filter: var(--wbc-composer-glass-filter);
+  backdrop-filter: var(--wbc-composer-glass-filter);
+}
+
+/* Match the dark composer's glass construction in light mode. The material
+   stays light, but uses the same translucency, blur and three-layer elevation
+   instead of falling back to the nearly flat shared control shadow. */
+html[data-theme="light"] .wbc-composer-box {
+  --wbc-composer-glass-background: color-mix(in srgb, #fff 76%, transparent);
+  --wbc-composer-glass-drop-shadow: 0 10px 28px rgba(15, 23, 42, .12);
+  --wbc-composer-glass-top-highlight: color-mix(in srgb, #fff 90%, transparent);
+  --wbc-composer-glass-inner-edge: color-mix(in srgb, #0f172a 3%, transparent);
+}
+
+/* Keep the light composer as the optical reference. Bright surfaces and their
+   shadow halos expand perceptually, while black shadows recede into a dark
+   canvas, so dark mode needs stronger edge contrast to carry the same visual
+   weight. Only material colours change here: both themes retain the base
+   three-layer shadow and the exact same compositor filter. */
+html[data-theme="dark"] :is(.wbc-composer-box, .wbc-side-card) {
+  --wbc-composer-glass-background: var(--wb-conversation-surface);
+  --wbc-composer-glass-drop-shadow: 0 10px 28px rgba(0, 0, 0, .42);
+  --wbc-composer-glass-top-highlight: color-mix(in srgb, #fff 14%, transparent);
+  --wbc-composer-glass-inner-edge: color-mix(in srgb, #fff 4%, transparent);
+  background: var(--wbc-composer-glass-background);
+  box-shadow: var(--wbc-composer-glass-shadow);
+}
+
+/* Conversation panels opened over a split transcript are cards, not glass.
+   Keep their material opaque in both themes and anchor the visual boundary to
+   the panel itself; otherwise transcript text remains visible through the
+   dark-theme conversation surface. */
+html :is(
+  .wbc-pane-floating-conversation-panel,
+  .wbc-split-chat-panel,
+  .wbc-split-main-grip > .wbc-side-floating
+) .wbc-side-card {
+  background: var(--wb-card-bg-strong);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Agent-created chats and Agent-entered drafts get one quiet, moving edge on
+   the composer itself. It stays on the 1.5px perimeter and never affects
+   layout, content opacity, or pointer behavior. */
+.wbc-composer-box.agent-flow::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: 4;
+  border-radius: 15px;
+  padding: 1.5px;
+  pointer-events: none;
+  background: linear-gradient(
+    104deg,
+    transparent 24%,
+    color-mix(in srgb, var(--wb-accent) 82%, transparent) 45%,
+    color-mix(in srgb, #22d3ee 72%, var(--wb-accent)) 52%,
+    transparent 76%
+  );
+  background-size: 260% 100%;
+  background-position: 140% 0;
+  opacity: .9;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: wbc-agent-composer-flow 3.2s cubic-bezier(.4, 0, .2, 1) infinite;
+}
+
+@keyframes wbc-agent-composer-flow {
+  0% { background-position: 140% 0; opacity: .28; }
+  45% { opacity: .92; }
+  100% { background-position: -140% 0; opacity: .28; }
+}
+
+.wbc-composer-box textarea {
+  width: 100%;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--wb-text);
+  font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.6;
+  max-height: 180px;
+  box-sizing: border-box;
+}
+
+/* Chromium sizes the chat textarea from its content without the synchronous
+   style-write / scrollHeight-read loop previously used by WbcComposer. Keep
+   the exact resting and capped geometry so the glass surface only changes
+   bounds when the visible line count actually changes. */
+.wbc-composer-box textarea.wbc-composer-textarea {
+  field-sizing: content;
+  min-height: 44px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+/* field-sizing treats placeholder text as content. Pin the empty state to the
+   existing resting height so long localized placeholders cannot change the
+   composer's geometry in narrow panes. */
+.wbc-composer-box textarea.wbc-composer-textarea:placeholder-shown {
+  field-sizing: fixed;
+  height: 44px;
+}
+
+.wbc-composer-box textarea::placeholder {
+  color: var(--wb-faint);
+}
+
+.wbc-composer-box textarea:disabled {
+  color: var(--wb-faint);
+  opacity: .72;
+  cursor: not-allowed;
+}
+
+.wbc-attach-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.wbc-attach-card {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--wb-line);
+  border-radius: 9px;
+  background: var(--wb-panel-2);
+  padding: 5px 26px 5px 9px;
+  max-width: 220px;
+}
+
+.wbc-attach-card.file {
+  flex: 1 1 100%;
+  max-width: 100%;
+  min-height: 58px;
+  gap: 10px;
+  border-radius: 11px;
+  background: var(--wb-card-bg);
+  padding: 8px 40px 8px 10px;
+}
+
+.wbc-attach-card.file .wbc-composer-file-visual {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+}
+
+.wbc-attach-card.image {
+  padding: 0;
+  overflow: hidden;
+}
+
+.wbc-attach-card.image img {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 8px;
+  display: block;
+}
+
+.wbc-attach-name {
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-attach-x {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: var(--wb-muted);
+  display: inline-flex;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 999px;
+}
+
+.wbc-attach-card.file .wbc-attach-x {
+  right: 9px;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+}
+
+.wbc-attach-card.file .wbc-attach-x:hover {
+  background: color-mix(in srgb, var(--wb-text) 9%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-attach-card.image .wbc-attach-x {
+  top: 2px;
+  right: 2px;
+  transform: none;
+  background: rgba(15, 23, 42, 0.55);
+  color: #fff;
+  border-radius: 6px;
+}
+
+.wbc-context-chips {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 0 2px;
+}
+
+/* Anchor the context picker to the full chip row instead of the add button.
+   When the button sits near the right edge, left-aligning the picker to that
+   button lets the menu extend beyond (and get clipped by) a narrow window. */
+.wbc-context-chips > .wbc-pop-anchor {
+  position: static;
+}
+
+.wbc-ctx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-muted);
+  background: var(--wb-icon-bg);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+.wbc-ctx-chip.on {
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-accent) 11%, var(--wb-panel-2));
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 22%, transparent);
+  padding: 2px 4px 2px 9px;
+}
+
+.wbc-ctx-chip.on svg {
+  color: var(--wb-accent);
+}
+
+.wbc-ctx-x {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--wb-muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 999px;
+  margin-left: 1px;
+}
+
+.wbc-ctx-x:hover {
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-text) 12%, transparent);
+}
+
+.wbc-ctx-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  height: 24px;
+  padding: 0 8px;
+  border: 1px dashed var(--wb-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+
+.wbc-ctx-add-btn:hover,
+.wbc-ctx-add-btn.active {
+  border-color: var(--wb-accent);
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 8%, transparent);
+}
+
+.wbc-ctx-picker {
+  top: auto;
+  bottom: calc(100% + 4px);
+  left: 0;
+  min-width: min(220px, 100%);
+}
+
+.wbc-composer-actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 0;
+  margin-top: 6px;
+}
+
+.wbc-composer-icon {
+  box-sizing: border-box;
+  height: 30px;
+  min-width: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  padding: 0 7px;
+}
+
+.wbc-composer-icon:hover:not(:disabled) {
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-composer-icon.active {
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
+}
+
+.wbc-composer-icon:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.wbc-composer-icon:focus-visible,
+.wbc-send:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 22%, transparent);
+}
+
+.wbc-voice-input {
+  /* The model button already carries 6px of trailing space in addition to the
+     action-row gap. Mirror it on the microphone so both neighboring gaps are
+     visually identical without changing the compact icon target. */
+  margin-right: 6px;
+}
+
+.wbc-voice-input.recording {
+  background: color-mix(in srgb, var(--wb-red) 12%, transparent);
+  color: var(--wb-red);
+  animation: wb-voice-command-pulse 1.4s ease-in-out infinite;
+}
+
+.wbc-voice-input.starting,
+.wbc-voice-input.transcribing {
+  background: color-mix(in srgb, var(--wb-accent) 10%, transparent);
+  color: var(--wb-accent);
+}
+
+.wbc-voice-input.starting:disabled,
+.wbc-voice-input.transcribing:disabled {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-voice-input.recording { animation: none; }
+}
+
+.wbc-composer-spacer {
+  flex: 1;
+}
+
+.wbc-model-anchor {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 190px;
+}
+
+.wbc-model-button {
+  box-sizing: border-box;
+  height: 30px;
+  min-width: 0;
+  max-width: 100%;
+  margin-right: 6px;
+  padding: 0 8px 0 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 65%, var(--wb-bg-2));
+  color: var(--wb-text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.wbc-model-button:hover:not(:disabled),
+.wbc-model-button.active {
+  background: var(--wb-control-hover-bg);
+  border-color: var(--wb-line);
+}
+
+.wbc-model-button:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 20%, transparent);
+}
+
+.wbc-model-button:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.wbc-model-button-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-model-button-icon {
+  display: none;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+}
+
+.wbc-model-button-effort,
+.wbc-model-button-chevron {
+  flex: 0 0 auto;
+  color: var(--wb-muted);
+}
+
+.wbc-model-button-effort {
+  font-size: 11px;
+}
+
+.wbc-model-button-chevron {
+  display: inline-flex;
+  transition: transform 0.14s ease;
+}
+
+.wbc-model-button.active .wbc-model-button-chevron {
+  transform: rotate(180deg);
+}
+
+html[data-theme="light"] .wbc-model-button {
+  background: #eaf0f4;
+  border-color: #e3e8ec;
+}
+
+html[data-theme="light"] .wbc-model-button:hover:not(:disabled) {
+  background: #e1e8ed;
+  border-color: #d4dde3;
+}
+
+html[data-theme="light"] .wbc-model-button.active {
+  background: #dce5eb;
+  border-color: #cdd7de;
+}
+
+html[data-theme="dark"] .wbc-model-button {
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 94%, var(--wb-text));
+}
+
+html[data-theme="dark"] .wbc-model-button:hover:not(:disabled),
+html[data-theme="dark"] .wbc-model-button.active {
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 89%, var(--wb-text));
+  border-color: var(--wb-line-2);
+}
+
+.wbc-send {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  background: var(--wb-accent);
+  color: var(--wb-accent-text);
+  cursor: pointer;
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--wb-accent) 22%, transparent);
+  transition: transform .14s ease, filter .14s ease, box-shadow .14s ease;
+}
+
+.wbc-send:hover:not(:disabled) {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--wb-accent) 28%, transparent);
+}
+
+.wbc-send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.wbc-send.stop {
+  background: var(--wb-red);
+  color: #fff;
+}
+
+.wbc-send > svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+  transform: none;
+}
+
+.wbc-send.stop > svg {
+  transform: none;
+}
+
+@container wbc-composer (max-width: 420px) {
+  .wbc-composer-actions {
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+
+  /* Keep every composer action on one line in a narrow split. The flexible
+     spacer yields first, while the model control switches to its compact
+     icon-only presentation below. */
+  .wbc-composer-spacer {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .wbc-model-anchor {
+    flex: 0 1 52px;
+    min-width: 44px;
+    margin-left: 0;
+  }
+
+  .wbc-model-button {
+    width: 52px;
+    gap: 4px;
+    margin-right: 0;
+    padding-inline: 7px;
+    justify-content: center;
+  }
+
+  .wbc-voice-input {
+    margin-right: 0;
+  }
+
+  .wbc-model-button-icon {
+    display: inline-flex;
+  }
+
+  .wbc-model-button-name {
+    display: none;
+  }
+
+  .wbc-model-button-effort {
+    display: none;
+  }
+
+}
+
+.wbc-pop-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.wbc-popmenu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 40;
+  min-width: 240px;
+  max-height: 320px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  background: var(--wb-flyout-bg);
+  border: 1px solid var(--wb-flyout-border);
+  border-radius: var(--wb-flyout-radius);
+  box-shadow: var(--wb-flyout-shadow);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wb-popmenu::-webkit-scrollbar,
+.wbc-popmenu::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.wbc-popmenu-head {
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-faint);
+  padding: 4px 8px;
+}
+
+.wbc-popmenu > button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "label check" "desc check";
+  column-gap: 8px;
+  text-align: left;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-text);
+  padding: 7px 9px;
+  cursor: pointer;
+}
+
+.wbc-popmenu > button:hover {
+  background: var(--wb-row-hover-bg);
+}
+
+.wbc-popmenu > button.active {
+  background: var(--wb-active-bg);
+}
+
+.wbc-popmenu-label {
+  grid-area: label;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 620;
+}
+
+.wbc-popmenu-desc {
+  grid-area: desc;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  color: var(--wb-muted);
+}
+
+.wbc-popmenu-check {
+  grid-area: check;
+  align-self: center;
+  color: var(--wb-accent);
+  display: inline-flex;
+}
+
+.wbc-model-menu {
+  right: 0;
+  left: auto;
+  width: min(260px, calc(100vw - 32px));
+  min-width: min(260px, calc(100vw - 32px));
+  padding: 8px;
+  border-radius: var(--wb-flyout-radius);
+  background: var(--wb-flyout-bg);
+}
+
+.wbc-popmenu > .wbc-model-menu-row {
+  grid-template-columns: max-content minmax(0, 1fr) 18px;
+  grid-template-areas: "key value chevron";
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 10px;
+}
+
+.wbc-model-menu-key {
+  grid-area: key;
+  font-size: calc(14px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wbc-model-menu-value {
+  grid-area: value;
+  min-width: 0;
+  color: var(--wb-muted);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-model-menu-chevron {
+  grid-area: chevron;
+  color: var(--wb-muted);
+  display: inline-flex;
+  justify-content: flex-end;
+}
+
+.wbc-popmenu > .wbc-model-menu-back {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  margin-bottom: 2px;
+  padding: 6px 8px;
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wbc-model-menu-row.locked {
+  opacity: .62;
+  cursor: not-allowed;
+}
+
+.wbc-agent-menu-note {
+  margin: 2px 4px 8px;
+  padding: 7px 9px;
+  border-left: 2px solid color-mix(in srgb, var(--wb-accent) 58%, transparent);
+  color: var(--wb-faint);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.4;
+}
+
+.wbc-agent-menu-group {
+  margin-top: 2px;
+}
+
+.wbc-agent-menu-group-title {
+  padding: 8px 8px 4px;
+  color: var(--wb-faint);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-weight: 750;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.wbc-agent-menu-row {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  grid-template-areas: "dot name state" "dot meta state";
+  align-items: center;
+  column-gap: 9px;
+  row-gap: 1px;
+  width: 100%;
+  min-height: 44px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+}
+
+.wbc-agent-menu-row:hover {
+  background: var(--wb-row-hover-bg);
+}
+
+.wbc-agent-menu-row.active {
+  background: color-mix(in srgb, var(--wb-accent) 8%, transparent);
+}
+
+.wbc-agent-menu-row:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 48%, transparent);
+}
+
+.wbc-agent-menu-row.locked {
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+.wbc-agent-menu-row.unavailable {
+  opacity: .68;
+  cursor: pointer;
+}
+
+.wbc-agent-menu-dot {
+  grid-area: dot;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wb-faint);
+}
+
+.wbc-agent-menu-row.active .wbc-agent-menu-dot {
+  background: var(--wb-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 12%, transparent);
+}
+
+.wbc-agent-menu-row:not(.unavailable):not(.active) .wbc-agent-menu-dot {
+  background: var(--wb-green);
+}
+
+.wbc-agent-menu-name {
+  grid-area: name;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wbc-agent-menu-meta {
+  grid-area: meta;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wb-faint);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-agent-menu-state {
+  grid-area: state;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wb-muted);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-agent-menu-empty {
+  padding: 10px;
+  color: var(--wb-faint);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.5;
+  text-align: center;
+}
+
+.wbc-tools-anchor {
+  flex: 0 0 auto;
+}
+
+.wbc-tools-trigger {
+  transition: width .14s ease, background-color .14s ease, color .14s ease, box-shadow .14s ease;
+}
+
+.wbc-tools-trigger.has-content {
+  min-width: 46px;
+  padding: 0 9px;
+  gap: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-accent) 11%, transparent);
+  color: var(--wb-accent);
+}
+
+.wbc-tools-trigger.has-content:hover:not(:disabled),
+.wbc-tools-trigger.has-content.active {
+  background: color-mix(in srgb, var(--wb-accent) 17%, transparent);
+}
+
+.wbc-tools-trigger-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wbc-tools-trigger-count {
+  min-width: 8px;
+  color: currentColor;
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  line-height: 1;
+  text-align: center;
+}
+
+.wbc-tools-menu {
+  width: min(260px, calc(100cqw - 58px));
+  min-width: min(260px, calc(100cqw - 58px));
+  max-height: min(390px, calc(100vh - 190px));
+  padding: 8px;
+  gap: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.wbc-tools-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.wbc-tools-commands {
+  margin-top: 2px;
+}
+
+.wbc-tools-section-title {
+  padding: 0 4px;
+  color: var(--wb-faint);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  letter-spacing: .02em;
+}
+
+.wbc-tools-content-list {
+  display: grid;
+  gap: 3px;
+}
+
+.wbc-tools-enabled-row,
+.wbc-tools-command {
+  appearance: none;
+  border: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wbc-tools-enabled-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 5px 7px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-text);
+}
+
+.wbc-tools-enabled-row.active {
+  background: color-mix(in srgb, var(--wb-accent) 9%, transparent);
+}
+
+.wbc-tools-choose-row {
+  min-height: 34px;
+}
+
+.wbc-tools-enabled-row:not(:disabled):hover,
+.wbc-tools-command:not(:disabled):hover {
+  background: color-mix(in srgb, var(--wb-accent) 10%, var(--wb-row-hover-bg));
+}
+
+.wbc-tools-enabled-row:focus-visible,
+.wbc-tools-command:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 52%, transparent);
+  outline-offset: -2px;
+}
+
+.wbc-tools-enabled-row:disabled {
+  cursor: default;
+  opacity: .72;
+}
+
+.wbc-tools-row-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+}
+
+.wbc-tools-row-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wbc-tools-row-copy,
+.wbc-tools-command-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.wbc-tools-row-copy > span,
+.wbc-tools-command-copy > span {
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-tools-row-copy small,
+.wbc-tools-command-copy small {
+  overflow: hidden;
+  color: var(--wb-muted);
+  font-size: calc(9.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-tools-row-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: end;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--wb-accent);
+  color: var(--wb-accent-text);
+}
+
+.wbc-tools-row-check svg {
+  width: 10px;
+  height: 10px;
+}
+
+.wbc-tools-command-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.wbc-tools-command {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 10px;
+  align-items: center;
+  gap: 4px;
+  min-height: 34px;
+  min-width: 0;
+  padding: 5px 6px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-text);
+}
+
+.wbc-tools-command-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+}
+
+.wbc-tools-command-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.wbc-tools-command.active {
+  background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
+}
+
+.wbc-tools-command-check {
+  display: inline-flex;
+  justify-self: end;
+  color: var(--wb-accent);
+}
+
+.wbc-tools-empty {
+  padding: 12px;
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .wbc-tools-menu {
+    max-height: min(360px, calc(100vh - 160px));
+  }
+
+}
+
+@container wbc-composer (max-width: 640px) {
+  .wbc-tools-menu {
+    width: min(260px, calc(100cqw - 58px));
+    min-width: min(260px, calc(100cqw - 58px));
+  }
+}

@@ -17,6 +17,7 @@ import platform
 import statistics
 import sys
 import time
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,12 @@ except ImportError:  # pragma: no cover - Windows fallback
     resource = None
 
 from cyrene.agent.context import bind_run_context
+from cyrene.observability.benchmark_cache import (
+    IdealPrefixCacheTracker,
+    aggregate_ideal_cache_metrics,
+    ideal_cache_percent,
+    ideal_cache_progression,
+)
 from cyrene.observability.trace import bind_trace_context, bind_trace_sink, trace_span
 
 
@@ -41,6 +48,12 @@ class BenchmarkScenario:
     background_contention: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class AgentBenchmarkWorkload:
+    parallel_sessions: int = 4
+    turns_per_session: int = 3
+
+
 DEFAULT_SCENARIOS = (
     BenchmarkScenario("pure_chat"),
     BenchmarkScenario("single_tool", ("Read",)),
@@ -51,6 +64,7 @@ DEFAULT_SCENARIOS = (
     BenchmarkScenario("large_tool_result", ("Read",), tool_result_chars=500_000),
     BenchmarkScenario("background_contention", ("Read",), background_contention=True),
 )
+DEFAULT_WORKLOAD = AgentBenchmarkWorkload()
 
 
 def _rss_bytes() -> int:
@@ -92,9 +106,14 @@ def _prompt_token_estimate(messages: list[dict], tools: list | None) -> int:
     return max(1, (len(serialized) + 3) // 4)
 
 
-async def _run_scenario(scenario: BenchmarkScenario) -> dict[str, Any]:
+async def _run_scenario(
+    scenario: BenchmarkScenario,
+    workload: AgentBenchmarkWorkload,
+) -> dict[str, Any]:
     from cyrene.agent import agent as agent_core
 
+    parallel_sessions = max(2, int(workload.parallel_sessions))
+    turns_per_session = max(2, int(workload.turns_per_session))
     model_calls = 0
     tool_calls = 0
     event_count = 0
@@ -103,6 +122,19 @@ async def _run_scenario(scenario: BenchmarkScenario) -> dict[str, Any]:
     trace_events: list[dict[str, Any]] = []
     background_ticks = 0
     background_stop = asyncio.Event()
+    cache_tracker = IdealPrefixCacheTracker(series_dimension="turn")
+    model_round_index: ContextVar[int] = ContextVar(
+        "benchmark_model_round_index",
+        default=0,
+    )
+    cache_scope: ContextVar[str] = ContextVar(
+        "benchmark_cache_scope",
+        default="benchmark",
+    )
+    cache_turn: ContextVar[int] = ContextVar(
+        "benchmark_cache_turn",
+        default=0,
+    )
 
     originals = {
         "_call_llm": agent_core._call_llm,
@@ -114,10 +146,37 @@ async def _run_scenario(scenario: BenchmarkScenario) -> dict[str, Any]:
 
     async def fake_call_llm(messages, tools=None, **_kwargs):
         nonlocal model_calls, prompt_tokens_total, max_prompt_tokens
+        current_round = model_round_index.get() + 1
+        model_round_index.set(current_round)
         model_calls += 1
         prompt_tokens = _prompt_token_estimate(messages, tools)
         prompt_tokens_total += prompt_tokens
         max_prompt_tokens = max(max_prompt_tokens, prompt_tokens)
+        cache_tracker.record(
+            cache_scope.get(),
+            [
+                *(
+                    json.dumps(
+                        {
+                            "role": message.get("role"),
+                            "content": message.get("content"),
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    )
+                    for message in messages
+                ),
+                "tools:"
+                + json.dumps(
+                    tools or [],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                ),
+            ],
+            series_index=cache_turn.get(),
+        )
         async with trace_span(
             "model",
             "benchmark.fake_model",
@@ -130,7 +189,7 @@ async def _run_scenario(scenario: BenchmarkScenario) -> dict[str, Any]:
                 "content": "Deterministic benchmark reply.",
                 "tool_calls": [_tool_call("quit_1", "quit", {})],
             }
-        if model_calls == 1:
+        if current_round == 1:
             return {
                 "content": "",
                 "tool_calls": [
@@ -146,7 +205,7 @@ async def _run_scenario(scenario: BenchmarkScenario) -> dict[str, Any]:
                     )
                 ],
             }
-        if model_calls == 2:
+        if current_round == 2:
             return {
                 "content": "",
                 "tool_calls": [
@@ -187,16 +246,59 @@ async def _run_scenario(scenario: BenchmarkScenario) -> dict[str, Any]:
             background_ticks += 1
             await asyncio.sleep(0)
 
-    history = []
-    if scenario.history_chars:
+    def initial_history() -> list[dict[str, Any]]:
+        if not scenario.history_chars:
+            return []
         chunk = "history fixture " * 128
         text = (chunk * ((scenario.history_chars // len(chunk)) + 1))[
             : scenario.history_chars
         ]
-        history = [{"role": "user", "content": text}]
+        return [{"role": "user", "content": text}]
 
-    run_id = f"bench_{scenario.name}_{uuid4().hex}"
-    round_id = f"round_{scenario.name}"
+    async def run_session(index: int) -> None:
+        session_id = f"session_{scenario.name}_{index}"
+        history = initial_history()
+        for turn in range(turns_per_session):
+            run_id = f"bench_{scenario.name}_{index}_{turn}_{uuid4().hex}"
+            round_id = f"round_{scenario.name}_{index}_{turn}"
+            user_message = (
+                "Run deterministic benchmark fixture "
+                f"for conversation turn {turn + 1}."
+            )
+            model_token = model_round_index.set(0)
+            cache_token = cache_scope.set(session_id)
+            turn_token = cache_turn.set(turn)
+            try:
+                with bind_run_context(session_id=session_id, round_id=round_id):
+                    with bind_trace_context(
+                        trace_id=run_id,
+                        run_id=run_id,
+                        session_id=session_id,
+                        round_id=round_id,
+                    ):
+                        with bind_trace_sink(trace_events.append):
+                            async with trace_span(
+                                "run",
+                                "benchmark_scenario",
+                                span_id=run_id,
+                            ):
+                                response = await agent_core._run_main_agent(
+                                    user_message,
+                                    history,
+                                    None,
+                                    index,
+                                    "",
+                                    persist_user_message=False,
+                                )
+            finally:
+                cache_scope.reset(cache_token)
+                cache_turn.reset(turn_token)
+                model_round_index.reset(model_token)
+            history.extend([
+                {"role": "user", "content": user_message},
+                {"role": "assistant", "content": str(response)},
+            ])
+
     rss_before = _rss_bytes()
     started = time.perf_counter()
     background_task: asyncio.Task[None] | None = None
@@ -208,23 +310,7 @@ async def _run_scenario(scenario: BenchmarkScenario) -> dict[str, Any]:
         agent_core._publish_runtime_event = fake_publish
         if scenario.background_contention:
             background_task = asyncio.create_task(background_load())
-        with bind_run_context(session_id=f"session_{scenario.name}", round_id=round_id):
-            with bind_trace_context(
-                trace_id=run_id,
-                run_id=run_id,
-                session_id=f"session_{scenario.name}",
-                round_id=round_id,
-            ):
-                with bind_trace_sink(trace_events.append):
-                    async with trace_span("run", "benchmark_scenario", span_id=run_id):
-                        await agent_core._run_main_agent(
-                            "Run deterministic benchmark fixture.",
-                            history,
-                            None,
-                            0,
-                            "",
-                            persist_user_message=False,
-                        )
+        await asyncio.gather(*(run_session(index) for index in range(parallel_sessions)))
     finally:
         background_stop.set()
         if background_task is not None:
@@ -236,6 +322,9 @@ async def _run_scenario(scenario: BenchmarkScenario) -> dict[str, Any]:
     rss_after = _rss_bytes()
     return {
         "scenario": scenario.name,
+        "parallel_sessions": parallel_sessions,
+        "turns_per_session": turns_per_session,
+        "conversation_turns": parallel_sessions * turns_per_session,
         "wall_ms": round(wall_ms, 3),
         "model_rounds": model_calls,
         "tool_calls": tool_calls,
@@ -245,6 +334,7 @@ async def _run_scenario(scenario: BenchmarkScenario) -> dict[str, Any]:
         "rss_delta_bytes": max(0, rss_after - rss_before),
         "trace_span_count": len(trace_events),
         "background_ticks": background_ticks,
+        "ideal_cache": cache_tracker.metrics(),
     }
 
 
@@ -252,12 +342,15 @@ async def run_benchmark(
     *,
     repeats: int = 1,
     scenarios: tuple[BenchmarkScenario, ...] = DEFAULT_SCENARIOS,
+    workload: AgentBenchmarkWorkload = DEFAULT_WORKLOAD,
 ) -> dict[str, Any]:
     """Run fixtures sequentially and return stable counters plus timing samples."""
     repeats = max(1, int(repeats))
     results = []
     for scenario in scenarios:
-        samples = [await _run_scenario(scenario) for _ in range(repeats)]
+        samples = [
+            await _run_scenario(scenario, workload) for _ in range(repeats)
+        ]
         combined = dict(samples[-1])
         combined["wall_ms"] = round(
             statistics.median(sample["wall_ms"] for sample in samples), 3
@@ -268,7 +361,7 @@ async def run_benchmark(
         combined["samples"] = [sample["wall_ms"] for sample in samples]
         results.append(combined)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "environment": {
             "python": platform.python_version(),
@@ -276,9 +369,17 @@ async def run_benchmark(
             "repeats": repeats,
             "network_access": False,
             "real_credentials": False,
+            "real_llm_calls": False,
         },
         "fixtures": [asdict(scenario) for scenario in scenarios],
+        "workload": {
+            "parallel_sessions": max(2, int(workload.parallel_sessions)),
+            "turns_per_session": max(2, int(workload.turns_per_session)),
+        },
         "results": results,
+        "ideal_cache": aggregate_ideal_cache_metrics(
+            item["ideal_cache"] for item in results
+        ),
     }
 
 
@@ -288,18 +389,25 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         f"Generated: `{report['generated_at']}`",
         "",
-        "| Scenario | Wall ms | Model rounds | Tools | Prompt tokens | Max prompt | Events | RSS delta | Spans |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Scenario | Parallel | Turns | Wall ms | Model rounds | Tools | Prompt tokens | Max prompt | Events | RSS delta | Spans | Cache progression | Ideal cache |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|",
     ]
     for item in report["results"]:
         lines.append(
-            "| {scenario} | {wall_ms:.3f} | {model_rounds} | {tool_calls} | "
+            "| {scenario} | {parallel_sessions} | {turns_per_session} | "
+            "{wall_ms:.3f} | {model_rounds} | {tool_calls} | "
             "{prompt_tokens_total} | {max_prompt_tokens} | {event_count} | "
-            "{rss_delta_bytes} | {trace_span_count} |".format(**item)
+            "{rss_delta_bytes} | {trace_span_count} | {cache_progression} | "
+            "{ideal_cache_rate:.2f}% |".format(
+                **item,
+                cache_progression=ideal_cache_progression(item["ideal_cache"]),
+                ideal_cache_rate=ideal_cache_percent(item["ideal_cache"]),
+            )
         )
     lines.extend([
         "",
         "> The fixtures use deterministic fake models/tools and do not access the network or real credentials.",
+        "> Ideal cache rate is theoretical fixture reuse only; it does not query a runtime cache or LLM provider.",
         "",
     ])
     return "\n".join(lines)

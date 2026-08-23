@@ -2,6 +2,31 @@
 // authoritative for product operations. A bounded accessibility projection
 // adds visible, standard controls (press/value/select/scroll/context menu)
 // without accepting selectors, coordinates, scripts, URLs, or raw events.
+async function waitForCursorAnimations(root, state, cursorElement, pressMs, result, options) {
+  if (!result) return false;
+  var config = options || {};
+  var expectedMs = Math.max(0, Number(config.press === true ? pressMs : result.waitMs) || 0);
+  if (expectedMs <= 0) return state.sequence === result.sequence;
+  var cursor = cursorElement();
+  if (!cursor) return false;
+  await new Promise(function (resolve) {
+    root.requestAnimationFrame(function () { root.requestAnimationFrame(resolve); });
+  });
+  if (state.sequence !== result.sequence) return false;
+  var animations = cursor.getAnimations();
+  if (config.press === true && typeof cursor.querySelector === "function") {
+    var art = cursor.querySelector("[data-cyrene-agent-cursor-art]");
+    if (art && typeof art.getAnimations === "function") animations = animations.concat(art.getAnimations());
+  }
+  animations = animations.filter(function (animation) {
+    return animation && animation.finished
+      && animation.playState !== "finished" && animation.playState !== "idle";
+  });
+  if (!animations.length) return state.sequence === result.sequence;
+  await Promise.allSettled(animations.map(function (animation) { return animation.finished; }));
+  return state.sequence === result.sequence;
+}
+
 (function (root) {
   "use strict";
 
@@ -230,11 +255,8 @@
     };
   }
 
-  function delayCursor(ms) {
-    return new Promise(function (resolve) {
-      if (root.setTimeout) root.setTimeout(resolve, ms);
-      else resolve();
-    });
+  function waitForAgentCursorCompletion(result, options) {
+    return waitForCursorAnimations(root, agentCursorState, agentCursorElement, AGENT_CURSOR_PRESS_MS, result, options);
   }
 
   function agentControlHighlightElement() {
@@ -1429,7 +1451,7 @@
         if (clickPoint) {
           var clickMove = showAgentCursor(clickPoint, { element: entryElement(item) });
           cursorSequence = clickMove && clickMove.sequence;
-          await delayCursor(clickMove ? clickMove.waitMs : 0);
+          await waitForAgentCursorCompletion(clickMove);
           var stableItem = visibleEntries().find(function (candidate) {
             return candidate.entry.node_id === nodeId;
           });
@@ -1439,7 +1461,7 @@
             clickPoint = stablePoint;
             clickMove = showAgentCursor(clickPoint, { element: entryElement(stableItem) });
             cursorSequence = clickMove && clickMove.sequence;
-            await delayCursor(clickMove ? clickMove.waitMs : 0);
+            await waitForAgentCursorCompletion(clickMove);
             stableItem = visibleEntries().find(function (candidate) {
               return candidate.entry.node_id === nodeId;
             });
@@ -1454,7 +1476,7 @@
             element: entryElement(stableItem),
           });
           cursorSequence = clickPress && clickPress.sequence;
-          await delayCursor(AGENT_CURSOR_PRESS_MS);
+          await waitForAgentCursorCompletion(clickPress, { press: true });
           var finalItem = visibleEntries().find(function (candidate) {
             return candidate.entry.node_id === nodeId;
           });
@@ -1477,7 +1499,7 @@
           var sourceMove = showAgentCursor(sourcePoint, { element: entryElement(item) });
           cursorSequence = sourceMove && sourceMove.sequence;
           if (targetPoint) {
-            await delayCursor(sourceMove ? sourceMove.waitMs : 0);
+            await waitForAgentCursorCompletion(sourceMove);
             controlHighlightSequence = showAgentControlHighlight(
               entryHighlightElement(targetItem),
               String(input.target_node_id || ""),
@@ -1488,7 +1510,7 @@
               element: entryElement(targetItem),
             });
             cursorSequence = targetMove && targetMove.sequence;
-            await delayCursor(AGENT_CURSOR_DRAG_MS);
+            await waitForAgentCursorCompletion(targetMove);
           }
         }
       } else if (cursorMode === "target") {
@@ -1496,7 +1518,7 @@
         if (actionPoint) {
           var actionMove = showAgentCursor(actionPoint, { element: entryElement(item) });
           cursorSequence = actionMove && actionMove.sequence;
-          await delayCursor(actionMove ? actionMove.waitMs : 0);
+          await waitForAgentCursorCompletion(actionMove);
         }
       }
       var handler = entry.handlers[actionId];

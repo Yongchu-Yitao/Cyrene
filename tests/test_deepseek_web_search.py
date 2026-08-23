@@ -197,111 +197,106 @@ async def test_native_search_errors_are_safe_and_do_not_include_api_key(monkeypa
         raise AssertionError("expected DeepSeekWebSearchError")
 
 
-async def test_deep_search_skips_native_search_when_disabled(monkeypatch):
+async def test_deep_search_rejects_disabled_search(monkeypatch):
     from cyrene.tooling.backends import search
+    from cyrene.runtime.search_settings import SearchRuntimeSettings
 
-    monkeypatch.setattr(search, "_NATIVE_DEEPSEEK_SEARCH_ENABLED", False)
-    monkeypatch.setattr(
-        search,
-        "find_official_deepseek_search_candidate",
-        lambda: (_ for _ in ()).throw(AssertionError("must not probe DeepSeek")),
-    )
-    monkeypatch.setattr(
-        search,
-        "_deep_search_simplexng",
-        lambda topic: _async_value(f"simplexng: {topic}"),
-    )
+    monkeypatch.setattr(search, "runtime_settings", lambda: SearchRuntimeSettings(False, ()))
 
-    result = await search.deep_search(
-        "query",
-        db_path="runtime.db",
-        session_id="chat-1",
-        round_id="round-1",
-    )
-
-    assert result == "simplexng: query"
+    try:
+        await search.deep_search("query")
+    except search.SearchBackendUnavailable as exc:
+        assert "disabled" in str(exc)
+    else:
+        raise AssertionError("expected SearchBackendUnavailable")
 
 
-async def test_deep_search_uses_native_deepseek_when_enabled(monkeypatch):
-    from cyrene.tooling.backends import deepseek_web_search as dws
+async def test_deep_search_uses_first_enabled_provider(monkeypatch):
     from cyrene.tooling.backends import search
+    from cyrene.runtime.search_settings import SearchRuntimeSettings
 
-    monkeypatch.setattr(search, "_NATIVE_DEEPSEEK_SEARCH_ENABLED", True)
+    calls = []
+
+    async def run(provider, topic):
+        calls.append((provider, topic))
+        return "brave result"
+
     monkeypatch.setattr(
         search,
-        "find_official_deepseek_search_candidate",
-        lambda: dws.DeepSeekSearchCandidate(
-            candidate_id="cand-1",
-            configured_model="deepseek-v4-flash",
-            api_key="sk-test-secret",
-        ),
+        "runtime_settings",
+        lambda: SearchRuntimeSettings(True, ("brave", "simplexng")),
     )
+    monkeypatch.setattr(search, "_run_search_provider", run)
+
+    result = await search.deep_search("query")
+
+    assert result == "brave result"
+    assert calls == [("brave", "query")]
+
+
+async def test_deep_search_falls_back_after_empty_or_unusable_provider(monkeypatch):
+    from cyrene.tooling.backends import search
+    from cyrene.runtime.search_settings import SearchRuntimeSettings
+
+    calls = []
+
+    async def run(provider, topic):
+        calls.append(provider)
+        if provider == "simplexng":
+            raise search.SearchBackendUnavailable("no usable content")
+        return f"deepseek: {topic}"
+
     monkeypatch.setattr(
         search,
-        "search_with_deepseek",
-        lambda query, candidate: _async_value(
-            dws.DeepSeekWebSearchResult(
-                text=f"deepseek: {query}",
-                usage={"total_tokens": 10},
-                duration_ms=5,
-            )
-        ),
+        "runtime_settings",
+        lambda: SearchRuntimeSettings(True, ("simplexng", "deepseek")),
     )
-    monkeypatch.setattr(
-        search,
-        "_deep_search_simplexng",
-        lambda topic: _async_value(f"simplexng: {topic}"),
-    )
+    monkeypatch.setattr(search, "_run_search_provider", run)
 
     result = await search.deep_search("query")
 
     assert result == "deepseek: query"
+    assert calls == ["simplexng", "deepseek"]
 
 
-async def test_deep_search_falls_back_without_official_account(monkeypatch):
+async def test_deep_search_reports_all_provider_failures(monkeypatch):
+    from cyrene.tooling.backends import search
+    from cyrene.runtime.search_settings import SearchRuntimeSettings
+
+    async def run(provider, _topic):
+        raise search.SearchBackendUnavailable(f"{provider} unavailable")
+
+    monkeypatch.setattr(
+        search,
+        "runtime_settings",
+        lambda: SearchRuntimeSettings(True, ("tavily", "brave")),
+    )
+    monkeypatch.setattr(search, "_run_search_provider", run)
+
+    try:
+        await search.deep_search("query")
+    except search.SearchBackendUnavailable as exc:
+        assert "tavily" in str(exc)
+        assert "brave" in str(exc)
+    else:
+        raise AssertionError("expected SearchBackendUnavailable")
+
+
+async def test_provider_boundary_converts_unexpected_failure_for_fallback(monkeypatch):
     from cyrene.tooling.backends import search
 
-    monkeypatch.setattr(search, "_NATIVE_DEEPSEEK_SEARCH_ENABLED", True)
-    monkeypatch.setattr(search, "find_official_deepseek_search_candidate", lambda: None)
-    monkeypatch.setattr(
-        search,
-        "_deep_search_simplexng",
-        lambda topic: _async_value(f"simplexng: {topic}"),
-    )
+    async def broken_simplexng(_topic):
+        raise ValueError("bad provider response")
 
-    result = await search.deep_search("query")
+    monkeypatch.setattr(search, "_deep_search_simplexng", broken_simplexng)
 
-    assert result == "simplexng: query"
-
-
-async def test_deep_search_falls_back_when_native_search_fails(monkeypatch):
-    from cyrene.tooling.backends import deepseek_web_search as dws
-    from cyrene.tooling.backends import search
-
-    monkeypatch.setattr(search, "_NATIVE_DEEPSEEK_SEARCH_ENABLED", True)
-    monkeypatch.setattr(
-        search,
-        "find_official_deepseek_search_candidate",
-        lambda: dws.DeepSeekSearchCandidate(
-            candidate_id="cand-1",
-            configured_model="deepseek-v4-flash",
-            api_key="sk-test-secret",
-        ),
-    )
-
-    async def failing_search(_query, _candidate):
-        raise dws.DeepSeekWebSearchError("boom")
-
-    monkeypatch.setattr(search, "search_with_deepseek", failing_search)
-    monkeypatch.setattr(
-        search,
-        "_deep_search_simplexng",
-        lambda topic: _async_value(f"simplexng: {topic}"),
-    )
-
-    result = await search.deep_search("query")
-
-    assert result == "simplexng: query"
+    try:
+        await search._run_search_provider("simplexng", "query")
+    except search.SearchBackendUnavailable as exc:
+        assert str(exc) == "simplexng failed (ValueError)."
+        assert "bad provider response" not in str(exc)
+    else:
+        raise AssertionError("expected SearchBackendUnavailable")
 
 
 async def test_tool_passes_run_context_to_search(monkeypatch):

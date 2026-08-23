@@ -3,8 +3,8 @@ import asyncio
 import pytest
 
 from cyrene.knowledge import ingest
+from cyrene.knowledge import workspace as knowledge_workspace
 from cyrene.workbench import runtime as routes
-from cyrene.workbench import knowledge as routes_workbench_knowledge
 
 
 @pytest.mark.asyncio
@@ -32,14 +32,16 @@ async def test_clear_knowledge_data_removes_workspace_databases_and_cache(tmp_pa
         cancelled = True
 
     monkeypatch.setattr(ingest, "cancel_pending_tasks", fake_cancel_pending_tasks)
-    routes_workbench_knowledge._kb_initialized.update(str(path) for path in knowledge_paths)
+    knowledge_workspace.initialized_databases.update(
+        str(path) for path in knowledge_paths
+    )
 
     await routes._clear_knowledge_data(store_dir)
 
     assert cancelled is True
     assert all(not path.exists() for path in knowledge_paths)
     assert unrelated.exists()
-    assert routes_workbench_knowledge._kb_initialized == set()
+    assert knowledge_workspace.initialized_databases == set()
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,8 @@
 from datetime import datetime
 from pathlib import Path
 
+from conftest import workbench_settings_source, workbench_style_source
+
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -9,9 +11,7 @@ def test_onboarding_timezone_row_uses_single_line_layout():
     source = (ROOT / "src" / "webui" / "frontend" / "workbench-welcome.jsx").read_text(
         encoding="utf-8"
     )
-    styles = (ROOT / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     assert 'className="wb-wel-pref"' in source
     assert "is-long-value" not in source
@@ -50,9 +50,7 @@ def test_onboarding_timezone_opens_general_timezone_setting():
     welcome = (ROOT / "src" / "webui" / "frontend" / "workbench-welcome.jsx").read_text(
         encoding="utf-8"
     )
-    settings = (ROOT / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(
-        encoding="utf-8"
-    )
+    settings = workbench_settings_source()
 
     assert 'localStorage.getItem("cyrene-timezone")' in welcome
     assert "return selectedTimezone();" in welcome

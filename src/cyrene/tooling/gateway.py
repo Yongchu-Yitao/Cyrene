@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from cyrene.tooling.catalog import (
+    all_capabilities,
     describe_capabilities,
     discover_capabilities,
     get_capability,
@@ -17,6 +18,7 @@ from cyrene.tooling.catalog import (
     get_tool_execution_metadata,
     get_effective_function_definitions,
     module_wire_names,
+    search_capability_items,
 )
 from cyrene.runtime.settings_store import is_tool_pack_enabled
 from cyrene.tooling.results import (
@@ -28,7 +30,11 @@ from cyrene.tooling.policy.engine import capability_available
 from cyrene.tooling.types import ToolExecutionContext
 from cyrene.tooling.types import ToolCatalogSnapshot, ToolSpec
 from cyrene.tooling.validation import ensure_object, validate_schema
-from cyrene.tooling.wire import DIRECT_TOOL_NAMES, SUBAGENT_DIRECT_TOOL_NAMES
+from cyrene.tooling.wire import (
+    DIRECT_TOOL_NAMES,
+    SUBAGENT_DIRECT_TOOL_NAMES,
+    TOOLBOX_TOOL_NAME,
+)
 
 WireToolError = ToolProtocolError
 _active_catalog_snapshot: ContextVar[ToolCatalogSnapshot | None] = ContextVar(
@@ -118,6 +124,26 @@ def _snapshot_specs_for_wire(
             include_disabled
             or spec.capability_id in selected.enabled_capability_ids
         )
+    ]
+
+
+def _snapshot_specs_all(
+    *,
+    actor: str,
+    snapshot: ToolCatalogSnapshot | None,
+    include_disabled: bool = False,
+) -> list[ToolSpec] | None:
+    selected = _effective_snapshot(actor, snapshot)
+    if selected is None:
+        return None
+    return [
+        spec
+        for spec in selected.capabilities.values()
+        if (
+            include_disabled
+            or spec.capability_id in selected.enabled_capability_ids
+        )
+        and _wire_name_for_pack_id(spec.pack_id)
     ]
 
 
@@ -255,6 +281,136 @@ def _gateway_resolution(
     )
 
 
+def _validated_toolbox_operation(arguments: dict[str, Any]) -> str:
+    operation = str(arguments.get("operation") or "").strip()
+    if operation == "discover":
+        operation = "search"
+    if operation not in {"search", "describe", "invoke"}:
+        raise WireToolError(
+            "invalid_arguments",
+            "`operation` must be search, describe, or invoke.",
+        )
+    allowed_fields = {
+        "search": {"operation", "query", "limit"},
+        "describe": {"operation", "capability_id", "capability_ids"},
+        "invoke": {"operation", "capability_id", "arguments"},
+    }[operation]
+    unknown_fields = sorted(set(arguments) - allowed_fields)
+    if unknown_fields:
+        raise WireToolError(
+            "invalid_arguments",
+            f"Unknown field(s) for operation={operation}: "
+            + ", ".join(unknown_fields)
+            + ".",
+        )
+    if operation == "search":
+        if "query" in arguments and not isinstance(arguments["query"], str):
+            raise WireToolError("invalid_arguments", "`query` must be a string.")
+        if "limit" in arguments:
+            limit = arguments["limit"]
+            if (
+                not isinstance(limit, int)
+                or isinstance(limit, bool)
+                or not 1 <= limit <= 50
+            ):
+                raise WireToolError(
+                    "invalid_arguments",
+                    "`limit` must be an integer from 1 to 50.",
+                )
+    if operation == "describe":
+        if "capability_id" in arguments and not isinstance(
+            arguments["capability_id"], str
+        ):
+            raise WireToolError(
+                "invalid_arguments", "`capability_id` must be a string."
+            )
+        if "capability_ids" in arguments and (
+            not isinstance(arguments["capability_ids"], list)
+            or not all(isinstance(item, str) for item in arguments["capability_ids"])
+        ):
+            raise WireToolError(
+                "invalid_arguments", "`capability_ids` must be an array of strings."
+            )
+    return operation
+
+
+def _toolbox_invoke_resolution(
+    arguments: dict[str, Any],
+    *,
+    actor: str,
+    catalog_snapshot: ToolCatalogSnapshot | None,
+) -> WireCallResolution:
+    capability_id = str(arguments.get("capability_id") or "").strip()
+    if not capability_id:
+        raise WireToolError(
+            "invalid_arguments",
+            "`capability_id` is required for operation=invoke.",
+        )
+    selected = _effective_snapshot(actor, catalog_snapshot)
+    capability = (
+        _snapshot_spec(
+            capability_id,
+            actor=actor,
+            snapshot=selected,
+            include_disabled=True,
+        )
+        if selected is not None
+        else get_capability(capability_id, actor=actor, include_disabled=True)
+    )
+    wire_name = _wire_name_for_pack_id(capability.pack_id) if capability else ""
+    if capability is None or not wire_name:
+        raise WireToolError(
+            "unknown_capability",
+            f"Capability `{capability_id}` is not available through `{TOOLBOX_TOOL_NAME}`.",
+        )
+    enabled = (
+        capability_id in selected.enabled_capability_ids
+        if selected is not None
+        else is_tool_pack_enabled(wire_name)
+    )
+    if not enabled:
+        raise WireToolError(
+            "permission_denied",
+            f"Capability `{capability_id}` is disabled in settings.",
+        )
+    concrete_arguments = ensure_object(arguments.get("arguments"), "arguments")
+    validate_schema(concrete_arguments, capability.input_schema)
+    return WireCallResolution(
+        wire_name=TOOLBOX_TOOL_NAME,
+        operation="invoke",
+        capability_id=capability.capability_id,
+        concrete_name=capability.concrete_name,
+        concrete_arguments=concrete_arguments,
+    )
+
+
+def _toolbox_resolution(
+    arguments: dict[str, Any],
+    *,
+    actor: str,
+    catalog_snapshot: ToolCatalogSnapshot | None = None,
+) -> WireCallResolution:
+    """Resolve the provider-visible universal gateway.
+
+    Package-specific gateways remain accepted by ``_gateway_resolution`` as
+    hidden compatibility aliases, but only this stable definition is advertised.
+    """
+    operation = _validated_toolbox_operation(arguments)
+    if operation != "invoke":
+        return WireCallResolution(
+            wire_name=TOOLBOX_TOOL_NAME,
+            operation=operation,
+            capability_id=f"{TOOLBOX_TOOL_NAME}.{operation}",
+            concrete_name="",
+            concrete_arguments={},
+        )
+    return _toolbox_invoke_resolution(
+        arguments,
+        actor=actor,
+        catalog_snapshot=catalog_snapshot,
+    )
+
+
 def resolve_wire_call(
     wire_name: str,
     arguments: dict[str, Any] | None,
@@ -272,6 +428,12 @@ def resolve_wire_call(
     """
     name = str(wire_name or "").strip()
     args = ensure_object(arguments, "arguments")
+    if name == TOOLBOX_TOOL_NAME:
+        return _toolbox_resolution(
+            args,
+            actor=actor,
+            catalog_snapshot=catalog_snapshot,
+        )
     if name in module_wire_names():
         return _gateway_resolution(
             name,
@@ -572,7 +734,7 @@ def _normalize_module_arguments(
     remain unchanged, preserving prompt/tool-schema cache prefixes.
     """
     normalized = dict(arguments or {})
-    if wire_name not in module_wire_names():
+    if wire_name != TOOLBOX_TOOL_NAME and wire_name not in module_wire_names():
         return normalized
 
     # Lift misplaced gateway-envelope fields through multiple pure
@@ -590,7 +752,8 @@ def _normalize_module_arguments(
             nested_operation = nested_copy.get("operation")
             if (
                 isinstance(nested_operation, str)
-                and nested_operation.strip() in {"discover", "describe", "invoke"}
+                and nested_operation.strip()
+                in {"search", "discover", "describe", "invoke"}
             ):
                 normalized["operation"] = nested_operation.strip()
                 nested_copy.pop("operation", None)
@@ -598,6 +761,7 @@ def _normalize_module_arguments(
                 changed = True
 
         lift_fields = {
+            "search": ("query", "limit"),
             "discover": ("query", "limit"),
             "describe": ("capability_id", "capability_ids"),
             "invoke": ("capability_id",),
@@ -704,15 +868,17 @@ def _invalid_argument_example(
     catalog_snapshot: ToolCatalogSnapshot | None = None,
 ) -> dict[str, Any] | None:
     """Return a concrete gateway-call shape for an invalid argument response."""
-    if wire_name not in module_wire_names():
+    if wire_name != TOOLBOX_TOOL_NAME and wire_name not in module_wire_names():
         return None
     args = dict(arguments or {})
     operation = str(args.get("operation") or "").strip()
-    if operation == "discover":
+    if operation in {"search", "discover"}:
         return {
             "tool": wire_name,
             "arguments": {
-                "operation": "discover",
+                "operation": (
+                    "search" if wire_name == TOOLBOX_TOOL_NAME else "discover"
+                ),
                 "query": str(args.get("query") or "<search terms>"),
             },
         }
@@ -761,7 +927,9 @@ def _invalid_argument_example(
     return {
         "tool": wire_name,
         "arguments": {
-            "operation": "discover",
+            "operation": (
+                "search" if wire_name == TOOLBOX_TOOL_NAME else "discover"
+            ),
             "query": "<search terms>",
         },
     }
@@ -801,7 +969,69 @@ def _runtime_capability_available(
 ) -> bool:
     if capability_id == "delivery.send_wechat_file":
         return bool(bot is not None and hasattr(bot, "send_file"))
+    if capability_id.startswith(("office.", "ppt.")):
+        try:
+            installation = importlib.import_module("cyrene.office.installation")
+            return bool(installation.powerpoint_addin_installed())
+        except Exception:
+            return False
     return True
+
+
+def _office_integration_error(
+    wire_name: str,
+    arguments: dict[str, Any] | None = None,
+) -> str | None:
+    office_names = {
+        "PowerPointGetContext",
+        "PowerPointInspect",
+        "PowerPointApplyBatch",
+        "PowerPointRenderSlide",
+        "PowerPointToolSearch",
+    }
+    capability_id = str((arguments or {}).get("capability_id") or "").strip()
+    if not (
+        wire_name == "office_tools"
+        or wire_name.startswith("ppt.")
+        or wire_name in office_names
+        or (
+            wire_name == TOOLBOX_TOOL_NAME
+            and capability_id.startswith(("office.", "ppt."))
+        )
+    ):
+        return None
+    installation = importlib.import_module("cyrene.office.installation")
+    if installation.powerpoint_addin_installed():
+        return None
+    return json.dumps(
+        {
+            "status": "error",
+            "error": {
+                "type": "integration_not_installed",
+                "message": (
+                    "The Cyrene PowerPoint add-in is not installed; "
+                    "PowerPoint tools are unavailable."
+                ),
+            },
+        },
+        ensure_ascii=False,
+    )
+
+
+def _prepare_wire_execution(
+    wire_name: str,
+    arguments: dict[str, Any] | None,
+    *,
+    actor: str,
+    catalog_snapshot: ToolCatalogSnapshot | None,
+) -> tuple[str | None, dict[str, Any]]:
+    normalized = _normalize_module_arguments(
+        wire_name,
+        arguments,
+        actor=actor,
+        catalog_snapshot=catalog_snapshot,
+    )
+    return _office_integration_error(wire_name, normalized), normalized
 
 
 async def execute_wire_tool(
@@ -815,12 +1045,11 @@ async def execute_wire_tool(
     actor: str = "main",
     catalog_snapshot: ToolCatalogSnapshot | None = None,
 ) -> str:
-    args = _normalize_module_arguments(
-        wire_name,
-        arguments,
-        actor=actor,
-        catalog_snapshot=catalog_snapshot,
+    office_error, args = _prepare_wire_execution(
+        wire_name, arguments, actor=actor, catalog_snapshot=catalog_snapshot
     )
+    if office_error is not None:
+        return office_error
     try:
         selected_snapshot = _effective_snapshot(actor, catalog_snapshot)
         resolution = resolve_wire_call(
@@ -829,22 +1058,36 @@ async def execute_wire_tool(
             actor=actor,
             catalog_snapshot=selected_snapshot,
         )
-        if resolution.operation == "discover":
-            snapshot_specs = _snapshot_specs_for_wire(
-                resolution.wire_name,
-                actor=actor,
-                snapshot=selected_snapshot,
-            )
-            if snapshot_specs is None:
-                result = discover_capabilities(
+        if resolution.operation in {"search", "discover"}:
+            universal = resolution.wire_name == TOOLBOX_TOOL_NAME
+            snapshot_specs = (
+                _snapshot_specs_all(
+                    actor=actor,
+                    snapshot=selected_snapshot,
+                )
+                if universal
+                else _snapshot_specs_for_wire(
                     resolution.wire_name,
                     actor=actor,
-                    query=str(args.get("query") or ""),
-                    limit=int(args.get("limit") or 20),
+                    snapshot=selected_snapshot,
                 )
+            )
+            if snapshot_specs is None:
+                if universal:
+                    matched = search_capability_items(
+                        all_capabilities(actor=actor),
+                        query=str(args.get("query") or ""),
+                        limit=int(args.get("limit") or 20),
+                    )
+                    result = [item.summary() for item in matched]
+                else:
+                    result = discover_capabilities(
+                        resolution.wire_name,
+                        actor=actor,
+                        query=str(args.get("query") or ""),
+                        limit=int(args.get("limit") or 20),
+                    )
             else:
-                from cyrene.tooling.catalog import search_capability_items
-
                 matched = search_capability_items(
                     snapshot_specs,
                     query=str(args.get("query") or ""),
@@ -865,12 +1108,13 @@ async def execute_wire_tool(
             return json.dumps(
                 {
                     "status": "success",
+                    "gateway": resolution.wire_name,
                     "module": resolution.wire_name,
                     "capabilities": result,
                     "important": (
                         "Capability IDs are identifiers, not model-visible function "
-                        f"names. The only advertised callable function for this module is "
-                        f"`{resolution.wire_name}`. Never emit a function call named "
+                        f"names. Use `{resolution.wire_name}` for describe and invoke. "
+                        "Never emit a function call named "
                         "after a capability ID."
                     ),
                     "next": (
@@ -901,17 +1145,36 @@ async def execute_wire_tool(
                     "invalid_arguments",
                     "`capability_id` or `capability_ids` is required for operation=describe.",
                 )
-            snapshot_specs = _snapshot_specs_for_wire(
-                resolution.wire_name,
-                actor=actor,
-                snapshot=selected_snapshot,
+            universal = resolution.wire_name == TOOLBOX_TOOL_NAME
+            snapshot_specs = (
+                _snapshot_specs_all(
+                    actor=actor,
+                    snapshot=selected_snapshot,
+                )
+                if universal
+                else _snapshot_specs_for_wire(
+                    resolution.wire_name,
+                    actor=actor,
+                    snapshot=selected_snapshot,
+                )
             )
             if snapshot_specs is None:
-                details = describe_capabilities(
-                    resolution.wire_name,
-                    capability_ids,
-                    actor=actor,
-                )
+                if universal:
+                    available = {
+                        capability.capability_id: capability
+                        for capability in all_capabilities(actor=actor)
+                    }
+                    details = [
+                        available[capability_id].detail()
+                        for capability_id in capability_ids[:20]
+                        if capability_id in available
+                    ]
+                else:
+                    details = describe_capabilities(
+                        resolution.wire_name,
+                        capability_ids,
+                        actor=actor,
+                    )
             else:
                 available = {
                     spec.capability_id: spec
@@ -941,10 +1204,21 @@ async def execute_wire_tool(
                     "unknown_capability",
                     f"Unavailable capability ID(s): {', '.join(missing)}.",
                 )
+            from cyrene.tooling.guidance import describe_guidance
+
+            module_guidance, capability_guidance = describe_guidance(
+                [str(detail.get("id") or "") for detail in details]
+            )
+            for detail in details:
+                guidance = capability_guidance.get(str(detail.get("id") or ""))
+                if guidance:
+                    detail["usage_guidance"] = guidance
             return json.dumps(
                 {
                     "status": "success",
+                    "gateway": resolution.wire_name,
                     "module": resolution.wire_name,
+                    "module_guidance": module_guidance,
                     "capabilities": details,
                 },
                 ensure_ascii=False,
@@ -985,7 +1259,11 @@ async def execute_wire_tool(
             if str(result).casefold().startswith(("tool failed:", "tool unavailable:"))
             else "success"
         )
-        if resolution.wire_name in module_wire_names() or resolution.concrete_compat:
+        if (
+            resolution.wire_name == TOOLBOX_TOOL_NAME
+            or resolution.wire_name in module_wire_names()
+            or resolution.concrete_compat
+        ):
             wire_result: Any = result
             if isinstance(result, str):
                 try:
@@ -1103,7 +1381,7 @@ def get_wire_tool_execution_metadata(
             "resource_keys": (f"tool:{wire_name}",),
             "requires_order": True,
         }
-    if resolution.operation in {"discover", "describe"}:
+    if resolution.operation in {"search", "discover", "describe"}:
         return {
             "read_only": True,
             "resource_keys": (f"tool-catalog:{wire_name}",),

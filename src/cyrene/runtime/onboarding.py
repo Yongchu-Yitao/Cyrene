@@ -10,8 +10,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from cyrene.config import (
     DATA_DIR,
     DB_PATH,
@@ -23,18 +21,9 @@ from cyrene.config import (
 )
 from cyrene.runtime.setup import mark_setup_done, normalize_custom_soul_content
 from cyrene.runtime.memory.soul import get_default_soul_content, get_soul_path, read_soul
+from cyrene.runtime.model_probe_service import ModelProbeService
 
 logger = logging.getLogger(__name__)
-
-# A tiny valid PNG used to verify that an OpenAI-compatible endpoint accepts
-# multimodal ``image_url`` messages. The probe checks transport capability, not
-# image quality, so it stays cheap and does not depend on OCR accuracy.
-_VISION_CAPABILITY_TEST_IMAGE = (
-    "data:image/png;base64,"
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/"
-    "0eQnAAAAAElFTkSuQmCC"
-)
-
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -284,78 +273,16 @@ def get_onboarding_status() -> dict[str, Any]:
     }
 
 
-async def _test_llm_connection(api_key: str, base_url: str, model: str) -> str:
-    from cyrene.model_runtime.protocol_adapters import protocol_endpoints
-
-    endpoint = protocol_endpoints("openai", base_url, model)[0]
-    headers = {"Content-Type": "application/json"}
-    if api_key.strip():
-        headers["Authorization"] = f"Bearer {api_key.strip()}"
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": "Reply with OK."}],
-        "max_tokens": 48,
-    }
-    transport = httpx.AsyncHTTPTransport(retries=1)
-    async with httpx.AsyncClient(transport=transport, timeout=30.0) as client:
-        response = await client.post(endpoint, headers=headers, json=payload)
-        response.raise_for_status()
-        data = response.json()
-    choices = data.get("choices") or []
-    if not choices:
-        raise ValueError("LLM endpoint returned no choices")
-    message = choices[0].get("message") or {}
-    content = str(message.get("content") or "").strip()
-    return content or "OK"
+async def test_llm_connection(api_key: str, base_url: str, model: str) -> str:
+    """Public onboarding API for a non-persisting text connectivity probe."""
+    return await ModelProbeService().test_connection(api_key, base_url, model)
 
 
-async def _test_llm_vision_capability(api_key: str, base_url: str, model: str) -> dict[str, Any]:
-    """Return a persisted capability record for one configured model.
-
-    A rejected image input is an expected result for text-only models, so this
-    probe never prevents an otherwise healthy text model from being saved.
-    """
-    checked_at = _now_iso()
-    from cyrene.model_runtime.protocol_adapters import protocol_endpoints
-
-    endpoint = protocol_endpoints("openai", base_url, model)[0]
-    headers = {"Content-Type": "application/json"}
-    if api_key.strip():
-        headers["Authorization"] = f"Bearer {api_key.strip()}"
-    payload = {
-        "model": model,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "This is a capability check. Briefly confirm that an image was received.",
-                },
-                {"type": "image_url", "image_url": {"url": _VISION_CAPABILITY_TEST_IMAGE}},
-            ],
-        }],
-        "max_tokens": 48,
-    }
-    try:
-        transport = httpx.AsyncHTTPTransport(retries=1)
-        async with httpx.AsyncClient(transport=transport, timeout=30.0) as client:
-            response = await client.post(endpoint, headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
-        if not (data.get("choices") or []):
-            raise ValueError("LLM endpoint returned no choices for the vision capability check")
-    except Exception as exc:
-        detail = " ".join(str(exc).split())[:500]
-        return {
-            "vision_capable": False,
-            "vision_checked_at": checked_at,
-            "vision_check_error": detail or type(exc).__name__,
-        }
-    return {
-        "vision_capable": True,
-        "vision_checked_at": checked_at,
-        "vision_check_error": "",
-    }
+async def test_llm_vision_capability(
+    api_key: str, base_url: str, model: str
+) -> dict[str, Any]:
+    """Public onboarding API for a non-blocking image capability probe."""
+    return await ModelProbeService().probe_vision(api_key, base_url, model)
 
 
 async def save_and_test_llm_setup(api_key: str, base_url: str, model: str) -> dict[str, Any]:
@@ -367,8 +294,10 @@ async def save_and_test_llm_setup(api_key: str, base_url: str, model: str) -> di
     if not clean_model:
         raise ValueError("Model name is required")
 
-    preview = await _test_llm_connection(clean_api_key, clean_base_url, clean_model)
-    vision_capability = await _test_llm_vision_capability(clean_api_key, clean_base_url, clean_model)
+    preview = await test_llm_connection(clean_api_key, clean_base_url, clean_model)
+    vision_capability = await test_llm_vision_capability(
+        clean_api_key, clean_base_url, clean_model
+    )
     write_env_keys({
         "OPENAI_API_KEY": clean_api_key,
         "OPENAI_BASE_URL": clean_base_url,

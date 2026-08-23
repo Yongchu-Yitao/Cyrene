@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
+import threading
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -195,6 +198,121 @@ async def test_reload_loads_multiple_packages_tools_and_optional_metadata(tmp_pa
     assert tuple(echo.metadata["resource_keys"]) == ("custom:alpha",)
     assert echo.metadata["requires_order"] is False
     assert await _call_loaded(echo, {"value": "hello"}) == "alpha-echo:hello"
+
+
+@pytest.mark.asyncio
+async def test_source_scan_runs_off_loop_and_reuses_unchanged_hashes(
+    tmp_path,
+    monkeypatch,
+):
+    from cyrene.custom_tools.manager import CustomToolManager
+
+    root = tmp_path / "custom-tools"
+    source = _write_tool(root, "cached", "tool.py", "Cached", "first")
+    manager = CustomToolManager(root)
+    main_thread = threading.get_ident()
+    scan_threads: list[int] = []
+    original_scan = manager._scan_source_tree
+
+    def tracked_scan(previous_states):
+        scan_threads.append(threading.get_ident())
+        return original_scan(previous_states)
+
+    monkeypatch.setattr(manager, "_scan_source_tree", tracked_scan)
+    await manager.reload()
+
+    reads: list[Path] = []
+    original_read_bytes = Path.read_bytes
+
+    def tracked_read_bytes(path):
+        reads.append(path)
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", tracked_read_bytes)
+    await asyncio.to_thread(
+        manager._scan_source_tree,
+        dict(manager._source_states),
+    )
+
+    assert scan_threads[0] != main_thread
+    assert source not in reads
+
+    source.write_text(_tool_module("Cached", "second"), encoding="utf-8")
+    await asyncio.to_thread(
+        manager._scan_source_tree,
+        dict(manager._source_states),
+    )
+    assert source in reads
+
+
+@pytest.mark.asyncio
+async def test_native_source_event_refreshes_only_affected_cache(
+    tmp_path,
+):
+    from cyrene.custom_tools.manager import CustomToolManager
+
+    root = tmp_path / "custom-tools"
+    source = _write_tool(root, "native", "tool.py", "Native", "first")
+    untouched = _write_tool(root, "untouched", "tool.py", "Untouched", "stable")
+    manager = CustomToolManager(root)
+    await manager.reload()
+    manager._running = True
+    untouched_state = manager._source_states[untouched]
+
+    source.write_text(_tool_module("Native", "second"), encoding="utf-8")
+    changed = await manager._apply_source_events({(2, str(source))})
+
+    assert changed is True
+    assert manager._source_states[untouched] is untouched_state
+    assert await _call_loaded(
+        _resolve(manager, "native", "Native"),
+        {"value": "x"},
+    ) == "second:x"
+
+
+@pytest.mark.asyncio
+async def test_disabled_custom_tool_pack_never_starts_source_watcher(
+    tmp_path,
+    monkeypatch,
+):
+    from cyrene.custom_tools import manager as manager_module
+    from cyrene.custom_tools.manager import CustomToolManager
+
+    root = tmp_path / "custom-tools"
+    _write_tool(root, "disabled", "tool.py", "Disabled", "disabled")
+    monkeypatch.setattr(manager_module, "_pack_enabled", lambda: False)
+    manager = CustomToolManager(root)
+
+    await manager.start()
+
+    assert manager.running is True
+    assert manager._watch_task is None
+
+
+@pytest.mark.asyncio
+async def test_disabling_custom_tool_pack_cancels_source_watcher(
+    tmp_path,
+    monkeypatch,
+):
+    from cyrene.custom_tools import manager as manager_module
+    from cyrene.custom_tools.manager import CustomToolManager
+
+    root = tmp_path / "custom-tools"
+    _write_tool(root, "toggle", "tool.py", "Toggle", "toggle")
+    pack_enabled = True
+    monkeypatch.setattr(manager_module, "_pack_enabled", lambda: pack_enabled)
+    manager = CustomToolManager(root)
+    await manager.reload()
+    manager._running = True
+    watcher = asyncio.create_task(asyncio.Event().wait())
+    manager._watch_task = watcher
+
+    pack_enabled = False
+    status = await manager.sync_pack_state()
+
+    assert status["enabled"] is False
+    assert manager._watch_task is None
+    assert watcher.cancelled()
 
 
 @pytest.mark.asyncio

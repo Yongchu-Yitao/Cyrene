@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from conftest import workbench_i18n_source, workbench_shell_source, workbench_style_source
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,8 +38,8 @@ def test_downloads_are_associated_with_the_originating_browser_page():
 
 def test_global_download_center_supports_pause_resume_cancel_and_progress():
     main = read("electron/main.js")
-    source = read("src/webui/frontend/workbench.jsx")
-    styles = read("src/webui/frontend/workbench.css")
+    source = workbench_shell_source()
+    styles = workbench_style_source()
 
     assert "function controlBrowserDownload(downloadId, action)" in main
     assert "record.item.pause()" in main
@@ -57,8 +59,8 @@ def test_global_download_center_supports_pause_resume_cancel_and_progress():
 
 
 def test_topbar_manager_keeps_the_existing_pinned_resource_hint():
-    source = read("src/webui/frontend/workbench.jsx")
-    styles = read("src/webui/frontend/workbench.css")
+    source = workbench_shell_source()
+    styles = workbench_style_source()
 
     assert 'workbench-browser-manager-button' in source
     assert 'className="workbench-browser-manager-download-center"' in source
@@ -71,15 +73,15 @@ def test_topbar_manager_keeps_the_existing_pinned_resource_hint():
 
 
 def test_browser_manager_entry_hides_when_there_are_no_pages_or_downloads():
-    source = read("src/webui/frontend/workbench.jsx")
+    source = workbench_shell_source()
 
     assert '&& (browserManagerPages.length || browserManagerDownloads.length) ? (' in source
     assert "if (browserManagerMenu && !browserManagerState.pageCount && !browserManagerState.downloadCount)" in source
 
 
 def test_browser_manager_topbar_uses_page_favicons_and_opaque_flyout():
-    source = read("src/webui/frontend/workbench.jsx")
-    styles = read("src/webui/frontend/workbench.css")
+    source = workbench_shell_source()
+    styles = workbench_style_source()
 
     assert "browserManagerPreviewPages" in source
     assert 'className="workbench-browser-manager-preview"' in source
@@ -96,8 +98,8 @@ def test_browser_manager_topbar_uses_page_favicons_and_opaque_flyout():
 
 
 def test_browser_manager_can_pin_pages_and_pinned_browser_keeps_its_favicon():
-    source = read("src/webui/frontend/workbench.jsx")
-    styles = read("src/webui/frontend/workbench.css")
+    source = read("src/webui/frontend/features/shell/topbar.jsx")
+    styles = workbench_style_source()
 
     assert "function toggleManagedBrowserPin(page, event)" in source
     assert "var pinnedResource = pinnedBrowserResource(page);" in source
@@ -105,17 +107,17 @@ def test_browser_manager_can_pin_pages_and_pinned_browser_keeps_its_favicon():
     assert 'favicon: String(page.favicon || "")' in source
     assert 'name={pinnedResource ? "pinned-off" : "pin"}' in source
     assert '<><WorkbenchAssetIcon name="browser" />{resource.favicon ? <img' in source
-    assert "var owner = sessionTabCandidates.find" in source
-    assert "browserBridge.activateTab({" in source
-    assert "tabId: resource.tabId" in source
+    assert "function browserOwnerSession(page)" in source
+    assert "String(page && page.sessionId || \"\")" in source
+    assert "bridge.activateTab({ sessionId: page.sessionId, tabId: page.tabId })" in source
     assert "justify-content: flex-start" in styles.split(".workbench-resource-shelf {", 1)[1].split("}", 1)[0]
     assert "grid-template-columns: 174px minmax(0, max-content) minmax(34px, 1fr) auto auto;" in styles
 
 
 def test_browser_manager_uses_packaged_tabler_icon_assets_and_i18n():
     build = read("src/webui/build-jsx.mjs")
-    source = read("src/webui/frontend/workbench.jsx")
-    translations = read("src/webui/frontend/workbench-i18n.jsx")
+    source = workbench_shell_source()
+    translations = workbench_i18n_source()
 
     for icon in ("browser.svg", "chevron-down.svg", "devices.svg", "download.svg", "reload.svg", "volume.svg", "volume-off.svg", "pin.svg", "pinned-off.svg", "player-pause.svg", "player-play.svg", "x.svg"):
         assert f"'{icon}'" in build

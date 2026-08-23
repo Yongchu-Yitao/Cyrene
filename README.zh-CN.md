@@ -33,6 +33,9 @@
 - **真正会操作浏览器**：你可以实时看到 Cyrene 浏览页面、点击、输入、上传和
   检查内容；遇到登录、CAPTCHA 或 2FA 时，可在同一个浏览器中接管，完成后再
   交还给 Agent，无需丢失会话状态。
+- **实时创作 PowerPoint**：通过本地 Office 加载项，Cyrene 能检查、批量新增、
+  移动、缩放和修改当前演示文稿中的元素，并在每页完成后直接让 PowerPoint
+  渲染和验证；用户可以连续看到整套 PPT 的渐进式变化。
 - **一个能管理自己的 Agent**：通过受权限约束且可审计的工具，Cyrene 可以查看
   和操作自己的界面、调整设置、管理 Project 与 Chat、备份数据并处理更新。
 - **承载长期思考的一体化工作空间**：Project 将 Chat、Task、Memory、
@@ -94,6 +97,7 @@ uv run cyrene stop
 
 - [安装指南](docs/installation.zh-CN.md)
 - [使用指南](docs/usage.zh-CN.md)
+- [实时控制 PowerPoint](docs/office-live-control.zh-CN.md)
 - [配置说明](docs/configuration.zh-CN.md)
 - [自定义工具](docs/custom-tools.zh-CN.md)
 - [架构说明](docs/architecture.zh-CN.md)

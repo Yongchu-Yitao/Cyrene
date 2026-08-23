@@ -1,15 +1,7 @@
 import json
-import sys
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-
-sys.modules.setdefault("PIL", MagicMock())
-sys.modules["PIL"].Image = MagicMock()
-sys.modules.setdefault("pypdf", MagicMock())
 
 from cyrene.agent.commands import DEEP_REFLECT_COMMAND_ID, parse_deep_reflect_command
 from cyrene.agent.deep_reflection import (
@@ -416,7 +408,6 @@ async def test_manual_deep_reflect_continues_main_agent_after_record(monkeypatch
     monkeypatch.setattr(agent_coordinator, "get_context", lambda max_chars=5000: "")
     monkeypatch.setattr(agent_coordinator, "get_memory_context", lambda include_short_term=True: "")
     monkeypatch.setattr(agent_coordinator, "build_skill_prompt_block", lambda: "")
-    monkeypatch.setattr(agent_coordinator, "_schedule_session_label_refresh", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(agent_coordinator, "_publish_runtime_event", AsyncMock())
     monkeypatch.setattr(agent_core, "_run_main_agent", fake_run_main_agent)
 

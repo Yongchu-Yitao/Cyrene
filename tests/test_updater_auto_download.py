@@ -353,6 +353,11 @@ async def test_download_update_rejects_concurrent_call(monkeypatch, tmp_path):
     client = FakeClient(responses=[resp])
     monkeypatch.setattr(updater.httpx, "AsyncClient", lambda *a, **k: client)
     monkeypatch.setattr(updater, "TEMP_DIR", tmp_path)
+    monkeypatch.setattr(
+        updater,
+        "_hash_file",
+        lambda _path: pytest.fail("fresh downloads must use the streaming digest"),
+    )
 
     first = asyncio.create_task(updater.download_update("https://dl/pkg"))
     await gate._entered.wait()
@@ -387,6 +392,11 @@ async def test_download_resumes_from_existing_partial(monkeypatch, tmp_path):
     client = FakeClient(responses=[resp])
     monkeypatch.setattr(updater.httpx, "AsyncClient", lambda *a, **k: client)
     monkeypatch.setattr(updater, "TEMP_DIR", tmp_path)
+    monkeypatch.setattr(
+        updater,
+        "_hash_file",
+        lambda _path: pytest.fail("completed downloads must use the streaming digest"),
+    )
 
     result = await updater.download_update("https://dl/pkg.dmg")
 

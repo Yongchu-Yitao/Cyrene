@@ -69,7 +69,6 @@ const DATA = {
     services: [],
   },
 
-  skills: [],
   browserByChat: {},
 
   onboarding: {
@@ -176,7 +175,6 @@ async function bootstrapData() {
     if (fresh.dashboard) DATA.dashboard = fresh.dashboard;
     if (Array.isArray(fresh.sessions) && fresh.sessions.length) DATA.sessions = fresh.sessions;
     if (fresh.status) DATA.status = fresh.status;
-    if (Array.isArray(fresh.skills)) DATA.skills = fresh.skills;
     if (fresh.settings) DATA.settings = { ...DATA.settings, ...fresh.settings };
     if (fresh.onboarding) DATA.onboarding = fresh.onboarding;
     bumpData();
@@ -187,8 +185,9 @@ async function bootstrapData() {
 
 let __sessionsRequestSeq = 0;
 let __statusRequestSeq = 0;
+let __sessionsRequestController = null;
+let __statusRequestController = null;
 let __refreshTimer = null;
-let __refreshSafetyTimer = null;
 
 function sessionsFingerprint(sessions) {
   if (!Array.isArray(sessions)) return "";
@@ -232,8 +231,11 @@ function sessionsFingerprint(sessions) {
 
 async function refreshSessions() {
   const seq = ++__sessionsRequestSeq;
+  if (__sessionsRequestController) __sessionsRequestController.abort();
+  const controller = new AbortController();
+  __sessionsRequestController = controller;
   try {
-    const r = await fetch("/api/sessions");
+    const r = await fetch("/api/sessions", { signal: controller.signal });
     if (!r.ok) return;
     const { sessions, model_stats } = await r.json();
     if (seq !== __sessionsRequestSeq) return;
@@ -251,13 +253,18 @@ async function refreshSessions() {
       if (prevStats !== nextStats) changed = true;
     }
     if (changed) bumpData();
-  } catch (e) { /* swallow */ }
+  } catch (e) { /* swallow */ } finally {
+    if (__sessionsRequestController === controller) __sessionsRequestController = null;
+  }
 }
 
 async function refreshStatus() {
   const seq = ++__statusRequestSeq;
+  if (__statusRequestController) __statusRequestController.abort();
+  const controller = new AbortController();
+  __statusRequestController = controller;
   try {
-    const r = await fetch("/api/status");
+    const r = await fetch("/api/status", { signal: controller.signal });
     if (!r.ok) return;
     const status = await r.json();
     if (seq !== __statusRequestSeq) return;
@@ -265,16 +272,22 @@ async function refreshStatus() {
     var next = JSON.stringify(status);
     DATA.status = status;
     if (prev !== next) bumpData();
-  } catch (e) { /* swallow */ }
+  } catch (e) { /* swallow */ } finally {
+    if (__statusRequestController === controller) __statusRequestController = null;
+  }
 }
 
 let __dashboardRequestSeq = 0;
+let __dashboardRequestController = null;
 let __dashboardRefreshTimer = null;
 async function refreshDashboard() {
   const seq = ++__dashboardRequestSeq;
+  if (__dashboardRequestController) __dashboardRequestController.abort();
+  const controller = new AbortController();
+  __dashboardRequestController = controller;
   try {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
-    const r = await fetch("/api/dashboard?tz=" + encodeURIComponent(tz));
+    const r = await fetch("/api/dashboard?tz=" + encodeURIComponent(tz), { signal: controller.signal });
     if (!r.ok) return;
     const dashboard = await r.json();
     if (seq !== __dashboardRequestSeq) return;
@@ -283,7 +296,9 @@ async function refreshDashboard() {
       DATA.dashboard = dashboard;
       if (prev !== JSON.stringify(dashboard)) bumpData();
     }
-  } catch (e) { /* swallow */ }
+  } catch (e) { /* swallow */ } finally {
+    if (__dashboardRequestController === controller) __dashboardRequestController = null;
+  }
 }
 function scheduleDashboardRefresh() {
   if (__dashboardRefreshTimer) return;
@@ -299,12 +314,6 @@ function scheduleRealtimeRefresh() {
     __refreshTimer = null;
     void refreshSessions();
     void refreshStatus();
-    // Safety-net retry: backend sometimes needs a moment to persist question state
-    __refreshSafetyTimer = window.setTimeout(() => {
-      __refreshSafetyTimer = null;
-      void refreshSessions();
-      void refreshStatus();
-    }, 350);
   }, 80);
 }
 
@@ -317,6 +326,129 @@ let _retryDelay = 1000;
 let __eventReconnectTimer = null;
 let __eventsClosed = false;
 
+function scheduleEventReconnect() {
+  if (
+    __eventsClosed
+    || (window.CyrenePageLifecycle && window.CyrenePageLifecycle.isInvalidated())
+  ) return;
+  window.clearTimeout(__eventReconnectTimer);
+  __eventReconnectTimer = window.setTimeout(function () {
+    __eventReconnectTimer = null;
+    connectEvents();
+  }, _retryDelay);
+  _retryDelay = Math.min(_retryDelay * 2, 15000);
+}
+
+function handleDesktopNotification(data) {
+  if (data.type !== "notification" || !data.title || !data.body) return false;
+  try {
+    const enabled = localStorage.getItem("cyrene-desktop-notifications") === "1";
+    if (!enabled) return true;
+    const isElectron = navigator.userAgent.includes("Electron");
+    if (isElectron && window.cyrene && window.cyrene.showNotification) {
+      window.cyrene.showNotification({ title: data.title, body: data.body });
+    } else if ("Notification" in window && Notification.permission === "granted") {
+      new Notification(data.title, { body: data.body });
+    }
+  } catch (e) { /* best-effort */ }
+  return false;
+}
+
+const REALTIME_REFRESH_EVENTS = new Set([
+  "chat_message", "guidance_acknowledged", "user_question", "user_question_answered",
+  "tool_call", "llm_call", "phase_transition", "subagent_update", "session_update",
+  "shell_update", "round_guidance_update", "agent_comm", "agent_chat_user_message",
+  "assistant_message", "entity_created", "entity_updated", "entity_deleted",
+]);
+
+function applyMapEvent(data) {
+  if (data.type !== "map_pin") return;
+  DATA.map = DATA.map || {};
+  DATA.map.pins = data.pins || [];
+  DATA.map.routes = data.routes || [];
+  bumpData();
+}
+
+function applyBrowserFrameEvent(data) {
+  if (data.type !== "browser_frame") return;
+  const chatId = browserEventChatId(data);
+  DATA.browser = DATA.browser || {};
+  Object.assign(DATA.browser, {
+    active: true,
+    url: data.url || DATA.browser.url || "",
+    title: data.title || "",
+    action: data.action || "",
+    target: data.target || null,
+    box: data.box || null,
+    sessionId: chatId || DATA.browser.sessionId || "",
+    roundId: data.round_id || "",
+    userWindow: false,
+  });
+  updateBrowserForChat(chatId, function (state) {
+    Object.assign(state, {
+      active: true, url: data.url || state.url || "", title: data.title || "",
+      action: data.action || "", target: data.target || null, box: data.box || null,
+      roundId: data.round_id || "", userWindow: false,
+    });
+  });
+  bumpData();
+}
+
+function applyBrowserTakeoverEvent(data) {
+  if (data.type === "browser_takeover_request") {
+    const chatId = browserEventChatId(data);
+    const takeover = {
+      pending: true, url: data.url || "", reason: data.reason || "",
+      questionId: data.question_id || data.questionId || "",
+    };
+    DATA.browser = DATA.browser || {};
+    Object.assign(DATA.browser, {
+      active: true, url: data.url || DATA.browser.url || "",
+      sessionId: chatId || DATA.browser.sessionId || "", roundId: data.round_id || "", takeover: takeover,
+    });
+    updateBrowserForChat(chatId, function (state) {
+      Object.assign(state, { active: true, url: data.url || state.url || "", roundId: data.round_id || "", takeover: takeover });
+    });
+    bumpData();
+  } else if (data.type === "browser_takeover_cancelled" && DATA.browser) {
+    const chatId = browserEventChatId(data);
+    DATA.browser.takeover = { pending: false };
+    DATA.browser.userWindow = false;
+    updateBrowserForChat(chatId, function (state) {
+      state.takeover = { pending: false };
+      state.userWindow = false;
+    });
+    bumpData();
+  }
+}
+
+function handleUiEventMessage(ev) {
+  try {
+    const data = JSON.parse(ev.data);
+    if (data.type === "heartbeat" || handleDesktopNotification(data)) return;
+    if (!UI_EVENTS.publish(data)) return;
+    if (REALTIME_REFRESH_EVENTS.has(data.type)) {
+      scheduleRealtimeRefresh();
+      scheduleDashboardRefresh();
+    }
+    applyMapEvent(data);
+    applyBrowserFrameEvent(data);
+    applyBrowserTakeoverEvent(data);
+  } catch (e) {
+    console.warn("Cyrene: failed to process UI event", e);
+  }
+}
+
+function handleUiEventError(es) {
+  es.close();
+  if (__eventsClosed) return;
+  // EventSource hides the HTTP status. Probe one authenticated endpoint so an
+  // obsolete Electron token invalidates the renderer instead of reconnecting forever.
+  fetch("/api/status", { cache: "no-store" })
+    .then(scheduleEventReconnect)
+    .catch(scheduleEventReconnect);
+}
+
 function connectEvents() {
   if (
     __eventsClosed
@@ -326,163 +458,12 @@ function connectEvents() {
     // Close any existing EventSource before creating a new one.
     const es = new EventSource("/api/events");
     UI_EVENTS.setSource(es);
-    es.onmessage = (ev) => {
-      try {
-        const data = JSON.parse(ev.data);
-        if (data.type === "heartbeat") return;
-
-        // Notification via SSE: use Web Notification API in browser,
-        // Electron Notification API when running in Electron.
-        if (data.type === "notification" && data.title && data.body) {
-          try {
-            const enabled = localStorage.getItem("cyrene-desktop-notifications") === "1";
-            if (!enabled) return;
-            const isElectron = navigator.userAgent.includes("Electron");
-            if (isElectron && window.cyrene && window.cyrene.showNotification) {
-              window.cyrene.showNotification({ title: data.title, body: data.body });
-            } else if ("Notification" in window && Notification.permission === "granted") {
-              new Notification(data.title, { body: data.body });
-            }
-          } catch (e) { /* best-effort */ }
-        }
-
-        // Store and dispatch through the shared, lifecycle-aware event bridge.
-        if (!UI_EVENTS.publish(data)) return;
-
-        if ([
-          "chat_message",
-          "guidance_acknowledged",
-          "user_question",
-          "user_question_answered",
-          "tool_call",
-          "llm_call",
-          "phase_transition",
-          "subagent_update",
-          "session_update",
-          "shell_update",
-          "round_guidance_update",
-          "agent_comm",
-          "agent_chat_user_message",
-          "assistant_message",
-          "entity_created",
-          "entity_updated",
-          "entity_deleted",
-        ].includes(data.type)) {
-          scheduleRealtimeRefresh();
-          scheduleDashboardRefresh();
-        }
-
-        // Map pin events — update global state for the MapView component.
-        if (data.type === "map_pin") {
-          DATA.map = DATA.map || {};
-          DATA.map.pins = data.pins || [];
-          DATA.map.routes = data.routes || [];
-          bumpData();
-        }
-
-        // Live browser view — lightweight action metadata. Pixel frames stream
-        // over /ws/browser, not the shared SSE bus.
-        if (data.type === "browser_frame") {
-          const chatId = browserEventChatId(data);
-          DATA.browser = DATA.browser || {};
-          DATA.browser.active = true;
-          DATA.browser.url = data.url || DATA.browser.url || "";
-          DATA.browser.title = data.title || "";
-          DATA.browser.action = data.action || "";
-          DATA.browser.target = data.target || null;
-          DATA.browser.box = data.box || null;
-          DATA.browser.sessionId = chatId || DATA.browser.sessionId || "";
-          DATA.browser.roundId = data.round_id || "";
-          // Frames only flow in the embedded (headless) view, so any user-opened
-          // native window is no longer the active surface.
-          DATA.browser.userWindow = false;
-          updateBrowserForChat(chatId, function (state) {
-            state.active = true;
-            state.url = data.url || state.url || "";
-            state.title = data.title || "";
-            state.action = data.action || "";
-            state.target = data.target || null;
-            state.box = data.box || null;
-            state.roundId = data.round_id || "";
-            state.userWindow = false;
-          });
-          bumpData();
-        }
-        // Browser login takeover (M3): the panel shows a passive "waiting for
-        // login" placeholder. The actual confirmation is the app's standard
-        // question popup (QuestionPanel), not a control inside the panel.
-        if (data.type === "browser_takeover_request") {
-          const chatId = browserEventChatId(data);
-          DATA.browser = DATA.browser || {};
-          DATA.browser.active = true;
-          DATA.browser.url = data.url || DATA.browser.url || "";
-          DATA.browser.sessionId = chatId || DATA.browser.sessionId || "";
-          DATA.browser.roundId = data.round_id || "";
-          DATA.browser.takeover = {
-            pending: true,
-            url: data.url || "",
-            reason: data.reason || "",
-            questionId: data.question_id || data.questionId || "",
-          };
-          updateBrowserForChat(chatId, function (state) {
-            state.active = true;
-            state.url = data.url || state.url || "";
-            state.roundId = data.round_id || "";
-            state.takeover = {
-              pending: true,
-              url: data.url || "",
-              reason: data.reason || "",
-              questionId: data.question_id || data.questionId || "",
-            };
-          });
-          bumpData();
-        }
-        // Takeover ended/cancelled (user finished, or closed the window) — drop
-        // the placeholder so the panel returns to the live view.
-        if (data.type === "browser_takeover_cancelled" && DATA.browser) {
-          const chatId = browserEventChatId(data);
-          DATA.browser.takeover = { pending: false };
-          DATA.browser.userWindow = false;
-          updateBrowserForChat(chatId, function (state) {
-            state.takeover = { pending: false };
-            state.userWindow = false;
-          });
-          bumpData();
-        }
-      } catch (e) {
-        console.warn("Cyrene: failed to process UI event", e);
-      }
-    };
-    es.onerror = () => {
-      es.close();
-      if (__eventsClosed) return;
-      window.clearTimeout(__eventReconnectTimer);
-      // EventSource hides the HTTP status. Probe one authenticated endpoint so
-      // a renderer holding an obsolete Electron token stops permanently on 401
-      // instead of reconnecting forever. Transient network failures still use
-      // bounded exponential backoff.
-      fetch("/api/status", { cache: "no-store" }).then(function (response) {
-        if (__eventsClosed) return;
-        __eventReconnectTimer = window.setTimeout(function () {
-          __eventReconnectTimer = null;
-          connectEvents();
-        }, _retryDelay);
-        _retryDelay = Math.min(_retryDelay * 2, 15000);
-      }).catch(function () {
-        if (
-          __eventsClosed
-          || (window.CyrenePageLifecycle && window.CyrenePageLifecycle.isInvalidated())
-        ) return;
-        __eventReconnectTimer = window.setTimeout(function () {
-          __eventReconnectTimer = null;
-          connectEvents();
-        }, _retryDelay);
-        _retryDelay = Math.min(_retryDelay * 2, 15000);
-      });
-    };
+    es.onmessage = handleUiEventMessage;
+    es.onerror = () => { handleUiEventError(es); };
     es.onopen = () => { _retryDelay = 1000; };
   } catch (e) {
     console.warn("SSE connection failed", e);
+    scheduleEventReconnect();
   }
 }
 
@@ -503,20 +484,15 @@ DATA_STORE.ready = bootstrapData().then(function () {
   connectEvents();
 });
 
-var DATA_REFRESH_INTERVAL = window.setInterval(function () {
-  refreshSessions();
-  refreshStatus();
-  refreshDashboard();
-}, 15000);
-
 function disposeDataStore() {
   if (__eventsClosed) return;
   __eventsClosed = true;
-  window.clearInterval(DATA_REFRESH_INTERVAL);
   window.clearTimeout(__refreshTimer);
-  window.clearTimeout(__refreshSafetyTimer);
   window.clearTimeout(__dashboardRefreshTimer);
   window.clearTimeout(__eventReconnectTimer);
+  if (__sessionsRequestController) __sessionsRequestController.abort();
+  if (__statusRequestController) __statusRequestController.abort();
+  if (__dashboardRequestController) __dashboardRequestController.abort();
   UI_EVENTS.close();
 }
 

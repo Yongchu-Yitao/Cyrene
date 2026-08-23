@@ -97,6 +97,18 @@ _MAIN_ONLY_TOOLS = {
     "UninstallSkill",
     "ManageExtensions",
     "ManageAgentHooks",
+    "PluginAuthoringGuide",
+    "PluginScaffold",
+    "PluginValidate",
+    "PluginList",
+    "PluginInstall",
+    "PluginEnable",
+    "PluginDisable",
+    "PluginReload",
+    "PluginContributions",
+    "PluginCall",
+    "PluginLogs",
+    "PluginDelete",
 }
 
 AGENT_TOOL_GROUPS: dict[str, set[str]] = {
@@ -275,6 +287,17 @@ def get_tool_execution_metadata(
         )
     args = dict(arguments or {})
     resolved_keys: list[str] = []
+    alternatives = metadata.get("resource_key_alternatives") or ()
+    for field, template in alternatives:
+        raw = args.get(str(field))
+        if raw not in (None, ""):
+            rendered = str(template).replace("{" + str(field) + "}", str(raw))
+            resolved_keys.append(_normalize_resource_key(rendered))
+            break
+    if alternatives and not resolved_keys:
+        default_key = str(metadata.get("resource_key_default") or "").strip()
+        if default_key:
+            resolved_keys.append(_normalize_resource_key(default_key))
     for template in metadata.get("resource_keys") or ():
         rendered = str(template)
         missing = False
@@ -284,9 +307,8 @@ def get_tool_execution_metadata(
                 missing = True
                 break
             rendered = rendered.replace("{" + field + "}", str(raw))
-        resolved_keys.append(
-            _normalize_resource_key(rendered if not missing else f"tool:{metadata_name}")
-        )
+        if not missing:
+            resolved_keys.append(_normalize_resource_key(rendered))
     return {
         "read_only": bool(metadata.get("read_only")),
         "resource_keys": tuple(dict.fromkeys(key for key in resolved_keys if key)),
@@ -357,12 +379,30 @@ def _register_code_tools() -> None:
     )
 
 
+def _register_office_kit() -> None:
+    importlib.import_module("cyrene.tool_impl.office.kit").register_all(
+        TOOL_DEFS,
+        TOOL_HANDLERS,
+        TOOL_METADATA,
+    )
+
+
+def _register_plugin_tools() -> None:
+    importlib.import_module("cyrene.tool_impl.plugins").register_all(
+        TOOL_DEFS,
+        TOOL_HANDLERS,
+        TOOL_METADATA,
+    )
+
+
 def _initialize_registry() -> None:
     if TOOL_DEFS or TOOL_HANDLERS:
         return
     _load_native_tools()
     _register_map_tools()
     _register_code_tools()
+    _register_office_kit()
+    _register_plugin_tools()
     for tool_def in TOOL_DEFS:
         name = str((tool_def.get("function") or {}).get("name") or "")
         TOOL_METADATA.setdefault(name, _default_tool_metadata(name))

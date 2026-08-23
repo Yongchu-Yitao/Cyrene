@@ -25,6 +25,7 @@ const javascriptParser = parser.configure({ dialect: "jsx ts" })
 function sourceFiles(root) {
   const files = []
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (entry.isDirectory() && ["node_modules", "vendor"].includes(entry.name)) continue
     const target = path.join(root, entry.name)
     if (entry.isDirectory()) files.push(...sourceFiles(target))
     if (entry.isFile() && /\.(?:js|jsx|mjs)$/.test(entry.name)) files.push(target)
@@ -36,6 +37,7 @@ function applicationFiles() {
   return [
     ...sourceFiles(path.join(REPOSITORY_ROOT, "electron")),
     ...sourceFiles(path.join(WEBUI_ROOT, "frontend")),
+    ...sourceFiles(path.join(REPOSITORY_ROOT, "src", "cyrene", "office", "static")),
     path.join(WEBUI_ROOT, "build-jsx.mjs"),
   ].sort()
 }

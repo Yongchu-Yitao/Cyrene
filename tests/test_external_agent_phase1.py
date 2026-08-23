@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 from fastapi import APIRouter, FastAPI
@@ -737,13 +738,30 @@ def test_agents_route_endpoints_with_runtime_states(saved_settings):
     assert response.status_code == 404
 
 
-def test_extensions_agent_proposal_routes(saved_settings, monkeypatch):
+def test_extensions_agent_proposal_routes(saved_settings):
+    from cyrene.extensions.application_service import (
+        ExtensionApplicationService,
+        ExtensionInstallInputService,
+    )
+    from cyrene.extensions.service import (
+        audit_records,
+        source_settings,
+        update_source_settings,
+    )
     import route.extensions as extension_routes
 
     service = _service()
-    monkeypatch.setattr(extension_routes, "get_extension_service", lambda: service)
     router = APIRouter()
-    extension_routes.register_extension_routes(router, None, "")
+    extension_routes.register_extension_routes(
+        router,
+        ExtensionApplicationService(
+            service,
+            ExtensionInstallInputService(service, Path.cwd()),
+            source_get=source_settings,
+            source_update=update_source_settings,
+            audit_get=audit_records,
+        ),
+    )
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)

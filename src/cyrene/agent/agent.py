@@ -178,6 +178,8 @@ async def _publish_tool_call_finished(
     arguments: dict[str, Any],
     *,
     status: str,
+    result: Any = None,
+    error: BaseException | None = None,
 ) -> None:
     """Close the live lifecycle opened by ``_publish_tool_call_started``.
 
@@ -187,7 +189,8 @@ async def _publish_tool_call_finished(
     regardless of which gateway branch handled it.
     """
     try:
-        await _publish_runtime_event({
+        error_payload = _tool_error_payload(result=result, error=error)
+        event = {
             "type": "tool_call_finished",
             "tool_call_id": str(tool_call_id),
             "tool": str(tool_name or ""),
@@ -195,11 +198,55 @@ async def _publish_tool_call_finished(
             "status": str(status or "completed"),
             "failed": str(status or "").casefold() == "failed",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        if error_payload:
+            event["error"] = error_payload
+            event["error_code"] = error_payload.get("error_code")
+            event["message"] = error_payload.get("message")
+            if error_payload.get("details") is not None:
+                event["details"] = error_payload["details"]
+        await _publish_runtime_event(event)
     except Exception:
         # Live activity is observability. A disconnected SSE subscriber must not
         # turn an otherwise successful tool result into an agent failure.
         logger.debug("Failed to publish tool completion for %s", tool_name, exc_info=True)
+
+
+def _tool_error_payload(*, result: Any = None, error: BaseException | None = None) -> dict[str, Any] | None:
+    if error is not None:
+        return {
+            "error_code": str(getattr(error, "code", "tool_exception") or "tool_exception"),
+            "message": str(error)[:1000],
+        }
+    payload = result
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (TypeError, json.JSONDecodeError):
+            if payload.casefold().startswith(("tool failed:", "tool unavailable:")):
+                return {"error_code": "tool_failed", "message": payload[:1000]}
+            return None
+    if not isinstance(payload, dict) or payload.get("status") != "error":
+        return None
+    if isinstance(payload.get("result"), dict) and payload["result"].get("status") == "error":
+        payload = payload["result"]
+    nested = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+    details = payload.get("details", nested.get("details"))
+    safe_details = redact_value(details) if details is not None else None
+    if safe_details is not None:
+        try:
+            encoded = json.dumps(safe_details, ensure_ascii=False)
+            if len(encoded) > 4000:
+                safe_details = {"summary": encoded[:4000] + "…"}
+        except (TypeError, ValueError):
+            safe_details = {"summary": str(safe_details)[:4000]}
+    result_payload: dict[str, Any] = {
+        "error_code": str(payload.get("error_code") or nested.get("type") or nested.get("code") or "tool_error"),
+        "message": str(payload.get("message") or nested.get("message") or "Tool call failed.")[:1000],
+    }
+    if safe_details is not None:
+        result_payload["details"] = safe_details
+    return result_payload
 
 
 async def _execute_tool_for_call(
@@ -223,20 +270,22 @@ async def _execute_tool_for_call(
         result = await _execute_tool(
             tool_name, arguments, bot, chat_id, db_path, None
         )
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as exc:
         await _publish_tool_call_finished(
             tool_call_id,
             tool_name,
             arguments,
             status="cancelled",
+            error=exc,
         )
         raise
-    except Exception:
+    except Exception as exc:
         await _publish_tool_call_finished(
             tool_call_id,
             tool_name,
             arguments,
             status="failed",
+            error=exc,
         )
         raise
     else:
@@ -245,6 +294,7 @@ async def _execute_tool_for_call(
             tool_name,
             arguments,
             status="completed" if _wire_result_succeeded(result) else "failed",
+            result=result,
         )
         return result
     finally:
@@ -285,6 +335,39 @@ def _tool_def_name(tool_def: dict[str, Any]) -> str:
 
 def _without_tool(tool_defs: list[dict[str, Any]], tool_name: str) -> list[dict[str, Any]]:
     return [tool_def for tool_def in tool_defs if _tool_def_name(tool_def) != tool_name]
+
+
+def _enabled_wire_names(tool_defs: list[dict[str, Any]]) -> set[str]:
+    names_in_bundle = {_tool_def_name(tool_def) for tool_def in tool_defs}
+    if "toolbox" in names_in_bundle:
+        # The provider-visible universal gateway deliberately hides package
+        # names. Prompt filtering still needs the run's allowed package set for
+        # compatibility blocks outside the stable main tool protocol.
+        from cyrene.tooling.wire import enabled_module_tool_names
+
+        return set(enabled_module_tool_names("main"))
+    names = {
+        name for name in names_in_bundle if name.endswith("_tools")
+    }
+    if any(_tool_def_name(tool_def) == "PowerPointToolSearch" for tool_def in tool_defs):
+        names.add("office_tools")
+    return names
+
+
+def _missing_completion_signal_entry(round_id: str) -> dict[str, Any]:
+    """Return the protocol correction for a response without a tool signal."""
+    return {
+        "role": "user",
+        "content": (
+            "Your previous response did not call a tool, so the run is still "
+            "active. Continue the task now by calling the next required tool. "
+            "If the task is complete, write the complete user-facing answer in "
+            "normal assistant content and call `quit` as the terminal signal. "
+            "A progress update or plain assistant text does not end the run."
+        ),
+        "hidden_from_ui": True,
+        **({"round_id": round_id} if round_id else {}),
+    }
 
 
 def _attach_final_usage(entry: dict[str, Any]) -> dict[str, Any]:
@@ -593,13 +676,7 @@ async def _run_main_agent_impl(
     # its gateway schema and package-specific prompt lines are both omitted.
     # Deep Research's length handshake keeps its dedicated tiny bundle.
     wire_tool_defs = get_main_wire_tool_defs()
-    enabled_wire_names = {
-        str((tool_def.get("function") or {}).get("name") or "")
-        for tool_def in wire_tool_defs
-        if str((tool_def.get("function") or {}).get("name") or "").endswith(
-            "_tools"
-        )
-    }
+    enabled_wire_names = _enabled_wire_names(wire_tool_defs)
 
     visible_user_message = user_message if public_user_message is None else str(public_user_message)
     user_message_id = f"user_{uuid4().hex}"
@@ -716,6 +793,30 @@ async def _run_main_agent_impl(
             ),
         ))
 
+    async def _require_phase1_control_signal(
+        response_obj: dict[str, Any],
+        context_messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        while not (response_obj.get("tool_calls") or []):
+            incomplete_entry = _assistant_entry_from_response(
+                response_obj,
+                round_id,
+            )
+            incomplete_entry["hidden_from_ui"] = True
+            context_messages.extend([
+                incomplete_entry,
+                _missing_completion_signal_entry(round_id),
+            ])
+            response_obj = await _call_with_runtime_guidance(
+                context_messages,
+                lambda: _call_phase1_llm(
+                    project_history_for_llm(context_messages),
+                    tools=tools,
+                ),
+            )
+        return response_obj
+
     async def _ensure_text_reply(
         response_obj: dict[str, Any],
         base_messages: list[dict[str, Any]],
@@ -811,6 +912,11 @@ async def _run_main_agent_impl(
                     tools=phase1_wire_tools,
                 ),
             )
+    response = await _require_phase1_control_signal(
+        response,
+        phase1_messages,
+        phase1_wire_tools,
+    )
     tool_calls = response.get("tool_calls") or []
     phase1_allowed = {_tool_def_name(tool_def) for tool_def in phase1_tools}
     phase1_wire_names = {
@@ -869,6 +975,11 @@ async def _run_main_agent_impl(
                 project_history_for_llm(retry_messages),
                 tools=phase1_wire_tools,
             ),
+        )
+        response = await _require_phase1_control_signal(
+            response,
+            retry_messages,
+            phase1_wire_tools,
         )
         phase1_context_messages = retry_messages
     tool_calls = response.get("tool_calls") or []
@@ -1002,6 +1113,13 @@ async def _run_main_agent_impl(
         if quit_call is not None:
             if runtime_inbox is not None:
                 await runtime_inbox.wait_for_active_tools()
+            await _publish_runtime_event({
+                "type": "phase_transition",
+                "from": "phase1_decision",
+                "to": "done",
+                "detail": "Agent called quit",
+                "detail_key": "phase.agentQuit",
+            })
             final_text = await _ensure_text_reply(response, messages)
             messages[-1]["content"] = final_text
             messages[-1].pop("tool_calls", None)
@@ -1162,73 +1280,69 @@ async def _run_main_agent_impl(
                 # ``quit`` is a hard terminal signal. If the model mistakenly mixes
                 # it with sibling calls, none of those siblings may execute.
                 done_via_quit = "quit" in tool_names
-                if done_via_quit or not tcs:
-                    if done_via_quit and runtime_inbox is not None:
+                if not tcs:
+                    entry["hidden_from_ui"] = True
+                    messages.append(_missing_completion_signal_entry(round_id))
+                    continue
+                if done_via_quit:
+                    if runtime_inbox is not None:
                         await runtime_inbox.wait_for_active_tools()
                     # Guidance may have arrived while this model call was in flight.
                     # Do not finalize an answer that the user has already superseded.
                     if runtime_inbox is not None:
                         pending_guidance = runtime_inbox.collect_guidance_nowait()
                         if pending_guidance:
-                            if done_via_quit:
-                                for tc in tcs:
-                                    is_quit = str(tc.get("function", {}).get("name") or "") == "quit"
-                                    tool_entry = {
-                                        "role": "tool",
-                                        "tool_call_id": tc["id"],
-                                        "content": (
-                                            "Completion deferred because new user guidance arrived."
-                                            if is_quit else
-                                            "Skipped because the same batch contained terminal quit."
-                                        ),
-                                    }
-                                    if round_id:
-                                        tool_entry["round_id"] = round_id
-                                    messages.append(tool_entry)
+                            for tc in tcs:
+                                is_quit = str(tc.get("function", {}).get("name") or "") == "quit"
+                                tool_entry = {
+                                    "role": "tool",
+                                    "tool_call_id": tc["id"],
+                                    "content": (
+                                        "Completion deferred because new user guidance arrived."
+                                        if is_quit else
+                                        "Skipped because the same batch contained terminal quit."
+                                    ),
+                                }
+                                if round_id:
+                                    tool_entry["round_id"] = round_id
+                                messages.append(tool_entry)
                             await _inject_runtime_guidance(messages, pending_guidance)
                             await _save(_session_messages_to_save(messages))
                             continue
-                    if done_via_quit:
-                        for tc in tcs:
-                            is_quit = (
-                                str(tc.get("function", {}).get("name") or "") == "quit"
-                            )
-                            tool_entry = {
-                                "role": "tool",
-                                "tool_call_id": tc["id"],
-                                "content": (
-                                    "Agent requested to finish."
-                                    if is_quit
-                                    else "Skipped because the same batch contained terminal quit."
-                                ),
-                            }
-                            if round_id:
-                                tool_entry["round_id"] = round_id
-                            messages.append(tool_entry)
-                        await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
+                    for tc in tcs:
+                        is_quit = (
+                            str(tc.get("function", {}).get("name") or "") == "quit"
+                        )
+                        tool_entry = {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": (
+                                "Agent requested to finish."
+                                if is_quit
+                                else "Skipped because the same batch contained terminal quit."
+                            ),
+                        }
+                        if round_id:
+                            tool_entry["round_id"] = round_id
+                        messages.append(tool_entry)
+                    await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
                     # A missing/invalid terminal answer may be repaired, but only by
                     # the no-tool final-reply path used inside ``_ensure_text_reply``.
                     # Once quit is observed, this run can never reopen execution.
                     final_text = await _ensure_text_reply(response, messages)
-                    final_entry = entry
-                    if done_via_quit:
-                        # Preserve a valid assistant(tool_calls) -> tool-results
-                        # sequence, then store the user-visible answer as the
-                        # terminal assistant message after that sequence.
-                        entry["content"] = ""
-                        final_entry = _apply_assistant_meta(
-                            {
-                                "role": "assistant",
-                                "content": final_text,
-                                **({"round_id": round_id} if round_id else {}),
-                            }
-                        )
-                        if entry.get("usage"):
-                            final_entry["usage"] = entry.pop("usage")
-                        messages.append(final_entry)
-                    else:
-                        entry["content"] = final_text
-                        entry.pop("tool_calls", None)
+                    # Preserve a valid assistant(tool_calls) -> tool-results
+                    # sequence, then store the user-visible answer after it.
+                    entry["content"] = ""
+                    final_entry = _apply_assistant_meta(
+                        {
+                            "role": "assistant",
+                            "content": final_text,
+                            **({"round_id": round_id} if round_id else {}),
+                        }
+                    )
+                    if entry.get("usage"):
+                        final_entry["usage"] = entry.pop("usage")
+                    messages.append(final_entry)
                     _attach_final_usage(final_entry)
                     if client_request_id:
                         final_entry["client_request_id"] = client_request_id

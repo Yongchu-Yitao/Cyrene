@@ -88,6 +88,7 @@ class TerminalDaemon:
         if self.server is not None:
             await self.server.wait_closed()
             self.server = None
+        self.manager.flush()
 
     async def _send(self, writer: asyncio.StreamWriter, message: dict[str, Any]) -> None:
         writer.write(json.dumps(message, separators=(",", ":")).encode() + b"\n")
@@ -136,24 +137,7 @@ class TerminalDaemon:
                     "activeTerminalId": self.manager.active_terminal_id(project_id),
                 }
             elif action == "create":
-                terminal = await self.manager.create_resolved(
-                    str(request.get("projectId") or ""),
-                    cwd=str(request.get("cwd") or ""),
-                    shell=str(request.get("shell") or "shell"),
-                    argv=[str(part) for part in request.get("argv") or []],
-                    title=str(request.get("title") or ""),
-                    cols=int(request.get("cols") or 100),
-                    rows=int(request.get("rows") or 30),
-                    owner_chat_id=str(request.get("ownerChatId") or ""),
-                    created_by=str(request.get("createdBy") or "user"),
-                    owner_tool_call_id=str(request.get("ownerToolCallId") or ""),
-                    launch_mode=str(request.get("launchMode") or "interactive"),
-                    wake_on_exit=bool(request.get("wakeOnExit")),
-                    wake_note=str(request.get("wakeNote") or ""),
-                )
-                if bool(request.get("activate", True)):
-                    self.manager.set_active(terminal["projectId"], terminal["id"])
-                payload = {"terminal": terminal}
+                payload = {"terminal": await self._create_terminal(request)}
             elif action == "screen":
                 payload = self.manager.screen_snapshot(str(request.get("terminalId") or ""))
             elif action == "scrollback":
@@ -165,6 +149,22 @@ class TerminalDaemon:
                         if requested_cursor is not None else None
                     ),
                     max_bytes=int(request.get("maxBytes") or 64 * 1024),
+                )
+            elif action == "historySearch":
+                payload = {"matches": self.manager.search_history(
+                    str(request.get("projectId") or ""),
+                    str(request.get("query") or ""),
+                    terminal_id=str(request.get("terminalId") or ""),
+                    limit=int(request.get("limit") or 100),
+                )}
+            elif action == "commands":
+                payload = {"commands": self.manager.commands(
+                    str(request.get("terminalId") or "")
+                )}
+            elif action == "commandOutput":
+                payload = self.manager.command_output(
+                    str(request.get("terminalId") or ""),
+                    str(request.get("commandId") or ""),
                 )
             elif action == "inputHistory":
                 payload = {
@@ -255,9 +255,37 @@ class TerminalDaemon:
             return
         await self._send(writer, {"ok": True, **payload})
 
+    async def _create_terminal(self, request: dict[str, Any]) -> dict[str, Any]:
+        project_id = str(request.get("projectId") or "")
+        cwd = str(request.get("cwd") or "")
+        if not cwd:
+            active_id = self.manager.active_terminal_id(project_id)
+            cwd = (
+                self.manager.get(active_id).cwd
+                if active_id
+                else str(request.get("defaultCwd") or "")
+            )
+        terminal = await self.manager.create_resolved(
+            project_id,
+            cwd=cwd,
+            shell=str(request.get("shell") or "shell"),
+            argv=[str(part) for part in request.get("argv") or []],
+            title=str(request.get("title") or ""),
+            cols=int(request.get("cols") or 100),
+            rows=int(request.get("rows") or 30),
+            owner_chat_id=str(request.get("ownerChatId") or ""),
+            created_by=str(request.get("createdBy") or "user"),
+            owner_tool_call_id=str(request.get("ownerToolCallId") or ""),
+            launch_mode=str(request.get("launchMode") or "interactive"),
+            wake_on_exit=bool(request.get("wakeOnExit")),
+            wake_note=str(request.get("wakeNote") or ""),
+        )
+        if bool(request.get("activate", True)):
+            self.manager.set_active(terminal["projectId"], terminal["id"])
+        return terminal
+
     async def _subscribe(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
-        request: dict[str, Any],
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, request: dict[str, Any],
     ) -> None:
         terminal_id = str(request.get("terminalId") or "")
         try:
@@ -271,16 +299,17 @@ class TerminalDaemon:
             # Freeze the replay boundary before yielding. Live output produced
             # while the replay is sent is already queued by subscribe() and is
             # delivered afterwards without creating a gap.
-            replay = self.manager.replay(terminal_id, cursor)
             snapshot = session.public()
             replay_target = int(snapshot.get("nextSeq") or 0)
-            replayed_through = max(
-                [int(event.get("nextSeq") or 0) for event in replay]
-                or [min(max(cursor, int(snapshot.get("oldestSeq") or 0)), replay_target)]
+            replayed_through = min(
+                max(cursor, int(snapshot.get("oldestSeq") or 0)), replay_target
             )
             await self._send(writer, {"type": "snapshot", "terminal": snapshot})
-            for event in replay:
+            for event in self.manager.iter_replay(
+                terminal_id, cursor, end_seq=replay_target
+            ):
                 await self._send(writer, event)
+                replayed_through = int(event.get("nextSeq") or replayed_through)
             # The old protocol inferred completion from the last output chunk.
             # If durable metadata and retained bytes differed, or the replay was
             # empty, the renderer could remain in "restoring" forever. This

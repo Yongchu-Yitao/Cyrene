@@ -1,5 +1,5 @@
 from __future__ import annotations
-from conftest import workbench_chat_source
+from conftest import workbench_chat_source, workbench_shell_source
 
 import json
 from pathlib import Path
@@ -94,7 +94,7 @@ def test_background_business_controls_are_internal_only():
 
 def test_current_tree_exposes_project_switch_chat_search_and_shared_pip_maximize_handler():
     root = Path(__file__).resolve().parents[1]
-    workbench = (root / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    workbench = workbench_shell_source()
     chat = workbench_chat_source()
     model = (root / "src/webui/frontend/workbench-model.jsx").read_text(encoding="utf-8")
     welcome = (root / "src/webui/frontend/workbench-welcome.jsx").read_text(encoding="utf-8")

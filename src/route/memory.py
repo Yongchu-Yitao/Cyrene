@@ -1,17 +1,16 @@
 """Legacy memory routes."""
 
-# ruff: noqa: F403,F405
+from fastapi import APIRouter
 
-from cyrene.workbench.runtime import *
+from cyrene.workbench.presentation_service import PresentationQueryService
 
 
-def register_memory_routes(router: APIRouter, bot: Any, db_path: str) -> None:
-    global _bot, _db_path
-    _bot = bot
-    _db_path = db_path
-
+def register_memory_routes(
+    router: APIRouter,
+    queries: PresentationQueryService,
+) -> None:
     # ---- Memory API ----
 
     @router.get("/api/memory")
     async def api_memory():
-        return await _build_memory()
+        return await queries.memory()

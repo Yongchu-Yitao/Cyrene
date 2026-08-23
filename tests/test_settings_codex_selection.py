@@ -2,13 +2,12 @@ import json
 from pathlib import Path
 import subprocess
 
+from conftest import workbench_settings_source
+
 
 ROOT = Path(__file__).resolve().parent.parent
-SETTINGS_SOURCE = ROOT / "src" / "webui" / "frontend" / "settings-overlay.jsx"
-
-
 def _run_codex_selection_helpers(expression: str):
-    source = SETTINGS_SOURCE.read_text(encoding="utf-8")
+    source = workbench_settings_source()
     helpers = source[
         source.index("function codexModelId") : source.index(
             "async function readSettingsResponse"
@@ -24,7 +23,7 @@ def _run_codex_selection_helpers(expression: str):
 
 
 def test_codex_settings_keep_the_persisted_selection_visible_during_catalog_load():
-    source = SETTINGS_SOURCE.read_text(encoding="utf-8")
+    source = workbench_settings_source()
 
     assert "function codexModelSelectOptions(models, selectedModel)" in source
     assert "options.unshift({ model: selected, displayName: selected, persisted: true });" in source
@@ -52,7 +51,7 @@ def test_codex_settings_keep_saved_effort_and_accept_snake_case_catalogs():
 
 
 def test_codex_catalog_refresh_reads_the_latest_persisted_candidate():
-    source = SETTINGS_SOURCE.read_text(encoding="utf-8")
+    source = workbench_settings_source()
 
     assert "codexCandidateRef.current = codexCandidate;" in source
     assert "var saved = codexCandidateRef.current;" in source

@@ -209,14 +209,13 @@ def test_project_text_file_editor_saves_atomically_and_detects_conflicts(monkeyp
 def test_context_state_uses_lightweight_store_read_off_event_loop(
     monkeypatch, tmp_path,
 ):
-    client = _client(monkeypatch, tmp_path)
-
     from cyrene.runtime import settings_store
     from route.settings import general
+    from route.settings import onboarding_context
 
     route_threads = []
     reader_threads = []
-    original_to_thread = general.asyncio.to_thread
+    original_to_thread = onboarding_context.asyncio.to_thread
 
     async def recording_to_thread(function, *args, **kwargs):
         route_threads.append(threading.get_ident())
@@ -234,15 +233,8 @@ def test_context_state_uses_lightweight_store_read_off_event_loop(
             ],
         }
 
-    monkeypatch.setattr(
-        general,
-        "_read_workbench_store",
-        lambda: (_ for _ in ()).throw(
-            AssertionError("context state must not run the repair reader")
-        ),
-    )
-    monkeypatch.setattr(general.asyncio, "to_thread", recording_to_thread)
-    monkeypatch.setattr(general, "_read_workbench_store_lightweight", lightweight_read)
+    monkeypatch.setattr(onboarding_context.asyncio, "to_thread", recording_to_thread)
+    monkeypatch.setattr(general, "read_project_state", lightweight_read)
     monkeypatch.setattr(settings_store, "is_soul_active", lambda: True)
     monkeypatch.setattr(settings_store, "is_workspace_active", lambda: True)
     monkeypatch.setattr(
@@ -250,6 +242,7 @@ def test_context_state_uses_lightweight_store_read_off_event_loop(
         "get_workspace_history",
         lambda: ["/fast/workspace"],
     )
+    client = _client(monkeypatch, tmp_path)
 
     response = client.get("/api/context/state")
 
@@ -260,23 +253,62 @@ def test_context_state_uses_lightweight_store_read_off_event_loop(
     assert reader_threads[0] != route_threads[0]
 
 
+async def test_task_artifact_download_delegates_to_artifact_service(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from fastapi import APIRouter
+    from fastapi.responses import FileResponse
+
+    from route.workbench.task_session_routes.events_artifacts import (
+        register_event_artifact_routes,
+    )
+
+    artifact_path = tmp_path / "report.md"
+    artifact_path.write_text("report", encoding="utf-8")
+    artifacts = MagicMock()
+    artifacts.download.return_value = SimpleNamespace(
+        path=artifact_path,
+        filename="report.md",
+        media_type="text/markdown",
+    )
+    router = APIRouter()
+    register_event_artifact_routes(
+        router,
+        SimpleNamespace(artifacts=artifacts, tasks=MagicMock()),
+    )
+    endpoint = next(
+        route.endpoint
+        for route in router.routes
+        if route.path
+        == "/api/task-sessions/{session_id}/artifacts/{artifact_id}/download"
+    )
+
+    response = await endpoint("session_1", "artifact_1")
+
+    assert isinstance(response, FileResponse)
+    assert response.path == artifact_path
+    assert response.media_type == "text/markdown"
+    artifacts.download.assert_called_once_with("session_1", "artifact_1")
+
+
 def test_workspace_context_mutations_use_background_thread(
     monkeypatch, tmp_path,
 ):
     client = _client(monkeypatch, tmp_path)
 
     from cyrene.runtime import settings_store
-    from route.settings import general
+    from route.settings import onboarding_context
 
     route_threads = []
     calls = []
-    original_to_thread = general.asyncio.to_thread
+    original_to_thread = onboarding_context.asyncio.to_thread
 
     async def recording_to_thread(function, *args, **kwargs):
         route_threads.append(threading.get_ident())
         return await original_to_thread(function, *args, **kwargs)
 
-    monkeypatch.setattr(general.asyncio, "to_thread", recording_to_thread)
+    monkeypatch.setattr(onboarding_context.asyncio, "to_thread", recording_to_thread)
     monkeypatch.setattr(
         settings_store,
         "activate_workspace",
@@ -646,15 +678,15 @@ def test_unhandled_api_error_returns_500_and_logs_traceback(caplog):
 
 
 def test_workbench_storage_error_is_500_and_logged(monkeypatch, tmp_path, caplog):
-    from route.workbench import memory as routes_workbench_memory
+    from cyrene.workbench import memory as workbench_memory
 
     client = _client(monkeypatch, tmp_path)
 
     def fail(_workspace):
         raise OSError("disk failed")
 
-    monkeypatch.setattr(routes_workbench_memory, "_build_payload", fail)
-    with caplog.at_level(logging.ERROR, logger="route.workbench.memory"):
+    monkeypatch.setattr(workbench_memory, "_build_payload", fail)
+    with caplog.at_level(logging.ERROR, logger="cyrene.workbench.memory"):
         response = client.get("/api/workbench/memory?workspace=project_1")
 
     assert response.status_code == 500

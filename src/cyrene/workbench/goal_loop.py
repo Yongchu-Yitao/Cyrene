@@ -10,37 +10,34 @@ SQLite is the source of truth for both loop execution and the Workbench UI
 projection. Legacy JSON files are migration/export artifacts only.
 """
 
-# Public imports in this service are consumed by the route adapter namespace.
-# ruff: noqa: F401
-
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import socket
-import sqlite3
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
-
-import aiosqlite
-from fastapi.responses import JSONResponse
 
 from cyrene.observability import debug
 from cyrene.agent import _AWAITING_USER_SENTINEL, interrupt_active_run
 from cyrene.runtime.run_coordinator import RunLease, run_coordinator_for
 from cyrene.workbench.notifications import append_notification
+from cyrene.workbench.goal_loop_repository import (
+    ensure_schema,
+    execute,
+    fetch_all,
+    fetch_one,
+    json_dumps,
+    json_loads,
+    utc_iso,
+    utc_now,
+)
 
 logger = logging.getLogger(__name__)
 
-_RUNNING_STATUSES = {"running"}
-_RESUMABLE_STATUSES = {"paused", "blocked"}
-_TERMINAL_STATUSES = {"review", "completed", "cancelled"}
-_REFLECTION_MODES = {"standard", "proactive", "frequent"}
-_PERMISSION_MODES = {"auto", "full_access"}
 # A single step that fails independent verification this many times in a row is
 # treated as stuck: the loop reflects once, then blocks instead of retrying the
 # same step until the runtime budget is burned.
@@ -52,146 +49,42 @@ _STEP_FAILURE_CAP = 3
 # a 30-minute silent wait looked like a healthy run while producing no work.
 _SUBAGENT_SETTLE_TIMEOUT_SECONDS = 5 * 60
 _SUBAGENT_HEARTBEAT_SECONDS = 15
-_SQLITE_TIMEOUT_SECONDS = 15
-# db_paths whose schema + WAL pragma have already been ensured this process.
-# The durable goal-loop tables are created once instead of on every query,
-# which removes a write transaction from the hot path of every read/write.
-_SCHEMA_READY: set[str] = set()
 _MANAGERS: dict[str, "GoalLoopManager"] = {}
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return utc_now()
 
 
 def _utc_iso() -> str:
-    return _utc_now().isoformat()
+    return utc_iso()
 
 
 def _json_dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+    return json_dumps(value)
 
 
 def _json_loads(value: Any, fallback: Any) -> Any:
-    try:
-        parsed = json.loads(str(value or ""))
-    except Exception:
-        return fallback
-    return parsed
+    return json_loads(value, fallback)
 
 
 async def _ensure_schema(db_path: str) -> None:
-    # Goal-loop workers can be exercised without registering the FastAPI app.
-    # Bind their projection reads/writes to the same SQLite database explicitly.
-    from cyrene.workbench import runtime as R
+    from cyrene.workbench import runtime
 
-    R._configure_workbench_store(str(db_path))
-    if db_path in _SCHEMA_READY:
-        return
-    async with aiosqlite.connect(db_path, timeout=_SQLITE_TIMEOUT_SECONDS) as db:
-        await db.execute(f"PRAGMA busy_timeout = {_SQLITE_TIMEOUT_SECONDS * 1000}")
-        await db.execute("PRAGMA journal_mode = WAL")
-        await db.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS goal_loop_drafts (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                project_id TEXT NOT NULL,
-                base_plan_revision INTEGER NOT NULL,
-                goal TEXT NOT NULL,
-                goal_changed INTEGER NOT NULL DEFAULT 0,
-                plan_json TEXT NOT NULL,
-                acceptance_json TEXT NOT NULL,
-                limits_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_goal_loop_drafts_session ON goal_loop_drafts(session_id);
-            CREATE INDEX IF NOT EXISTS idx_goal_loop_drafts_expires ON goal_loop_drafts(expires_at);
-            CREATE TABLE IF NOT EXISTS goal_runs (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL UNIQUE,
-                project_id TEXT NOT NULL,
-                objective TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'running',
-                phase TEXT NOT NULL DEFAULT 'executing',
-                plan_definition_revision INTEGER NOT NULL,
-                current_step_id TEXT,
-                permission_mode TEXT NOT NULL DEFAULT 'auto',
-                reflection_mode TEXT NOT NULL DEFAULT 'proactive',
-                max_active_seconds INTEGER NOT NULL,
-                max_repair_rounds INTEGER NOT NULL,
-                active_seconds REAL NOT NULL DEFAULT 0,
-                active_started_at TEXT,
-                repair_round INTEGER NOT NULL DEFAULT 0,
-                lease_owner TEXT,
-                lease_until TEXT,
-                stop_reason TEXT,
-                last_error TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_goal_runs_status ON goal_runs(status);
-            CREATE INDEX IF NOT EXISTS idx_goal_runs_lease ON goal_runs(lease_until);
-            CREATE TABLE IF NOT EXISTS goal_run_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                step_id TEXT,
-                payload_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_goal_run_events_run ON goal_run_events(run_id);
-            """
-        )
-        await db.commit()
-    _SCHEMA_READY.add(db_path)
+    runtime._configure_workbench_store(str(db_path))
+    await ensure_schema(db_path)
 
 
 async def _fetch_one(db_path: str, sql: str, args: tuple[Any, ...] = ()) -> dict[str, Any] | None:
-    await _ensure_schema(db_path)
-    async with aiosqlite.connect(db_path, timeout=_SQLITE_TIMEOUT_SECONDS) as db:
-        await db.execute(f"PRAGMA busy_timeout = {_SQLITE_TIMEOUT_SECONDS * 1000}")
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(sql, args)
-        row = await cursor.fetchone()
-        return dict(row) if row is not None else None
+    return await fetch_one(db_path, sql, args)
 
 
 async def _fetch_all(db_path: str, sql: str, args: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-    await _ensure_schema(db_path)
-    async with aiosqlite.connect(db_path, timeout=_SQLITE_TIMEOUT_SECONDS) as db:
-        await db.execute(f"PRAGMA busy_timeout = {_SQLITE_TIMEOUT_SECONDS * 1000}")
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(sql, args)
-        rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+    return await fetch_all(db_path, sql, args)
 
 
 async def _execute(db_path: str, sql: str, args: tuple[Any, ...] = ()) -> int:
-    await _ensure_schema(db_path)
-    async with aiosqlite.connect(db_path, timeout=_SQLITE_TIMEOUT_SECONDS) as db:
-        await db.execute(f"PRAGMA busy_timeout = {_SQLITE_TIMEOUT_SECONDS * 1000}")
-        cursor = await db.execute(sql, args)
-        await db.commit()
-        return int(cursor.rowcount or 0)
-
-
-def _sqlite_storage_busy(exc: BaseException) -> bool:
-    return isinstance(exc, sqlite3.OperationalError) and any(
-        marker in str(exc).lower()
-        for marker in ("database is locked", "database table is locked", "database is busy")
-    )
-
-
-def _storage_busy_response() -> JSONResponse:
-    return JSONResponse(
-        {
-            "error": "任务存储正被其他操作占用，请等待相关测试或任务结束后重试。",
-            "code": "goal_loop_storage_busy",
-        },
-        status_code=503,
-    )
+    return await execute(db_path, sql, args)
 
 
 def _public_run(run: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -237,40 +130,6 @@ async def _event(
     )
 
 
-def _validate_limits(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
-    goal = str(payload.get("goal") or "").strip()
-    if len(goal) < 3:
-        return None, "目标至少需要 3 个字符。"
-    try:
-        max_hours = float(payload.get("maxRuntimeHours"))
-    except (TypeError, ValueError):
-        return None, "最大运行时间必须是数字。"
-    if max_hours < 0.5 or max_hours > 24:
-        return None, "最大运行时间必须在 0.5 到 24 小时之间。"
-    try:
-        max_repairs = int(payload.get("maxRepairRounds"))
-    except (TypeError, ValueError):
-        return None, "最大返工轮数必须是整数。"
-    if max_repairs < 0 or max_repairs > 10:
-        return None, "最大返工轮数必须在 0 到 10 之间。"
-    permission_mode = str(payload.get("permissionMode") or "auto").strip()
-    if permission_mode not in _PERMISSION_MODES:
-        return None, "权限模式无效。"
-    if permission_mode == "full_access" and not bool(payload.get("fullAccessConfirmed")):
-        return None, "使用完全访问前必须确认风险。"
-    reflection_mode = str(payload.get("reflectionMode") or "proactive").strip()
-    if reflection_mode not in _REFLECTION_MODES:
-        return None, "深度思考强度无效。"
-    return {
-        "goal": goal,
-        "maxRuntimeHours": max_hours,
-        "maxActiveSeconds": int(max_hours * 3600),
-        "maxRepairRounds": max_repairs,
-        "permissionMode": permission_mode,
-        "reflectionMode": reflection_mode,
-    }, ""
-
-
 def _read_session(session_id: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     from cyrene.workbench import runtime as R
 
@@ -312,6 +171,82 @@ async def _publish(run: dict[str, Any], *, event_type: str = "goal_loop_update")
             "goal_loop": public,
         }
     )
+
+
+async def sync_goal_loop_projection(run: dict[str, Any], *, message: str = "") -> None:
+    public = _public_run(run) or {}
+
+    def apply(_payload: dict[str, Any], _project: dict[str, Any], session: dict[str, Any]) -> None:
+        session["goalLoop"] = public
+        if message:
+            session["agentReply"] = message
+        status = str(run.get("status") or "")
+        if status in {"running", "waiting_for_user", "paused", "blocked", "review", "completed", "cancelled"}:
+            session["status"] = status
+
+    try:
+        _write_session(str(run["session_id"]), apply)
+    except KeyError:
+        return
+    await _publish(run)
+
+
+class WorkbenchGoalLoopTransaction:
+    """Public Workbench document/planning port used by the application service."""
+
+    def read_session(self, session_id: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        return _read_session(session_id)
+
+    def write_session(
+        self,
+        session_id: str,
+        mutator: Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], None],
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        return _write_session(session_id, mutator)
+
+    async def generate_plan(
+        self, session: dict[str, Any], project: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+        from cyrene.workbench import runtime
+
+        plan, acceptance, generated, _operation = await runtime._workbench_generate_plan_steps(
+            session,
+            project,
+            feedback="目标已由用户在持续执行配置中更新，请基于新目标重新生成完整计划。",
+            requested_operation="replace",
+        )
+        return plan, acceptance, generated
+
+    async def generate_acceptance(
+        self, session: dict[str, Any], project: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], bool]:
+        from cyrene.workbench import runtime
+
+        return await runtime._workbench_generate_acceptance_criteria(session, project)
+
+    @staticmethod
+    def event_id() -> str:
+        return f"event_{uuid.uuid4().hex[:10]}"
+
+    @staticmethod
+    def serialize_run(run: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _public_run(run)
+
+    @staticmethod
+    async def publish(run: dict[str, Any]) -> None:
+        await _publish(run)
+
+    @staticmethod
+    async def sync_projection(run: dict[str, Any], *, message: str = "") -> None:
+        await sync_goal_loop_projection(run, message=message)
+
+    @staticmethod
+    def interrupt(session_id: str) -> None:
+        interrupt_active_run(session_id=session_id)
+
+
+def register_goal_loop_manager(db_path: str, manager: "GoalLoopManager") -> None:
+    _MANAGERS[str(db_path)] = manager
 
 
 async def _get_run_by_id(db_path: str, run_id: str) -> dict[str, Any] | None:
@@ -548,10 +483,6 @@ class GoalLoopManager:
         self.coordinator = run_coordinator_for(self.db_path)
         self.run_leases: dict[str, RunLease] = {}
         self.run_sessions: dict[str, str] = {}
-        # Starting a run spans the goal-loop tables and the Workbench document.
-        # Serialize that short cross-store critical section so duplicate clicks
-        # cannot interleave into a SQLite lock error or a half-created run.
-        self.start_lock = asyncio.Lock()
         self.closed = False
 
     async def startup(self) -> None:
@@ -610,7 +541,7 @@ class GoalLoopManager:
                     stop_reason="run_conflict",
                 )
                 if paused:
-                    await self._sync_projection(
+                    await self.sync_projection(
                         paused,
                         message="恢复持续执行时发现该任务已有其他运行，已安全暂停。",
                     )
@@ -747,22 +678,8 @@ class GoalLoopManager:
         )
         return await _get_run_by_id(self.db_path, str(run["id"])) if changed else None
 
-    async def _sync_projection(self, run: dict[str, Any], *, message: str = "") -> None:
-        public = _public_run(run) or {}
-
-        def apply(_payload: dict[str, Any], _project: dict[str, Any], session: dict[str, Any]) -> None:
-            session["goalLoop"] = public
-            if message:
-                session["agentReply"] = message
-            status = str(run.get("status") or "")
-            if status in {"running", "waiting_for_user", "paused", "blocked", "review", "completed", "cancelled"}:
-                session["status"] = status
-
-        try:
-            _write_session(str(run["session_id"]), apply)
-        except KeyError:
-            return
-        await _publish(run)
+    async def sync_projection(self, run: dict[str, Any], *, message: str = "") -> None:
+        await sync_goal_loop_projection(run, message=message)
 
     async def _run(self, run_id: str) -> None:
         from cyrene.workbench import runtime as R
@@ -786,7 +703,7 @@ class GoalLoopManager:
                 )
                 if paused:
                     await _event(self.db_path, run_id, "runtime_limit_reached")
-                    await self._sync_projection(paused, message="已达到最大运行时间，持续执行已暂停。")
+                    await self.sync_projection(paused, message="已达到最大运行时间，持续执行已暂停。")
                     append_notification(
                         title="持续执行已暂停",
                         body="任务达到最大运行时间，可调整限制后继续。",
@@ -846,7 +763,7 @@ class GoalLoopManager:
 
                 _write_session(str(run["session_id"]), start_step)
                 await _event(self.db_path, run_id, "step_started", step_id=step_id)
-                await self._sync_projection(run, message=f"持续执行中：{step.get('title') or '当前步骤'}")
+                await self.sync_projection(run, message=f"持续执行中：{step.get('title') or '当前步骤'}")
 
                 _, current_project, current_session = _read_session(str(run["session_id"]))
                 workspace_root = R._workbench_workspace_root(current_project)
@@ -919,7 +836,7 @@ class GoalLoopManager:
                                 step_id=step_id,
                                 payload={"code": exc.code, "error": exc.message},
                             )
-                            await self._sync_projection(
+                            await self.sync_projection(
                                 paused,
                                 message=f"预算限制阻止了继续执行，持续任务已暂停：{exc.message}",
                             )
@@ -959,7 +876,7 @@ class GoalLoopManager:
                     )
                     if waiting:
                         await _event(self.db_path, run_id, "waiting_for_user", step_id=step_id)
-                        await self._sync_projection(waiting, message=display_reply)
+                        await self.sync_projection(waiting, message=display_reply)
                     return
 
                 # A step isn't finished while subagents it spawned are still
@@ -1047,7 +964,7 @@ class GoalLoopManager:
                                 step_id=step_id,
                                 payload={"error": str(exc)},
                             )
-                            await self._sync_projection(
+                            await self.sync_projection(
                                 paused,
                                 message=f"步骤独立验收暂时不可用，持续执行已暂停：{exc}",
                             )
@@ -1154,7 +1071,7 @@ class GoalLoopManager:
                     # runtime budget runs out (and the cost with it).
                     reflecting = await _update_run(self.db_path, run_id, phase="reflecting", current_step_id=None)
                     if reflecting:
-                        await self._sync_projection(reflecting, message="步骤反复未通过验收，正在深度思考失败根因。")
+                        await self.sync_projection(reflecting, message="步骤反复未通过验收，正在深度思考失败根因。")
                     await _reflect(
                         str(run["session_id"]),
                         focus=str((verification or {}).get("retry_guidance") or f"步骤「{step.get('title') or ''}」反复未通过验收"),
@@ -1176,7 +1093,7 @@ class GoalLoopManager:
                             step_id=step_id,
                             payload={"attempts": step_attempts},
                         )
-                        await self._sync_projection(
+                        await self.sync_projection(
                             blocked,
                             message=f"步骤「{step.get('title') or '当前步骤'}」连续 {step_attempts} 次未通过独立验收，持续执行已阻塞。请调整计划或目标后再继续。",
                         )
@@ -1191,7 +1108,7 @@ class GoalLoopManager:
                     return
                 if passed and str(run.get("reflection_mode") or "") == "frequent":
                     await _update_run(self.db_path, run_id, phase="reflecting")
-                    await self._sync_projection(
+                    await self.sync_projection(
                         await _get_run_by_id(self.db_path, run_id) or run,
                         message="步骤完成，正在进行深度思考。",
                     )
@@ -1227,14 +1144,14 @@ class GoalLoopManager:
                 )
                 if blocked:
                     await _event(self.db_path, run_id, "dependency_blocked")
-                    await self._sync_projection(blocked, message="没有可执行步骤，任务被计划依赖阻塞。")
+                    await self.sync_projection(blocked, message="没有可执行步骤，任务被计划依赖阻塞。")
                 return
 
             reflection_mode = str(run.get("reflection_mode") or "proactive")
             if reflection_mode in {"proactive", "frequent"}:
                 reflecting = await _update_run(self.db_path, run_id, phase="reflecting", current_step_id=None)
                 if reflecting:
-                    await self._sync_projection(reflecting, message="全部步骤已处理，正在最终验收前深度思考。")
+                    await self.sync_projection(reflecting, message="全部步骤已处理，正在最终验收前深度思考。")
                 await _reflect(
                     str(run["session_id"]),
                     focus="最终验收前检查遗漏、假完成和表面满足",
@@ -1245,7 +1162,7 @@ class GoalLoopManager:
             verifying = await _update_run(self.db_path, run_id, phase="verifying", current_step_id=None)
             if not verifying:
                 return
-            await self._sync_projection(verifying, message="正在独立验收目标。")
+            await self.sync_projection(verifying, message="正在独立验收目标。")
             _, project, session = _read_session(str(run["session_id"]))
             try:
                 verdict = await R._workbench_verify_acceptance(session, project)
@@ -1260,7 +1177,7 @@ class GoalLoopManager:
                 )
                 if paused:
                     await _event(self.db_path, run_id, "verification_unavailable", payload={"error": str(exc)})
-                    await self._sync_projection(paused, message=f"独立验收暂时不可用，持续执行已暂停：{exc}")
+                    await self.sync_projection(paused, message=f"独立验收暂时不可用，持续执行已暂停：{exc}")
                 return
             if not isinstance(verdict, dict):
                 paused = await _set_inactive_status(
@@ -1271,7 +1188,7 @@ class GoalLoopManager:
                     stop_reason="verification_unavailable",
                 )
                 if paused:
-                    await self._sync_projection(paused, message="独立验收没有返回有效结果，持续执行已暂停。")
+                    await self.sync_projection(paused, message="独立验收没有返回有效结果，持续执行已暂停。")
                 return
 
             results = verdict.get("results") if isinstance(verdict.get("results"), list) else []
@@ -1314,7 +1231,7 @@ class GoalLoopManager:
                     stop_reason="acceptance_passed",
                 )
                 if completed:
-                    await self._sync_projection(completed, message="自动验收通过，任务已自动标记为已完成。")
+                    await self.sync_projection(completed, message="自动验收通过，任务已自动标记为已完成。")
                     try:
                         _, final_project, final_session = _read_session(str(run["session_id"]))
                         await R._workbench_archive_run_knowledge(
@@ -1353,7 +1270,7 @@ class GoalLoopManager:
                     stop_reason="max_repair_rounds",
                 )
                 if paused:
-                    await self._sync_projection(paused, message="已达到最大返工轮数，持续执行已暂停。")
+                    await self.sync_projection(paused, message="已达到最大返工轮数，持续执行已暂停。")
                     append_notification(
                         title="持续执行已暂停",
                         body="任务达到最大返工轮数，可调整限制后继续。",
@@ -1366,7 +1283,7 @@ class GoalLoopManager:
 
             reflecting = await _update_run(self.db_path, run_id, phase="reflecting")
             if reflecting:
-                await self._sync_projection(reflecting, message="验收未通过，正在深度思考失败原因。")
+                await self.sync_projection(reflecting, message="验收未通过，正在深度思考失败原因。")
             await _reflect(
                 str(run["session_id"]),
                 focus=str(verdict.get("reason") or "验收未通过"),
@@ -1409,7 +1326,7 @@ class GoalLoopManager:
                 payload={"repairRound": repair_round + 1, "stepCount": len(repair_steps)},
             )
             if repaired:
-                await self._sync_projection(repaired)
+                await self.sync_projection(repaired)
 
 
 async def begin_async_answer(
@@ -1484,7 +1401,7 @@ async def begin_async_answer(
                 stop_reason="run_conflict",
             )
             if paused:
-                await manager._sync_projection(
+                await manager.sync_projection(
                     paused,
                     message="任务已有其他运行，持续执行已安全暂停。",
                 )
@@ -1510,7 +1427,7 @@ async def resume_after_answer(db_path: str, session_id: str, *, permission_denie
             await _event(db_path, str(run["id"]), "permission_denied")
             manager = _MANAGERS.get(str(db_path))
             if manager:
-                await manager._sync_projection(
+                await manager.sync_projection(
                     paused,
                     message="权限请求已拒绝，持续执行已暂停。",
                 )
@@ -1570,11 +1487,18 @@ async def resume_after_answer(db_path: str, session_id: str, *, permission_denie
                 stop_reason="run_conflict",
             )
             if paused:
-                await manager._sync_projection(
+                await manager.sync_projection(
                     paused,
                     message="任务已有其他运行，持续执行已安全暂停。",
                 )
     await _publish(run)
 
 
-__all__ = ["GoalLoopManager", "resume_after_answer", "begin_async_answer"]
+__all__ = [
+    "GoalLoopManager",
+    "WorkbenchGoalLoopTransaction",
+    "begin_async_answer",
+    "register_goal_loop_manager",
+    "resume_after_answer",
+    "sync_goal_loop_projection",
+]

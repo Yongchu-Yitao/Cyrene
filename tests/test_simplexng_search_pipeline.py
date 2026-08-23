@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 
 async def test_simplexng_fetches_pages_and_returns_evidence(monkeypatch):
     from cyrene.tooling.backends import search
@@ -52,6 +54,193 @@ async def test_simplexng_pipeline_makes_no_internal_model_calls(monkeypatch):
 
     assert "Source evidence:" in result
     assert "Fetched evidence" in result
+
+
+class _FakeSearchResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+class _FakeSearchSession:
+    def __init__(self, payload):
+        self._payload = payload
+        self.trust_env = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        pass
+
+    def get(self, *_args, **_kwargs):
+        return _FakeSearchResponse(self._payload)
+
+
+async def test_simplexng_engine_outage_is_not_reported_as_zero_results(monkeypatch):
+    from cyrene.tooling.backends import search
+
+    payload = {
+        "results": [],
+        "unresponsive_engines": [
+            ["google", "HTTP connection error"],
+            ["duckduckgo", "HTTP connection error"],
+        ],
+    }
+    monkeypatch.setattr(search, "_get_simplexng_url", lambda: "http://127.0.0.1:8888")
+    monkeypatch.setattr(search.requests, "Session", lambda: _FakeSearchSession(payload))
+
+    with pytest.raises(search.SearchBackendUnavailable, match="duckduckgo, google"):
+        await search._deep_search_simplexng("广州天气")
+
+
+async def test_all_simplexng_engine_failures_continue_to_next_provider(monkeypatch):
+    from cyrene.runtime.search_settings import SearchRuntimeSettings
+    from cyrene.tooling.backends import search
+
+    payload = {
+        "results": [],
+        "unresponsive_engines": [
+            [engine, "HTTP connection error"]
+            for engine in (
+                "bing",
+                "brave",
+                "duckduckgo",
+                "google",
+                "qwant",
+                "startpage",
+            )
+        ],
+    }
+    monkeypatch.setattr(search, "_get_simplexng_url", lambda: "http://127.0.0.1:8888")
+    monkeypatch.setattr(search.requests, "Session", lambda: _FakeSearchSession(payload))
+    monkeypatch.setattr(
+        search,
+        "runtime_settings",
+        lambda: SearchRuntimeSettings(True, ("simplexng", "deepseek")),
+    )
+
+    async def deepseek_result(_topic):
+        return "DeepSeek fallback result"
+
+    monkeypatch.setattr(search, "_deep_search_deepseek", deepseek_result)
+
+    assert await search.deep_search("广州天气") == "DeepSeek fallback result"
+
+
+async def test_simplexng_genuine_empty_result_remains_empty(monkeypatch):
+    from cyrene.tooling.backends import search
+
+    payload = {"results": [], "unresponsive_engines": []}
+    monkeypatch.setattr(search, "_get_simplexng_url", lambda: "http://127.0.0.1:8888")
+    monkeypatch.setattr(search.requests, "Session", lambda: _FakeSearchSession(payload))
+
+    with pytest.raises(search.SearchBackendUnavailable, match="no usable search results"):
+        await search._deep_search_simplexng("不存在的内容")
+
+
+async def test_simplexng_result_without_snippet_or_page_content_is_unusable(monkeypatch):
+    from cyrene.tooling.backends import search
+
+    async def fake_search(_query):
+        return [{
+            "title": "Empty source",
+            "url": "https://example.test/empty",
+            "snippet": "",
+            "query": "topic",
+        }]
+
+    async def fake_fetch(_url, session=None):
+        return ""
+
+    monkeypatch.setattr(search, "_search_simplexng", fake_search)
+    monkeypatch.setattr(search, "_fetch_url", fake_fetch)
+
+    with pytest.raises(search.SearchBackendUnavailable, match="without usable content"):
+        await search._deep_search_simplexng("topic")
+
+
+class _FakeProviderSession:
+    def __init__(self, payload, calls):
+        self.payload = payload
+        self.calls = calls
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        pass
+
+    def post(self, url, **kwargs):
+        self.calls.append(("post", url, kwargs))
+        return _FakeSearchResponse(self.payload)
+
+    def get(self, url, **kwargs):
+        self.calls.append(("get", url, kwargs))
+        return _FakeSearchResponse(self.payload)
+
+
+async def test_tavily_uses_bearer_auth_and_normalizes_results(monkeypatch):
+    from cyrene.tooling.backends import search
+
+    calls = []
+    payload = {
+        "results": [{
+            "title": "Tavily source",
+            "url": "https://example.test/tavily",
+            "content": "Tavily evidence",
+        }],
+    }
+    monkeypatch.setattr(search, "provider_api_key", lambda provider: "tvly-secret")
+    monkeypatch.setattr(
+        search,
+        "_proxied_session",
+        lambda: _FakeProviderSession(payload, calls),
+    )
+
+    result = await search._search_tavily("topic")
+
+    method, url, request = calls[0]
+    assert (method, url) == ("post", "https://api.tavily.com/search")
+    assert request["headers"]["Authorization"] == "Bearer tvly-secret"
+    assert "api_key" not in request["json"]
+    assert "Tavily evidence" in result
+
+
+async def test_brave_uses_subscription_token_and_normalizes_results(monkeypatch):
+    from cyrene.tooling.backends import search
+
+    calls = []
+    payload = {
+        "web": {
+            "results": [{
+                "title": "Brave source",
+                "url": "https://example.test/brave",
+                "description": "Brave evidence",
+            }],
+        },
+    }
+    monkeypatch.setattr(search, "provider_api_key", lambda provider: "brave-secret")
+    monkeypatch.setattr(
+        search,
+        "_proxied_session",
+        lambda: _FakeProviderSession(payload, calls),
+    )
+
+    result = await search._search_brave("topic")
+
+    method, url, request = calls[0]
+    assert (method, url) == (
+        "get",
+        "https://api.search.brave.com/res/v1/web/search",
+    )
+    assert request["headers"]["X-Subscription-Token"] == "brave-secret"
+    assert "Brave evidence" in result
 
 
 class _FakeResponse:

@@ -21,7 +21,10 @@ from cyrene.config import (
 from cyrene.runtime.context import HostMode, RuntimeConfigSnapshot, RuntimeContext
 from cyrene.runtime.cyrene_migration import migrate_workspace_to_cyrene
 from cyrene.runtime.database import init_db
-from cyrene.runtime.database_migration import migrate_legacy_database
+from cyrene.runtime.database_migration import (
+    compact_legacy_knowledge_fts,
+    migrate_legacy_database,
+)
 from cyrene.runtime.inbox import ensure_inbox
 from cyrene.runtime.memory.short_term import init_short_term
 from cyrene.runtime.memory.soul import ensure_soul
@@ -108,6 +111,10 @@ async def initialize_runtime(
                     "Cyrene found legacy database data but could not migrate it "
                     f"safely (status={migration.status}): {migration.detail}"
                 )
+            await asyncio.to_thread(
+                compact_legacy_knowledge_fts,
+                context.database_path,
+            )
             # Fold Cyrene-owned workspace folders into the hidden .cyrene dir
             # before SOUL.md is re-created, so an existing soul file survives.
             await asyncio.to_thread(

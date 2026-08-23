@@ -1,13 +1,448 @@
-import { WBC_ICONS, WBC_SIDE_TAB_ICONS, useWbcCallback, useWbcEffect, useWbcLayoutEffect, useWbcRef, useWbcState, wbcAttachmentTypeLabel, wbcBrowserAvoidancePlan, wbcBrowserFullscreenStatusText, wbcBrowserPageTitle, wbcBrowserTabPickerPayload, wbcBrowserTabPickerToggleIsDebounced, wbcBrowserWindowTitle, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcClampBrowserWindowFrame, wbcConversationTabAtPoint, wbcCycleTopbarSessionTab, wbcHandleHorizontalWheelGesture, wbcHasAgentCapabilitySnapshot, wbcHasChatDrag, wbcIsBuiltinAgent, wbcKeepBrowserWindowClearOfComposer, wbcLoadBrowserWindowFrame, wbcMergeChronologicalMessages, wbcNotifyBrowserLayoutChanged, wbcNotifyBrowserWindowInteraction, wbcNotifyResourceShelfPointerDrag, wbcPointInsideResourceShelf, wbcReadChatDrag, wbcReconcileLiveUserMessages, wbcRuntimeSegmentMessages, wbcRuntimeTimelineMessages, wbcSaveBrowserWindowFrame, wbcT, wbcTraceDedupeKey } from "../../workbench-chat.jsx"
+import { workbenchServices } from "../../shared/runtime/services.jsx"
+import { WBC_ICONS, WBC_SIDE_TAB_ICONS, useWbcCallback, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcAttachmentTypeLabel, wbcBrowserAvoidancePlan, wbcBrowserFullscreenStatusText, wbcBrowserPageTitle, wbcBrowserTabPickerPayload, wbcBrowserTabPickerToggleIsDebounced, wbcBrowserWindowTitle, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcClampBrowserWindowFrame, wbcConversationTabAtPoint, wbcCycleTopbarSessionTab, wbcHandleHorizontalWheelGesture, wbcHasAgentCapabilitySnapshot, wbcHasChatDrag, wbcIsBuiltinAgent, wbcKeepBrowserWindowClearOfComposer, wbcLoadBrowserWindowFrame, wbcMergeChronologicalMessages, wbcNotifyBrowserLayoutChanged, wbcNotifyBrowserWindowInteraction, wbcNotifyResourceShelfPointerDrag, wbcPointInsideResourceShelf, wbcReadChatDrag, wbcReconcileLiveUserMessages, wbcRuntimeSegmentMessages, wbcRuntimeTimelineMessages, wbcSaveBrowserWindowFrame, wbcT, wbcTraceDedupeKey } from "../../workbench-chat.jsx"
 import { WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcUserMessage, wbcGroupConsecutiveActivityMessages } from "./messages.jsx"
 import { WbcComposer } from "./composer.jsx"
+import { WbcConversationNavigator } from "./conversation-navigator.jsx"
 
 import { permissionOptionLabel } from "./behavior.mjs"
+
+function useWbcFullscreenReplyEffects(options) {
+  useWbcEffect(function () {
+    options.clearFinalReplyTimer();
+    options.setDraft("");
+    options.setStatusRequested(false);
+    options.setSubmitting(false);
+    options.setFinalReply("");
+    options.replyBaselineRef.current = String(options.latestAssistantReplyId || "");
+    return options.clearFinalReplyTimer;
+  }, [options.effectiveMode, options.browserSessionId]);
+
+  useWbcEffect(function () {
+    if (options.effectiveMode !== "maximized" || !options.statusRequested) return undefined;
+    if (options.running || options.submitting || options.finalReply) return undefined;
+    var replyId = String(options.latestAssistantReplyId || "");
+    var replyText = String(options.latestAssistantReplyText || "").replace(/\s+/g, " ").trim();
+    if (replyText && replyId && replyId !== options.replyBaselineRef.current) {
+      options.setFinalReply(replyText);
+      options.clearFinalReplyTimer();
+      options.finalReplyTimerRef.current = setTimeout(function () {
+        options.finalReplyTimerRef.current = null;
+        options.setFinalReply("");
+        options.setStatusRequested(false);
+      }, 5000);
+      return undefined;
+    }
+    var settleTimer = setTimeout(function () { options.setStatusRequested(false); }, 1200);
+    return function () { clearTimeout(settleTimer); };
+  }, [options.effectiveMode, options.running, options.submitting, options.statusRequested, options.finalReply, options.latestAssistantReplyId, options.latestAssistantReplyText]);
+}
+
+function wbcNativeChatOverlayColors() {
+  var paletteNode = document.querySelector(".workbench-shell") || document.documentElement;
+  var rootStyles = getComputedStyle(paletteNode);
+  function color(name, fallback) {
+    return String(rootStyles.getPropertyValue(name) || "").trim() || fallback;
+  }
+  return {
+    line: color("--wb-line-2", "#d8dce4"),
+    panel: color("--wb-card-bg-strong", "#ffffff"),
+    text: color("--wb-text", "#17191d"),
+    muted: color("--wb-muted", "#6f737b"),
+    faint: color("--wb-faint", "#9297a1"),
+    accent: color("--wb-accent", "#6d5dfc"),
+    "accent-text": color("--wb-accent-text", "#ffffff"),
+    green: color("--wb-green", "#1f9d57"),
+    red: color("--wb-red", "#d84848"),
+  };
+}
+
+function useWbcNativeChatOverlayEffects(options) {
+  useWbcEffect(function () {
+    if (!options.hasNative || typeof options.bridge.onChatOverlayAction !== "function") return undefined;
+    return options.bridge.onChatOverlayAction(function (action) {
+      if (!action || String(action.sessionId || "") !== String(options.sessionId || "")) return;
+      if (options.mode !== "maximized") return;
+      if (action.type === "stop") {
+        if (options.running && options.onInterrupt) options.onInterrupt();
+        return;
+      }
+      options.sendText(action.text || "");
+    });
+  }, [options.hasNative, options.sessionId, options.mode, options.running, options.onSend, options.onGuidance, options.onInterrupt]);
+
+  useWbcEffect(function () {
+    if (!options.hasNative) return undefined;
+    var frameId = 0;
+    function refreshTheme() {
+      if (frameId) return;
+      frameId = requestAnimationFrame(function () {
+        frameId = 0;
+        options.setThemeRevision(function (value) { return value + 1; });
+      });
+    }
+    var observer = typeof MutationObserver === "function" ? new MutationObserver(refreshTheme) : null;
+    if (observer) observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "style"] });
+    window.addEventListener("cyrene-tweak-theme-change", refreshTheme);
+    window.addEventListener("cyrene-tweak-accent-change", refreshTheme);
+    return function () {
+      if (frameId) cancelAnimationFrame(frameId);
+      if (observer) observer.disconnect();
+      window.removeEventListener("cyrene-tweak-theme-change", refreshTheme);
+      window.removeEventListener("cyrene-tweak-accent-change", refreshTheme);
+    };
+  }, [options.hasNative]);
+
+  useWbcEffect(function () {
+    if (!options.hasNative) return;
+    options.bridge.setChatOverlay({
+      sessionId: options.sessionId || "", visible: options.visible && options.mode === "maximized",
+      running: !!options.running, showStatus: options.statusVisible, statusText: options.statusText,
+      statusComplete: !!options.completedReply,
+      placeholder: wbcT("workbenchChat.browserChatPlaceholder", "Tell Agent what to do in the browser…"),
+      placeholderRunning: wbcT("workbenchChat.browserChatPlaceholderRunning", "Add an instruction…"),
+      sendLabel: wbcT("workbenchChat.send", "Send"), guideLabel: wbcT("workbenchChat.sendGuidance", "Send guidance"),
+      stopLabel: wbcT("workbenchChat.stop", "Stop"), colors: wbcNativeChatOverlayColors(),
+    }).catch(function () {});
+  }, [options.hasNative, options.sessionId, options.visible, options.mode, options.running, options.statusVisible, options.statusText, options.completedReply, options.themeRevision]);
+
+  useWbcEffect(function () {
+    if (!options.hasNative) return undefined;
+    return function () { options.bridge.setChatOverlay({ sessionId: options.sessionId || "", visible: false }).catch(function () {}); };
+  }, [options.hasNative, options.sessionId]);
+}
+
+function useWbcFullscreenBrowserChat({ browserBridge, browserSessionId, effectiveMode, hasNativeChatOverlay, latestAssistantReplyId, latestAssistantReplyText, onGuidance, onInterrupt, onSend, running, runtime, visible }) {
+  var [draft, setDraft] = useWbcState("");
+  var [fullscreenStatusRequested, setFullscreenStatusRequested] = useWbcState(false);
+  var [fullscreenSubmitting, setFullscreenSubmitting] = useWbcState(false);
+  var [fullscreenFinalReply, setFullscreenFinalReply] = useWbcState("");
+  var [themeRevision, setThemeRevision] = useWbcState(0);
+  var finalReplyTimerRef = useWbcRef(null);
+  var replyBaselineRef = useWbcRef("");
+  var savedReply = !running && !fullscreenSubmitting
+    && String(latestAssistantReplyId || "")
+    && String(latestAssistantReplyId || "") !== replyBaselineRef.current
+    ? String(latestAssistantReplyText || "").replace(/\s+/g, " ").trim()
+    : "";
+  var completedReply = fullscreenFinalReply || savedReply;
+  var statusVisible = effectiveMode === "maximized"
+    && fullscreenStatusRequested
+    && (!!running || fullscreenSubmitting || !!completedReply);
+  var statusText = completedReply || wbcBrowserFullscreenStatusText(runtime);
+
+  function clearFinalReplyTimer() {
+    if (!finalReplyTimerRef.current) return;
+    clearTimeout(finalReplyTimerRef.current);
+    finalReplyTimerRef.current = null;
+  }
+
+  function sendText(value) {
+    var text = String(value || "").trim();
+    if (!text) return;
+    var wasRunning = !!running;
+    clearFinalReplyTimer();
+    replyBaselineRef.current = String(latestAssistantReplyId || "");
+    setFullscreenFinalReply("");
+    setFullscreenStatusRequested(true);
+    setFullscreenSubmitting(true);
+    var request;
+    try {
+      request = wasRunning && onGuidance
+        ? onGuidance(text)
+        : (onSend ? onSend({ message: text, attachments: [], command: "" }) : null);
+    } catch (error) {
+      if (!hasNativeChatOverlay) setDraft(text);
+      setFullscreenStatusRequested(false);
+      setFullscreenSubmitting(false);
+      return;
+    }
+    Promise.resolve(request).catch(function () {
+      if (!hasNativeChatOverlay) setDraft(text);
+      setFullscreenStatusRequested(false);
+    }).finally(function () {
+      setFullscreenSubmitting(false);
+    });
+  }
+
+  function submit(event) {
+    if (event) event.preventDefault();
+    var text = String(draft || "").trim();
+    if (!text) {
+      if (running && onInterrupt) onInterrupt();
+      return;
+    }
+    setDraft("");
+    sendText(text);
+  }
+
+  useWbcFullscreenReplyEffects({
+    browserSessionId: browserSessionId, clearFinalReplyTimer: clearFinalReplyTimer,
+    effectiveMode: effectiveMode, finalReply: fullscreenFinalReply, finalReplyTimerRef: finalReplyTimerRef,
+    latestAssistantReplyId: latestAssistantReplyId, latestAssistantReplyText: latestAssistantReplyText,
+    replyBaselineRef: replyBaselineRef, running: running, setDraft: setDraft,
+    setFinalReply: setFullscreenFinalReply, setStatusRequested: setFullscreenStatusRequested,
+    setSubmitting: setFullscreenSubmitting, statusRequested: fullscreenStatusRequested,
+    submitting: fullscreenSubmitting,
+  });
+
+  useWbcNativeChatOverlayEffects({
+    bridge: browserBridge, completedReply: completedReply, hasNative: hasNativeChatOverlay,
+    mode: effectiveMode, onGuidance: onGuidance, onInterrupt: onInterrupt, onSend: onSend,
+    running: running, sendText: sendText, sessionId: browserSessionId,
+    setThemeRevision: setThemeRevision, statusText: statusText, statusVisible: statusVisible,
+    themeRevision: themeRevision, visible: visible,
+  });
+
+  return {
+    completedReply: completedReply,
+    draft: draft,
+    setDraft: setDraft,
+    statusText: statusText,
+    statusVisible: statusVisible,
+    submit: submit,
+  };
+}
+
+function useWbcFloatingBrowserTabEffects(options) {
+  useWbcEffect(function () {
+    var sessionId = String(options.sessionId || "");
+    options.setNativeState(null);
+    if (!options.visible || !sessionId || !options.bridge || typeof options.bridge.getState !== "function") return undefined;
+    options.bridge.getState(sessionId).then(function (next) {
+      if (next && String(next.sessionId || "") === sessionId) options.setNativeState(next);
+    }).catch(function () {});
+    if (typeof options.bridge.onState !== "function") return undefined;
+    return options.bridge.onState(function (next) {
+      if (next && String(next.sessionId || "") === sessionId) options.setNativeState(next);
+    });
+  }, [options.visible, options.sessionId]);
+
+  useWbcEffect(function () {
+    if (!options.hasNativePicker || typeof options.bridge.onTabPickerAction !== "function") return undefined;
+    return options.bridge.onTabPickerAction(function (action) {
+      if (!action || String(action.sessionId || "") !== String(options.sessionId || "")) return;
+      if (action.variant !== "maximized") return;
+      options.setPickerOpen(action.visible === true);
+    });
+  }, [options.hasNativePicker, options.sessionId]);
+
+  useWbcEffect(function () {
+    if (!options.pickerOpen) return undefined;
+    function closeOnOutsidePointer(event) {
+      if (options.pickerRef.current && !options.pickerRef.current.contains(event.target)) options.setPicker(false);
+    }
+    function closeOnWindowBlur() { options.setPicker(false); }
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    if (!options.hasNativePicker) window.addEventListener("blur", closeOnWindowBlur);
+    return function () {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      if (!options.hasNativePicker) window.removeEventListener("blur", closeOnWindowBlur);
+    };
+  }, [options.pickerOpen, options.sessionId, options.hasNativePicker]);
+
+  useWbcEffect(function () {
+    if (options.mode === "maximized") return undefined;
+    options.setPicker(false);
+    return undefined;
+  }, [options.mode, options.sessionId, options.hasNativePicker]);
+
+  useWbcEffect(function () {
+    if (!options.hasNativePicker) return undefined;
+    return function () {
+      options.bridge.setTabPicker(wbcBrowserTabPickerPayload(options.sessionId, false, "maximized")).catch(function () {});
+    };
+  }, [options.hasNativePicker, options.sessionId]);
+}
+
+function useWbcFloatingBrowserTabs({ browserBridge, browserSessionId, effectiveMode, hasNativeTabPicker, visible }) {
+  var pickerRef = useWbcRef(null);
+  var [nativeState, setNativeState] = useWbcState(null);
+  var [pickerOpen, setPickerOpen] = useWbcState(false);
+
+  function updateState(next) {
+    if (next && next.ok !== false && String(next.sessionId || "") === String(browserSessionId || "")) {
+      setNativeState(next);
+    }
+    return next;
+  }
+
+  function setMaximizedBrowserPicker(nextOpen) {
+    var isVisible = nextOpen === true;
+    setPickerOpen(isVisible);
+    if (!hasNativeTabPicker) return;
+    browserBridge.setTabPicker(
+      wbcBrowserTabPickerPayload(browserSessionId, isVisible, "maximized")
+    ).catch(function () { setPickerOpen(false); });
+  }
+
+  function selectMaximizedBrowserTab(tab) {
+    if (!tab || !tab.id) return;
+    setMaximizedBrowserPicker(false);
+    if (browserBridge && typeof browserBridge.activateTab === "function") {
+      browserBridge.activateTab({ sessionId: browserSessionId, tabId: tab.id }).then(updateState).catch(function () {});
+    }
+  }
+
+  function refreshMaximizedBrowserTab(tab, event) {
+    if (event) { event.preventDefault(); event.stopPropagation(); }
+    if (!browserBridge || !tab || !tab.id || typeof browserBridge.reload !== "function") return;
+    browserBridge.reload({ sessionId: browserSessionId, tabId: tab.id }).then(updateState).catch(function () {});
+  }
+
+  function toggleMaximizedBrowserMute(tab, event) {
+    if (event) { event.preventDefault(); event.stopPropagation(); }
+    if (!browserBridge || !tab || !tab.id || typeof browserBridge.setMuted !== "function") return;
+    browserBridge.setMuted({ sessionId: browserSessionId, tabId: tab.id, muted: !tab.muted }).then(updateState).catch(function () {});
+  }
+
+  function closeMaximizedBrowserTab(tab, event) {
+    if (event) { event.preventDefault(); event.stopPropagation(); }
+    if (!browserBridge || !tab || !tab.id || typeof browserBridge.closeTab !== "function") return;
+    browserBridge.closeTab({ sessionId: browserSessionId, tabId: tab.id }).then(function (next) {
+      updateState(next);
+      if (!next || !Array.isArray(next.tabs) || !next.tabs.length) setMaximizedBrowserPicker(false);
+    }).catch(function () {});
+  }
+
+  useWbcFloatingBrowserTabEffects({
+    bridge: browserBridge, hasNativePicker: hasNativeTabPicker, mode: effectiveMode,
+    pickerOpen: pickerOpen, pickerRef: pickerRef, sessionId: browserSessionId,
+    setNativeState: setNativeState, setPicker: setMaximizedBrowserPicker,
+    setPickerOpen: setPickerOpen, visible: visible,
+  });
+
+  return {
+    close: closeMaximizedBrowserTab,
+    nativeState: nativeState,
+    pickerOpen: pickerOpen,
+    pickerRef: pickerRef,
+    refresh: refreshMaximizedBrowserTab,
+    select: selectMaximizedBrowserTab,
+    setPicker: setMaximizedBrowserPicker,
+    toggleMute: toggleMaximizedBrowserMute,
+  };
+}
+
+function wbcMeasureBrowserSurfaceForMode(shellRef, targetMode) {
+  var shell = shellRef.current;
+  var host = targetMode === "pip" ? document.querySelector(".wbc-browser-movement-region") : shell && shell.parentElement;
+  if (!shell || !host) return null;
+  var measurementHost = targetMode === "maximized" ? document.body : host;
+  var clone = shell.cloneNode(true);
+  clone.className = "wbc-browser-window " + targetMode;
+  clone.removeAttribute("style");
+  clone.setAttribute("aria-hidden", "true");
+  clone.style.visibility = "hidden";
+  clone.style.pointerEvents = "none";
+  clone.style.transition = "none";
+  measurementHost.appendChild(clone);
+  var surface = clone.querySelector(".browser-native-surface");
+  var rect = surface && surface.getBoundingClientRect();
+  clone.remove();
+  if (!rect || rect.width <= 8 || rect.height <= 8) return null;
+  return {
+    x: rect.left, y: rect.top, width: rect.width, height: rect.height,
+    borderRadius: 0, pageCornerRadius: targetMode === "pip" ? 8 : 0,
+  };
+}
+
+class WbcBrowserModeTransition {
+  constructor(shellRef, effectiveMode, browserBridge, browserSessionId, rafRef, timerRef, readyHandlerRef) {
+    this.shellRef = shellRef;
+    this.effectiveMode = effectiveMode;
+    this.browserBridge = browserBridge;
+    this.browserSessionId = browserSessionId;
+    this.rafRef = rafRef;
+    this.timerRef = timerRef;
+    this.readyHandlerRef = readyHandlerRef;
+  }
+
+  cancel() {
+    if (this.readyHandlerRef.current) {
+      window.removeEventListener("workbench:browser-transition-target-ready", this.readyHandlerRef.current);
+      this.readyHandlerRef.current = null;
+    }
+    if (this.rafRef.current) {
+      cancelAnimationFrame(this.rafRef.current);
+      this.rafRef.current = 0;
+    }
+    if (this.timerRef.current) {
+      clearTimeout(this.timerRef.current);
+      this.timerRef.current = null;
+    }
+  }
+
+  runModeTransition(action, targetMode) {
+    if (!action) return;
+    this.cancel();
+    if (targetMode === "pip" && this.effectiveMode === "maximized") {
+      var restoreBounds = wbcMeasureBrowserSurfaceForMode(this.shellRef, "pip");
+      var commitRestore = function () { action(); };
+      if (window.ReactDOM && typeof window.ReactDOM.flushSync === "function") window.ReactDOM.flushSync(commitRestore);
+      else commitRestore();
+      if (restoreBounds && this.browserBridge && typeof this.browserBridge.setBounds === "function") {
+        this.browserBridge.setBounds({
+          ...restoreBounds, sessionId: this.browserSessionId, visible: true, forceVisible: true, zoomEnabled: true,
+        }).catch(function () {});
+      }
+      this.rafRef.current = requestAnimationFrame(function () {
+        this.rafRef.current = 0;
+        wbcNotifyBrowserLayoutChanged();
+        wbcNotifyBrowserWindowInteraction(false, "mode", this.browserSessionId);
+      }.bind(this));
+      return;
+    }
+    var started = false;
+    var applyModeAfterPreview = function () {
+      if (started) return;
+      started = true;
+      if (this.readyHandlerRef.current) {
+        window.removeEventListener("workbench:browser-transition-target-ready", this.readyHandlerRef.current);
+        this.readyHandlerRef.current = null;
+      }
+      if (this.timerRef.current) { clearTimeout(this.timerRef.current); this.timerRef.current = null; }
+      var commitModeAndPreview = function () {
+        action();
+        window.dispatchEvent(new CustomEvent("workbench:browser-transition-commit-preview", { detail: { sessionId: this.browserSessionId } }));
+      }.bind(this);
+      if (window.ReactDOM && typeof window.ReactDOM.flushSync === "function") window.ReactDOM.flushSync(commitModeAndPreview);
+      else commitModeAndPreview();
+      this.rafRef.current = requestAnimationFrame(function () {
+        this.rafRef.current = requestAnimationFrame(function () {
+          this.rafRef.current = 0;
+          wbcNotifyBrowserWindowInteraction(false, "mode", this.browserSessionId);
+        }.bind(this));
+      }.bind(this));
+    }.bind(this);
+    this.readyHandlerRef.current = function (event) {
+      var detail = event && event.detail || {};
+      if (String(detail.sessionId || "") !== String(this.browserSessionId || "")) return;
+      applyModeAfterPreview();
+    }.bind(this);
+    window.addEventListener("workbench:browser-transition-target-ready", this.readyHandlerRef.current);
+    wbcNotifyBrowserWindowInteraction(true, "mode", this.browserSessionId, {
+      targetMode: targetMode || "", targetBounds: wbcMeasureBrowserSurfaceForMode(this.shellRef, targetMode || ""),
+    });
+    this.timerRef.current = setTimeout(applyModeAfterPreview, 1800);
+  }
+}
+
+function useWbcBrowserModeTransition(shellRef, effectiveMode, browserBridge, browserSessionId) {
+  var rafRef = useWbcRef(0);
+  var timerRef = useWbcRef(null);
+  var readyHandlerRef = useWbcRef(null);
+  var transition = new WbcBrowserModeTransition(
+    shellRef, effectiveMode, browserBridge, browserSessionId, rafRef, timerRef, readyHandlerRef
+  );
+  return {
+    cancel: transition.cancel.bind(transition),
+    run: transition.runModeTransition.bind(transition),
+  };
+}
 
 // Workbench chat conversation and interactive prompts.
 function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mode, composerDocked, runtime, running, latestAssistantReplyId, latestAssistantReplyText, onSend, onGuidance, onInterrupt, onMaximize, onRestore, onTakeoverComplete }) {
   var shellRef = useWbcRef(null);
-  var maximizedPickerRef = useWbcRef(null);
   var minimizedRef = useWbcRef(null);
   var frameRef = useWbcRef(null);
   var frameSessionRef = useWbcRef("");
@@ -21,21 +456,9 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   var interactionRef = useWbcRef(null);
   var minimizedDragRef = useWbcRef(null);
   var suppressMinimizedClickRef = useWbcRef(false);
-  var modeTransitionRafRef = useWbcRef(0);
-  var modeTransitionTimerRef = useWbcRef(null);
-  var modeTransitionReadyHandlerRef = useWbcRef(null);
   var maximizedPickerToggleAtRef = useWbcRef(0);
   var [frame, setFrame] = useWbcState(null);
   var [minimizedFrame, setMinimizedFrame] = useWbcState(null);
-  var [nativeBrowserState, setNativeBrowserState] = useWbcState(null);
-  var [fullscreenDraft, setFullscreenDraft] = useWbcState("");
-  var [fullscreenStatusRequested, setFullscreenStatusRequested] = useWbcState(false);
-  var [fullscreenSubmitting, setFullscreenSubmitting] = useWbcState(false);
-  var [fullscreenFinalReply, setFullscreenFinalReply] = useWbcState("");
-  var [maximizedPickerOpen, setMaximizedPickerOpen] = useWbcState(false);
-  var [chatOverlayThemeRevision, setChatOverlayThemeRevision] = useWbcState(0);
-  var fullscreenFinalReplyTimerRef = useWbcRef(null);
-  var fullscreenReplyBaselineRef = useWbcRef("");
   // Minimized browser mode is temporarily retired. Normalize any stale
   // in-memory value back to the fixed PiP surface.
   var effectiveMode = mode === "minimized" ? "pip" : (mode || "pip");
@@ -43,27 +466,11 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   // keep avoidance active through the panel's 500ms grid transition; the
   // effect below releases it only after the composer has finished shrinking.
   if (composerDocked) composerDockedRef.current = true;
-  var displayBrowserState = nativeBrowserState || browserState || {};
-  var displayBrowserTabs = Array.isArray(displayBrowserState.tabs) ? displayBrowserState.tabs : [];
-  var displayActiveBrowserTab = displayBrowserState.activeTab || displayBrowserTabs.find(function (tab) {
-    return String(tab && tab.id || "") === String(displayBrowserState.activeTabId || "");
-  }) || displayBrowserTabs[0] || {};
-  var displayBrowserFavicon = String(displayActiveBrowserTab.favicon || "");
-  var hasNoBrowserTabs = Array.isArray(displayBrowserState.tabs) && displayBrowserState.tabs.length === 0;
   var browserBridge = window.cyrene && window.cyrene.browser;
-  var FloatingBrowserIcon = window.CyreneUI.require("browser").Icon;
+  var FloatingBrowserIcon = workbenchServices.browser().Icon;
   var hasNativeChatOverlay = !!(browserBridge && typeof browserBridge.setChatOverlay === "function");
   var hasNativeTabPicker = !!(browserBridge && typeof browserBridge.setTabPicker === "function");
-  var fullscreenSavedReply = !running && !fullscreenSubmitting
-    && String(latestAssistantReplyId || "")
-    && String(latestAssistantReplyId || "") !== fullscreenReplyBaselineRef.current
-    ? String(latestAssistantReplyText || "").replace(/\s+/g, " ").trim()
-    : "";
-  var fullscreenCompletedReply = fullscreenFinalReply || fullscreenSavedReply;
-  var fullscreenStatusVisible = effectiveMode === "maximized"
-    && fullscreenStatusRequested
-    && (!!running || fullscreenSubmitting || !!fullscreenCompletedReply);
-  var fullscreenStatusText = fullscreenCompletedReply || wbcBrowserFullscreenStatusText(runtime);
+  var modeTransition = useWbcBrowserModeTransition(shellRef, effectiveMode, browserBridge, browserSessionId);
 
   function browserDragPayload() {
     return {
@@ -133,183 +540,6 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       }));
     } catch (e) {}
     return true;
-  }
-
-  function clearFullscreenFinalReplyTimer() {
-    if (!fullscreenFinalReplyTimerRef.current) return;
-    clearTimeout(fullscreenFinalReplyTimerRef.current);
-    fullscreenFinalReplyTimerRef.current = null;
-  }
-
-  function sendFullscreenChatText(value) {
-    var text = String(value || "").trim();
-    if (!text) return;
-    var wasRunning = !!running;
-    clearFullscreenFinalReplyTimer();
-    fullscreenReplyBaselineRef.current = String(latestAssistantReplyId || "");
-    setFullscreenFinalReply("");
-    setFullscreenStatusRequested(true);
-    setFullscreenSubmitting(true);
-    var request;
-    try {
-      request = wasRunning && onGuidance
-        ? onGuidance(text)
-        : (onSend ? onSend({ message: text, attachments: [], command: "" }) : null);
-    } catch (error) {
-      if (!hasNativeChatOverlay) setFullscreenDraft(text);
-      setFullscreenStatusRequested(false);
-      setFullscreenSubmitting(false);
-      return;
-    }
-    Promise.resolve(request).catch(function () {
-      if (!hasNativeChatOverlay) setFullscreenDraft(text);
-      setFullscreenStatusRequested(false);
-    }).finally(function () {
-      setFullscreenSubmitting(false);
-    });
-  }
-
-  function submitFullscreenChat(event) {
-    if (event) event.preventDefault();
-    var text = String(fullscreenDraft || "").trim();
-    if (!text) {
-      if (running && onInterrupt) onInterrupt();
-      return;
-    }
-    setFullscreenDraft("");
-    sendFullscreenChatText(text);
-  }
-
-  function cancelModeTransition() {
-    if (modeTransitionReadyHandlerRef.current) {
-      window.removeEventListener("workbench:browser-transition-target-ready", modeTransitionReadyHandlerRef.current);
-      modeTransitionReadyHandlerRef.current = null;
-    }
-    if (modeTransitionRafRef.current) {
-      cancelAnimationFrame(modeTransitionRafRef.current);
-      modeTransitionRafRef.current = 0;
-    }
-    if (modeTransitionTimerRef.current) {
-      clearTimeout(modeTransitionTimerRef.current);
-      modeTransitionTimerRef.current = null;
-    }
-  }
-
-  function measureBrowserSurfaceForMode(targetMode) {
-    var shell = shellRef.current;
-    var host = targetMode === "pip"
-      ? document.querySelector(".wbc-browser-movement-region")
-      : shell && shell.parentElement;
-    if (!shell || !host) return null;
-    // The maximized shell is viewport-fixed. Measure its preview under body so
-    // it uses the same containing block as the committed shell after the
-    // conversation stage releases its transform promotion.
-    var measurementHost = targetMode === "maximized" ? document.body : host;
-    var clone = shell.cloneNode(true);
-    clone.className = "wbc-browser-window " + targetMode;
-    clone.removeAttribute("style");
-    clone.setAttribute("aria-hidden", "true");
-    clone.style.visibility = "hidden";
-    clone.style.pointerEvents = "none";
-    clone.style.transition = "none";
-    measurementHost.appendChild(clone);
-    var surface = clone.querySelector(".browser-native-surface");
-    var rect = surface && surface.getBoundingClientRect();
-    clone.remove();
-    if (!rect || rect.width <= 8 || rect.height <= 8) return null;
-    return {
-      x: rect.left,
-      y: rect.top,
-      width: rect.width,
-      height: rect.height,
-      borderRadius: 0,
-      pageCornerRadius: targetMode === "pip" ? 8 : 0,
-    };
-  }
-
-  function runModeTransition(action, targetMode) {
-    if (!action) return;
-    cancelModeTransition();
-
-    // Restoring from the full browser back to PiP does not need a screenshot
-    // preflight: both surfaces display the same live WebContentsView. Commit
-    // the React mode and hand Electron the already measurable PiP rectangle in
-    // the same frame so the page is visible immediately instead of waiting for
-    // the transition-preview timeout.
-    if (targetMode === "pip" && effectiveMode === "maximized") {
-      var restoreBounds = measureBrowserSurfaceForMode("pip");
-      var commitRestore = function () { action(); };
-      if (window.ReactDOM && typeof window.ReactDOM.flushSync === "function") {
-        window.ReactDOM.flushSync(commitRestore);
-      } else {
-        commitRestore();
-      }
-      if (restoreBounds && browserBridge && typeof browserBridge.setBounds === "function") {
-        browserBridge.setBounds({
-          ...restoreBounds,
-          sessionId: browserSessionId,
-          visible: true,
-          forceVisible: true,
-          zoomEnabled: true,
-        }).catch(function () {});
-      }
-      modeTransitionRafRef.current = requestAnimationFrame(function () {
-        modeTransitionRafRef.current = 0;
-        wbcNotifyBrowserLayoutChanged();
-        wbcNotifyBrowserWindowInteraction(false, "mode", browserSessionId);
-      });
-      return;
-    }
-
-    var started = false;
-    function applyModeAfterPreview() {
-      if (started) return;
-      started = true;
-      if (modeTransitionReadyHandlerRef.current) {
-        window.removeEventListener("workbench:browser-transition-target-ready", modeTransitionReadyHandlerRef.current);
-        modeTransitionReadyHandlerRef.current = null;
-      }
-      if (modeTransitionTimerRef.current) {
-        clearTimeout(modeTransitionTimerRef.current);
-        modeTransitionTimerRef.current = null;
-      }
-      var commitModeAndPreview = function () {
-        action();
-        window.dispatchEvent(new CustomEvent("workbench:browser-transition-commit-preview", {
-          detail: { sessionId: browserSessionId },
-        }));
-      };
-      // The target screenshot and the target shell must become visible in the
-      // same renderer commit. Without flushSync React may paint the target page
-      // inside the old PiP shell first, which looks like an extra zoom step.
-      if (window.ReactDOM && typeof window.ReactDOM.flushSync === "function") {
-        window.ReactDOM.flushSync(commitModeAndPreview);
-      } else {
-        commitModeAndPreview();
-      }
-      // Let React commit the target shell and the browser surface finish layout
-      // before asking Electron to attach at the new rectangle.
-      modeTransitionRafRef.current = requestAnimationFrame(function () {
-        modeTransitionRafRef.current = requestAnimationFrame(function () {
-          modeTransitionRafRef.current = 0;
-          wbcNotifyBrowserWindowInteraction(false, "mode", browserSessionId);
-        });
-      });
-    }
-    modeTransitionReadyHandlerRef.current = function (event) {
-      var detail = event && event.detail || {};
-      if (String(detail.sessionId || "") !== String(browserSessionId || "")) return;
-      applyModeAfterPreview();
-    };
-    window.addEventListener("workbench:browser-transition-target-ready", modeTransitionReadyHandlerRef.current);
-    // Keep the current shell unchanged while Electron prepares a frame at the
-    // target rectangle. The target proxy and the React mode commit then land in
-    // one batch, so no stretched intermediate frame reaches the screen.
-    wbcNotifyBrowserWindowInteraction(true, "mode", browserSessionId, {
-      targetMode: targetMode || "",
-      targetBounds: measureBrowserSurfaceForMode(targetMode || ""),
-    });
-    modeTransitionTimerRef.current = setTimeout(applyModeAfterPreview, 1800);
   }
 
   function measuredFloatingFrame(node) {
@@ -788,227 +1018,36 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     };
   }, [composerDocked, visible, effectiveMode]);
 
-  // A fullscreen session starts visually quiet. Only commands sent from this
-  // compact composer opt into the live status pill; runs that were already in
-  // progress before maximizing therefore do not create unsolicited chrome.
-  useWbcEffect(function () {
-    clearFullscreenFinalReplyTimer();
-    setFullscreenDraft("");
-    setFullscreenStatusRequested(false);
-    setFullscreenSubmitting(false);
-    setFullscreenFinalReply("");
-    fullscreenReplyBaselineRef.current = String(latestAssistantReplyId || "");
-    return clearFullscreenFinalReplyTimer;
-  }, [effectiveMode, browserSessionId]);
+  var fullscreenChat = useWbcFullscreenBrowserChat({
+    browserBridge: browserBridge,
+    browserSessionId: browserSessionId,
+    effectiveMode: effectiveMode,
+    hasNativeChatOverlay: hasNativeChatOverlay,
+    latestAssistantReplyId: latestAssistantReplyId,
+    latestAssistantReplyText: latestAssistantReplyText,
+    onGuidance: onGuidance,
+    onInterrupt: onInterrupt,
+    onSend: onSend,
+    running: running,
+    runtime: runtime,
+    visible: visible,
+  });
 
-  // A saved assistant message lands in the durable transcript at the same time
-  // the live runtime disappears. Keep that final reply in the compact status
-  // pill briefly, then remove the pill and return its pixels to the page. Runs
-  // that finish without a textual reply retain the old immediate-hide behavior
-  // after a short grace period for the saved message update to arrive.
-  useWbcEffect(function () {
-    if (effectiveMode !== "maximized" || !fullscreenStatusRequested) return undefined;
-    if (running || fullscreenSubmitting || fullscreenFinalReply) return undefined;
-    var replyId = String(latestAssistantReplyId || "");
-    var replyText = String(latestAssistantReplyText || "").replace(/\s+/g, " ").trim();
-    if (replyText && replyId && replyId !== fullscreenReplyBaselineRef.current) {
-      setFullscreenFinalReply(replyText);
-      clearFullscreenFinalReplyTimer();
-      fullscreenFinalReplyTimerRef.current = setTimeout(function () {
-        fullscreenFinalReplyTimerRef.current = null;
-        setFullscreenFinalReply("");
-        setFullscreenStatusRequested(false);
-      }, 5000);
-      return undefined;
-    }
-    var settleTimer = setTimeout(function () {
-      setFullscreenStatusRequested(false);
-    }, 1200);
-    return function () { clearTimeout(settleTimer); };
-  }, [effectiveMode, running, fullscreenSubmitting, fullscreenStatusRequested, fullscreenFinalReply, latestAssistantReplyId, latestAssistantReplyText]);
-
-  // Electron's live page is a native WebContentsView and therefore composites
-  // above renderer DOM. Its compact chat is a second transparent native view,
-  // raised above the page; the web/screencast fallback keeps the DOM version.
-  useWbcEffect(function () {
-    if (!hasNativeChatOverlay || typeof browserBridge.onChatOverlayAction !== "function") return undefined;
-    return browserBridge.onChatOverlayAction(function (action) {
-      if (!action || String(action.sessionId || "") !== String(browserSessionId || "")) return;
-      if (effectiveMode !== "maximized") return;
-      if (action.type === "stop") {
-        if (running && onInterrupt) onInterrupt();
-        return;
-      }
-      sendFullscreenChatText(action.text || "");
-    });
-  }, [hasNativeChatOverlay, browserSessionId, effectiveMode, running, onSend, onGuidance, onInterrupt]);
-
-  // The native overlay lives in a separate renderer, so CSS variables do not
-  // cascade into it. Re-send its palette whenever the host theme or accent is
-  // applied to the document root.
-  useWbcEffect(function () {
-    if (!hasNativeChatOverlay) return undefined;
-    var root = document.documentElement;
-    var frameId = 0;
-    function refreshOverlayTheme() {
-      if (frameId) return;
-      frameId = requestAnimationFrame(function () {
-        frameId = 0;
-        setChatOverlayThemeRevision(function (value) { return value + 1; });
-      });
-    }
-    var observer = typeof MutationObserver === "function"
-      ? new MutationObserver(refreshOverlayTheme)
-      : null;
-    if (observer) observer.observe(root, { attributes: true, attributeFilter: ["data-theme", "style"] });
-    window.addEventListener("cyrene-tweak-theme-change", refreshOverlayTheme);
-    window.addEventListener("cyrene-tweak-accent-change", refreshOverlayTheme);
-    return function () {
-      if (frameId) cancelAnimationFrame(frameId);
-      if (observer) observer.disconnect();
-      window.removeEventListener("cyrene-tweak-theme-change", refreshOverlayTheme);
-      window.removeEventListener("cyrene-tweak-accent-change", refreshOverlayTheme);
-    };
-  }, [hasNativeChatOverlay]);
-
-  useWbcEffect(function () {
-    if (!hasNativeChatOverlay) return;
-    var paletteNode = document.querySelector(".workbench-shell") || document.documentElement;
-    var rootStyles = getComputedStyle(paletteNode);
-    function color(name, fallback) {
-      return String(rootStyles.getPropertyValue(name) || "").trim() || fallback;
-    }
-    browserBridge.setChatOverlay({
-      sessionId: browserSessionId || "",
-      visible: visible && effectiveMode === "maximized",
-      running: !!running,
-      showStatus: fullscreenStatusVisible,
-      statusText: fullscreenStatusText,
-      statusComplete: !!fullscreenCompletedReply,
-      placeholder: wbcT("workbenchChat.browserChatPlaceholder", "Tell Agent what to do in the browser…"),
-      placeholderRunning: wbcT("workbenchChat.browserChatPlaceholderRunning", "Add an instruction…"),
-      sendLabel: wbcT("workbenchChat.send", "Send"),
-      guideLabel: wbcT("workbenchChat.sendGuidance", "Send guidance"),
-      stopLabel: wbcT("workbenchChat.stop", "Stop"),
-      colors: {
-        line: color("--wb-line-2", "#d8dce4"),
-        panel: color("--wb-card-bg-strong", "#ffffff"),
-        text: color("--wb-text", "#17191d"),
-        muted: color("--wb-muted", "#6f737b"),
-        faint: color("--wb-faint", "#9297a1"),
-        accent: color("--wb-accent", "#6d5dfc"),
-        "accent-text": color("--wb-accent-text", "#ffffff"),
-        green: color("--wb-green", "#1f9d57"),
-        red: color("--wb-red", "#d84848"),
-      },
-    }).catch(function () {});
-  }, [hasNativeChatOverlay, browserSessionId, visible, effectiveMode, running, fullscreenStatusVisible, fullscreenStatusText, fullscreenCompletedReply, chatOverlayThemeRevision]);
-
-  useWbcEffect(function () {
-    if (!hasNativeChatOverlay) return undefined;
-    return function () {
-      browserBridge.setChatOverlay({ sessionId: browserSessionId || "", visible: false }).catch(function () {});
-    };
-  }, [hasNativeChatOverlay, browserSessionId]);
-
-  useWbcEffect(function () {
-    var bridge = window.cyrene && window.cyrene.browser;
-    var sessionId = String(browserSessionId || "");
-    setNativeBrowserState(null);
-    if (!visible || !sessionId || !bridge || typeof bridge.getState !== "function") return undefined;
-    bridge.getState(sessionId).then(function (next) {
-      if (next && String(next.sessionId || "") === sessionId) setNativeBrowserState(next);
-    }).catch(function () {});
-    if (typeof bridge.onState !== "function") return undefined;
-    return bridge.onState(function (next) {
-      if (next && String(next.sessionId || "") === sessionId) setNativeBrowserState(next);
-    });
-  }, [visible, browserSessionId]);
-
-  function updateFloatingBrowserState(next) {
-    if (next && next.ok !== false && String(next.sessionId || "") === String(browserSessionId || "")) {
-      setNativeBrowserState(next);
-    }
-    return next;
-  }
-
-  function setMaximizedBrowserPicker(nextOpen) {
-    var visible = nextOpen === true;
-    setMaximizedPickerOpen(visible);
-    if (!hasNativeTabPicker) return;
-    browserBridge.setTabPicker(
-      wbcBrowserTabPickerPayload(browserSessionId, visible, "maximized")
-    ).catch(function () { setMaximizedPickerOpen(false); });
-  }
-
-  function selectMaximizedBrowserTab(tab) {
-    if (!tab || !tab.id) return;
-    setMaximizedBrowserPicker(false);
-    if (browserBridge && typeof browserBridge.activateTab === "function") {
-      browserBridge.activateTab({ sessionId: browserSessionId, tabId: tab.id }).then(updateFloatingBrowserState).catch(function () {});
-    }
-  }
-
-  function refreshMaximizedBrowserTab(tab, event) {
-    if (event) { event.preventDefault(); event.stopPropagation(); }
-    if (!browserBridge || !tab || !tab.id || typeof browserBridge.reload !== "function") return;
-    browserBridge.reload({ sessionId: browserSessionId, tabId: tab.id }).then(updateFloatingBrowserState).catch(function () {});
-  }
-
-  function toggleMaximizedBrowserMute(tab, event) {
-    if (event) { event.preventDefault(); event.stopPropagation(); }
-    if (!browserBridge || !tab || !tab.id || typeof browserBridge.setMuted !== "function") return;
-    browserBridge.setMuted({ sessionId: browserSessionId, tabId: tab.id, muted: !tab.muted }).then(updateFloatingBrowserState).catch(function () {});
-  }
-
-  function closeMaximizedBrowserTab(tab, event) {
-    if (event) { event.preventDefault(); event.stopPropagation(); }
-    if (!browserBridge || !tab || !tab.id || typeof browserBridge.closeTab !== "function") return;
-    browserBridge.closeTab({ sessionId: browserSessionId, tabId: tab.id }).then(function (next) {
-      updateFloatingBrowserState(next);
-      if (!next || !Array.isArray(next.tabs) || !next.tabs.length) setMaximizedBrowserPicker(false);
-    }).catch(function () {});
-  }
-
-  useWbcEffect(function () {
-    if (!hasNativeTabPicker || typeof browserBridge.onTabPickerAction !== "function") return undefined;
-    return browserBridge.onTabPickerAction(function (action) {
-      if (!action || String(action.sessionId || "") !== String(browserSessionId || "")) return;
-      if (action.variant !== "maximized") return;
-      setMaximizedPickerOpen(action.visible === true);
-    });
-  }, [hasNativeTabPicker, browserSessionId]);
-
-  useWbcEffect(function () {
-    if (!maximizedPickerOpen) return undefined;
-    function closeOnOutsidePointer(event) {
-      if (maximizedPickerRef.current && !maximizedPickerRef.current.contains(event.target)) {
-        setMaximizedBrowserPicker(false);
-      }
-    }
-    function closeOnWindowBlur() { setMaximizedBrowserPicker(false); }
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    if (!hasNativeTabPicker) window.addEventListener("blur", closeOnWindowBlur);
-    return function () {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      if (!hasNativeTabPicker) window.removeEventListener("blur", closeOnWindowBlur);
-    };
-  }, [maximizedPickerOpen, browserSessionId, hasNativeTabPicker]);
-
-  useWbcEffect(function () {
-    if (effectiveMode === "maximized") return undefined;
-    setMaximizedBrowserPicker(false);
-    return undefined;
-  }, [effectiveMode, browserSessionId, hasNativeTabPicker]);
-
-  useWbcEffect(function () {
-    if (!hasNativeTabPicker) return undefined;
-    return function () {
-      browserBridge.setTabPicker(
-        wbcBrowserTabPickerPayload(browserSessionId, false, "maximized")
-      ).catch(function () {});
-    };
-  }, [hasNativeTabPicker, browserSessionId]);
+  var browserTabs = useWbcFloatingBrowserTabs({
+    browserBridge: browserBridge,
+    browserSessionId: browserSessionId,
+    effectiveMode: effectiveMode,
+    hasNativeTabPicker: hasNativeTabPicker,
+    visible: visible,
+  });
+  var displayBrowserState = browserTabs.nativeState || browserState || {};
+  var displayBrowserTabs = Array.isArray(displayBrowserState.tabs) ? displayBrowserState.tabs : [];
+  var displayActiveBrowserTab = displayBrowserState.activeTab || displayBrowserTabs.find(function (tab) {
+    return String(tab && tab.id || "") === String(displayBrowserState.activeTabId || "");
+  }) || displayBrowserTabs[0] || {};
+  var displayBrowserFavicon = String(displayActiveBrowserTab.favicon || "");
+  var hasNoBrowserTabs = Array.isArray(displayBrowserState.tabs) && displayBrowserState.tabs.length === 0;
+  var maximizedPickerOpen = browserTabs.pickerOpen;
 
   useWbcEffect(function () {
     var wasVisible = previousVisibleRef.current;
@@ -1055,7 +1094,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     if (effectiveMode !== "maximized") return undefined;
     function onKeyDown(event) {
       if (event.key !== "Escape") return;
-      if (maximizedPickerOpen) setMaximizedBrowserPicker(false);
+      if (maximizedPickerOpen) browserTabs.setPicker(false);
       else if (onRestore) onRestore();
     }
     window.addEventListener("keydown", onKeyDown);
@@ -1066,23 +1105,23 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     return function () {
       stopInteraction();
       finishMinimizedDrag();
-      cancelModeTransition();
+      modeTransition.cancel();
       if (composerDockRestoreTimerRef.current) clearTimeout(composerDockRestoreTimerRef.current);
     };
   }, []);
 
   function maximizeBrowserWindow() {
-    return runModeTransition(onMaximize, "maximized");
+    return modeTransition.run(onMaximize, "maximized");
   }
 
   function restoreBrowserWindow() {
-    setMaximizedBrowserPicker(false);
-    return runModeTransition(onRestore, "pip");
+    browserTabs.setPicker(false);
+    return modeTransition.run(onRestore, "pip");
   }
 
   useWbcEffect(function () {
     if (!window.CyreneUI.has("uiSurface")) return undefined;
-    var uiSurface = window.CyreneUI.require("uiSurface");
+    var uiSurface = workbenchServices.uiSurface();
     var isPresent = visible && !hasNoBrowserTabs && (effectiveMode === "pip" || effectiveMode === "maximized");
     var actions = effectiveMode === "pip" ? [{
       action_id: "maximize",
@@ -1121,7 +1160,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       className={"wbc-browser-window " + effectiveMode}
       aria-label={wbcT("workbenchChat.browserWindowRegion", "Live browser window")}
     >
-      <div ref={effectiveMode === "maximized" ? maximizedPickerRef : undefined} className={effectiveMode === "maximized" ? "wbc-resource-split-picker-wrap wbc-browser-maximized-picker-wrap" : "wbc-browser-pip-head-wrap"}>
+      <div ref={effectiveMode === "maximized" ? browserTabs.pickerRef : undefined} className={effectiveMode === "maximized" ? "wbc-resource-split-picker-wrap wbc-browser-maximized-picker-wrap" : "wbc-browser-pip-head-wrap"}>
         <div
           className={"wbc-browser-window-bar" + (effectiveMode === "maximized" ? " wbc-browser-maximized-head" : "")}
           onPointerDown={effectiveMode === "pip" ? function (event) { beginInteraction(event, "drag", ""); } : undefined}
@@ -1130,7 +1169,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
           {effectiveMode === "maximized" ? (
             <button type="button" className="wbc-browser-maximized-picker" onClick={function () {
               if (wbcBrowserTabPickerToggleIsDebounced(maximizedPickerToggleAtRef)) return;
-              setMaximizedBrowserPicker(!maximizedPickerOpen);
+              browserTabs.setPicker(!maximizedPickerOpen);
             }} aria-expanded={maximizedPickerOpen}>
               <span className="wbc-browser-window-title">
                 <span className="wbc-browser-title-pill">{wbcT("workbenchChat.browserWindowTitle", "Browser")}</span>
@@ -1149,8 +1188,8 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
               <button type="button" onClick={maximizeBrowserWindow} title={wbcT("workbenchChat.browserMaximize", "Maximize")} aria-label={wbcT("workbenchChat.browserMaximize", "Maximize")}>{WBC_ICONS.windowMaximize}</button>
             ) : (
               <React.Fragment>
-                <button type="button" className="wbc-browser-split-action" onClick={function (event) { refreshMaximizedBrowserTab(displayActiveBrowserTab, event); }} title={wbcT("browser.context.reload", "Reload")} aria-label={wbcT("browser.context.reload", "Reload")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name="reload" size={15} /> : WBC_ICONS.retry}</button>
-                <button type="button" className={"wbc-browser-split-action" + (displayActiveBrowserTab.muted ? " active" : "")} onClick={function (event) { toggleMaximizedBrowserMute(displayActiveBrowserTab, event); }} title={displayActiveBrowserTab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} aria-label={displayActiveBrowserTab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name={displayActiveBrowserTab.muted ? "muted" : "volume"} size={15} /> : null}</button>
+                <button type="button" className="wbc-browser-split-action" onClick={function (event) { browserTabs.refresh(displayActiveBrowserTab, event); }} title={wbcT("browser.context.reload", "Reload")} aria-label={wbcT("browser.context.reload", "Reload")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name="reload" size={15} /> : WBC_ICONS.retry}</button>
+                <button type="button" className={"wbc-browser-split-action" + (displayActiveBrowserTab.muted ? " active" : "")} onClick={function (event) { browserTabs.toggleMute(displayActiveBrowserTab, event); }} title={displayActiveBrowserTab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} aria-label={displayActiveBrowserTab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name={displayActiveBrowserTab.muted ? "muted" : "volume"} size={15} /> : null}</button>
                 <button type="button" onClick={restoreBrowserWindow} title={wbcT("workbenchChat.browserRestoreSize", "Restore")} aria-label={wbcT("workbenchChat.browserRestoreSize", "Restore")}>{WBC_ICONS.x}</button>
               </React.Fragment>
             )}
@@ -1160,14 +1199,14 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
           <div className="wbc-side-agent-split-menu wbc-resource-picker-menu wbc-browser-picker-menu wbc-browser-maximized-menu open" role="listbox">
             {displayBrowserTabs.map(function (tab) {
               var selected = String(tab.id || "") === String(displayActiveBrowserTab.id || displayBrowserState.activeTabId || "");
-              return <div key={tab.id} className={"wbc-browser-picker-row" + (selected ? " active" : "")} role="option" aria-selected={selected}><button type="button" className="wbc-browser-picker-select" onClick={function () { selectMaximizedBrowserTab(tab); }}><span className="wbc-browser-picker-favicon" aria-hidden="true"><span className="wbc-browser-picker-favicon-fallback">{WBC_SIDE_TAB_ICONS.browser}</span>{tab.favicon ? <img src={tab.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</span><b>{tab.title || tab.url || wbcT("workbenchChat.browserWindowTitle", "Browser")}</b></button><span className="wbc-browser-picker-actions"><button type="button" onClick={function (event) { refreshMaximizedBrowserTab(tab, event); }} aria-label={wbcT("browser.context.reload", "Reload")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name="reload" size={14} /> : WBC_ICONS.retry}</button><button type="button" className={tab.muted ? "active" : ""} onClick={function (event) { toggleMaximizedBrowserMute(tab, event); }} aria-label={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name={tab.muted ? "muted" : "volume"} size={14} /> : null}</button><button type="button" onClick={function (event) { closeMaximizedBrowserTab(tab, event); }} aria-label={wbcT("browser.context.closeTab", "Close tab")} title={wbcT("browser.context.closeTab", "Close tab")}>{WBC_ICONS.x}</button></span></div>;
+              return <div key={tab.id} className={"wbc-browser-picker-row" + (selected ? " active" : "")} role="option" aria-selected={selected}><button type="button" className="wbc-browser-picker-select" onClick={function () { browserTabs.select(tab); }}><span className="wbc-browser-picker-favicon" aria-hidden="true"><span className="wbc-browser-picker-favicon-fallback">{WBC_SIDE_TAB_ICONS.browser}</span>{tab.favicon ? <img src={tab.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}</span><b>{tab.title || tab.url || wbcT("workbenchChat.browserWindowTitle", "Browser")}</b></button><span className="wbc-browser-picker-actions"><button type="button" onClick={function (event) { browserTabs.refresh(tab, event); }} aria-label={wbcT("browser.context.reload", "Reload")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name="reload" size={14} /> : WBC_ICONS.retry}</button><button type="button" className={tab.muted ? "active" : ""} onClick={function (event) { browserTabs.toggleMute(tab, event); }} aria-label={tab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name={tab.muted ? "muted" : "volume"} size={14} /> : null}</button><button type="button" onClick={function (event) { browserTabs.close(tab, event); }} aria-label={wbcT("browser.context.closeTab", "Close tab")} title={wbcT("browser.context.closeTab", "Close tab")}>{WBC_ICONS.x}</button></span></div>;
             })}
           </div>
         )}
       </div>
       <div className="wbc-browser-window-content">
-        {window.CyreneUI.require("browser").ViewportPanel
-          ? React.createElement(window.CyreneUI.require("browser").ViewportPanel, {
+        {workbenchServices.browser().ViewportPanel
+          ? React.createElement(workbenchServices.browser().ViewportPanel, {
               browserState: browserState || {},
               browserSessionId: browserSessionId || "",
               roundId: (browserState && browserState.roundId) || "",
@@ -1179,17 +1218,17 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
           : <p className="workbench-muted">{wbcT("chat.side.browserUnavailable", "Browser view is unavailable.")}</p>}
         {effectiveMode === "maximized" && !hasNativeChatOverlay && (
           <div className="wbc-browser-fullscreen-chat">
-            {fullscreenStatusVisible && (
-              <div className={"wbc-browser-fullscreen-status" + (fullscreenCompletedReply ? " completed" : "")} role="status" aria-live="polite">
+            {fullscreenChat.statusVisible && (
+              <div className={"wbc-browser-fullscreen-status" + (fullscreenChat.completedReply ? " completed" : "")} role="status" aria-live="polite">
                 <span className="wbc-browser-fullscreen-status-dot" aria-hidden="true" />
-                <span>{fullscreenStatusText}</span>
+                <span>{fullscreenChat.statusText}</span>
               </div>
             )}
-            <form className="wbc-browser-fullscreen-composer" onSubmit={submitFullscreenChat}>
+            <form className="wbc-browser-fullscreen-composer" onSubmit={fullscreenChat.submit}>
               <input
                 type="text"
-                value={fullscreenDraft}
-                onChange={function (event) { setFullscreenDraft(event.target.value); }}
+                value={fullscreenChat.draft}
+                onChange={function (event) { fullscreenChat.setDraft(event.target.value); }}
                 placeholder={running
                   ? wbcT("workbenchChat.browserChatPlaceholderRunning", "Add an instruction…")
                   : wbcT("workbenchChat.browserChatPlaceholder", "Tell Agent what to do in the browser…")}
@@ -1197,22 +1236,22 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
               />
               <button
                 type="submit"
-                className={running && !fullscreenDraft.trim() ? "stop" : ""}
-                disabled={!running && !fullscreenDraft.trim()}
-                title={running && !fullscreenDraft.trim()
+                className={running && !fullscreenChat.draft.trim() ? "stop" : ""}
+                disabled={!running && !fullscreenChat.draft.trim()}
+                title={running && !fullscreenChat.draft.trim()
                   ? wbcT("workbenchChat.stop", "Stop")
                   : (running
                     ? wbcT("workbenchChat.sendGuidance", "Send guidance")
                     : wbcT("workbenchChat.send", "Send"))}
               >
-                {running && !fullscreenDraft.trim() ? WBC_ICONS.stop : WBC_ICONS.send}
+                {running && !fullscreenChat.draft.trim() ? WBC_ICONS.stop : WBC_ICONS.send}
               </button>
             </form>
           </div>
         )}
       </div>
       {effectiveMode === "pip" && React.createElement(
-        window.CyreneUI.require("shell").ColResizer,
+        workbenchServices.shell().ColResizer,
         { trackGutter: true, surfaceId: "browser" }
       )}
       {effectiveMode === "pip" && ["n", "s"].map(function (direction) {
@@ -1299,141 +1338,6 @@ function wbcShouldStickToConversationBottom(wasSticking, previousScrollTop, scro
   return wasSticking === true;
 }
 
-function WbcConversationNavigator({ threadRef, chatId }) {
-  var [snapshot, setSnapshot] = useWbcState({
-    visible: false,
-    active: -1,
-    markers: [],
-  });
-
-  useWbcEffect(function () {
-    var thread = threadRef.current;
-    if (!thread) return undefined;
-    var raf = 0;
-    var itemObserver = typeof ResizeObserver === "function"
-      ? new ResizeObserver(scheduleMeasure)
-      : null;
-    var observedItems = typeof WeakSet === "function" ? new WeakSet() : null;
-
-    function collectItems() {
-      var items = Array.prototype.slice.call(thread.querySelectorAll(":scope > [data-wbc-nav-item='true']"));
-      if (itemObserver) {
-        items.forEach(function (item) {
-          if (observedItems && observedItems.has(item)) return;
-          if (observedItems) observedItems.add(item);
-          itemObserver.observe(item);
-        });
-      }
-      return items;
-    }
-
-    function measure() {
-      raf = 0;
-      var clientHeight = Math.max(1, thread.clientHeight);
-      var items = collectItems();
-      var viewportCenter = thread.scrollTop + clientHeight * 0.42;
-      var active = -1;
-      var activeDistance = Infinity;
-      var markers = items.map(function (item, index) {
-        var center = item.offsetTop + item.offsetHeight / 2;
-        var distance = Math.abs(center - viewportCenter);
-        if (distance < activeDistance) {
-          activeDistance = distance;
-          active = index;
-        }
-        var role = String(item.dataset.wbcNavRole || "assistant");
-        return {
-          index: index,
-          role: role,
-          label: String(item.dataset.wbcNavLabel || ""),
-          text: String(item.dataset.wbcNavText || item.dataset.wbcNavLabel || ""),
-        };
-      });
-      setSnapshot({
-        visible: markers.length > 5,
-        active: active,
-        markers: markers,
-      });
-    }
-
-    function scheduleMeasure() {
-      if (document.body.classList.contains("wbc-resizing-side-agent")) return;
-      if (raf) return;
-      raf = requestAnimationFrame(measure);
-    }
-
-    var threadObserver = typeof ResizeObserver === "function"
-      ? new ResizeObserver(scheduleMeasure)
-      : null;
-    if (threadObserver) threadObserver.observe(thread);
-    var mutationObserver = typeof MutationObserver === "function"
-      ? new MutationObserver(scheduleMeasure)
-      : null;
-    if (mutationObserver) mutationObserver.observe(thread, { childList: true, subtree: true, characterData: true });
-    thread.addEventListener("scroll", scheduleMeasure, { passive: true });
-    window.addEventListener("resize", scheduleMeasure);
-    window.addEventListener("workbench:split-resize-end", scheduleMeasure);
-    scheduleMeasure();
-    return function () {
-      if (raf) cancelAnimationFrame(raf);
-      if (threadObserver) threadObserver.disconnect();
-      if (itemObserver) itemObserver.disconnect();
-      if (mutationObserver) mutationObserver.disconnect();
-      thread.removeEventListener("scroll", scheduleMeasure);
-      window.removeEventListener("resize", scheduleMeasure);
-      window.removeEventListener("workbench:split-resize-end", scheduleMeasure);
-    };
-  }, [threadRef, chatId]);
-
-  function jumpToMarker(index) {
-    var thread = threadRef.current;
-    if (!thread) return;
-    var items = thread.querySelectorAll(":scope > [data-wbc-nav-item='true']");
-    var target = items[index];
-    if (!target) return;
-    var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    thread.scrollTo({
-      top: Math.max(0, target.offsetTop - 18),
-      behavior: reducedMotion ? "auto" : "smooth",
-    });
-  }
-
-  if (!snapshot.visible) return null;
-  return (
-    <nav className="wbc-conversation-nav" data-cyrene-revision-volatile="true" aria-label={wbcT("workbenchChat.navigation.label", "Conversation navigation")}>
-      <button
-        type="button"
-        className="wbc-conversation-nav-trigger"
-        aria-label={wbcT("workbenchChat.navigation.label", "Conversation navigation")}
-      >
-        <span /><span /><span /><span /><span />
-      </button>
-      <div className="wbc-conversation-nav-panel">
-        <div className="wbc-conversation-nav-heading">
-          <span>{wbcT("workbenchChat.navigation.messages", "Your messages")}</span>
-          <span>{snapshot.markers.length}</span>
-        </div>
-        <div className="wbc-conversation-nav-list">
-          {snapshot.markers.map(function (marker) {
-            return (
-              <button
-                type="button"
-                key={marker.index}
-                className={"wbc-conversation-marker " + marker.role + (marker.index === snapshot.active ? " active" : "")}
-                aria-label={wbcT("workbenchChat.navigation.jump", "Jump to: {label}", { label: marker.label })}
-                aria-current={marker.index === snapshot.active ? "location" : undefined}
-                onClick={function () { jumpToMarker(marker.index); }}
-              >
-                <span className="wbc-conversation-marker-index">{marker.index + 1}</span>
-                <span className="wbc-conversation-marker-text">{marker.text}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    </nav>
-  );
-}
 
 function wbcSelectionTextRect(range) {
   if (!range) return null;
@@ -1463,11 +1367,371 @@ function wbcSelectionTextRect(range) {
   return { left: left, top: top, right: right, bottom: bottom, width: right - left, height: bottom - top };
 }
 
-function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onRetryClearAnimationEnd, retryClearingMessageIds, retrySuppressedMessageIds, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail, horizontalSessionWheelGesture }) {
+function wbcSyncAgentCursorRunning(isRunning) {
+  try {
+    if (window.CyreneUI.has("uiSurface")) {
+      workbenchServices.uiSurface().setAgentRunning(isRunning === true);
+    }
+  } catch (error) {}
+  var cursorBridge = window.cyrene && window.cyrene.agentCursor;
+  if (cursorBridge && typeof cursorBridge.setRunning === "function") {
+    cursorBridge.setRunning(isRunning === true).catch(function () {});
+  }
+}
+
+function useWbcConversationRuntime(composerChat, runtimeEngine) {
+  var runtimeChatId = String(composerChat && composerChat.id || "");
+  var [runtimeState, setRuntimeState] = useWbcState(function () {
+    var initial = runtimeEngine && runtimeEngine.get ? runtimeEngine.get(runtimeChatId) : null;
+    return { chatId: runtimeChatId, value: initial || null };
+  });
+  useWbcEffect(function () {
+    if (!runtimeEngine || !runtimeEngine.subscribe || !runtimeChatId) return undefined;
+    function applyRuntimeSnapshot(snapshot) {
+      var next = snapshot[runtimeChatId] || null;
+      setRuntimeState(function (current) {
+        return current.chatId === runtimeChatId && current.value === next
+          ? current
+          : { chatId: runtimeChatId, value: next };
+      });
+    }
+    applyRuntimeSnapshot(runtimeEngine.snapshot());
+    return runtimeEngine.subscribe(applyRuntimeSnapshot);
+  }, [runtimeEngine, runtimeChatId]);
+  return runtimeEngine && runtimeEngine.get
+    ? (runtimeState.chatId === runtimeChatId ? runtimeState.value : runtimeEngine.get(runtimeChatId))
+    : null;
+}
+
+function useWbcConversationProjection(chat, runtime, retryClearingMessageIds, retrySuppressedMessageIds) {
+  var chatMessages = chat && Array.isArray(chat.messages) ? chat.messages : [];
+  var runtimeUserMessages = runtime && runtime.userMessages;
+  var runtimeSegments = runtime && runtime.segments;
+  var runtimeActivities = runtime && runtime.activities;
+  var runtimeNotifications = runtime && runtime.notifications;
+  var runtimeStartedAt = runtime && runtime.startedAt;
+  var runtimeFinalizing = !!(runtime && runtime.finalizing);
+  var runtimeHasReplyText = !!(runtime && runtime.text);
+  var durableMessages = useWbcMemo(function () {
+    return wbcReconcileLiveUserMessages(chatMessages, runtimeUserMessages);
+  }, [chatMessages, runtimeUserMessages]);
+  var reasoningStatus = wbcCapabilityStatus(chat, "output", "reasoning");
+  var showReasoningPlaceholder = !wbcHasAgentCapabilitySnapshot(chat)
+    || reasoningStatus === "supported"
+    || reasoningStatus === "degraded";
+  var runtimeTimeline = useWbcMemo(function () {
+    return wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder }));
+  }, [runtimeSegments, runtimeActivities, runtimeNotifications, runtimeStartedAt, runtimeFinalizing, runtimeHasReplyText, runtime && runtime.chatId, showReasoningPlaceholder]);
+  var retrySuppressedKey = Array.isArray(retrySuppressedMessageIds) ? retrySuppressedMessageIds.map(String).join("\u0000") : "";
+  var retryClearingKey = Array.isArray(retryClearingMessageIds) ? retryClearingMessageIds.map(String).join("\u0000") : "";
+  var retrySuppressedIds = useWbcMemo(function () {
+    return new Set(retrySuppressedKey ? retrySuppressedKey.split("\u0000") : []);
+  }, [retrySuppressedKey]);
+  var retryClearingIds = useWbcMemo(function () {
+    return new Set(retryClearingKey ? retryClearingKey.split("\u0000") : []);
+  }, [retryClearingKey]);
+  var messages = useWbcMemo(function () {
+    var merged = wbcMergeChronologicalMessages(durableMessages, runtimeTimeline);
+    if (!retrySuppressedIds.size) return merged;
+    return merged.filter(function (message) {
+      return !retrySuppressedIds.has(String(message && message.id || ""));
+    });
+  }, [durableMessages, runtimeTimeline, retrySuppressedIds]);
+  var activityTraceKeys = useWbcMemo(function () {
+    var keys = new Set();
+    messages.forEach(function (message) {
+      if (!message || !(message.activityCard || message.runtimeActivity)) return;
+      var trace = message.runtimeActivity ? message.runtimeActivity.progress : message.trace;
+      var key = wbcTraceDedupeKey(trace);
+      if (key) keys.add(key);
+    });
+    return keys;
+  }, [messages]);
+  var latestAssistantReply = useWbcMemo(function () {
+    for (var index = durableMessages.length - 1; index >= 0; index -= 1) {
+      var durableMessage = durableMessages[index] || {};
+      var durableContent = String(durableMessage.content || "").trim();
+      if (durableMessage.role !== "assistant" || !durableContent) continue;
+      return {
+        id: String(durableMessage.id || durableMessage.createdAt || ("assistant-" + index)),
+        text: durableContent,
+      };
+    }
+    return { id: "", text: "" };
+  }, [durableMessages]);
+  var lastMessageIds = useWbcMemo(function () {
+    var assistant = "";
+    var user = "";
+    for (var index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === "user") {
+        if (!user) user = String(messages[index].id || "");
+      } else if (!assistant) {
+        assistant = String(messages[index].id || "");
+      }
+      if (user && assistant) break;
+    }
+    return { assistant: assistant, user: user };
+  }, [messages]);
+  var runtimeDurationEnd = runtimeFinalizing ? runtime && runtime.lastEventAt : 0;
+  var displayMessages = useWbcMemo(function () {
+    return wbcGroupConsecutiveActivityMessages(messages, runtime);
+  }, [messages, runtimeStartedAt, runtimeFinalizing, runtimeDurationEnd]);
+  return {
+    activityTraceKeys: activityTraceKeys,
+    displayMessages: displayMessages,
+    durableMessages: durableMessages,
+    isLegacy: !!(chat && chat.legacy),
+    lastAssistantId: lastMessageIds.assistant,
+    lastUserId: lastMessageIds.user,
+    latestAssistantReplyId: latestAssistantReply.id,
+    latestAssistantReplyText: latestAssistantReply.text,
+    messages: messages,
+    retryClearingIds: retryClearingIds,
+    runtimeFinalizing: runtimeFinalizing,
+  };
+}
+
+function wbcRenderHistoryMessage(msg, context) {
+  var retryClearing = msg && msg.activityGroup
+    ? msg.activities.some(function (activityMessage) {
+        return context.retryClearingIds.has(String(activityMessage && activityMessage.id || ""));
+      })
+    : context.retryClearingIds.has(String(msg && msg.id || ""));
+  if (msg.activityGroup) {
+    return (
+      <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}>
+        <WbcActivityGroup group={msg} />
+      </WbcThreadItem>
+    );
+  }
+  var canRetryAssistant = !context.isLegacy && !context.running && String(msg.id || "") === context.lastAssistantId;
+  var canRetryUser = !context.isLegacy && !context.running && msg.role === "user" && String(msg.id || "") === context.lastUserId;
+  var canEdit = !context.isLegacy
+    && !context.running
+    && msg.role === "user"
+    && !!context.onEditMessage
+    && (!wbcChatAgent(context.chat) || wbcIsBuiltinAgent(wbcChatAgent(context.chat)) || wbcCapabilityEnabled(context.chat, "session", "fork", { strictUnknown: true }));
+  var isActiveQuestion = !!(
+    msg.questionPrompt
+    && context.chat.pendingQuestion
+    && String(context.chat.pendingQuestion.id || "") === String(msg.questionId || "")
+  );
+  if (msg.runtimeHeartbeat) return null;
+  if (msg.modelStatusCard) {
+    return <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}><WbcModelStatusMessage msg={msg} /></WbcThreadItem>;
+  }
+  if (msg.runtimeNotification || msg.notificationCard) {
+    return <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}><WbcAgentNotification notice={msg.notification} /></WbcThreadItem>;
+  }
+  if (msg.runtimeActivity || msg.activityCard) {
+    var activity = msg.runtimeActivity || {
+      id: msg.id,
+      reasoning: msg.reasoning || "",
+      progress: Array.isArray(msg.trace) ? msg.trace : [],
+    };
+    var activityEntries = Array.isArray(activity.progress) ? activity.progress : [];
+    if (!msg.runtimeActivityActive && activityEntries.length === 0 && !String(activity.reasoning || "").trim()) return null;
+    return (
+      <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}>
+        <WbcLiveActivityCard
+          activity={activity}
+          active={!!msg.runtimeActivityActive}
+          hasReplyText={!!msg.runtimeActivityHasReplyText}
+          live={!!msg.runtimeActivity}
+        />
+      </WbcThreadItem>
+    );
+  }
+  if (isActiveQuestion) {
+    return <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}><WbcQuestionPrompt pending={context.chat.pendingQuestion} onAnswer={context.onAnswer ? context.answerHistoryQuestion : context.onAnswer} busy={context.running} trace={msg.trace} /></WbcThreadItem>;
+  }
+  var messageTraceKey = wbcTraceDedupeKey(msg.trace);
+  var visibleMessage = messageTraceKey && context.activityTraceKeys.has(messageTraceKey)
+    ? { ...msg, trace: [] }
+    : msg;
+  return (
+    <WbcThreadItem key={msg.id} navigation={msg.role === "user" ? wbcUserMessageNavigationMeta(msg) : null} className={retryClearing ? "retry-clearing" : ""}>
+      {msg.role === "user"
+        ? <WbcUserMessage msg={visibleMessage} onOpenFile={context.onOpenFile ? context.openHistoryFile : context.onOpenFile} onEditMessage={context.onEditMessage ? context.editHistoryMessage : context.onEditMessage} canEdit={canEdit} onRetryMessage={canRetryUser && context.onRetryMessage ? context.retryHistoryMessage : null} />
+        : <WbcAssistantMessage msg={visibleMessage} onOpenFile={context.onOpenFile ? context.openHistoryFile : context.onOpenFile} onRetryMessage={canRetryAssistant && context.onRetryMessage ? context.retryHistoryMessage : null} chatId={String(context.chat && context.chat.id || "")} />}
+    </WbcThreadItem>
+  );
+}
+
+function useWbcComposerReserveHeight(mainRef, chatId) {
+  useWbcEffect(function () {
+    var main = mainRef.current;
+    if (!main) return undefined;
+    var page = main.closest(".wbc-page");
+    var composer = main.querySelector(":scope > .wbc-composer");
+    if (!page || !composer) return undefined;
+    var resizeRaf = 0;
+    var lastHeight = 0;
+    function commit() {
+      resizeRaf = 0;
+      var height = Math.ceil(composer.getBoundingClientRect().height);
+      if (height <= 0 || height === lastHeight) return;
+      lastHeight = height;
+      page.style.setProperty("--wbc-composer-reserve-height", height + "px");
+    }
+    function schedule() {
+      if (resizeRaf) return;
+      resizeRaf = requestAnimationFrame(commit);
+    }
+    commit();
+    var observer = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
+    if (observer) observer.observe(composer);
+    window.addEventListener("resize", schedule);
+    return function () {
+      if (observer) observer.disconnect();
+      window.removeEventListener("resize", schedule);
+      if (resizeRaf) cancelAnimationFrame(resizeRaf);
+      page.style.removeProperty("--wbc-composer-reserve-height");
+    };
+  }, [chatId]);
+}
+
+class WbcFloatingBrowserAlignment {
+  constructor(mainRef) {
+    this.mainRef = mainRef;
+    this.raf = 0;
+    this.nativeBoundsRaf = 0;
+    this.nativeBoundsCommitRaf = 0;
+    this.observer = null;
+    this.align = this.align.bind(this);
+    this.schedule = this.schedule.bind(this);
+    this.onBrowserLayout = this.onBrowserLayout.bind(this);
+    this.onRightResize = this.onRightResize.bind(this);
+  }
+
+  dispatchNativeBounds() {
+    window.dispatchEvent(new CustomEvent("workbench:browser-layout", {
+      detail: { source: "pip-context-panel-alignment" },
+    }));
+  }
+
+  publishNativeBounds(deferUntilMounted) {
+    if (this.nativeBoundsRaf) cancelAnimationFrame(this.nativeBoundsRaf);
+    if (this.nativeBoundsCommitRaf) cancelAnimationFrame(this.nativeBoundsCommitRaf);
+    if (!deferUntilMounted) {
+      this.dispatchNativeBounds();
+      return;
+    }
+    this.nativeBoundsRaf = requestAnimationFrame(function () {
+      this.nativeBoundsRaf = 0;
+      this.nativeBoundsCommitRaf = requestAnimationFrame(function () {
+        this.nativeBoundsCommitRaf = 0;
+        this.dispatchNativeBounds();
+      }.bind(this));
+    }.bind(this));
+  }
+
+  align(forceNativeSync, immediateNativeSync) {
+    this.raf = 0;
+    if (!this.paneCard.isConnected || !this.sideCard.isConnected || !this.floating.isConnected) return;
+    var sideRect = this.sideCard.getBoundingClientRect();
+    var paneRect = this.paneCard.getBoundingClientRect();
+    var alignedWidth = Math.round(sideRect.width);
+    var maximumHeight = Math.max(0, Math.floor(paneRect.bottom - sideRect.bottom - 12));
+    var alignedHeight = Math.min(Math.round(alignedWidth * 3 / 4), maximumHeight);
+    var userHeight = parseFloat(this.floating.style.getPropertyValue("--wbc-browser-pip-user-height")) || 0;
+    var userOffsetY = parseFloat(this.floating.style.getPropertyValue("--wbc-browser-pip-user-offset-y")) || 0;
+    if (userHeight > maximumHeight) {
+      userHeight = maximumHeight;
+      this.floating.style.setProperty("--wbc-browser-pip-user-height", userHeight + "px");
+    }
+    var renderedHeight = userHeight || alignedHeight;
+    var minimumOffsetY = sideRect.bottom + 12 + renderedHeight - paneRect.bottom;
+    var boundedOffsetY = Math.min(0, Math.max(minimumOffsetY, userOffsetY));
+    if (boundedOffsetY !== userOffsetY) {
+      userOffsetY = boundedOffsetY;
+      this.floating.style.setProperty("--wbc-browser-pip-user-offset-y", userOffsetY + "px");
+    }
+    var currentWidth = parseFloat(this.floating.style.getPropertyValue("--wbc-browser-pip-aligned-width")) || 0;
+    var currentHeight = parseFloat(this.floating.style.getPropertyValue("--wbc-browser-pip-aligned-height")) || 0;
+    if (currentWidth !== alignedWidth) this.floating.style.setProperty("--wbc-browser-pip-aligned-width", alignedWidth + "px");
+    if (!userHeight && currentHeight !== alignedHeight) this.floating.style.setProperty("--wbc-browser-pip-aligned-height", alignedHeight + "px");
+    var floatingRect = this.floating.getBoundingClientRect();
+    var currentX = parseFloat(this.floating.style.getPropertyValue("--wbc-browser-pip-align-x")) || 0;
+    var currentY = parseFloat(this.floating.style.getPropertyValue("--wbc-browser-pip-align-y")) || 0;
+    var nextX = Math.round(currentX + sideRect.left - floatingRect.left);
+    var nextY = Math.round(currentY + paneRect.bottom + userOffsetY - floatingRect.bottom);
+    var geometryChanged = currentWidth !== alignedWidth
+      || (!userHeight && currentHeight !== alignedHeight)
+      || Math.round(currentX) !== nextX
+      || Math.round(currentY) !== nextY;
+    if (geometryChanged) {
+      this.floating.style.setProperty("--wbc-browser-pip-align-x", nextX + "px");
+      this.floating.style.setProperty("--wbc-browser-pip-align-y", nextY + "px");
+    }
+    if (geometryChanged || forceNativeSync) this.publishNativeBounds(!immediateNativeSync);
+  }
+
+  schedule() {
+    if (this.raf) cancelAnimationFrame(this.raf);
+    this.raf = requestAnimationFrame(function () { this.align(false); }.bind(this));
+  }
+
+  onBrowserLayout(event) {
+    if (event && event.detail && event.detail.source === "pip-context-panel-alignment") return;
+    this.schedule();
+  }
+
+  onRightResize(event) {
+    var phase = event && event.detail && event.detail.phase;
+    this.align(phase === "end", true);
+  }
+
+  start() {
+    var main = this.mainRef.current;
+    var page = main && main.closest(".wbc-page");
+    this.paneCard = main && main.closest(".wbc-pane-card");
+    this.sideCard = page && page.querySelector(":scope > .wbc-side .wbc-side-card");
+    this.floating = main && main.querySelector(".wbc-browser-window.pip");
+    if (!this.paneCard || !this.sideCard || !this.floating) return false;
+    this.align(true);
+    this.observer = typeof ResizeObserver === "function" ? new ResizeObserver(this.schedule) : null;
+    if (this.observer) {
+      this.observer.observe(this.sideCard);
+      this.observer.observe(this.paneCard);
+    }
+    window.addEventListener("workbench:browser-layout", this.onBrowserLayout);
+    window.addEventListener("workbench:right-resize", this.onRightResize);
+    window.addEventListener("resize", this.schedule);
+    return true;
+  }
+
+  stop() {
+    if (this.raf) cancelAnimationFrame(this.raf);
+    if (this.nativeBoundsRaf) cancelAnimationFrame(this.nativeBoundsRaf);
+    if (this.nativeBoundsCommitRaf) cancelAnimationFrame(this.nativeBoundsCommitRaf);
+    if (this.observer) this.observer.disconnect();
+    window.removeEventListener("workbench:browser-layout", this.onBrowserLayout);
+    window.removeEventListener("workbench:right-resize", this.onRightResize);
+    window.removeEventListener("resize", this.schedule);
+    this.floating.style.removeProperty("--wbc-browser-pip-aligned-width");
+    this.floating.style.removeProperty("--wbc-browser-pip-aligned-height");
+    this.floating.style.removeProperty("--wbc-browser-pip-align-x");
+    this.floating.style.removeProperty("--wbc-browser-pip-align-y");
+  }
+}
+
+function useWbcFloatingBrowserAlignment(mainRef, active, revision) {
+  useWbcLayoutEffect(function () {
+    if (!active) return undefined;
+    var alignment = new WbcFloatingBrowserAlignment(mainRef);
+    if (!alignment.start()) return undefined;
+    return function () { alignment.stop(); };
+  }, [active, revision]);
+}
+
+function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, errorKind, onRetry, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onRetryClearAnimationEnd, retryClearingMessageIds, retrySuppressedMessageIds, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail, horizontalSessionWheelGesture }) {
   // The lightweight list item already contains every Composer preference.
   // Keep using it while the full transcript hydrates so switching chats never
   // paints a temporary "new chat" Composer with global/default settings.
   var composerChat = chat || chatSummary || null;
+  var runtime = useWbcConversationRuntime(composerChat, runtimeEngine);
+  var running = !!runtime;
   var mainRef = useWbcRef(null);
   var stageRef = useWbcRef(null);
   var scrollRef = useWbcRef(null);
@@ -1489,110 +1753,74 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
   var avoidanceApplyingRef = useWbcRef(false);
   var avoidanceApplyingRafRef = useWbcRef(0);
 
-  function syncAgentCursorRunning(isRunning) {
-    try {
-      if (window.CyreneUI.has("uiSurface")) {
-        window.CyreneUI.require("uiSurface").setAgentRunning(isRunning === true);
-      }
-    } catch (error) {}
-    var cursorBridge = window.cyrene && window.cyrene.agentCursor;
-    if (cursorBridge && typeof cursorBridge.setRunning === "function") {
-      cursorBridge.setRunning(isRunning === true).catch(function () {});
-    }
-  }
-
   useWbcEffect(function () {
-    syncAgentCursorRunning(running === true);
+    wbcSyncAgentCursorRunning(running === true);
   }, [running]);
 
   useWbcEffect(function () {
     return function () {
-      syncAgentCursorRunning(false);
+      wbcSyncAgentCursorRunning(false);
     };
   }, []);
-  var durableMessages = wbcReconcileLiveUserMessages(
-    chat && Array.isArray(chat.messages) ? chat.messages : [],
-    runtime && runtime.userMessages
-  );
-  var reasoningStatus = wbcCapabilityStatus(chat, "output", "reasoning");
-  var showReasoningPlaceholder = !wbcHasAgentCapabilitySnapshot(chat)
-    || reasoningStatus === "supported"
-    || reasoningStatus === "degraded";
-  var runtimeTimeline = wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder }));
-  var messages = wbcMergeChronologicalMessages(durableMessages, runtimeTimeline);
-  var retrySuppressedIds = new Set(Array.isArray(retrySuppressedMessageIds) ? retrySuppressedMessageIds.map(String) : []);
-  if (retrySuppressedIds.size) {
-    messages = messages.filter(function (message) {
-      return !retrySuppressedIds.has(String(message && message.id || ""));
+  var projection = useWbcConversationProjection(chat, runtime, retryClearingMessageIds, retrySuppressedMessageIds);
+  var messages = projection.messages;
+  var retryClearingIds = projection.retryClearingIds;
+  var runtimeFinalizing = projection.runtimeFinalizing;
+  var latestAssistantReplyId = projection.latestAssistantReplyId;
+  var latestAssistantReplyText = projection.latestAssistantReplyText;
+  var displayMessages = projection.displayMessages;
+  var activityTraceKeys = projection.activityTraceKeys;
+  var isLegacy = projection.isLegacy;
+  var lastAssistantId = projection.lastAssistantId;
+  var lastUserId = projection.lastUserId;
+  var historyActionsRef = useWbcRef({});
+  historyActionsRef.current = { onAnswer: onAnswer, onEditMessage: onEditMessage, onOpenFile: onOpenFile, onRetryMessage: onRetryMessage };
+  var answerHistoryQuestion = useWbcCallback(function () {
+    var callback = historyActionsRef.current.onAnswer;
+    if (callback) return callback.apply(null, arguments);
+  }, []);
+  var editHistoryMessage = useWbcCallback(function () {
+    var callback = historyActionsRef.current.onEditMessage;
+    if (callback) return callback.apply(null, arguments);
+  }, []);
+  var openHistoryFile = useWbcCallback(function () {
+    var callback = historyActionsRef.current.onOpenFile;
+    if (callback) return callback.apply(null, arguments);
+  }, []);
+  var retryHistoryMessage = useWbcCallback(function () {
+    var callback = historyActionsRef.current.onRetryMessage;
+    if (callback) return callback.apply(null, arguments);
+  }, []);
+  var renderedHistory = useWbcMemo(function () {
+    return displayMessages.map(function (msg) {
+      return wbcRenderHistoryMessage(msg, {
+        activityTraceKeys: activityTraceKeys,
+        answerHistoryQuestion: answerHistoryQuestion,
+        chat: chat,
+        editHistoryMessage: editHistoryMessage,
+        isLegacy: isLegacy,
+        lastAssistantId: lastAssistantId,
+        lastUserId: lastUserId,
+        onAnswer: onAnswer,
+        onEditMessage: onEditMessage,
+        onOpenFile: onOpenFile,
+        onRetryMessage: onRetryMessage,
+        openHistoryFile: openHistoryFile,
+        retryClearingIds: retryClearingIds,
+        retryHistoryMessage: retryHistoryMessage,
+        running: running,
+      });
     });
-  }
-  var retryClearingIds = new Set(Array.isArray(retryClearingMessageIds) ? retryClearingMessageIds.map(String) : []);
-  var activityTraceKeys = new Set();
-  messages.forEach(function (message) {
-    if (!message || !(message.activityCard || message.runtimeActivity)) return;
-    var trace = message.runtimeActivity
-      ? message.runtimeActivity.progress
-      : message.trace;
-    var key = wbcTraceDedupeKey(trace);
-    if (key) activityTraceKeys.add(key);
-  });
-  var isLegacy = !!(chat && chat.legacy);
-  var latestAssistantReplyId = "";
-  var latestAssistantReplyText = "";
-  for (var di = durableMessages.length - 1; di >= 0; di--) {
-    var durableMessage = durableMessages[di] || {};
-    var durableContent = String(durableMessage.content || "").trim();
-    if (durableMessage.role !== "assistant" || !durableContent) continue;
-    latestAssistantReplyId = String(durableMessage.id || durableMessage.createdAt || ("assistant-" + di));
-    latestAssistantReplyText = durableContent;
-    break;
-  }
-  var lastAssistantId = "";
-  var lastUserId = "";
-  for (var mi = messages.length - 1; mi >= 0; mi--) {
-    if (messages[mi].role === "user") {
-      if (!lastUserId) lastUserId = String(messages[mi].id || "");
-    } else if (!lastAssistantId) {
-      lastAssistantId = String(messages[mi].id || "");
-    }
-    if (lastUserId && lastAssistantId) break;
-  }
-  var displayMessages = wbcGroupConsecutiveActivityMessages(messages, runtime);
+  }, [displayMessages, retryClearingIds, isLegacy, running, lastAssistantId, lastUserId, chat, activityTraceKeys, !!onAnswer, !!onEditMessage, !!onOpenFile, !!onRetryMessage, answerHistoryQuestion, editHistoryMessage, openHistoryFile, retryHistoryMessage]);
+  var pendingQuestionId = String(chat && chat.pendingQuestion && chat.pendingQuestion.id || "");
+  var pendingQuestionInTimeline = useWbcMemo(function () {
+    if (!pendingQuestionId) return false;
+    return messages.some(function (msg) {
+      return msg.questionPrompt && String(msg.questionId || "") === pendingQuestionId;
+    });
+  }, [messages, pendingQuestionId]);
 
-  // Keep the transcript's bottom reserve synchronized with the composer's
-  // rendered height when controls, attachments or wrapped content change it.
-  useWbcEffect(function () {
-    var main = mainRef.current;
-    if (!main) return undefined;
-    var page = main.closest(".wbc-page");
-    var composer = main.querySelector(":scope > .wbc-composer");
-    if (!page || !composer) return undefined;
-    var resizeRaf = 0;
-    var lastHeight = 0;
-    function commitComposerReserveHeight() {
-      resizeRaf = 0;
-      var height = Math.ceil(composer.getBoundingClientRect().height);
-      if (height <= 0 || height === lastHeight) return;
-      lastHeight = height;
-      page.style.setProperty("--wbc-composer-reserve-height", height + "px");
-    }
-    function scheduleComposerReserveHeight() {
-      if (resizeRaf) return;
-      resizeRaf = requestAnimationFrame(commitComposerReserveHeight);
-    }
-    commitComposerReserveHeight();
-    var observer = typeof ResizeObserver === "function"
-      ? new ResizeObserver(scheduleComposerReserveHeight)
-      : null;
-    if (observer) observer.observe(composer);
-    window.addEventListener("resize", scheduleComposerReserveHeight);
-    return function () {
-      if (observer) observer.disconnect();
-      window.removeEventListener("resize", scheduleComposerReserveHeight);
-      if (resizeRaf) cancelAnimationFrame(resizeRaf);
-      page.style.removeProperty("--wbc-composer-reserve-height");
-    };
-  }, [chat && chat.id]);
+  useWbcComposerReserveHeight(mainRef, chat && chat.id);
 
   // Expanded side-panel content owns the whole right-side corridor below the
   // conversation card, leaving no room for a floating browser there. Hide the
@@ -1606,142 +1834,11 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
 
   var floatingBrowserVisible = browserVisible && !browserSuppressedForSide;
 
-  // The PiP is rendered inside the conversation so it can share the native
-  // browser lifecycle, but visually it belongs below the context card. Align
-  // it from the actual rendered rectangles instead of reconstructing those
-  // coordinates from grid variables: card gutters, transcript insets and
-  // density scaling otherwise accumulate into a visible horizontal drift.
-  useWbcLayoutEffect(function () {
-    if (!sideVisible || !floatingBrowserVisible || browserWindowMode !== "pip") return undefined;
-    var main = mainRef.current;
-    var page = main && main.closest(".wbc-page");
-    var paneCard = main && main.closest(".wbc-pane-card");
-    var sideCard = page && page.querySelector(":scope > .wbc-side .wbc-side-card");
-    var floating = main && main.querySelector(".wbc-browser-window.pip");
-    if (!paneCard || !sideCard || !floating) return undefined;
-    var raf = 0;
-    var nativeBoundsRaf = 0;
-    var nativeBoundsCommitRaf = 0;
-    function dispatchNativeBounds() {
-      window.dispatchEvent(new CustomEvent("workbench:browser-layout", {
-        detail: { source: "pip-context-panel-alignment" },
-      }));
-    }
-    function publishNativeBounds(deferUntilMounted) {
-      if (nativeBoundsRaf) cancelAnimationFrame(nativeBoundsRaf);
-      if (nativeBoundsCommitRaf) cancelAnimationFrame(nativeBoundsCommitRaf);
-      if (!deferUntilMounted) {
-        dispatchNativeBounds();
-        return;
-      }
-      // The viewport subscribes from a passive effect. Two paint frames ensure
-      // that listener exists and that layout has committed the translated
-      // shell before its native surface rectangle is measured.
-      nativeBoundsRaf = requestAnimationFrame(function () {
-        nativeBoundsRaf = 0;
-        nativeBoundsCommitRaf = requestAnimationFrame(function () {
-          nativeBoundsCommitRaf = 0;
-          dispatchNativeBounds();
-        });
-      });
-    }
-    function alignFloatingBrowser(forceNativeSync, immediateNativeSync) {
-      raf = 0;
-      if (!paneCard.isConnected || !sideCard.isConnected || !floating.isConnected) return;
-      var sideRect = sideCard.getBoundingClientRect();
-      var paneRect = paneCard.getBoundingClientRect();
-      var alignedWidth = Math.round(sideRect.width);
-      // The compact browser is a 4:3 card. Width and height must change as one
-      // geometry update so the native page never appears stretched mid-drag.
-      // The right rail has one strict vertical corridor: 12px below the
-      // context panel through the conversation card's bottom edge.
-      var maximumHeight = Math.max(0, Math.floor(paneRect.bottom - sideRect.bottom - 12));
-      var alignedHeight = Math.min(Math.round(alignedWidth * 3 / 4), maximumHeight);
-      var userHeight = parseFloat(floating.style.getPropertyValue("--wbc-browser-pip-user-height")) || 0;
-      var userOffsetY = parseFloat(floating.style.getPropertyValue("--wbc-browser-pip-user-offset-y")) || 0;
-      if (userHeight > maximumHeight) {
-        userHeight = maximumHeight;
-        floating.style.setProperty("--wbc-browser-pip-user-height", userHeight + "px");
-      }
-      // Offset zero is the lowest legal position. The negative bound keeps the
-      // title bar exactly 12px below the context card at the highest position.
-      var renderedHeight = userHeight || alignedHeight;
-      var minimumOffsetY = sideRect.bottom + 12 + renderedHeight - paneRect.bottom;
-      var boundedOffsetY = Math.min(0, Math.max(minimumOffsetY, userOffsetY));
-      if (boundedOffsetY !== userOffsetY) {
-        userOffsetY = boundedOffsetY;
-        floating.style.setProperty("--wbc-browser-pip-user-offset-y", userOffsetY + "px");
-      }
-      var currentWidth = parseFloat(floating.style.getPropertyValue("--wbc-browser-pip-aligned-width")) || 0;
-      var currentHeight = parseFloat(floating.style.getPropertyValue("--wbc-browser-pip-aligned-height")) || 0;
-      if (currentWidth !== alignedWidth) {
-        floating.style.setProperty("--wbc-browser-pip-aligned-width", alignedWidth + "px");
-      }
-      if (!userHeight && currentHeight !== alignedHeight) {
-        floating.style.setProperty("--wbc-browser-pip-aligned-height", alignedHeight + "px");
-      }
-      var floatingRect = floating.getBoundingClientRect();
-      var currentX = parseFloat(floating.style.getPropertyValue("--wbc-browser-pip-align-x")) || 0;
-      var currentY = parseFloat(floating.style.getPropertyValue("--wbc-browser-pip-align-y")) || 0;
-      var nextX = Math.round(currentX + sideRect.left - floatingRect.left);
-      // floatingRect already includes the user's vertical offset. Include that
-      // offset in the target baseline so alignment updates do not cancel a
-      // manual drag when the panel or window is resized.
-      var nextY = Math.round(currentY + paneRect.bottom + userOffsetY - floatingRect.bottom);
-      var geometryChanged = currentWidth !== alignedWidth
-        || (!userHeight && currentHeight !== alignedHeight)
-        || Math.round(currentX) !== nextX
-        || Math.round(currentY) !== nextY;
-      if (geometryChanged) {
-        floating.style.setProperty("--wbc-browser-pip-align-x", nextX + "px");
-        floating.style.setProperty("--wbc-browser-pip-align-y", nextY + "px");
-      }
-      // WebContentsView lives outside the renderer transform tree. Publish one
-      // authoritative bounds refresh after the shell moves, otherwise the old
-      // native rectangle can cover the PiP title bar. Also force the first
-      // mounted frame to sync even when the CSS fallback was already exact.
-      if (geometryChanged || forceNativeSync) publishNativeBounds(!immediateNativeSync);
-    }
-    function scheduleAlignment() {
-      if (raf) cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(function () { alignFloatingBrowser(false); });
-    }
-    alignFloatingBrowser(true);
-    var observer = typeof ResizeObserver === "function"
-      ? new ResizeObserver(scheduleAlignment)
-      : null;
-    if (observer) {
-      observer.observe(sideCard);
-      observer.observe(paneCard);
-    }
-    function onBrowserLayout(event) {
-      if (event && event.detail && event.detail.source === "pip-context-panel-alignment") return;
-      scheduleAlignment();
-    }
-    function onRightResize(event) {
-      var phase = event && event.detail && event.detail.phase;
-      // The panel width has already been written when this event fires. A
-      // synchronous rect read flushes that style and keeps the PiP attached to
-      // the pointer instead of waiting for ResizeObserver's next delivery.
-      alignFloatingBrowser(phase === "end", true);
-    }
-    window.addEventListener("workbench:browser-layout", onBrowserLayout);
-    window.addEventListener("workbench:right-resize", onRightResize);
-    window.addEventListener("resize", scheduleAlignment);
-    return function () {
-      if (raf) cancelAnimationFrame(raf);
-      if (nativeBoundsRaf) cancelAnimationFrame(nativeBoundsRaf);
-      if (nativeBoundsCommitRaf) cancelAnimationFrame(nativeBoundsCommitRaf);
-      if (observer) observer.disconnect();
-      window.removeEventListener("workbench:browser-layout", onBrowserLayout);
-      window.removeEventListener("workbench:right-resize", onRightResize);
-      window.removeEventListener("resize", scheduleAlignment);
-      floating.style.removeProperty("--wbc-browser-pip-aligned-width");
-      floating.style.removeProperty("--wbc-browser-pip-aligned-height");
-      floating.style.removeProperty("--wbc-browser-pip-align-x");
-      floating.style.removeProperty("--wbc-browser-pip-align-y");
-    };
-  }, [sideVisible, floatingBrowserVisible, browserWindowMode, chat && chat.id]);
+  useWbcFloatingBrowserAlignment(
+    mainRef,
+    sideVisible && floatingBrowserVisible && browserWindowMode === "pip",
+    chat && chat.id
+  );
 
   // Content can finish reflowing one frame after a message/ PiP resize. A
   // scrollHeight change does not emit a scroll event, so the synchronous
@@ -1951,7 +2048,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
           scheduleBrowserAvoidance();
         })
       : null;
-    if (mutationObserver) mutationObserver.observe(thread, { childList: true, subtree: true, characterData: true });
+    if (mutationObserver) mutationObserver.observe(thread, { childList: true });
     function preserveTraceDisclosureAnchor(event) {
       var detail = event && event.detail || {};
       var anchor = detail.anchor;
@@ -2213,89 +2310,13 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
             <p>{wbcT("workbenchChat.emptyBody", "Chats are bound to the current workspace. The agent can read project context, and work can be converted into a task when needed.")}</p>
           </div>
         )}
-        {displayMessages.map(function (msg) {
-          var retryClearing = msg && msg.activityGroup
-            ? msg.activities.some(function (activityMessage) {
-                return retryClearingIds.has(String(activityMessage && activityMessage.id || ""));
-              })
-            : retryClearingIds.has(String(msg && msg.id || ""));
-          if (msg.activityGroup) {
-            return (
-              <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}>
-                <WbcActivityGroup group={msg} />
-              </WbcThreadItem>
-            );
-          }
-          var canRetryAssistant = !isLegacy && !running && String(msg.id || "") === lastAssistantId;
-          var canRetryUser = !isLegacy && !running && msg.role === "user" && String(msg.id || "") === lastUserId;
-          var canEdit = !isLegacy
-            && !running
-            && msg.role === "user"
-            && !!onEditMessage
-            && (!wbcChatAgent(chat) || wbcIsBuiltinAgent(wbcChatAgent(chat)) || wbcCapabilityEnabled(chat, "session", "fork", { strictUnknown: true }));
-          var isActiveQuestion = !!(
-            msg.questionPrompt
-            && chat.pendingQuestion
-            && String(chat.pendingQuestion.id || "") === String(msg.questionId || "")
-          );
-          if (msg.runtimeHeartbeat) {
-            return null;
-          }
-          if (msg.modelStatusCard) {
-            return <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}><WbcModelStatusMessage msg={msg} /></WbcThreadItem>;
-          }
-          if (msg.runtimeNotification || msg.notificationCard) {
-            return <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}><WbcAgentNotification notice={msg.notification} /></WbcThreadItem>;
-          }
-          if (msg.runtimeActivity || msg.activityCard) {
-            var activity = msg.runtimeActivity || {
-              id: msg.id,
-              reasoning: msg.reasoning || "",
-              progress: Array.isArray(msg.trace) ? msg.trace : [],
-            };
-            var activityEntries = Array.isArray(activity.progress) ? activity.progress : [];
-            // A tool-free thinking card is useful only while it is the live
-            // phase. Once completed, omit it instead of leaving a durable
-            // "thinking complete" placeholder between messages.
-            if (
-              !msg.runtimeActivityActive
-              && activityEntries.length === 0
-              && !String(activity.reasoning || "").trim()
-            ) return null;
-            return (
-              <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}>
-                <WbcLiveActivityCard
-                  activity={activity}
-                  active={!!msg.runtimeActivityActive}
-                  hasReplyText={!!msg.runtimeActivityHasReplyText}
-                  live={!!msg.runtimeActivity}
-                />
-              </WbcThreadItem>
-            );
-          }
-          if (isActiveQuestion) {
-            return <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} trace={msg.trace} /></WbcThreadItem>;
-          }
-          var messageTraceKey = wbcTraceDedupeKey(msg.trace);
-          var visibleMessage = messageTraceKey && activityTraceKeys.has(messageTraceKey)
-            ? { ...msg, trace: [] }
-            : msg;
-          return (
-            <WbcThreadItem key={msg.id} navigation={msg.role === "user" ? wbcUserMessageNavigationMeta(msg) : null} className={retryClearing ? "retry-clearing" : ""}>
-              {msg.role === "user"
-                ? <WbcUserMessage msg={visibleMessage} onOpenFile={onOpenFile} onEditMessage={onEditMessage} canEdit={canEdit} onRetryMessage={canRetryUser ? onRetryMessage : null} />
-                : <WbcAssistantMessage msg={visibleMessage} onOpenFile={onOpenFile} onRetryMessage={canRetryAssistant ? onRetryMessage : null} chatId={String(chat && chat.id || "")} />}
-            </WbcThreadItem>
-          );
-        })}
+        {renderedHistory}
         {runtime && (runtime.text || (runtime.artifacts && runtime.artifacts.length)) && <WbcThreadItem><WbcLiveMessage runtime={runtime} onOpenFile={onOpenFile} /></WbcThreadItem>}
-        {chat && chat.pendingQuestion && chat.pendingQuestion.id && (!runtime || wbcIsLiveAgentRequest(chat.pendingQuestion)) && !messages.some(function (msg) {
-          return msg.questionPrompt && String(msg.questionId || "") === String(chat.pendingQuestion.id || "");
-        }) && (
+        {chat && chat.pendingQuestion && chat.pendingQuestion.id && (!runtime || wbcIsLiveAgentRequest(chat.pendingQuestion)) && !pendingQuestionInTimeline && (
           <WbcThreadItem><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running && !wbcIsLiveAgentRequest(chat.pendingQuestion)} /></WbcThreadItem>
         )}
       </div>
-      <WbcConversationNavigator threadRef={scrollRef} chatId={chat && chat.id} />
+      <WbcConversationNavigator threadRef={scrollRef} chatId={chat && chat.id} messagesRevision={projection.durableMessages} />
       {selectionMenuPortal}
       <div className="wbc-browser-movement-region">
         <WbcBrowserFloatingSurface
@@ -2379,7 +2400,7 @@ function wbcPermissionOptionLabel(option, index, total) {
 }
 
 function wbcPermissionQuestionText(pending) {
-  var i18n = window.CyreneUI.require("i18n");
+  var i18n = workbenchServices.i18n();
   return i18n.permissionQuestionText(pending, i18n.getLang());
 }
 
@@ -2387,7 +2408,7 @@ function wbcVoiceQuestionText(pending) {
   var question = pending && typeof pending === "object" ? pending : {};
   var kind = String(question.kind || "");
   var isPermission = kind === "permission.requested"
-    || window.CyreneUI.require("model").isPermissionQuestionKind(kind);
+    || workbenchServices.model().isPermissionQuestionKind(kind);
   var text = String(isPermission
     ? wbcPermissionQuestionText(question)
     : (question.text || wbcT("workbenchChat.questionFallback", "Agent needs your confirmation to continue."))).trim();

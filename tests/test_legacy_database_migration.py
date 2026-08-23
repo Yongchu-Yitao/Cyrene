@@ -8,7 +8,9 @@ import pytest
 
 from cyrene.runtime.database_migration import (
     DatabaseMigrationResult,
+    LEGACY_KNOWLEDGE_FTS_COMPACTION_ID,
     MIGRATION_ID,
+    compact_legacy_knowledge_fts,
     migrate_legacy_database,
 )
 
@@ -34,6 +36,44 @@ def _values(path: Path) -> list[str]:
             str(row[0])
             for row in connection.execute(
                 "SELECT value FROM user_records ORDER BY id"
+            )
+        ]
+
+
+def _create_knowledge_fts_database(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE VIRTUAL TABLE kb_chunks_fts USING fts5("
+            "content, chunk_id UNINDEXED, document_id UNINDEXED, "
+            "tokenize='trigram')"
+        )
+        connection.executemany(
+            "INSERT INTO kb_chunks_fts(rowid, content, chunk_id, document_id) "
+            "VALUES (?, ?, ?, ?)",
+            [
+                (7, "alpha knowledge entry", "chunk-7", "document-1"),
+                (11, "beta knowledge entry", "chunk-11", "document-2"),
+            ],
+        )
+        # Leave enough free pages to make VACUUM's effect observable without
+        # changing any live application data.
+        connection.execute("CREATE TABLE discarded_payload (value BLOB)")
+        connection.executemany(
+            "INSERT INTO discarded_payload(value) VALUES (zeroblob(4096))",
+            [()] * 256,
+        )
+        connection.execute("DELETE FROM discarded_payload")
+        connection.commit()
+
+
+def _fts_rows(path: Path) -> list[tuple[int, str, str, str]]:
+    with sqlite3.connect(path) as connection:
+        return [
+            (int(row[0]), str(row[1]), str(row[2]), str(row[3]))
+            for row in connection.execute(
+                "SELECT rowid, content, chunk_id, document_id "
+                "FROM kb_chunks_fts ORDER BY rowid"
             )
         ]
 
@@ -137,6 +177,79 @@ def test_corrupt_source_does_not_replace_target(tmp_path):
     assert source.read_bytes() == b"not a sqlite database"
 
 
+def test_compacts_legacy_fts_without_changing_rows_or_search_results(
+    monkeypatch,
+    tmp_path,
+):
+    from cyrene.runtime import database_migration
+
+    database = tmp_path / "cyrene.runtime.database"
+    _create_knowledge_fts_database(database)
+    rows_before = _fts_rows(database)
+    with sqlite3.connect(database) as connection:
+        matches_before = connection.execute(
+            "SELECT rowid FROM kb_chunks_fts "
+            "WHERE kb_chunks_fts MATCH 'knowledge' ORDER BY rowid"
+        ).fetchall()
+    size_before = database.stat().st_size
+
+    # Exercise the production rebuild path with a compact fixture rather than
+    # generating thousands of obsolete FTS segments in the test suite.
+    monkeypatch.setattr(database_migration, "_LEGACY_FTS_MIN_DATA_BLOCKS", 0)
+    monkeypatch.setattr(database_migration, "_LEGACY_FTS_DATA_BLOCKS_PER_ROW", 0)
+
+    assert compact_legacy_knowledge_fts(database) is True
+    assert database.stat().st_size < size_before
+    assert _fts_rows(database) == rows_before
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT rowid FROM kb_chunks_fts "
+            "WHERE kb_chunks_fts MATCH 'knowledge' ORDER BY rowid"
+        ).fetchall() == matches_before
+        assert connection.execute("PRAGMA quick_check").fetchone() == ("ok",)
+        marker = connection.execute(
+            "SELECT migration_id FROM cyrene_runtime_migrations "
+            "WHERE migration_id = ?",
+            (LEGACY_KNOWLEDGE_FTS_COMPACTION_ID,),
+        ).fetchone()
+        assert marker == (LEGACY_KNOWLEDGE_FTS_COMPACTION_ID,)
+
+    compacted_size = database.stat().st_size
+    assert compact_legacy_knowledge_fts(database) is False
+    assert database.stat().st_size == compacted_size
+    assert _fts_rows(database) == rows_before
+
+
+def test_skips_database_without_legacy_fts_schema(tmp_path):
+    database = tmp_path / "cyrene.runtime.database"
+    _create_database(database, "unchanged")
+
+    assert compact_legacy_knowledge_fts(database) is False
+    assert _values(database) == ["unchanged"]
+    with sqlite3.connect(database) as connection:
+        marker_table = connection.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'cyrene_runtime_migrations'"
+        ).fetchone()
+        assert marker_table is None
+
+
+def test_marks_healthy_legacy_fts_without_rebuilding_it(tmp_path):
+    database = tmp_path / "cyrene.runtime.database"
+    _create_knowledge_fts_database(database)
+    rows_before = _fts_rows(database)
+
+    assert compact_legacy_knowledge_fts(database) is False
+    assert _fts_rows(database) == rows_before
+    with sqlite3.connect(database) as connection:
+        marker = connection.execute(
+            "SELECT migration_id FROM cyrene_runtime_migrations "
+            "WHERE migration_id = ?",
+            (LEGACY_KNOWLEDGE_FTS_COMPACTION_ID,),
+        ).fetchone()
+        assert marker == (LEGACY_KNOWLEDGE_FTS_COMPACTION_ID,)
+
+
 @pytest.mark.asyncio
 async def test_runtime_runs_migration_before_database_initialization(
     monkeypatch,
@@ -161,17 +274,23 @@ async def test_runtime_runs_migration_before_database_initialization(
 
     events: list[str] = []
     real_migrate = bootstrap.migrate_legacy_database
+    real_compact = bootstrap.compact_legacy_knowledge_fts
     real_init = bootstrap.init_db
 
     def migrate(path):
         events.append("migrate")
         return real_migrate(path)
 
+    def compact(path):
+        events.append("compact")
+        return real_compact(path)
+
     async def init(path):
         events.append("init")
         await real_init(path)
 
     monkeypatch.setattr(bootstrap, "migrate_legacy_database", migrate)
+    monkeypatch.setattr(bootstrap, "compact_legacy_knowledge_fts", compact)
     monkeypatch.setattr(bootstrap, "init_db", init)
     monkeypatch.setattr(bootstrap, "ensure_soul", lambda: None)
     monkeypatch.setattr(bootstrap, "ensure_inbox", lambda _name: None)
@@ -179,7 +298,7 @@ async def test_runtime_runs_migration_before_database_initialization(
 
     await bootstrap.initialize_runtime(context=context)
 
-    assert events == ["migrate", "init"]
+    assert events == ["migrate", "compact", "init"]
     assert _values(context.database_path) == ["legacy"]
 
 

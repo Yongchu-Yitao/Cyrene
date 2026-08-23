@@ -1,8 +1,10 @@
+import { workbenchServices } from "../shared/runtime/services.jsx"
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { installTerminalShellIntegration } from "./shell-integration.mjs";
 import "@xterm/xterm/css/xterm.css";
 
 var RESIZE_SETTLE_MS = 160;
@@ -131,7 +133,39 @@ var TerminalClient = {
       body: JSON.stringify({ projectId: projectId, terminalId: terminalId || null }),
     }).then(function (response) { return response.ok ? response.json() : terminalError(response); });
   },
+  searchHistory: function (projectId, query, options) {
+    var params = new URLSearchParams({ projectId: projectId || "", q: query || "" });
+    if (options && options.terminalId) params.set("terminalId", options.terminalId);
+    if (options && options.limit) params.set("limit", String(options.limit));
+    return fetch("/api/terminals/history/search?" + params.toString(), { cache: "no-store" })
+      .then(function (response) { return response.ok ? response.json() : terminalError(response); })
+      .then(function (payload) { return Array.isArray(payload.matches) ? payload.matches : []; });
+  },
+  commands: function (terminalId) {
+    return fetch("/api/terminals/" + encodeURIComponent(terminalId) + "/commands", { cache: "no-store" })
+      .then(function (response) { return response.ok ? response.json() : terminalError(response); })
+      .then(function (payload) { return Array.isArray(payload.commands) ? payload.commands : []; });
+  },
+  commandOutput: function (terminalId, commandId) {
+    return fetch("/api/terminals/" + encodeURIComponent(terminalId) + "/commands/" + encodeURIComponent(commandId) + "/output", { cache: "no-store" })
+      .then(function (response) { return response.ok ? response.json() : terminalError(response); });
+  },
+  historyExportUrl: function (terminalId) {
+    return "/api/terminals/" + encodeURIComponent(terminalId) + "/history/export";
+  },
 };
+
+function copyLastTerminalCommandOutput(terminalId) {
+  return TerminalClient.commands(terminalId).then(function (commands) {
+    var command = commands.slice().reverse().find(function (item) { return !item.running; });
+    if (!command || !command.id) return null;
+    return TerminalClient.commandOutput(terminalId, command.id);
+  }).then(function (payload) {
+    var output = String(payload && payload.text || "");
+    if (!output || !navigator.clipboard || !navigator.clipboard.writeText) return null;
+    return navigator.clipboard.writeText(output);
+  }).catch(function () { return null; });
+}
 
 function decodeBase64(value) {
   var binary = window.atob(String(value || ""));
@@ -189,7 +223,7 @@ var shownTerminalExitNotices = new Set();
 function showTerminalToast(message, type, options) {
   if (!message) return false;
   try {
-    var feedback = window.CyreneUI.require("feedback");
+    var feedback = workbenchServices.feedback();
     if (feedback && typeof feedback.showToast === "function") {
       feedback.showToast(String(message), type || "info", options || {});
       return true;
@@ -321,7 +355,13 @@ function TerminalPane({ terminalId, onState }) {
     tailSpacer.setAttribute("aria-hidden", "true");
     host.appendChild(tailSpacer);
     var tailBaseOverflow = Math.max(0, host.scrollHeight - host.clientHeight);
-
+    var shellIntegration = installTerminalShellIntegration(terminal, {
+      beforePromptNavigation: function () { host.scrollTop = 0; },
+      copyLastCommandOutput: function () { copyLastTerminalCommandOutput(terminalId); },
+      toggleFullscreen: function () {
+        setFullscreen(function (value) { return !value; });
+      },
+    });
     function isNativeCursorHidden() {
       var core = terminal._core;
       return Boolean(core && core.coreService && core.coreService.isCursorHidden);
@@ -502,28 +542,6 @@ function TerminalPane({ terminalId, onState }) {
     }
 
     host.addEventListener("wheel", handleTailWheel, { passive: false, capture: true });
-    terminal.attachCustomKeyEventHandler(function (event) {
-      if (event.type !== "keydown") return true;
-      var key = String(event.key || "");
-      if (!event.metaKey && event.ctrlKey && event.shiftKey && key.toLowerCase() === "f") {
-        event.preventDefault();
-        event.stopPropagation();
-        setFullscreen(function (value) { return !value; });
-        return false;
-      }
-      // The Workbench has global Escape/arrow/shortcut handlers. Once the
-      // terminal owns focus, keep TUI control keys inside xterm while leaving
-      // platform clipboard/window shortcuts (Command on macOS) untouched.
-      if (
-        !event.metaKey
-        && (event.ctrlKey || event.altKey || event.key === "Escape"
-          || event.key === "Tab" || event.key.startsWith("Arrow")
-          || /^F\d{1,2}$/.test(event.key))
-      ) {
-        event.stopPropagation();
-      }
-      return true;
-    });
     terminalRef.current = terminal;
     fitRef.current = fit;
 
@@ -651,14 +669,7 @@ function TerminalPane({ terminalId, onState }) {
       scheduleReplaySettle(180);
     }
 
-    function connect() {
-      if (disposed) return;
-      inputReadyRef.current = false;
-      setConnection(reconnectRef.current > 0 ? "disconnected" : "connecting");
-      commitFit();
-      var socket = new WebSocket(terminalWebSocketUrl(terminalId, cursorRef.current));
-      socketRef.current = socket;
-      socket.onopen = function () {
+    function handleSocketOpen() {
         if (disposed) return;
         replayTarget = null;
         replaySettled = false;
@@ -670,10 +681,15 @@ function TerminalPane({ terminalId, onState }) {
         lastSentCols = 0;
         lastSentRows = 0;
         scheduleFit();
-      };
-      socket.onmessage = function (event) {
+      }
+
+    function handleSocketMessage(socket, event) {
         var message;
         try { message = JSON.parse(event.data); } catch (error) { return; }
+        if (message.type === "resync_required") {
+          socket.close(4001, "terminal output backlog");
+          return;
+        }
         if (message.type === "snapshot" || message.type === "state") {
           if (message.terminal) {
             trackAgentInputBoundary(message.terminal, message.type);
@@ -691,6 +707,7 @@ function TerminalPane({ terminalId, onState }) {
               if (cursorRef.current >= replayTarget) refreshInteractiveScreen();
             }
             if (onState) onState(message.terminal);
+            if (message.reason === "metadata") return;
             if (
               message.type === "state" && statusRef.current === "running"
               && replaySettled
@@ -744,8 +761,9 @@ function TerminalPane({ terminalId, onState }) {
           if (!replayRefreshStarted) refreshInteractiveScreen();
           else scheduleReplaySettle(90);
         });
-      };
-      socket.onclose = function (event) {
+      }
+
+    function handleSocketClose(event) {
         if (disposed) return;
         inputReadyRef.current = false;
         if (event.code === 4404) {
@@ -764,7 +782,18 @@ function TerminalPane({ terminalId, onState }) {
         }
         var delay = Math.min(15000, 400 * Math.pow(2, Math.min(5, reconnectRef.current - 1)));
         reconnectTimer = window.setTimeout(connect, delay);
-      };
+      }
+
+    function connect() {
+      if (disposed) return;
+      inputReadyRef.current = false;
+      setConnection(reconnectRef.current > 0 ? "disconnected" : "connecting");
+      commitFit();
+      var socket = new WebSocket(terminalWebSocketUrl(terminalId, cursorRef.current));
+      socketRef.current = socket;
+      socket.onopen = handleSocketOpen;
+      socket.onmessage = function (event) { handleSocketMessage(socket, event); };
+      socket.onclose = handleSocketClose;
     }
 
     function retryNow() {
@@ -854,6 +883,7 @@ function TerminalPane({ terminalId, onState }) {
       cursorScroll.dispose();
       cursorResize.dispose();
       bufferChange.dispose();
+      shellIntegration.dispose();
       if (socketRef.current) socketRef.current.close();
       if (pendingUserInputMarker) pendingUserInputMarker.dispose();
       if (lastInteractionMarker) lastInteractionMarker.dispose();
@@ -903,7 +933,7 @@ function TerminalPane({ terminalId, onState }) {
 
   React.useEffect(function () {
     var feedback;
-    try { feedback = window.CyreneUI.require("feedback"); } catch (error) {}
+    try { feedback = workbenchServices.feedback(); } catch (error) {}
     if (!feedback || typeof feedback.showToast !== "function") return;
     if (!notice) {
       if (statusToastRef.current && typeof feedback.dismissToast === "function") {
@@ -934,7 +964,7 @@ function TerminalPane({ terminalId, onState }) {
     return function () {
       if (!statusToastRef.current) return;
       try {
-        var feedback = window.CyreneUI.require("feedback");
+        var feedback = workbenchServices.feedback();
         if (feedback && typeof feedback.dismissToast === "function") {
           feedback.dismissToast(statusToastRef.current);
         }

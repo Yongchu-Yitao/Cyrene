@@ -189,6 +189,13 @@ if __name__ == "__main__":
         _run_terminal_daemon()
         raise SystemExit(0)
 
+    if "--launch-plugin-host" in sys.argv:
+        sys.argv.remove("--launch-plugin-host")
+        from cyrene.plugins.host import main as _run_plugin_host
+
+        _run_plugin_host()
+        raise SystemExit(0)
+
     if "--launch-web" in sys.argv:
         sys.argv.remove("--launch-web")
         if "--electron" in sys.argv:

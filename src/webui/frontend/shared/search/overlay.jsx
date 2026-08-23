@@ -1,4 +1,5 @@
 import { DATA } from "../../platform/data-store.jsx"
+import { workbenchServices } from "../runtime/services.jsx"
 
 // Cyrene — global Workbench search overlay
 const { useState: useStateSr, useEffect: useEffectSr, useRef: useRefSr, useCallback: useCallbackSr, useMemo: useMemoSr } = React;
@@ -30,7 +31,7 @@ var SEARCH_COMMANDS = [
 
 var SETTINGS_INDEX = (function () {
   try {
-    return window.CyreneUI.require("settings-index");
+    return workbenchServices.settingsIndex();
   } catch (e) {
     return null;
   }
@@ -61,7 +62,7 @@ var NEW_ACTION_ICONS = {
 };
 
 function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
-  var { t, lang } = window.CyreneUI.require("i18n").use();
+  var { t, lang } = workbenchServices.i18n().use();
   var inputRef = useRefSr(null);
   var resultsRef = useRefSr(null);
   var [query, setQuery] = useStateSr("");
@@ -345,7 +346,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
   }
 
   function navigateWorkbench(result) {
-    if (window.CyreneUI.require("navigation").navigate({
+    if (workbenchServices.navigation().navigate({
         type: result.type || "conversation",
         id: result.id,
         projectId: result.projectId,

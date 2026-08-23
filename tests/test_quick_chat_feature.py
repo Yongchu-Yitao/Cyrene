@@ -1,4 +1,4 @@
-from conftest import workbench_chat_source
+from conftest import workbench_chat_source, workbench_settings_source, workbench_shell_source
 import importlib
 import json
 import sys
@@ -47,9 +47,7 @@ def test_quick_chat_preload_exposes_narrow_bridge():
 
 def test_quick_chat_shortcut_is_persisted_by_the_main_process():
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
-    settings = (
-        ROOT / "src" / "webui" / "frontend" / "settings-overlay.jsx"
-    ).read_text(encoding="utf-8")
+    settings = workbench_settings_source()
 
     assert "quickChatShortcut: 'CommandOrControl+Shift+Space'" in main
     assert "quickChatShortcut: normalizeQuickChatShortcut" in main
@@ -113,9 +111,7 @@ def test_quick_chat_send_close_and_sync_contract():
         ROOT / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx"
     ).read_text(encoding="utf-8")
     chat = workbench_chat_source()
-    workbench = (
-        ROOT / "src" / "webui" / "frontend" / "workbench.jsx"
-    ).read_text(encoding="utf-8")
+    workbench = workbench_shell_source()
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
     preload = (ROOT / "electron" / "preload.js").read_text(encoding="utf-8")
 
@@ -140,13 +136,14 @@ def test_quick_chat_send_close_and_sync_contract():
     assert 'className="wbc-thread wbq-thread"' in quick_chat
     # closeWindow is wired to ESC only, never to a successful send/ack.
     assert "resetAfterSend" not in quick_chat
-    # Main-window sync: quick window notifies, main process forwards, the chat
-    # module re-pulls.
+    # Main-window sync keeps the narrow native notification contract, while the
+    # durable backend event projects the new summary without a list re-pull.
     assert "notifySent" in quick_chat and "notifySent" in preload
     assert "quick-chat:notify-sent" in main
     assert "quick-chat:sent" in main and "quick-chat:sent" in preload
-    assert "cyrene:wbc-refresh-chats" in workbench
-    assert "cyrene:wbc-refresh-chats" in chat
+    assert "wbApplyRecentChatSummary" in workbench
+    assert "applyChatSummaryEvent" in chat
+    assert "quickChat.onSent" not in workbench
 
 
 def test_quick_chat_keeps_backend_alive_for_the_global_shortcut():
@@ -224,9 +221,7 @@ def test_tray_icon_is_a_small_transparent_colored_asset(real_pillow_modules):
 
 def test_quick_chat_is_opt_in_behind_general_settings_toggles():
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
-    general = (
-        ROOT / "src" / "webui" / "frontend" / "settings-overlay.jsx"
-    ).read_text(encoding="utf-8")
+    general = workbench_settings_source()
 
     # Opt-in: the global shortcut is only claimed when quick chat is enabled,
     # which itself requires background residency.

@@ -48,18 +48,25 @@ def test_managed_attachment_path_rebases_after_portable_restore(
     )
 
 
-def test_chat_export_route_preserves_legacy_unicode_storage_key(
-    monkeypatch, tmp_path
-):
+def test_chat_export_route_preserves_legacy_unicode_storage_key(tmp_path):
     from route.agent import chat as chat_routes
+    from cyrene.workbench.global_chat_service import GlobalChatApplicationService
+    from cyrene.workbench.subagent_messaging_service import SubagentMessagingService
 
     export_name = "deadbeef_测试摘录.md"
     (tmp_path / export_name).write_text("正文", encoding="utf-8")
-    monkeypatch.setattr(chat_routes, "_EXPORTS_DIR", tmp_path)
-
     app = FastAPI()
     router = APIRouter()
-    chat_routes.register_chat_routes(router, bot=None, db_path="")
+    chat_routes.register_chat_routes(
+        router,
+        GlobalChatApplicationService(
+            "",
+            bot=None,
+            subagents=SubagentMessagingService(None, ""),
+            reset_agent_lottery=lambda: None,
+            exports_dir=tmp_path,
+        ),
+    )
     app.include_router(router)
 
     response = TestClient(app).get(

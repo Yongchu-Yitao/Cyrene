@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from cyrene.terminal.client import (
@@ -46,8 +48,89 @@ def _http_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=503, detail=str(exc))
 
 
+async def _terminal_history_export(client, terminal_id: str) -> StreamingResponse:
+    try:
+        first = await client.scrollback(
+            terminal_id, cursor=0, max_bytes=512 * 1024,
+        )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+    async def chunks():
+        page = first
+        target = int(first.get("nextSeq") or 0)
+        while True:
+            data = base64.b64decode(str(page.get("data") or ""))
+            if data:
+                yield data
+            end = int(page.get("endSeq") or 0)
+            if end >= target:
+                break
+            page = await client.scrollback(
+                terminal_id,
+                cursor=end,
+                max_bytes=min(512 * 1024, target - end),
+            )
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{terminal_id}.ansi"',
+        "X-Terminal-Oldest-Seq": str(first.get("oldestSeq") or 0),
+        "X-Terminal-Next-Seq": str(first.get("nextSeq") or 0),
+    }
+    return StreamingResponse(
+        chunks(), media_type="application/octet-stream", headers=headers,
+    )
+
+
+def _register_terminal_history_routes(router: APIRouter, client) -> None:
+    @router.get("/api/terminals/history/search")
+    async def search_terminal_history(
+        projectId: str, q: str, terminalId: str = "", limit: int = 100,
+    ):
+        try:
+            result = await client.search_history(
+                projectId,
+                q,
+                terminal_id=terminalId,
+                limit=max(1, min(int(limit or 100), 500)),
+            )
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"matches": result.get("matches", [])}
+
+    @router.get("/api/terminals/{terminal_id}/input-history")
+    async def terminal_input_history(terminal_id: str, limit: int = 200):
+        try:
+            result = await client.input_history(
+                terminal_id, limit=max(1, min(int(limit or 200), 1000))
+            )
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"events": result.get("events", [])}
+
+    @router.get("/api/terminals/{terminal_id}/commands")
+    async def terminal_commands(terminal_id: str):
+        try:
+            result = await client.commands(terminal_id)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"commands": result.get("commands", [])}
+
+    @router.get("/api/terminals/{terminal_id}/commands/{command_id}/output")
+    async def terminal_command_output(terminal_id: str, command_id: str):
+        try:
+            return await client.command_output(terminal_id, command_id)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+
+    @router.get("/api/terminals/{terminal_id}/history/export")
+    async def export_terminal_history(terminal_id: str):
+        return await _terminal_history_export(client, terminal_id)
+
+
 def register_terminal_routes(router: APIRouter) -> None:
     client = get_terminal_daemon_client()
+    _register_terminal_history_routes(router, client)
 
     @router.get("/api/terminals")
     async def list_terminals(projectId: str = "", ownerChatId: str | None = None):
@@ -100,16 +183,6 @@ def register_terminal_routes(router: APIRouter) -> None:
             return await client.screen(terminal_id)
         except Exception as exc:
             raise _http_error(exc) from exc
-
-    @router.get("/api/terminals/{terminal_id}/input-history")
-    async def terminal_input_history(terminal_id: str, limit: int = 200):
-        try:
-            result = await client.input_history(
-                terminal_id, limit=max(1, min(int(limit or 200), 1000))
-            )
-        except Exception as exc:
-            raise _http_error(exc) from exc
-        return {"events": result.get("events", [])}
 
     @router.put("/api/terminals/layout")
     async def update_terminal_layout(payload: TerminalLayoutRequest):

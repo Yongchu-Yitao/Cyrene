@@ -5,6 +5,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from conftest import workbench_i18n_source, workbench_settings_source
+
 
 def _hook(**overrides):
     value = {
@@ -437,6 +439,7 @@ async def test_hook_rejects_missing_shebang_and_oversized_stdout(tmp_path, monke
 
 
 def test_hook_api_crud_test_and_proposal_approval(tmp_path, monkeypatch):
+    from cyrene.hooks.application_service import HookApplicationService
     from cyrene.hooks import service
     from route import hooks as hook_routes
 
@@ -445,10 +448,11 @@ def test_hook_api_crud_test_and_proposal_approval(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "set_setting", lambda key, value: settings.__setitem__(key, value))
     monkeypatch.setattr(service, "_AUDIT_FILE", tmp_path / "audit.jsonl")
 
-    async def approve_review(*_args, **_kwargs):
-        return None
+    review_requests = []
 
-    monkeypatch.setattr(hook_routes, "_review", approve_review)
+    async def approve_review(*_args, **kwargs):
+        review_requests.append(kwargs)
+        return True, "approved"
     script = tmp_path / "api-hook.py"
     script.write_text(
         "#!/usr/bin/env python3\n"
@@ -460,12 +464,32 @@ def test_hook_api_crud_test_and_proposal_approval(tmp_path, monkeypatch):
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
 
     app = FastAPI()
-    hook_routes.register_hook_routes(app.router, None, "")
+    hook_routes.register_hook_routes(
+        app.router,
+        HookApplicationService(
+            service.get_hook_service(),
+            reviewer=approve_review,
+            public_hook=service.public_hook_config,
+            public_proposal=service.public_hook_proposal,
+            configuration_results=lambda: [],
+            audit_records=service.hook_audit_records,
+            extension_cards=lambda: {"cli": []},
+            schedule_configuration=lambda *_args, **_kwargs: None,
+        ),
+    )
     client = TestClient(app)
-    payload = _hook(runner={"type": "script", "path": str(script), "args": [], "env": {}})
+    payload = _hook(runner={
+        "type": "script",
+        "path": str(script),
+        "args": [],
+        "env": {"API_TOKEN": "super-secret-value"},
+    })
 
     created = client.post("/api/hooks", json=payload)
     assert created.status_code == 200
+    assert "super-secret-value" not in review_requests[0]["reason"]
+    assert '"environment_keys": "[REDACTED]"' in review_requests[0]["reason"]
+    assert review_requests[0]["path_hint"].startswith("agent-hook:")
     hook_id = created.json()["hook"]["id"]
     assert client.get("/api/hooks").json()["hooks"][0]["id"] == hook_id
     tested = client.post(f"/api/hooks/{hook_id}/test", json={})
@@ -484,11 +508,8 @@ def test_hook_api_crud_test_and_proposal_approval(tmp_path, monkeypatch):
 
 
 def test_hook_management_ui_entry_and_i18n_contract():
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[1]
-    overlay = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
-    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    overlay = workbench_settings_source()
+    i18n = workbench_i18n_source()
     hook_button = 't("settings.agentHooks")'
     source_button = 't("settings.extensionSources")'
 

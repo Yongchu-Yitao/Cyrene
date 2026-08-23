@@ -43,7 +43,6 @@ from cyrene.agent.session import (
     _expand_report_reference_history,
     _load_session_messages,
     _save_session_messages,
-    _schedule_session_label_refresh,  # noqa: F401 - compatibility no-op
     get_session_labels,
 )
 from cyrene.agent.state import (
@@ -198,13 +197,9 @@ async def _run_execution_agent(task: str, bot: Any, chat_id: int, db_path: str, 
 async def _run_execution_agent_locked(task: str, bot: Any, chat_id: int, db_path: str, notify_state: dict[str, bool] | None = None) -> str:
     _caller_type.set("execution_agent")
     wire_tool_defs = get_main_wire_tool_defs()
-    enabled_wire_names = {
-        str((tool_def.get("function") or {}).get("name") or "")
-        for tool_def in wire_tool_defs
-        if str((tool_def.get("function") or {}).get("name") or "").endswith(
-            "_tools"
-        )
-    }
+    from cyrene.tooling.wire import enabled_module_tool_names
+
+    enabled_wire_names = set(enabled_module_tool_names("main"))
     messages = [
         {
             "role": "system",

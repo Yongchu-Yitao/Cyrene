@@ -88,11 +88,13 @@ def test_settings_api_exposes_stable_package_groups(monkeypatch):
         "skill_tools",
         "remote_tools",
         "cyrene_tools",
+        "office_tools",
+        "plugin_tools",
         "integration_tools",
         "custom_tools",
     ]
     groups = payload["tool_groups"]
-    assert len(groups) == 16
+    assert len(groups) == 18
     assert all(item["kind"] == "package" for item in groups)
     browser = next(
         item for item in payload["packages"]
@@ -108,6 +110,13 @@ def test_settings_api_exposes_stable_package_groups(monkeypatch):
     # preserving the global default during migration.
     assert custom["enabled"] is True
     assert custom["source"] == "custom"
+    plugin = next(
+        item for item in payload["packages"]
+        if item["id"] == "plugin_tools"
+    )
+    assert plugin["enabled"] is True
+    assert plugin["tool_count"] == 12
+    assert plugin["source"] == "native"
 
     tools = {item["name"]: item for item in payload["tools"]}
     assert tools["AnalyzeAttachment"]["package_id"] == "direct_tools"

@@ -1299,21 +1299,6 @@ def get_session_labels(round_id: str = "") -> dict[str, str]:
     }
 
 
-def _schedule_session_label_refresh(current_user_message: str, round_id: str) -> None:
-    """Compatibility no-op: Workbench owns visible one-shot session naming.
-
-    Visible Chat and Task sessions schedule naming directly after their first
-    user message, so this legacy per-round hook must remain disabled.
-    """
-
-async def _refresh_session_labels(
-    current_user_message: str,
-    round_id: str,
-    session_id: str = "",
-) -> None:
-    """Compatibility no-op for integrations importing the former helper."""
-
-
 # ---------------------------------------------------------------------------
 # Session lifecycle
 # ---------------------------------------------------------------------------

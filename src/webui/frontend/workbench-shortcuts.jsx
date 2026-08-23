@@ -1,3 +1,4 @@
+import { workbenchServices } from "./shared/runtime/services.jsx"
 // Workbench keyboard-shortcut manager.
 //
 // Goals:
@@ -486,7 +487,7 @@
   // localStorage remains an immediate startup cache and migration fallback.
   readRemote(true);
   try {
-    var events = window.CyreneUI.has("events") ? window.CyreneUI.require("events") : null;
+    var events = window.CyreneUI.has("events") ? workbenchServices.events() : null;
     if (events && typeof events.subscribe === "function") {
       events.subscribe(function (event) {
         if (event && event.type === "settings_changed" && event.namespace === "shortcuts") {

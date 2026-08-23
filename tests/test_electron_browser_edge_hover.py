@@ -1,12 +1,12 @@
 from pathlib import Path
 
+from conftest import workbench_shell_source, workbench_style_source
+
 
 def test_sidebar_browser_never_moves_as_a_resize_handle_hover_effect():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    styles = workbench_style_source()
 
     assert "BROWSER_LEFT_EDGE_PREFIX" not in main
     assert "_leftEdgeHovered" not in main
@@ -27,12 +27,8 @@ def test_sidebar_browser_keeps_resize_cursor_without_native_page_handle():
     viewport = (
         root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx"
     ).read_text(encoding="utf-8")
-    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
-        encoding="utf-8"
-    )
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
-        encoding="utf-8"
-    )
+    workbench = workbench_shell_source()
+    styles = workbench_style_source()
 
     assert 'data-cyrene-resize-edge-hint' not in main
     assert "resizeEdgeHint.style" not in main

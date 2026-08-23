@@ -155,7 +155,7 @@ def list_chats(project_id: str = "") -> list[dict[str, Any]]:
     from cyrene.workbench import chat as chat_store
     chats = [
         chat_store._public_chat_light(item)
-        for item in chat_store._read_chats_store().get("chats", [])
+        for item in chat_store._read_chat_summaries_store().get("chats", [])
         if str(item.get("kind") or "chat") == "chat"
         and (not project_id or str(item.get("projectId") or "") == project_id)
     ]
@@ -165,7 +165,7 @@ def list_chats(project_id: str = "") -> list[dict[str, Any]]:
 
 def read_chat(chat_id: str) -> dict[str, Any]:
     from cyrene.workbench import chat as chat_store
-    chat = chat_store._find_chat(chat_store._read_chats_store(), chat_id)
+    chat = chat_store.get_workbench_chat(chat_id)
     if not chat:
         raise LookupError("chat not found")
     return chat_store._public_chat_full(chat)
@@ -185,17 +185,18 @@ def create_chat(project_id: str, title: str = "") -> dict[str, Any]:
 
 def rename_chat(chat_id: str, title: str) -> dict[str, Any]:
     from cyrene.workbench import chat as chat_store
-    payload = chat_store._read_chats_store()
-    chat = chat_store._find_chat(payload, chat_id)
-    if not chat:
-        raise LookupError("chat not found")
     normalized = str(title or "").strip()[:60]
     if not normalized:
         raise ValueError("chat title is required")
-    chat["title"] = normalized
-    chat["titleLocked"] = True
-    chat["updatedAt"] = chat_store._utc_now_iso()
-    chat_store._write_chats_store(payload)
+
+    def rename(chat: dict[str, Any]) -> None:
+        chat["title"] = normalized
+        chat["titleLocked"] = True
+        chat["updatedAt"] = chat_store._utc_now_iso()
+
+    chat = chat_store._mutate_chat_store(chat_id, rename)
+    if not chat:
+        raise LookupError("chat not found")
     return chat_store._public_chat_full(chat)
 
 

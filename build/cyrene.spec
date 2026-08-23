@@ -36,6 +36,16 @@ if _static_dir.is_dir():
             dest = str(f.relative_to(_SRC).parent)
             _datas.append((str(f), dest))
 
+# PowerPoint Office.js task-pane assets live with the bridge package so the
+# wheel and frozen desktop app use the same source. PyInstaller does not infer
+# non-Python files from the dynamic-module scan below, so include them here.
+_office_static_dir = _SRC / "cyrene" / "office" / "static"
+if _office_static_dir.is_dir():
+    for f in _office_static_dir.rglob("*"):
+        if f.is_file() and "__pycache__" not in f.parts:
+            dest = str(f.relative_to(_SRC).parent)
+            _datas.append((str(f), dest))
+
 # .env 模板（打包模式首次启动时复制到用户数据目录）
 _env_tpl = _PROJECT_ROOT / ".env.example"
 if _env_tpl.exists():

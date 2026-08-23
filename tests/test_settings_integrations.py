@@ -7,6 +7,13 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from conftest import (
+    workbench_i18n_source,
+    workbench_settings_source,
+    workbench_shell_source,
+    workbench_style_source,
+)
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from route.registry import register_routes
@@ -348,9 +355,9 @@ def test_budget_stats_exposes_daily_usage_for_peak_metrics(monkeypatch, tmp_path
 
 def test_settings_ui_moves_zotero_to_integrations_and_keeps_embedding_in_models():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
-    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    source = workbench_settings_source()
+    styles = workbench_style_source()
+    translations = workbench_i18n_source()
 
     assert 'settingsFetch("/api/settings/integrations")' in source
     assert 'settingsFetch("/api/settings/integrations/test"' in source
@@ -381,7 +388,7 @@ def test_settings_ui_moves_zotero_to_integrations_and_keeps_embedding_in_models(
     assert 'saveAllModels' in models_panel
     assert 'settings.reembedPromptTitle' in models_panel
     assert 'coverage.pending_vectors' in models_panel
-    assert '"/api/workbench/knowledge/reembed?workspace="' in models_panel
+    assert '"/api/workbench/library/reembed?workspace="' in models_panel
     embedding_section = models_panel.split("function EmbeddingSettingsSection(p) {", 1)[1].split("function modelCredentialFields", 1)[0]
     assert 'onClick: save' not in embedding_section
     assert translations.count('"settings.embeddingIntegration"') == 2
@@ -390,17 +397,17 @@ def test_settings_ui_moves_zotero_to_integrations_and_keeps_embedding_in_models(
     assert translations.count('"settings.zoteroImportAction"') == 2
 
     library = (root / "src/webui/frontend/workbench-library.jsx").read_text(encoding="utf-8")
-    assert '"/api/workbench/knowledge/embedding/status?workspace="' in library
-    assert '"/api/workbench/knowledge/reembed?workspace="' in library
+    assert '"/api/workbench/library/embedding/status?workspace="' in library
+    assert '"/api/workbench/library/reembed?workspace="' in library
     assert 'L("library.vectorizeAll", "Vectorize all")' in library
     assert translations.count('"library.vectorizeAll"') == 2
 
 
 def test_profile_is_a_settings_item_without_a_collapsed_settings_icon_stack():
     root = Path(__file__).resolve().parent.parent
-    settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
-    workbench = (root / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
-    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    settings = workbench_settings_source()
+    workbench = workbench_shell_source()
+    styles = workbench_style_source()
 
     assert '{ id: "profile", labelKey: "rail.profile", icon: "user" }' in settings
     assert 'ids: ["profile", "general", "appearance", "shortcuts"]' in settings
@@ -422,7 +429,7 @@ def test_profile_is_a_settings_item_without_a_collapsed_settings_icon_stack():
     )[1].split("}", 1)[0]
     assert "display: none" in collapsed_rule
 
-    translations = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    translations = workbench_i18n_source()
     assert '"rail.profile": "个人信息"' in translations
     assert '"profile.basicInfo": "个人信息"' in translations
     for label in (
@@ -435,9 +442,9 @@ def test_profile_is_a_settings_item_without_a_collapsed_settings_icon_stack():
 
 def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
     root = Path(__file__).resolve().parent.parent
-    settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
-    translations = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
-    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    settings = workbench_settings_source()
+    translations = workbench_i18n_source()
+    styles = workbench_style_source()
 
     panel = settings.split("function BudgetPanel(p) {", 1)[1].split("// ── Shared UI helpers", 1)[0]
     assert 'var profileUsage = dashboard.usage || {};' in panel
@@ -569,9 +576,9 @@ def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
 
 def test_about_settings_matches_the_shared_settings_page_hierarchy():
     root = Path(__file__).resolve().parent.parent
-    settings = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
-    translations = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
-    styles = (root / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    settings = workbench_settings_source()
+    translations = workbench_i18n_source()
+    styles = workbench_style_source()
 
     panel = settings.split("function AboutPanel(p) {", 1)[1].split("// ── Skills Panel", 1)[0]
     assert 'className: "settings-panel wb-about-settings"' in panel
@@ -606,8 +613,8 @@ def test_about_settings_matches_the_shared_settings_page_hierarchy():
 
 def test_general_settings_has_opt_in_external_agent_proxy():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src/webui/frontend/settings-overlay.jsx").read_text(encoding="utf-8")
-    i18n = (root / "src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
+    source = workbench_settings_source()
+    i18n = workbench_i18n_source()
     general_panel = source.split("function GeneralPanel(p) {", 1)[1].split("// ── Models Panel ──", 1)[0]
 
     assert 't("settings.agentProxyEnabled")' in general_panel
@@ -626,3 +633,25 @@ def test_performance_mode_is_an_appearance_runtime_setting():
     assert spec.value_type == "boolean"
     assert spec.default is False
     assert "performance_mode" in _build_config()
+
+
+def test_agents_settings_control_background_skill_learning():
+    from cyrene.runtime.settings_service import SETTING_SPECS
+    from cyrene.workbench.runtime import _build_config
+
+    root = Path(__file__).resolve().parent.parent
+    source = workbench_settings_source()
+    i18n = workbench_i18n_source()
+    agents_panel = source.split("function AgentsPanel(p) {", 1)[1].split(
+        "// ── Appearance Panel ──", 1
+    )[0]
+    spec = next(item for item in SETTING_SPECS if item.key == "background_skill_learning")
+
+    assert spec.namespace == "runtime"
+    assert spec.tab == "agents"
+    assert spec.value_type == "boolean"
+    assert spec.default is True
+    assert "background_skill_learning" in _build_config()
+    assert 't("settings.backgroundSkillLearning")' in agents_panel
+    assert "background_skill_learning: config.background_skill_learning !== false" in source
+    assert i18n.count('"settings.backgroundSkillLearning"') == 2

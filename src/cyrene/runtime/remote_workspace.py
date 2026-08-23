@@ -254,7 +254,7 @@ class RemoteWorkspaceFiles:
             "path": self._display_path(path, root),
             "filename": path.name,
             "size": size,
-            "sha256": _sha256_file(path) if bool(payload.get("include_hash")) or next_offset >= size else "",
+            "sha256": _sha256_file(path) if bool(payload.get("include_hash")) else "",
             "offset": offset,
             "next_offset": next_offset,
             "eof": next_offset >= size,

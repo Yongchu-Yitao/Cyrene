@@ -208,6 +208,41 @@ function agentCursorCommand(config = {}) {
   })()`;
 }
 
+function agentCursorCompletionCommand(sequence, config = {}) {
+  const payload = {
+    sequence: Number(sequence),
+    press: config.press === true,
+  };
+  return `(async () => {
+    const config = ${JSON.stringify(payload)};
+    const state = window.__cyreneAgentCursorState;
+    const cursor = document.getElementById('cyrene-agent-cursor');
+    if (!state || !cursor || state.sequence !== config.sequence) return false;
+
+    // The initial fade is installed on the second animation frame. Waiting for
+    // those frames lets getAnimations() observe both that fade and ordinary
+    // transform transitions without guessing how busy the renderer is.
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    if (state.sequence !== config.sequence) return false;
+
+    let animations = cursor.getAnimations();
+    if (config.press) {
+      const art = cursor.querySelector('[data-cyrene-agent-cursor-art]');
+      if (art && typeof art.getAnimations === 'function') {
+        animations = animations.concat(art.getAnimations());
+      }
+    }
+    animations = animations.filter((animation) => (
+      animation && animation.finished
+      && animation.playState !== 'finished' && animation.playState !== 'idle'
+    ));
+    if (!animations.length) return state.sequence === config.sequence;
+
+    await Promise.allSettled(animations.map((animation) => animation.finished));
+    return state.sequence === config.sequence;
+  })()`;
+}
+
 function agentCursorRunningCommand(running) {
   const nextRunning = running === true;
   return `(() => {
@@ -262,6 +297,7 @@ module.exports = {
   AGENT_CURSOR_SIZE,
   AGENT_CURSOR_SVG,
   agentCursorCommand,
+  agentCursorCompletionCommand,
   agentCursorHideCommand,
   agentCursorOverlayHtml,
   agentCursorRunningCommand,

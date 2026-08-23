@@ -13,9 +13,11 @@ from cyrene.tooling.cache_invalidation import register_tool_cache_invalidator
 from cyrene.tooling.packs import (
     MAIN_ONLY_MODULE_TOOL_NAMES,
     MODULE_TOOL_NAMES,
-    PACK_BY_WIRE_NAME,
 )
 from cyrene.tooling.types import WireToolBundle
+
+
+TOOLBOX_TOOL_NAME = "toolbox"
 
 DIRECT_TOOL_NAMES = (
     "use_tools",
@@ -37,6 +39,19 @@ DIRECT_TOOL_NAMES = (
     "AnalyzeAttachment",
     "LoadRendererContract",
     "GenerateImage",
+    "PowerPointGetContext",
+    "PowerPointInspect",
+    "PowerPointApplyBatch",
+    "PowerPointRenderSlide",
+    "PowerPointToolSearch",
+)
+
+POWERPOINT_CORE_TOOL_NAMES = (
+    "PowerPointGetContext",
+    "PowerPointInspect",
+    "PowerPointApplyBatch",
+    "PowerPointRenderSlide",
+    "PowerPointToolSearch",
 )
 
 SUBAGENT_DIRECT_TOOL_NAMES = (
@@ -82,23 +97,23 @@ _USE_TOOLS_DEF = {
 }
 
 
-def _module_def(wire_name: str, description: str) -> dict[str, Any]:
+def _toolbox_def() -> dict[str, Any]:
     return {
         "type": "function",
         "function": {
-            "name": wire_name,
+            "name": TOOLBOX_TOOL_NAME,
             "description": (
-                f"{description} Use operation=discover to find capability IDs, "
-                "operation=describe to load only the selected input schemas, "
-                "then operation=invoke to execute one capability. Multiple "
-                "independent invokes may be issued in one assistant tool-call batch."
+                "Stable gateway for all deferred capabilities allowed in this run. "
+                "Use operation=search to find capability IDs across every enabled "
+                "package, operation=describe to load only selected schemas and "
+                "usage guidance, then operation=invoke to execute one capability."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "operation": {
                         "type": "string",
-                        "enum": ["discover", "describe", "invoke"],
+                        "enum": ["search", "describe", "invoke"],
                     },
                     "query": {
                         "type": "string",
@@ -147,13 +162,9 @@ def _direct_def(
     if name == "AnalyzeAttachment":
         description = (
             "Analyze an uploaded attachment or workspace file. PDFs and Office "
-            "documents are parsed locally; images can use vision/OCR."
+            "documents are parsed locally; images can use vision/OCR. Project "
+            "knowledge paths, when available, can be found through toolbox."
         )
-        if "knowledge_tools" in enabled_modules:
-            description += (
-                " For a project knowledge file, first obtain its exact path "
-                "through knowledge_tools."
-            )
         tool_def["function"]["description"] = description
     return tool_def
 
@@ -187,10 +198,13 @@ def _wire_bundle(
     enabled_modules: tuple[str, ...],
     oauth_image_generation: bool,
     interactive_blocks: bool,
+    powerpoint_installed: bool,
 ) -> tuple[dict[str, Any], ...]:
     direct_names = (
         SUBAGENT_DIRECT_TOOL_NAMES if actor == "subagent" else DIRECT_TOOL_NAMES
     )
+    if actor != "main" or "office_tools" not in enabled_modules or not powerpoint_installed:
+        direct_names = tuple(name for name in direct_names if name not in POWERPOINT_CORE_TOOL_NAMES)
     if not oauth_image_generation:
         direct_names = tuple(
             name for name in direct_names if name != "GenerateImage"
@@ -203,15 +217,15 @@ def _wire_bundle(
         _direct_def(name, enabled_modules)
         for name in direct_names
     ]
-    module_defs = [
-        _module_def(name, PACK_BY_WIRE_NAME[name].description)
-        for name in enabled_modules
-    ]
+    # One universal gateway keeps the provider-visible tool schema byte-stable
+    # as packages and dynamic integrations change. Package switches are enforced
+    # by the catalog snapshot and search/describe/invoke execution path.
+    module_defs = [_toolbox_def()]
     return tuple([*direct_defs, *module_defs])
 
 
 def get_main_wire_tool_defs() -> list[dict[str, Any]]:
-    """Return direct tools plus enabled package gateways in stable order."""
+    """Return direct tools plus the universal deferred-capability gateway."""
     from cyrene.agent.state import has_response_capability
 
     return deepcopy(list(_wire_bundle(
@@ -219,14 +233,16 @@ def get_main_wire_tool_defs() -> list[dict[str, Any]]:
         enabled_module_tool_names("main"),
         _oauth_image_generation_enabled(),
         has_response_capability("interactive_blocks"),
+        _powerpoint_addin_installed(),
     )))
 
 
 def get_subagent_wire_tool_defs() -> list[dict[str, Any]]:
-    """Return the actor-specific bundle with enabled package gateways."""
+    """Return the subagent direct tools plus the universal gateway."""
     return deepcopy(list(_wire_bundle(
         "subagent",
         enabled_module_tool_names("subagent"),
+        False,
         False,
         False,
     )))
@@ -238,6 +254,7 @@ def _get_wire_tool_bundle(
     enabled_modules: tuple[str, ...],
     oauth_image_generation: bool,
     interactive_blocks: bool,
+    powerpoint_installed: bool,
 ) -> WireToolBundle:
     normalized_actor = "subagent" if actor == "subagent" else "main"
     definitions = _wire_bundle(
@@ -245,6 +262,7 @@ def _get_wire_tool_bundle(
         enabled_modules,
         oauth_image_generation,
         interactive_blocks,
+        powerpoint_installed,
     )
     encoded = json.dumps(
         definitions,
@@ -274,6 +292,7 @@ def get_wire_tool_bundle(actor: str = "main") -> WireToolBundle:
             if normalized_actor == "main"
             else False
         ),
+        _powerpoint_addin_installed() if normalized_actor == "main" else False,
     )
 
 
@@ -292,3 +311,12 @@ def invalidate_wire_tool_cache() -> None:
 
 
 register_tool_cache_invalidator(invalidate_wire_tool_cache)
+
+
+def _powerpoint_addin_installed() -> bool:
+    try:
+        from cyrene.office.installation import powerpoint_addin_installed
+
+        return powerpoint_addin_installed()
+    except Exception:
+        return False

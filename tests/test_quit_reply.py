@@ -6,18 +6,18 @@ machine-readable completion metadata for subagents, but never answer text.
 import json
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-# Patch missing deps before any cyrene import
-sys.modules.setdefault("PIL", MagicMock())
-sys.modules["PIL"].Image = MagicMock()
-sys.modules.setdefault("pypdf", MagicMock())
-
 
 def _quit_call(arguments: str) -> dict:
-    return {"tool_calls": [{"function": {"name": "quit", "arguments": arguments}}]}
+    return {
+        "tool_calls": [{
+            "id": "quit-1",
+            "function": {"name": "quit", "arguments": arguments},
+        }]
+    }
 
 
 def test_terminal_reply_uses_assistant_content_and_ignores_quit_arguments():
@@ -151,6 +151,124 @@ async def test_streaming_wrapup_prompt_rejects_placeholder_after_delivery(monkey
     final_instruction = seen["messages"][-1]["content"]
     assert "Do not reply with only 'Done'" in final_instruction
     assert "send_file" in final_instruction
+
+
+async def test_phase1_plain_text_cannot_finish_without_quit(monkeypatch):
+    from cyrene.agent import agent as agent_core
+
+    responses = iter([
+        {"content": "这是完整回答，但还没有完成信号。"},
+        {
+            "content": "这是带完成信号的正式回答。",
+            **_quit_call("{}"),
+        },
+    ])
+    model_messages = []
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        model_messages.append(messages)
+        return next(responses)
+
+    monkeypatch.setattr(agent_core, "_call_llm", fake_call_llm)
+    monkeypatch.setattr(agent_core, "_save_session_messages", AsyncMock())
+    monkeypatch.setattr(agent_core, "_append_session_message", AsyncMock())
+
+    result = await agent_core._run_main_agent(
+        "直接回答",
+        [],
+        None,
+        0,
+        "db.sqlite3",
+        persist_user_message=False,
+    )
+
+    assert result == "这是带完成信号的正式回答。"
+    assert len(model_messages) == 2
+    assert "did not call a tool" in model_messages[1][-1]["content"]
+
+
+async def test_execution_plain_text_requires_agent_to_continue_work(monkeypatch):
+    from cyrene.agent import agent as agent_core
+
+    def tool_call(call_id, name, arguments):
+        return {
+            "id": call_id,
+            "function": {"name": name, "arguments": json.dumps(arguments)},
+        }
+
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [tool_call("phase-1", "use_tools", {
+                "execution_brief": "打开 B 站",
+            })],
+        },
+        {
+            "content": "",
+            "tool_calls": [tool_call("describe", "browser_tools", {
+                "operation": "describe",
+                "capability_ids": ["browser.navigate"],
+            })],
+        },
+        {"content": "正在打开浏览器访问 B 站。"},
+        {
+            "content": "",
+            "tool_calls": [tool_call("invoke", "browser_tools", {
+                "operation": "invoke",
+                "capability_id": "browser.navigate",
+                "arguments": {
+                    "url": "https://www.bilibili.com",
+                    "reason": "starting_page",
+                },
+            })],
+        },
+        {
+            "content": "已打开 B 站。",
+            **_quit_call("{}"),
+        },
+    ])
+    model_messages = []
+    executed = []
+    saved_messages = []
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        model_messages.append(messages)
+        return next(responses)
+
+    async def fake_execute_tool(name, arguments, *_args):
+        executed.append((name, arguments))
+        return json.dumps({"status": "success"})
+
+    async def fake_save(messages, **kwargs):
+        saved_messages.append(messages)
+
+    monkeypatch.setattr(agent_core, "_call_llm", fake_call_llm)
+    monkeypatch.setattr(agent_core, "_execute_tool", fake_execute_tool)
+    monkeypatch.setattr(agent_core, "_save_session_messages", fake_save)
+    monkeypatch.setattr(agent_core, "_append_session_message", AsyncMock())
+
+    result = await agent_core._run_main_agent(
+        "去浏览器打开B站。",
+        [],
+        None,
+        0,
+        "db.sqlite3",
+        persist_user_message=False,
+    )
+
+    assert result == "已打开 B 站。"
+    assert [arguments["operation"] for _name, arguments in executed] == [
+        "describe",
+        "invoke",
+    ]
+    assert "did not call a tool" in model_messages[3][-1]["content"]
+    persisted_text = [
+        message.get("content")
+        for message in saved_messages[-1]
+        if message.get("role") == "assistant"
+    ]
+    assert "正在打开浏览器访问 B 站。" not in persisted_text
+    assert "已打开 B 站。" in persisted_text
 
 
 async def test_quit_turn_persists_normal_assistant_content(monkeypatch):
