@@ -614,7 +614,6 @@ def test_voice_stream_refreshes_status_once_per_reply_instead_of_per_delta():
 
 
 def test_local_model_card_hides_stale_error_and_localizes_backend_errors():
-    root = Path(__file__).resolve().parents[1]
     settings = workbench_settings_source()
     translations = workbench_i18n_source()
     models_panel = settings.split("function ModelsPanel(p) {", 1)[1].split("function modelDraftField", 1)[0]

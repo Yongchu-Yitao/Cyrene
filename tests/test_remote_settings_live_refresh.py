@@ -3,7 +3,6 @@ from pathlib import Path
 
 
 def test_remote_pairing_refreshes_devices_without_reentering_loading_state():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_settings_source()
     remote_panel = source.split("function RemotePanel(p) {", 1)[1].split(
         "function RemotePeerCard", 1

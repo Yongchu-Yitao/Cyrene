@@ -25,7 +25,7 @@ def register_workbench_chat_routes(
 ) -> None:
     context = context or ChatRouteContext.create(bot=bot, db_path=db_path)
     run_api = register_run_routes(router, context)
-    chat_api = register_chat_routes(
+    register_chat_routes(
         router,
         context,
         send_chat_detached=run_api["send_chat_detached"],

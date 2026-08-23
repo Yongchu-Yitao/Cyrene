@@ -271,18 +271,26 @@ def browser_event_learning_fields(
         action = f"entered {value_preview!r} into {destination}" if value_preview else f"entered text into {destination}"
         purpose = f"provide browser input for {destination}"
     elif event_kind == "click":
-        destination = target_label or "page element"; action = f"clicked {destination}"; purpose = f"activate {destination}"
+        destination = target_label or "page element"
+        action = f"clicked {destination}"
+        purpose = f"activate {destination}"
     elif event_kind == "submit":
-        destination = target_label or "browser form"; action = f"submitted {destination}"; purpose = f"submit {destination}"
+        destination = target_label or "browser form"
+        action = f"submitted {destination}"
+        purpose = f"submit {destination}"
     elif event_kind in {"navigate", "navigation"}:
-        action = f"navigated to {value_preview or url or 'browser page'}"; purpose = "open or change browser page"
+        action = f"navigated to {value_preview or url or 'browser page'}"
+        purpose = "open or change browser page"
     elif event_kind in {"scroll", "wheel"}:
-        action = f"scrolled {page or 'browser page'}"; purpose = "inspect more page content"
+        action = f"scrolled {page or 'browser page'}"
+        purpose = "inspect more page content"
     elif event_kind in {"back", "forward", "reload", "select_tab", "close_tab"}:
-        action = f"{event_kind.replace('_', ' ')} on {page or 'browser tab'}"; purpose = "manage browser navigation state"
+        action = f"{event_kind.replace('_', ' ')} on {page or 'browser tab'}"
+        purpose = "manage browser navigation state"
     else:
         destination = target_label or page or "browser page"
-        action = f"performed browser user event {event_kind} on {destination}"; purpose = "continue browser task"
+        action = f"performed browser user event {event_kind} on {destination}"
+        purpose = "continue browser task"
     return {
         "purpose": _truncate(purpose, 240), "action_summary": _truncate(action, 300),
         "object_summary": _truncate(target_label or page or url, 240),

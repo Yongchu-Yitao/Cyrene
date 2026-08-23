@@ -193,14 +193,15 @@ class GlobalChatApplicationService:
         budget_error = await self.check_budget_gate(request.question_id)
         if budget_error:
             raise GlobalChatApplicationError(403, budget_error)
-        factory = lambda: agent.answer_pending_question(
-            request.question_id,
-            request.answer,
-            self.bot,
-            self.chat_id,
-            self.db_path,
-            client_request_id=request.client_request_id,
-        )
+        async def factory():
+            return await agent.answer_pending_question(
+                request.question_id,
+                request.answer,
+                self.bot,
+                self.chat_id,
+                self.db_path,
+                client_request_id=request.client_request_id,
+            )
         if request.wants_stream:
             return GlobalChatResult(events=self.stream_agent_events(factory, request.answer))
         response = await factory()
@@ -452,22 +453,24 @@ class GlobalChatApplicationService:
     ) -> GlobalChatResult:
         all_images = bool(attachments) and all(item.get("kind") == "image" for item in attachments)
         if all_images and command.command != DEEP_REFLECT_COMMAND_ID:
-            factory = lambda: self._run_direct_image_chat(
-                command, attachments, public_attachments
-            )
+            async def factory():
+                return await self._run_direct_image_chat(
+                    command, attachments, public_attachments
+                )
         else:
-            factory = lambda: agent.run_agent(
-                prompt,
-                self.bot,
-                self.chat_id,
-                self.db_path,
-                client_request_id=command.client_request_id,
-                lang=command.lang,
-                command=command.command,
-                public_user_message=command.message,
-                public_attachments=public_attachments,
-                permission_mode=command.permission_mode,
-            )
+            async def factory():
+                return await agent.run_agent(
+                    prompt,
+                    self.bot,
+                    self.chat_id,
+                    self.db_path,
+                    client_request_id=command.client_request_id,
+                    lang=command.lang,
+                    command=command.command,
+                    public_user_message=command.message,
+                    public_attachments=public_attachments,
+                    permission_mode=command.permission_mode,
+                )
         if command.wants_stream:
             return GlobalChatResult(events=self.stream_agent_events(factory, command.message))
         response = await factory()

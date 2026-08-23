@@ -5,6 +5,9 @@ This module deliberately retains the historical async function signatures and
 legacy mapping return values used by the scheduler, routes, and extensions.
 """
 
+# Public persistence imports are intentionally re-exported for older callers.
+# ruff: noqa: F401
+
 from __future__ import annotations
 
 from typing import Any

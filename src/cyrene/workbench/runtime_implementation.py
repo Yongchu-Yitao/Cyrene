@@ -7,7 +7,7 @@ module identity for older extensions and test seams.
 
 # This module is the compatibility facade consumed by route adapters while
 # application services continue to be extracted by domain.
-# ruff: noqa: F401
+# ruff: noqa: E402, F401
 
 import asyncio
 import base64

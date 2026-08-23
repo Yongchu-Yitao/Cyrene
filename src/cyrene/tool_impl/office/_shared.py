@@ -5,7 +5,6 @@ import asyncio
 import binascii
 from copy import deepcopy
 from io import BytesIO
-import json
 import secrets
 import subprocess
 from pathlib import Path

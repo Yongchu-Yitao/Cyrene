@@ -16,6 +16,10 @@ semantic runtime router, or separate review layer. Local retrieval scores only
 shortlist candidates; the learning agent still owns the merge/new decision.
 """
 
+# Historical helper imports in this compatibility module remain available to
+# extensions and tests while implementations move into focused services.
+# ruff: noqa: F401
+
 from __future__ import annotations
 
 import asyncio

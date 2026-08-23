@@ -14,6 +14,7 @@ from typing import Any
 from PIL import Image
 from pypdf import PdfReader
 
+from cyrene.call_llm import call_llm
 from cyrene.config import DATA_DIR
 from cyrene.model_runtime.messages import assistant_text, truncate
 from cyrene.runtime.file_hashing import sha256_file

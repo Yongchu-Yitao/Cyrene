@@ -441,7 +441,6 @@ def test_profile_is_a_settings_item_without_a_collapsed_settings_icon_stack():
 
 
 def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
-    root = Path(__file__).resolve().parent.parent
     settings = workbench_settings_source()
     translations = workbench_i18n_source()
     styles = workbench_style_source()
@@ -575,7 +574,6 @@ def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
 
 
 def test_about_settings_matches_the_shared_settings_page_hierarchy():
-    root = Path(__file__).resolve().parent.parent
     settings = workbench_settings_source()
     translations = workbench_i18n_source()
     styles = workbench_style_source()
@@ -612,7 +610,6 @@ def test_about_settings_matches_the_shared_settings_page_hierarchy():
 
 
 def test_general_settings_has_opt_in_external_agent_proxy():
-    root = Path(__file__).resolve().parent.parent
     source = workbench_settings_source()
     i18n = workbench_i18n_source()
     general_panel = source.split("function GeneralPanel(p) {", 1)[1].split("// ── Models Panel ──", 1)[0]
@@ -639,7 +636,6 @@ def test_agents_settings_control_background_skill_learning():
     from cyrene.runtime.settings_service import SETTING_SPECS
     from cyrene.workbench.runtime import _build_config
 
-    root = Path(__file__).resolve().parent.parent
     source = workbench_settings_source()
     i18n = workbench_i18n_source()
     agents_panel = source.split("function AgentsPanel(p) {", 1)[1].split(
