@@ -439,7 +439,13 @@ async def test_tool_loop_continues_until_completion_and_persists_final_message(t
                     "function": {"name": "WebSearch", "arguments": "{\"query\":\"x\"}"},
                 }],
             }
-        return {"content": "final answer from gathered tool results"}
+        return {
+            "content": "final answer from gathered tool results",
+            "tool_calls": [{
+                "id": "quit1",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+        }
 
     async def fake_execute_tool(*args, **kwargs):
         return "tool result"
