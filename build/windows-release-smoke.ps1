@@ -94,17 +94,30 @@ function Invoke-DesktopSmokeProcess {
         -RedirectStandardOutput $stdoutPath `
         -RedirectStandardError $stderrPath
 
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $startedAt = [DateTime]::UtcNow
+    $deadline = $startedAt.AddSeconds($TimeoutSeconds)
+    $nextProgressAt = $startedAt.AddSeconds(15)
     while (-not (Test-Path $ResultPath) -and [DateTime]::UtcNow -lt $deadline) {
+        if ($process.HasExited) { break }
         Start-Sleep -Milliseconds 250
+        if ([DateTime]::UtcNow -ge $nextProgressAt) {
+            $elapsed = [int]([DateTime]::UtcNow - $startedAt).TotalSeconds
+            Write-Host "$Label still running (${elapsed}s elapsed)"
+            $nextProgressAt = [DateTime]::UtcNow.AddSeconds(15)
+        }
     }
 
     if (-not (Test-Path $ResultPath)) {
-        & taskkill.exe /pid $process.Id /f /t 2>$null | Out-Null
+        if (-not $process.HasExited) {
+            & taskkill.exe /pid $process.Id /f /t 2>$null | Out-Null
+        }
         $stdout = if (Test-Path $stdoutPath) { Get-Content -Raw $stdoutPath } else { "" }
         $stderr = if (Test-Path $stderrPath) { Get-Content -Raw $stderrPath } else { "" }
         $combined = ($stdout, $stderr) -join [Environment]::NewLine
         if ($combined) { Write-Host $combined }
+        if ($process.HasExited) {
+            throw "$Label exited with code $($process.ExitCode) before writing its result"
+        }
         throw "$Label did not write its success result within $TimeoutSeconds seconds"
     }
 
@@ -145,7 +158,7 @@ function Assert-SmokeSucceeded {
     if ($Result.ExitCode -ne 0) {
         throw "$Label exited with code $($Result.ExitCode)"
     }
-    if ($Result.Output -match "SMOKE TEST FAILED|DESKTOP_SMOKE_TEST=failed") {
+    if ($Result.Output -match "SMOKE TEST FAILED|DESKTOP_SMOKE_TEST=failed|TERMINAL_LIFECYCLE_SOAK=failed") {
         throw "$Label reported a failure despite exit code 0"
     }
     if ($Result.Output -notmatch [regex]::Escape($SuccessMarker)) {
@@ -306,6 +319,23 @@ Assert-SmokeSucceeded `
     -SuccessMarker "DESKTOP_SMOKE_TEST=ok" `
     -Label "Installed Electron desktop smoke test"
 
+$env:CYRENE_USER_DATA_DIR = Join-Path $smokeRoot "installed-lifecycle-data"
+$env:CYRENE_CACHE_DIR = Join-Path $smokeRoot "installed-lifecycle-cache"
+$env:CYRENE_TEMP_DIR = Join-Path $smokeRoot "installed-lifecycle-tmp"
+$env:CYRENE_TERMINAL_SOAK_CYCLES = "20"
+$installedLifecycleResultPath = Join-Path $smokeRoot "installed-terminal-lifecycle-result.log"
+$installedLifecycleSoak = Invoke-DesktopSmokeProcess `
+    -Path $installedApp `
+    -Arguments @("--terminal-lifecycle-soak-test") `
+    -Label "windows-$Arch-installed-terminal-lifecycle" `
+    -ResultPath $installedLifecycleResultPath `
+    -TimeoutSeconds 900
+Assert-SmokeSucceeded `
+    -Result $installedLifecycleSoak `
+    -SuccessMarker "CYRENE_WINDOWS_TERMINAL_LIFECYCLE_SOAK=ok cycles=20" `
+    -Label "Installed Electron terminal lifecycle soak test"
+Remove-Item Env:CYRENE_TERMINAL_SOAK_CYCLES -ErrorAction SilentlyContinue
+
 $portableApps = @(Get-ChildItem -Path $electronDist -Filter "Cyrene-*-win-$Arch-portable.exe")
 if ($portableApps.Count -ne 1) {
     throw "Expected exactly one Windows $Arch portable app, found $($portableApps.Count)"
@@ -335,5 +365,22 @@ Assert-SmokeSucceeded `
     -Result $portableDesktopSmoke `
     -SuccessMarker "DESKTOP_SMOKE_TEST=ok" `
     -Label "Portable Electron desktop smoke test"
+
+$env:CYRENE_USER_DATA_DIR = Join-Path $smokeRoot "portable-lifecycle-data"
+$env:CYRENE_CACHE_DIR = Join-Path $smokeRoot "portable-lifecycle-cache"
+$env:CYRENE_TEMP_DIR = Join-Path $smokeRoot "portable-lifecycle-tmp"
+$env:CYRENE_TERMINAL_SOAK_CYCLES = "5"
+$portableLifecycleResultPath = Join-Path $smokeRoot "portable-terminal-lifecycle-result.log"
+$portableLifecycleSoak = Invoke-DesktopSmokeProcess `
+    -Path $portableApp `
+    -Arguments @("--terminal-lifecycle-soak-test") `
+    -Label "windows-$Arch-portable-terminal-lifecycle" `
+    -ResultPath $portableLifecycleResultPath `
+    -TimeoutSeconds 600
+Assert-SmokeSucceeded `
+    -Result $portableLifecycleSoak `
+    -SuccessMarker "CYRENE_WINDOWS_TERMINAL_LIFECYCLE_SOAK=ok cycles=5" `
+    -Label "Portable Electron terminal lifecycle soak test"
+Remove-Item Env:CYRENE_TERMINAL_SOAK_CYCLES -ErrorAction SilentlyContinue
 
 Write-Host "WINDOWS_INSTALL_SMOKE_TEST=ok arch=$Arch installDir=$installDir portable=$portableApp"

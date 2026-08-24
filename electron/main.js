@@ -41,6 +41,7 @@ const {
 } = require('./browser-popup-policy');
 const { BROWSER_FIND_TARGET_SCRIPT } = require('./browser-target');
 const { HostControl } = require('./host-control');
+const { runTerminalLifecycleSoak } = require('./terminal-lifecycle-soak');
 
 const APP_NAME = 'Cyrene';
 const TEMP_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -138,13 +139,13 @@ function installWindowDiagnostics(window, label) {
     const sourceId = String(details && details.sourceId || '');
     const text = `${prefix} renderer-${level} ${sourceId}${line ? `:${line}` : ''} ${message}\n`;
     appendErrorLog(text);
-    if (isDesktopSmokeTest) process.stderr.write(text);
+    if (isReleaseSmokeTest) process.stderr.write(text);
   });
   window.webContents.on('preload-error', (_event, preloadPath, error) => {
     const detail = error && error.stack ? error.stack : String(error || 'unknown preload error');
     const text = `${prefix} preload-error ${preloadPath}: ${detail}\n`;
     appendErrorLog(text);
-    if (isDesktopSmokeTest) process.stderr.write(text);
+    if (isReleaseSmokeTest) process.stderr.write(text);
   });
   window.webContents.on('did-fail-load', (_event, code, description, targetUrl, isMainFrame) => {
     // ERR_ABORTED is expected when a navigation is replaced or the app quits.
@@ -333,10 +334,16 @@ function executeApprovedLifecycle(actionId, action, receipt) {
   return { ok: true, summary: `accepted ${normalized}` };
 }
 const isDesktopSmokeTest = process.argv.includes('--desktop-smoke-test');
-if (isDesktopSmokeTest) {
+const isTerminalLifecycleSoakTest = process.argv.includes('--terminal-lifecycle-soak-test');
+const isReleaseSmokeTest = isDesktopSmokeTest || isTerminalLifecycleSoakTest;
+let terminalLifecycleSoakStarted = false;
+if (isReleaseSmokeTest) {
   // Keep release smoke tests independent from any resident desktop instance
   // and avoid reading or changing the runner/user's normal Electron profile.
-  app.setPath('userData', path.join(getCyreneTempDir(), 'electron-smoke-profile'));
+  const profile = isTerminalLifecycleSoakTest
+    ? 'electron-terminal-soak-profile'
+    : 'electron-smoke-profile';
+  app.setPath('userData', path.join(getCyreneTempDir(), profile));
 }
 const BROWSER_USER_EVENT_CONSOLE_PREFIX = '__CYRENE_BROWSER_USER_EVENT__';
 const BROWSER_RESIZE_EDGE_PREFIX = '__CYRENE_RESIZE_EDGE__';
@@ -6928,6 +6935,53 @@ async function runDesktopSmokeTest(window) {
   app.quit();
 }
 
+function writeTerminalLifecycleSoakResult(message) {
+  const resultPath = String(process.env.CYRENE_DESKTOP_SMOKE_RESULT || '').trim();
+  if (resultPath) {
+    fs.mkdirSync(path.dirname(resultPath), { recursive: true });
+    fs.writeFileSync(resultPath, `${message}\n`, 'utf8');
+  }
+  console.log(message);
+}
+
+function terminalLifecycleSoakFailure(error) {
+  const detail = String(error && error.stack ? error.stack : error || 'unknown failure');
+  appendErrorLog(`[electron:terminal-soak] ${detail}\n`);
+  isQuitting = true;
+  killPython();
+  writeTerminalLifecycleSoakResult(`TERMINAL_LIFECYCLE_SOAK=failed ${detail}`);
+}
+
+async function startTerminalLifecycleSoakTest() {
+  if (terminalLifecycleSoakStarted) return;
+  terminalLifecycleSoakStarted = true;
+  try {
+    if (!isWindows) throw new Error('Terminal lifecycle soak requires Windows');
+    const requestedCycles = Number.parseInt(
+      String(process.env.CYRENE_TERMINAL_SOAK_CYCLES || '20'),
+      10,
+    );
+    const cycles = Math.max(
+      1,
+      Math.min(50, Number.isFinite(requestedCycles) ? requestedCycles : 20),
+    );
+    const message = await runTerminalLifecycleSoak({
+      cycles,
+      getBackendPid: () => Number(pythonProcess && pythonProcess.pid || 0),
+      requestBackendJson,
+      restartBackend: restartPythonBackend,
+      tempDir: getCyreneTempDir(),
+      userDataDir: getCyreneUserDataDir(),
+    });
+    isQuitting = true;
+    killPython();
+    writeTerminalLifecycleSoakResult(message);
+    console.log('TERMINAL_LIFECYCLE_SOAK=awaiting_harness_cleanup');
+  } catch (error) {
+    terminalLifecycleSoakFailure(error);
+  }
+}
+
 async function createMainWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show();
@@ -6940,6 +6994,12 @@ async function createMainWindow() {
   try {
     port = await waitForPort();
   } catch (err) {
+    if (isTerminalLifecycleSoakTest) {
+      terminalLifecycleSoakFailure(err);
+      isQuitting = true;
+      app.exit(1);
+      return;
+    }
     dialog.showErrorBox(
       'Cyrene - Startup Timeout',
       'The Python backend did not start within 30 seconds.\n\n'
@@ -7022,7 +7082,9 @@ async function createMainWindow() {
   await mainWindow.webContents.session.clearCache();
   try {
     await mainWindow.loadURL(url);
-    if (isDesktopSmokeTest) {
+    if (isTerminalLifecycleSoakTest) {
+      await startTerminalLifecycleSoakTest();
+    } else if (isDesktopSmokeTest) {
       await runDesktopSmokeTest(mainWindow);
     }
   } catch (err) {
@@ -7030,6 +7092,10 @@ async function createMainWindow() {
     // Chromium has already received and rendered the full local page. In smoke
     // mode, trust the stronger DOM, screenshot, semantic-tree, and interaction
     // checks before treating loadURL's transport status as a package failure.
+    if (isTerminalLifecycleSoakTest) {
+      await startTerminalLifecycleSoakTest();
+      return;
+    }
     if (isDesktopSmokeTest) {
       try {
         await runDesktopSmokeTest(mainWindow);
@@ -7488,7 +7554,11 @@ if (!gotSingleInstanceLock) {
         const detail = err && err.stack ? err.stack : String(err);
         appendErrorLog(`[electron:main] create window failed: ${detail}\n`);
         console.error('[electron] Failed to create main window:', err);
-        if (isDesktopSmokeTest) {
+        if (isTerminalLifecycleSoakTest) {
+          terminalLifecycleSoakFailure(err);
+          isQuitting = true;
+          app.exit(1);
+        } else if (isDesktopSmokeTest) {
           console.error(`DESKTOP_SMOKE_TEST=failed ${detail}`);
           isQuitting = true;
           app.exit(1);

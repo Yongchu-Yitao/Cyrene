@@ -158,6 +158,7 @@
       "browser-popup-policy.js",
       "browser-target.js",
       "agent-cursor.js",
+      "terminal-lifecycle-soak.js",
       "preload.js",
       "browser-chat-overlay-preload.js",
       "browser-tab-picker-preload.js",

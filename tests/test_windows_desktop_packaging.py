@@ -79,8 +79,22 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     webui_build = (
         ROOT / "src" / "webui" / "build-jsx.mjs"
     ).read_text(encoding="utf-8")
+    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    lifecycle_soak = (
+        ROOT / "electron" / "terminal-lifecycle-soak.js"
+    ).read_text(encoding="utf-8")
+    electron_package = (ROOT / "electron" / "package.json").read_text(
+        encoding="utf-8"
+    )
 
     assert workflow.count("Install and smoke test Windows package") == 2
+    assert 'tags: ["v*"]' in workflow
+    assert "pull_request:" not in workflow
+    workflow_soak_calls = sum(
+        path.read_text(encoding="utf-8").count("windows-release-smoke.ps1")
+        for path in (ROOT / ".github" / "workflows").glob("*.yml")
+    )
+    assert workflow_soak_calls == 2
     assert "build\\windows-release-smoke.ps1 -Arch x64" in workflow
     assert "build\\windows-release-smoke.ps1 -Arch arm64" in workflow
     assert '"_multiarray_umath*.pyd"' in smoke
@@ -88,9 +102,26 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert '"resources\\python-bundle\\Cyrene.exe"' in smoke
     assert 'Arguments @("--desktop-smoke-test")' in smoke
     assert 'Arguments @("--terminal-smoke-test")' in smoke
+    assert smoke.count('Arguments @("--terminal-lifecycle-soak-test")') == 2
     assert 'SuccessMarker "Cyrene smoke test OK:"' in smoke
     assert 'SuccessMarker "DESKTOP_SMOKE_TEST=ok"' in smoke
     assert 'SuccessMarker "CYRENE_WINDOWS_TERMINAL_SMOKE=ok"' in smoke
+    assert 'SuccessMarker "CYRENE_WINDOWS_TERMINAL_LIFECYCLE_SOAK=ok cycles=20"' in smoke
+    assert 'SuccessMarker "CYRENE_WINDOWS_TERMINAL_LIFECYCLE_SOAK=ok cycles=5"' in smoke
+    assert '$env:CYRENE_TERMINAL_SOAK_CYCLES = "20"' in smoke
+    assert '$env:CYRENE_TERMINAL_SOAK_CYCLES = "5"' in smoke
+    assert "installed-terminal-lifecycle-result.log" in smoke
+    assert "portable-terminal-lifecycle-result.log" in smoke
+    assert "TERMINAL_LIFECYCLE_SOAK=failed" in smoke
+    assert "still running (${elapsed}s elapsed)" in smoke
+    assert "before writing its result" in smoke
+    assert "--terminal-lifecycle-soak-test" in main
+    assert "runTerminalLifecycleSoak" in main
+    assert "Terminal Daemon was replaced during lifecycle cycle" in lifecycle_soak
+    assert "Terminal process did not survive lifecycle cycle" in lifecycle_soak
+    assert "CYRENE_TERMINAL_SOAK_BURST_COMPLETE" in lifecycle_soak
+    assert "await daemonRequest(cleanupConnection, 'shutdown'" in lifecycle_soak
+    assert '"terminal-lifecycle-soak.js"' in electron_package
     client = (ROOT / "src" / "cyrene" / "terminal" / "client.py").read_text(
         encoding="utf-8"
     )

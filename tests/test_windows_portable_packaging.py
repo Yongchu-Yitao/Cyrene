@@ -25,6 +25,10 @@ def test_release_uploads_and_smoke_tests_both_portable_architectures():
     assert '"DESKTOP_SMOKE_TEST=ok"' in smoke
     assert "CYRENE_DESKTOP_SMOKE_RESULT" in smoke
     assert "portable-desktop-result.log" in smoke
+    assert 'Arguments @("--terminal-lifecycle-soak-test")' in smoke
+    assert '"Portable Electron terminal lifecycle soak test"' in smoke
+    assert '"CYRENE_WINDOWS_TERMINAL_LIFECYCLE_SOAK=ok cycles=5"' in smoke
+    assert "portable-terminal-lifecycle-result.log" in smoke
 
 
 def test_windows_portable_updates_replace_the_original_executable():
