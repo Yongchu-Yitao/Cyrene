@@ -3478,20 +3478,20 @@ class TerminalManager:
 
     @staticmethod
     def _publish(session: TerminalSession, event: dict[str, Any]) -> None:
-        for queue in tuple(session.subscribers):
-            if queue.full():
+        for subscriber_queue in tuple(session.subscribers):
+            if subscriber_queue.full():
                 while True:
                     try:
-                        queue.get_nowait()
+                        subscriber_queue.get_nowait()
                     except asyncio.QueueEmpty:
                         break
-                queue.put_nowait({
+                subscriber_queue.put_nowait({
                     "type": "resync_required",
                     "nextSeq": session.next_seq,
                 })
                 continue
             with contextlib.suppress(asyncio.QueueFull):
-                queue.put_nowait(event)
+                subscriber_queue.put_nowait(event)
 
     def list(
         self, project_id: str = "", *, owner_chat_id: str | None = None,

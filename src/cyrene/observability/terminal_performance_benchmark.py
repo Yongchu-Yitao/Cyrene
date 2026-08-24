@@ -20,7 +20,6 @@ import json
 import math
 import os
 import re
-import statistics
 import sys
 import tempfile
 import time
