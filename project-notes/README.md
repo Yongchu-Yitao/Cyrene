@@ -1,7 +1,5 @@
 # Cyrene 开发记录
 
-独立架构设计文档：[`Cyrene Durable Agent State Machine 重构设计`](./cyrene-durable-agent-state-machine-refactor.md)
-
 > 更新日期：2026-08-24
 >
 > 本文件是 `project-notes/` 中唯一的开发记录。它只记录三类内容：项目目的、
