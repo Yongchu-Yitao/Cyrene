@@ -415,6 +415,11 @@ async def _run_case(
             "sourceFramesExpected": source_frames.expected_frames,
             "sourceFrameSequenceErrors": source_frames.sequence_errors,
             "sourceFramesValid": source_frames.valid,
+            "historyMatchFound": bool(matches),
+            "commandsCaptured": bool(commands),
+            "commandOutputVisible": (
+                "CYRENE_BENCHMARK_COMMAND_OUTPUT" in screen["screenText"]
+            ),
             "elapsedMs": round(elapsed_ms, 3),
             "throughputMiBPerSecond": round(
                 actual_bytes / (1024 * 1024) / max(elapsed_ms / 1000, 0.000001), 3
@@ -742,6 +747,19 @@ def render_markdown(report: dict[str, Any]) -> str:
             )
         )
     fairness = report.get("fairness", {})
+    failed_cases = [
+        case for case in report["cases"] if not case["qualityPreserved"]
+    ]
+    for case in failed_cases:
+        lines.extend([
+            "",
+            f"### Failed quality details: {case['workload']} / "
+            f"{'subscribed' if case['subscribed'] else 'none'}",
+            "",
+            "```json",
+            json.dumps(case, indent=2, sort_keys=True),
+            "```",
+        ])
     if fairness:
         lines.extend([
             "",
