@@ -61,7 +61,8 @@ async def embed_texts_with_config(
     from cyrene.runtime.network_proxy import configured_proxy_url
 
     proxy_url = configured_proxy_url(opt_in=config.get("use_proxy") is True)
-    async with httpx.AsyncClient(proxy=proxy_url or None) as client:
+    client_options = {"proxy": proxy_url} if proxy_url else {}
+    async with httpx.AsyncClient(**client_options) as client:
         response = await client.post(
             endpoint,
             json=payload,

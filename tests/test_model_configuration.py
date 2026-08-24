@@ -259,6 +259,7 @@ async def test_profile_test_targets_only_the_selected_chat_model(monkeypatch):
         "api_key": "sk-test",
         "capabilities": ["chat", "vision"],
         "reasoning_effort": "",
+        "use_proxy": False,
         "endpoints": ["https://example.test/v1/chat/completions"],
     }]
     assert captured["publish_events"] is False
@@ -332,6 +333,7 @@ def test_default_provider_connections_include_managed_local_provider(
         "name": "MiniMax",
         "adapter": "openai",
         "enabled": True,
+        "use_proxy": False,
         "base_url": "https://api.minimaxi.com/v1",
         "api_key": "",
         "options": {"provider_preset": "minimax"},
@@ -341,6 +343,7 @@ def test_default_provider_connections_include_managed_local_provider(
         "name": "DeepSeek",
         "adapter": "openai",
         "enabled": True,
+        "use_proxy": False,
         "base_url": "https://api.deepseek.com/v1",
         "api_key": "",
         "options": {"provider_preset": "deepseek"},
@@ -350,6 +353,7 @@ def test_default_provider_connections_include_managed_local_provider(
         "name": "OpenAI Codex OAuth",
         "adapter": "codex_oauth",
         "enabled": True,
+        "use_proxy": False,
         "base_url": "codex://oauth",
         "api_key": "",
         "options": {"provider_preset": "codex_oauth"},
@@ -359,6 +363,7 @@ def test_default_provider_connections_include_managed_local_provider(
         "name": "Local ONNX",
         "adapter": "local_onnx",
         "enabled": True,
+        "use_proxy": False,
         "base_url": "",
         "api_key": "",
         "options": {"provider_preset": "local_onnx"},
@@ -368,6 +373,7 @@ def test_default_provider_connections_include_managed_local_provider(
         "name": "Kimi",
         "adapter": "openai",
         "enabled": True,
+        "use_proxy": False,
         "base_url": "https://api.moonshot.cn/v1",
         "api_key": "",
         "options": {"provider_preset": "kimi"},
@@ -377,6 +383,7 @@ def test_default_provider_connections_include_managed_local_provider(
         "name": "GLM",
         "adapter": "openai",
         "enabled": True,
+        "use_proxy": False,
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "api_key": "",
         "options": {"provider_preset": "glm"},
@@ -386,6 +393,7 @@ def test_default_provider_connections_include_managed_local_provider(
         "name": "OpenCode Go",
         "adapter": "openai",
         "enabled": True,
+        "use_proxy": False,
         "base_url": "https://opencode.ai/zen/go/v1",
         "api_key": "",
         "options": {"provider_preset": "opencode_go"},
@@ -395,6 +403,7 @@ def test_default_provider_connections_include_managed_local_provider(
         "name": "Gemini",
         "adapter": "gemini",
         "enabled": True,
+        "use_proxy": False,
         "base_url": "https://generativelanguage.googleapis.com/v1beta",
         "api_key": "",
         "options": {"provider_preset": "gemini"},
@@ -404,6 +413,7 @@ def test_default_provider_connections_include_managed_local_provider(
         "name": "OpenRouter",
         "adapter": "openai",
         "enabled": True,
+        "use_proxy": False,
         "base_url": "https://openrouter.ai/api/v1",
         "api_key": "",
         "options": {"provider_preset": "openrouter"},
@@ -413,6 +423,7 @@ def test_default_provider_connections_include_managed_local_provider(
         "name": "AMD GPU Cloud",
         "adapter": "openai",
         "enabled": True,
+        "use_proxy": False,
         "base_url": "https://developer.amd.com.cn/radeon/api/v1",
         "api_key": "",
         "options": {"provider_preset": "amd_gpu_cloud"},
@@ -582,6 +593,7 @@ def test_version_five_configuration_gains_managed_codex_connection(
         "name": "OpenAI Codex OAuth",
         "adapter": "codex_oauth",
         "enabled": True,
+        "use_proxy": False,
         "base_url": "codex://oauth",
         "api_key": "",
         "options": {"provider_preset": "codex_oauth"},
@@ -990,7 +1002,7 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert 'placeholder: "搜索模型服务…"' in settings
     assert "config.connections.filter(matchesConnectionQuery)" in settings
     assert 'className: "wb-mcfg-filter"' not in settings
-    assert 'return presetIcons[preset] || ""' in settings
+    assert 'return presetIcons[preset] || (isLocalConnection(connection) ? "onnx" : "")' in settings
     assert 'settingsGlyph("server", 17)' in settings
     assert ".wb-mcfg-toggle.is-on span {\n  transform: translateX(18px);\n  background: #fff;\n}" in styles
     assert 'label: "Adapter"' not in settings

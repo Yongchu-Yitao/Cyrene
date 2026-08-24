@@ -130,7 +130,9 @@ def test_linux_desktop_uses_gpu_by_default_with_explicit_software_fallback():
     assert "renderer-${level}" in main
     assert "'did-fail-load'" in main
     assert "'render-process-gone'" in main
-    assert "app.setPath('userData', path.join(getCyreneTempDir(), 'electron-smoke-profile'))" in main
+    assert "? 'electron-terminal-soak-profile'" in main
+    assert ": 'electron-smoke-profile';" in main
+    assert "app.setPath('userData', path.join(getCyreneTempDir(), profile))" in main
     assert "state.rootChildren < 1" in main
     assert "state.launchScreenPresent" in main
     assert "const renderTimeoutMs = 90000;" in main

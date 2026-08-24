@@ -46,6 +46,7 @@ CYRENE_TOP_LEVEL_DIRECTORIES = {
     "hooks",
     "knowledge",
     "learning",
+    "media",
     "model_runtime",
     "observability",
     "office",

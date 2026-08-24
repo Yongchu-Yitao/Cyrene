@@ -53,9 +53,10 @@ from cyrene.agent.prompts import (
     _DUAL_LANE_DECISION_SYSTEM_PROMPT,
     _DUAL_LANE_EXECUTION_SYSTEM_PROMPT,
     _MAIN_AGENT_PROMPT_TEMPLATE,
-    _PHASE1_DECISION_PROMPT,
+    PHASE1_DECISION_PROMPT,
     prompt_for_enabled_tool_packs,
 )
+_PHASE1_DECISION_PROMPT = PHASE1_DECISION_PROMPT
 from cyrene.agent.model_service import take_final_reply_usage
 from cyrene.agent.session import (
     _append_session_message,
@@ -865,7 +866,7 @@ async def _run_main_agent_impl(
             "- If clarification is needed before answering, call `ask_user`."
         )
     else:
-        phase1_decision = _PHASE1_DECISION_PROMPT
+        phase1_decision = PHASE1_DECISION_PROMPT
     if system_initiated:
         phase1_decision += (
             "\n- This is a proactive system-initiated round. Do not call `ask_user`; "

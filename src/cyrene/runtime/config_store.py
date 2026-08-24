@@ -578,8 +578,9 @@ def export_snapshot() -> dict:
             # nested credential-shaped fields (for example a future auth
             # header map).  Use the media boundary's recursive policy instead
             # of maintaining a fragile list of only today's ``api_key`` fields.
-            from cyrene.media.settings import redact_media_secrets
-
+            redact_media_secrets = importlib.import_module(
+                "cyrene.media.settings"
+            ).redact_media_secrets
             settings["media"] = redact_media_secrets(
                 media,
                 # Restored values must remain genuinely unconfigured rather

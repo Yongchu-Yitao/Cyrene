@@ -4,6 +4,7 @@ This is a pure-data module with zero dependencies on other ``cyrene``
 modules, so it is safe to import from anywhere in the agent subpackage.
 """
 
+import importlib
 import logging
 import re
 from typing import Any
@@ -163,9 +164,8 @@ def prompt_for_enabled_tool_packs(
             if is_tool_pack_enabled(wire_name)
         }
         try:
-            from cyrene.office.installation import powerpoint_addin_installed
-
-            if not powerpoint_addin_installed():
+            installation = importlib.import_module("cyrene.office.installation")
+            if not installation.powerpoint_addin_installed():
                 enabled_wire_names.discard("office_tools")
         except Exception:
             enabled_wire_names.discard("office_tools")
@@ -391,7 +391,7 @@ _MAIN_AGENT_PROMPT = prompt_for_enabled_tool_packs(
     frozenset(_TOOL_PACK_PROMPT_TERMS),
 )
 
-_PHASE1_DECISION_PROMPT = """Decision phase:
+PHASE1_DECISION_PROMPT = """Decision phase:
 Choose exactly one action: `use_tools`, `ask_user`, or `quit`.
 
 - Call `use_tools` when the request requires execution, file or project inspection, search, verification, citations, current information, or other tool-derived evidence.
@@ -406,6 +406,9 @@ When calling `use_tools`:
 When calling `quit`, put the complete user-facing answer in assistant content and use `quit` only as the terminal signal.
 Prefer the shortest reliable decision. Phase 2 owns planning, execution, adaptation, and validation.
 """
+
+# Historical import compatibility; new runtime code uses the public name.
+_PHASE1_DECISION_PROMPT = PHASE1_DECISION_PROMPT
 
 _DUAL_LANE_DECISION_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}'s decision and conversation lane.
 

@@ -18,7 +18,7 @@ ROUTE_DECORATOR = re.compile(
     r"@(?:router|app)\.(get|post|put|patch|delete|websocket)"
     r"\(\s*[\"']([^\"']+)"
 )
-EXPECTED_ROUTE_CONTRACT_SHA256 = "66eeda02e6925897ae9ece5b6d7eef203639b09d6f893e12e153d420ee74e7e4"
+EXPECTED_ROUTE_CONTRACT_SHA256 = "b84c0ee1a2498980270dcf64ce01edd663730a1f849fef27bfcb58f898ed4ef7"
 STANDALONE_HTTP_APPS = {ROOT / "src" / "cyrene" / "office" / "gateway.py"}
 
 
@@ -45,7 +45,7 @@ def _registered_routes(db_path: Path) -> set[str]:
 def test_route_package_owns_the_complete_public_contract():
     routes = _declared_routes(ROOT / "src" / "route")
 
-    assert len(routes) == 393
+    assert len(routes) == 394
     assert len(routes) == len(set(routes)), "duplicate method/path declaration"
     assert {
         "GET /api/projects/{project_id}/memory-prompt",

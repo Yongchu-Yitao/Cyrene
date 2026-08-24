@@ -23,12 +23,12 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 388
+OPENAPI_OPERATION_COUNT = 389
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "18d17809fa6ab6b56fef6bafeb7d828134b4bbc4862b34a180ee31befe6e3b6a"
+OPENAPI_SHA256 = "295fab2959c749cdbe3e8b08a2832e859b6038fa9847229ee9e5960141be8e1b"
 TOOL_REGISTRY_SHA256 = "f89051bdebdc54bb76288dbfbaf526765ab64fc7289e2bebd25f03510a6f7c45"
-MAIN_WIRE_SHA256 = "75564ec90f8c17437cfe6feb1b4d46ab78061bf04b03f6c4e2b08a42942b0649"
+MAIN_WIRE_SHA256 = "455f99062dd310cf5dbec1c3f02ccb3cb34b4018fcba17d3f2dd517c9b82d12a"
 SUBAGENT_WIRE_SHA256 = "1d28ab5db6096330a6a9c33877b04e1ff5e2f45c79df4b208e7f1a5a1516cd86"
 
 BROWSER_AND_VENDOR_GLOBALS = {
@@ -188,7 +188,7 @@ def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged(monkeypatch
         assert function["name"] in catalog.TOOL_HANDLERS
     assert len(catalog._MAIN_ONLY_TOOLS) == 85
 
-    assert len(wire.get_main_wire_tool_defs()) == 23
+    assert len(wire.get_main_wire_tool_defs()) == 18
     assert wire.get_wire_bundle_hash("main") == MAIN_WIRE_SHA256
     assert len(wire.get_subagent_wire_tool_defs()) == 12
     assert wire.get_wire_bundle_hash("subagent") == SUBAGENT_WIRE_SHA256

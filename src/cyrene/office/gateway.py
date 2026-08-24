@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib
 import ipaddress
 import json
 import logging
@@ -198,8 +199,7 @@ def _register_document_routes(app: FastAPI, material: OfficeGatewayFiles) -> Non
         args = payload.get("arguments") if isinstance(payload, dict) else None
         if not isinstance(args, dict):
             raise HTTPException(status_code=400, detail="arguments must be an object")
-        from cyrene.tool_impl.office import kit
-
+        kit = importlib.import_module("cyrene.tool_impl.office.kit")
         raw = await kit._method_handler(method, args)
         try:
             result = json.loads(raw)

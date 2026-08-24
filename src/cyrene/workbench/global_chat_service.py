@@ -227,9 +227,13 @@ class GlobalChatApplicationService:
                 "interrupted": agent.interrupt_active_run(session_id=session_id),
             }
         if workbench_run is None:
+            interrupted = agent.interrupt_active_run(session_id=session_id)
+            from cyrene.workbench import chat as chat_service
+
+            chat_service._stash_chat_pending_for(session_id, None)
             return {
                 "ok": True,
-                "interrupted": agent.interrupt_active_run(session_id=session_id),
+                "interrupted": interrupted,
             }
 
         interrupted = manager.interrupt(session_id)

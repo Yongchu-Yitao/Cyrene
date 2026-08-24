@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 from copy import deepcopy
 from functools import lru_cache
@@ -291,8 +292,7 @@ register_tool_cache_invalidator(invalidate_wire_tool_cache)
 
 def _powerpoint_addin_installed() -> bool:
     try:
-        from cyrene.office.installation import powerpoint_addin_installed
-
-        return powerpoint_addin_installed()
+        installation = importlib.import_module("cyrene.office.installation")
+        return installation.powerpoint_addin_installed()
     except Exception:
         return False

@@ -733,13 +733,11 @@ class ChatRunManager:
         run.status = "cancelled"
         run.termination_reason = "user_interrupted"
         run.outcome = {"kind": "interrupted"}
-        interrupted = self._coordinator.interrupt(
+        self._coordinator.interrupt(
             "conversation",
             run.chat_id,
             reason=run.termination_reason,
         )
-        if not interrupted:
-            raise RuntimeError(f"conversation run lost ownership: {run.chat_id}")
         try:
             asyncio.create_task(run.publish({"type": "interrupted", "chatId": run.chat_id}))
         except RuntimeError:
