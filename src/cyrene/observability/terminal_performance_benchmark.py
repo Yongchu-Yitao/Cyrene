@@ -245,10 +245,29 @@ async def _websocket_relay(
 
     async def handler(websocket: Any) -> None:
         queue = manager.subscribe(terminal_id)
-        connected.set()
         try:
+            replay_end = manager.get(terminal_id).next_seq
+            for event in await manager.replay_async(
+                terminal_id, 0, end_seq=replay_end
+            ):
+                await websocket.send(json.dumps(event, separators=(",", ":")))
+            connected.set()
             while True:
                 event = await queue.get()
+                if event.get("type") == "output":
+                    start = int(event["seq"])
+                    end = int(event["nextSeq"])
+                    if end <= replay_end:
+                        continue
+                    if start < replay_end:
+                        data = base64.b64decode(event["data"])
+                        event = {
+                            **event,
+                            "seq": replay_end,
+                            "data": base64.b64encode(
+                                data[replay_end - start:]
+                            ).decode("ascii"),
+                        }
                 await websocket.send(json.dumps(event, separators=(",", ":")))
                 if (
                     event.get("type") == "state"
