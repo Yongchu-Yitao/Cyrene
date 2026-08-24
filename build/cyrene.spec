@@ -89,6 +89,7 @@ _hidden += [
     "fastapi", "pydantic", "pydantic_core", "pydantic_core._pydantic_core",
     "starlette", "typing_extensions", "annotated_types",
     "dotenv", "telegram", "mcp", "httpx_sse", "sse_starlette", "requests",
+    "google.genai",
     "packaging", "pypdf", "pypdfium2", "reportlab", "PIL",
     "numpy", "onnxruntime", "sherpa_onnx", "soundfile", "tokenizers",
     # simplexng runtime deps (vendored searx pulls these in transitively;
@@ -127,6 +128,10 @@ def _collect_package(name: str) -> None:
     try:
         datas, binaries, hiddenimports = collect_all(name)
     except Exception as exc:
+        if name in {"google.genai", "openai_codex"}:
+            raise SystemExit(
+                f"[fatal] collect_all({name!r}) failed for a required runtime package: {exc}"
+            ) from exc
         print(f"[warn] collect_all({name!r}) failed: {exc}")
         return
 
@@ -196,6 +201,7 @@ for _package in (
     "httpx_sse",
     "sse_starlette",
     "requests",
+    "google.genai",
     "packaging",
     "pypdf",
     "pypdfium2",
@@ -209,6 +215,17 @@ for _package in (
     "openai_codex",
 ):
     _collect_package(_package)
+
+# ``google.genai`` is a namespace package whose distribution name differs
+# from its import name.  Some SDK paths query their own package metadata at
+# runtime, so keep the dist-info alongside the modules collected above.
+try:
+    _datas.extend(copy_metadata("google-genai"))
+except Exception as exc:
+    raise SystemExit(
+        "[fatal] PyInstaller could not collect required google-genai metadata; "
+        "aborting build"
+    ) from exc
 
 if _WOA_NATIVE_CORE:
     _collect_package("onnxruntime_qnn")

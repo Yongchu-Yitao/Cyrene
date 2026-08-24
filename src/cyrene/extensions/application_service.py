@@ -224,7 +224,13 @@ class ExtensionApplicationService:
             targets["skills"] = str(settings["skill_catalog_url"])
         headers = {"Authorization": f"Bearer {settings['github_token']}"} if settings.get("github_token") else {}
         checks = {}
-        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+        from cyrene.runtime.network_proxy import scoped_proxy_url
+
+        async with httpx.AsyncClient(
+            timeout=8,
+            follow_redirects=True,
+            proxy=scoped_proxy_url("extensions") or None,
+        ) as client:
             for name, url in targets.items():
                 try:
                     response = await client.get(url, headers=headers if name == "github" else None)

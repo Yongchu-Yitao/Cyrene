@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter
@@ -39,12 +40,33 @@ async def _publish_settings_changed(
 ) -> None:
     from cyrene.observability import debug
 
-    if {"external_agent_proxy_enabled", "external_agent_proxy_port"}.intersection(changed):
+    proxy_runtime_keys = {
+        "external_agent_proxy_enabled",
+        "external_agent_proxy_url",
+        "external_agent_proxy_port",
+        "proxy_search_enabled",
+    }
+    if {
+        "external_agent_proxy_enabled",
+        "external_agent_proxy_url",
+        "external_agent_proxy_port",
+    }.intersection(changed):
         # ACP transports are process-scoped and retain their spawn env. Recycle
         # them so the next turn applies the new setting without a full restart.
         from cyrene.agent_runtime.process_manager import get_process_manager
 
         await get_process_manager().close_all()
+    if proxy_runtime_keys.intersection(changed):
+        # SimpleXNG owns its outgoing environment and generated settings for
+        # the lifetime of the child process. Restart an already-running local
+        # instance so the saved search scope takes effect immediately.
+        from cyrene.config import SEARXNG_HOST, SEARXNG_PORT
+        from cyrene.tooling.backends.searxng_manager import get_manager
+
+        manager = get_manager()
+        if manager.is_running:
+            await asyncio.to_thread(manager.stop)
+            await asyncio.to_thread(manager.start, int(SEARXNG_PORT), SEARXNG_HOST)
     await debug.publish_event({
         "type": "settings_changed",
         "namespace": namespace,

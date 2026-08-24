@@ -18,7 +18,7 @@ ROUTE_DECORATOR = re.compile(
     r"@(?:router|app)\.(get|post|put|patch|delete|websocket)"
     r"\(\s*[\"']([^\"']+)"
 )
-EXPECTED_ROUTE_CONTRACT_SHA256 = "801aabe8fc14b5503d1800012fe8423553512379ab7caacefc010e9a7c0b9c8e"
+EXPECTED_ROUTE_CONTRACT_SHA256 = "66eeda02e6925897ae9ece5b6d7eef203639b09d6f893e12e153d420ee74e7e4"
 STANDALONE_HTTP_APPS = {ROOT / "src" / "cyrene" / "office" / "gateway.py"}
 
 
@@ -45,7 +45,7 @@ def _registered_routes(db_path: Path) -> set[str]:
 def test_route_package_owns_the_complete_public_contract():
     routes = _declared_routes(ROOT / "src" / "route")
 
-    assert len(routes) == 384
+    assert len(routes) == 393
     assert len(routes) == len(set(routes)), "duplicate method/path declaration"
     assert {
         "GET /api/projects/{project_id}/memory-prompt",
@@ -130,6 +130,8 @@ def test_split_chat_route_contract_is_stable():
         ("get", "/api/workbench/chats", "api_workbench_list_chats"),
         ("get", "/api/workbench/quick-chat/targets", "api_workbench_quick_chat_targets"),
         ("post", "/api/workbench/chats", "api_workbench_create_chat"),
+        ("get", "/api/workbench/context-capabilities", "api_workbench_context_capabilities"),
+        ("get", "/api/workbench/slash-commands", "api_workbench_slash_commands"),
         ("post", "/api/workbench/voice-command", "api_workbench_voice_command"),
         ("get", "/api/workbench/chats/{chat_id}/side-agents", "api_workbench_list_side_agents"),
         ("post", "/api/workbench/chats/{chat_id}/side-agents", "api_workbench_create_side_agent"),
@@ -148,6 +150,7 @@ def test_split_chat_route_contract_is_stable():
     split_modules = {
         "pinned_routes.py",
         "collection_routes.py",
+        "context_catalog_routes.py",
         "voice_routes.py",
         "side_agents_routes.py",
         "detail_routes.py",

@@ -98,6 +98,21 @@ def test_delivery_fallback_ignores_non_delivery_sent_results():
     assert _delivery_fallback_text(messages) == ""
 
 
+def test_deterministic_fallback_surfaces_tool_failure_reason():
+    from cyrene.agent.replies import _deterministic_final_fallback
+
+    messages = [
+        {"role": "user", "content": "检查文件"},
+        {
+            "role": "tool",
+            "tool_call_id": "read-1",
+            "content": json.dumps({"status": "failed", "error": "file not found"}),
+        },
+    ]
+
+    assert _deterministic_final_fallback(messages) == "工具执行失败：file not found"
+
+
 def test_terminal_reply_rejects_dsml_and_legacy_tool_markup():
     from cyrene.agent.agent import _safe_terminal_reply_from_response
 
@@ -153,7 +168,7 @@ async def test_streaming_wrapup_prompt_rejects_placeholder_after_delivery(monkey
     assert "send_file" in final_instruction
 
 
-async def test_phase1_plain_text_cannot_finish_without_quit(monkeypatch):
+async def test_phase1_plain_text_requires_one_control_repair(monkeypatch):
     from cyrene.agent import agent as agent_core
 
     responses = iter([
@@ -184,7 +199,11 @@ async def test_phase1_plain_text_cannot_finish_without_quit(monkeypatch):
 
     assert result == "这是带完成信号的正式回答。"
     assert len(model_messages) == 2
-    assert "did not call a tool" in model_messages[1][-1]["content"]
+    assert any(
+        "Plain assistant text without an explicit control signal never ends the run"
+        in str(message.get("content") or "")
+        for message in model_messages[1]
+    )
 
 
 async def test_execution_plain_text_requires_agent_to_continue_work(monkeypatch):
@@ -261,7 +280,7 @@ async def test_execution_plain_text_requires_agent_to_continue_work(monkeypatch)
         "describe",
         "invoke",
     ]
-    assert "did not call a tool" in model_messages[3][-1]["content"]
+    assert "was not published to the user" in model_messages[3][-1]["content"]
     persisted_text = [
         message.get("content")
         for message in saved_messages[-1]
@@ -269,6 +288,138 @@ async def test_execution_plain_text_requires_agent_to_continue_work(monkeypatch)
     ]
     assert "正在打开浏览器访问 B 站。" not in persisted_text
     assert "已打开 B 站。" in persisted_text
+
+
+async def test_execution_rejected_plain_text_must_be_restated_with_quit(monkeypatch):
+    """A rejected plain response is not an implicit completion candidate."""
+    from cyrene.agent import agent as agent_core
+
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "phase-1",
+                "function": {
+                    "name": "use_tools",
+                    "arguments": json.dumps({"execution_brief": "查询广州天气"}),
+                },
+            }],
+        },
+        {
+            "content": "广州今天有阵雨，气温 29–33℃。外出请带伞。",
+            "tool_calls": [],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 30,
+                "total_tokens": 130,
+                "prompt_cache_hit_tokens": 80,
+            },
+        },
+        {
+            "content": "广州今天有阵雨，气温 29–33℃。外出请带伞。",
+            **_quit_call("{}"),
+            "usage": {
+                "prompt_tokens": 120,
+                "completion_tokens": 20,
+                "total_tokens": 140,
+                "prompt_cache_hit_tokens": 100,
+            },
+        },
+    ])
+    model_messages = []
+    saved_messages = []
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        model_messages.append(messages)
+        return next(responses)
+
+    async def fake_save(messages, **kwargs):
+        saved_messages.append(messages)
+
+    monkeypatch.setattr(agent_core, "_call_llm", fake_call_llm)
+    monkeypatch.setattr(agent_core, "_save_session_messages", fake_save)
+    monkeypatch.setattr(agent_core, "_append_session_message", AsyncMock())
+
+    result = await agent_core._run_main_agent(
+        "广州市天气",
+        [],
+        None,
+        0,
+        "db.sqlite3",
+        persist_user_message=False,
+    )
+
+    candidate = "广州今天有阵雨，气温 29–33℃。外出请带伞。"
+    assert result == candidate
+    assert len(model_messages) == 3
+    persisted_text = [
+        str(message.get("content") or "")
+        for message in saved_messages[-1]
+        if message.get("role") == "assistant"
+    ]
+    assert persisted_text.count(candidate) == 1
+    repair = str(model_messages[2][-1]["content"])
+    assert "was not published to the user" in repair
+    assert "cannot be referenced as an earlier answer" in repair
+    final_usage = saved_messages[-1][-1]["usage"]
+    assert final_usage["prompt_tokens"] == 220
+    assert final_usage["completion_tokens"] == 50
+    assert final_usage["prompt_cache_hit_tokens"] == 180
+
+
+async def test_execution_rejects_unsafe_plain_text_before_empty_quit(monkeypatch):
+    """DSML in a rejected response is never committed by a later empty quit."""
+    from cyrene.agent import agent as agent_core
+
+    dsml = '<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="WebSearch"/>'
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "phase-1",
+                "function": {
+                    "name": "use_tools",
+                    "arguments": json.dumps({"execution_brief": "查询广州天气"}),
+                },
+            }],
+        },
+        {"content": dsml, "tool_calls": []},
+        {
+            "content": "",
+            **_quit_call("{}"),
+        },
+        {"content": "安全的广州天气答复。"},
+    ])
+    calls = []
+    saved_messages = []
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        calls.append(tools)
+        return next(responses)
+
+    async def fake_save(messages, **kwargs):
+        saved_messages.append(messages)
+
+    monkeypatch.setattr(agent_core, "_call_llm", fake_call_llm)
+    monkeypatch.setattr(agent_core, "_save_session_messages", fake_save)
+    monkeypatch.setattr(agent_core, "_append_session_message", AsyncMock())
+
+    result = await agent_core._run_main_agent(
+        "广州市天气",
+        [],
+        None,
+        0,
+        "db.sqlite3",
+        persist_user_message=False,
+    )
+
+    assert result == "安全的广州天气答复。"
+    assert len(calls) == 4
+    assert calls[-1] is None
+    assert all(
+        "DSML" not in str(message.get("content") or "")
+        for message in saved_messages[-1]
+    )
 
 
 async def test_quit_turn_persists_normal_assistant_content(monkeypatch):

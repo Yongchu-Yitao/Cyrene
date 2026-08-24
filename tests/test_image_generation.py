@@ -23,7 +23,7 @@ def _png_bytes() -> bytes:
     )
 
 
-def test_generate_image_tool_is_visible_only_for_oauth(
+def test_legacy_generate_image_tool_is_internal_for_every_model_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from cyrene.runtime import settings_store
@@ -55,8 +55,8 @@ def test_generate_image_tool_is_visible_only_for_oauth(
         item["function"]["name"]
         for item in catalog.get_active_tool_defs_for_actor("main")
     }
-    assert "GenerateImage" in oauth_wire_names
-    assert "GenerateImage" in oauth_catalog_names
+    assert "GenerateImage" not in oauth_wire_names
+    assert "GenerateImage" not in oauth_catalog_names
 
 
 @pytest.mark.asyncio

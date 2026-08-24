@@ -111,6 +111,12 @@ async def _run_scenario(
     workload: AgentBenchmarkWorkload,
 ) -> dict[str, Any]:
     from cyrene.agent import agent as agent_core
+    from cyrene.agent import state as agent_state
+    from cyrene.agent.lane_protocol import current_agent_lane
+    from cyrene.model_runtime.transcript_policy import (
+        ProviderFamily,
+        TranscriptPolicy,
+    )
 
     parallel_sessions = max(2, int(workload.parallel_sessions))
     turns_per_session = max(2, int(workload.turns_per_session))
@@ -123,6 +129,7 @@ async def _run_scenario(
     background_ticks = 0
     background_stop = asyncio.Event()
     cache_tracker = IdealPrefixCacheTracker(series_dimension="turn")
+    lane_cache_tracker = IdealPrefixCacheTracker(series_dimension="turn")
     model_round_index: ContextVar[int] = ContextVar(
         "benchmark_model_round_index",
         default=0,
@@ -141,6 +148,7 @@ async def _run_scenario(
         "_execute_tool": agent_core._execute_tool,
         "_save_session_messages": agent_core._save_session_messages,
         "_append_session_message": agent_core._append_session_message,
+        "append_or_upsert_lane_record": agent_core.append_or_upsert_lane_record,
         "_publish_runtime_event": agent_core._publish_runtime_event,
     }
 
@@ -152,29 +160,36 @@ async def _run_scenario(
         prompt_tokens = _prompt_token_estimate(messages, tools)
         prompt_tokens_total += prompt_tokens
         max_prompt_tokens = max(max_prompt_tokens, prompt_tokens)
-        cache_tracker.record(
-            cache_scope.get(),
-            [
-                *(
-                    json.dumps(
-                        {
-                            "role": message.get("role"),
-                            "content": message.get("content"),
-                        },
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        default=str,
-                    )
-                    for message in messages
-                ),
-                "tools:"
-                + json.dumps(
-                    tools or [],
+        request_units = [
+            *(
+                json.dumps(
+                    {
+                        "role": message.get("role"),
+                        "content": message.get("content"),
+                    },
                     ensure_ascii=False,
                     sort_keys=True,
                     default=str,
-                ),
-            ],
+                )
+                for message in messages
+            ),
+            "tools:"
+            + json.dumps(
+                tools or [],
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ),
+        ]
+        session_scope = cache_scope.get()
+        cache_tracker.record(
+            session_scope,
+            request_units,
+            series_index=cache_turn.get(),
+        )
+        lane_cache_tracker.record(
+            f"{session_scope}:{str(_kwargs.get('cache_lane') or current_agent_lane())}",
+            request_units,
             series_index=cache_turn.get(),
         )
         async with trace_span(
@@ -258,46 +273,56 @@ async def _run_scenario(
     async def run_session(index: int) -> None:
         session_id = f"session_{scenario.name}_{index}"
         history = initial_history()
-        for turn in range(turns_per_session):
-            run_id = f"bench_{scenario.name}_{index}_{turn}_{uuid4().hex}"
-            round_id = f"round_{scenario.name}_{index}_{turn}"
-            user_message = (
-                "Run deterministic benchmark fixture "
-                f"for conversation turn {turn + 1}."
-            )
-            model_token = model_round_index.set(0)
-            cache_token = cache_scope.set(session_id)
-            turn_token = cache_turn.set(turn)
-            try:
-                with bind_run_context(session_id=session_id, round_id=round_id):
-                    with bind_trace_context(
-                        trace_id=run_id,
-                        run_id=run_id,
-                        session_id=session_id,
-                        round_id=round_id,
-                    ):
-                        with bind_trace_sink(trace_events.append):
-                            async with trace_span(
-                                "run",
-                                "benchmark_scenario",
-                                span_id=run_id,
-                            ):
-                                response = await agent_core._run_main_agent(
-                                    user_message,
-                                    history,
-                                    None,
-                                    index,
-                                    "",
-                                    persist_user_message=False,
-                                )
-            finally:
-                cache_scope.reset(cache_token)
-                cache_turn.reset(turn_token)
-                model_round_index.reset(model_token)
-            history.extend([
-                {"role": "user", "content": user_message},
-                {"role": "assistant", "content": str(response)},
-            ])
+        lease = agent_state.RunModelLease(
+            f"benchmark-lease-{scenario.name}-{index}",
+            {"primary": ()},
+            provider_family=ProviderFamily.OPENAI_COMPATIBLE,
+            transcript_policy=TranscriptPolicy.DUAL_LANE,
+        )
+        lease_token = agent_state._run_model_lease.set(lease)
+        try:
+            for turn in range(turns_per_session):
+                run_id = f"bench_{scenario.name}_{index}_{turn}_{uuid4().hex}"
+                round_id = f"round_{scenario.name}_{index}_{turn}"
+                user_message = (
+                    "Run deterministic benchmark fixture "
+                    f"for conversation turn {turn + 1}."
+                )
+                model_token = model_round_index.set(0)
+                cache_token = cache_scope.set(session_id)
+                turn_token = cache_turn.set(turn)
+                try:
+                    with bind_run_context(session_id=session_id, round_id=round_id):
+                        with bind_trace_context(
+                            trace_id=run_id,
+                            run_id=run_id,
+                            session_id=session_id,
+                            round_id=round_id,
+                        ):
+                            with bind_trace_sink(trace_events.append):
+                                async with trace_span(
+                                    "run",
+                                    "benchmark_scenario",
+                                    span_id=run_id,
+                                ):
+                                    response = await agent_core._run_main_agent(
+                                        user_message,
+                                        history,
+                                        None,
+                                        index,
+                                        "",
+                                        persist_user_message=False,
+                                    )
+                finally:
+                    cache_scope.reset(cache_token)
+                    cache_turn.reset(turn_token)
+                    model_round_index.reset(model_token)
+                history.extend([
+                    {"role": "user", "content": user_message},
+                    {"role": "assistant", "content": str(response)},
+                ])
+        finally:
+            agent_state._run_model_lease.reset(lease_token)
 
     rss_before = _rss_bytes()
     started = time.perf_counter()
@@ -307,6 +332,7 @@ async def _run_scenario(
         agent_core._execute_tool = fake_execute_tool
         agent_core._save_session_messages = fake_save
         agent_core._append_session_message = fake_append
+        agent_core.append_or_upsert_lane_record = fake_append
         agent_core._publish_runtime_event = fake_publish
         if scenario.background_contention:
             background_task = asyncio.create_task(background_load())
@@ -335,6 +361,7 @@ async def _run_scenario(
         "trace_span_count": len(trace_events),
         "background_ticks": background_ticks,
         "ideal_cache": cache_tracker.metrics(),
+        "ideal_lane_cache": lane_cache_tracker.metrics(),
     }
 
 
@@ -361,7 +388,7 @@ async def run_benchmark(
         combined["samples"] = [sample["wall_ms"] for sample in samples]
         results.append(combined)
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "environment": {
             "python": platform.python_version(),
@@ -380,6 +407,9 @@ async def run_benchmark(
         "ideal_cache": aggregate_ideal_cache_metrics(
             item["ideal_cache"] for item in results
         ),
+        "ideal_lane_cache": aggregate_ideal_cache_metrics(
+            item["ideal_lane_cache"] for item in results
+        ),
     }
 
 
@@ -389,8 +419,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         f"Generated: `{report['generated_at']}`",
         "",
-        "| Scenario | Parallel | Turns | Wall ms | Model rounds | Tools | Prompt tokens | Max prompt | Events | RSS delta | Spans | Cache progression | Ideal cache |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|",
+        "| Scenario | Parallel | Turns | Wall ms | Model rounds | Tools | Prompt tokens | Max prompt | Events | RSS delta | Spans | Cache progression | Ideal cache | Lane cache |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|",
     ]
     for item in report["results"]:
         lines.append(
@@ -398,10 +428,11 @@ def render_markdown(report: dict[str, Any]) -> str:
             "{wall_ms:.3f} | {model_rounds} | {tool_calls} | "
             "{prompt_tokens_total} | {max_prompt_tokens} | {event_count} | "
             "{rss_delta_bytes} | {trace_span_count} | {cache_progression} | "
-            "{ideal_cache_rate:.2f}% |".format(
+            "{ideal_cache_rate:.2f}% | {ideal_lane_cache_rate:.2f}% |".format(
                 **item,
                 cache_progression=ideal_cache_progression(item["ideal_cache"]),
                 ideal_cache_rate=ideal_cache_percent(item["ideal_cache"]),
+                ideal_lane_cache_rate=ideal_cache_percent(item["ideal_lane_cache"]),
             )
         )
     lines.extend([

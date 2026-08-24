@@ -125,6 +125,14 @@ async def _apply_agent_binding(chat: dict[str, Any], body: dict[str, Any], defau
             capabilities_raw=dict(installation.get("capabilities") or {}),
         )
     chat.update(fields)
+    if not installation_id or installation_id == BUILTIN_INSTALLATION_ID:
+        from cyrene.workbench.composer_context import normalize_context_activations
+
+        chat["contextActivations"] = normalize_context_activations(
+            chat.get("contextActivations")
+        )
+    else:
+        chat.pop("contextActivations", None)
     chat.pop("agentConfigOptions", None)
     chat.pop("agentConfigValues", None)
     chat.pop("modelSelectionId", None)
@@ -234,6 +242,25 @@ def _register_update_route(router: APIRouter, context: ChatRouteContext):
                 chat["workspaceOverride"] = override
             else:
                 chat.pop("workspaceOverride", None)
+        if "contextActivations" in body:
+            from cyrene.workbench.composer_context import validate_context_activations
+
+            try:
+                chat["contextActivations"] = validate_context_activations(
+                    body.get("contextActivations")
+                )
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+        from cyrene.agent_runtime.builtin import normalize_agent_binding
+
+        if (
+            not normalize_agent_binding(chat.get("agent")).is_builtin
+            and any((chat.get("contextActivations") or {}).values())
+        ):
+            return JSONResponse(
+                {"error": "Composer context capabilities require the built-in Cyrene Agent"},
+                status_code=400,
+            )
         chat["updatedAt"] = _utc_now_iso()
         await asyncio.to_thread(_write_chat_store, chat, base_chat=base_chat)
         await publish_chat_changed(

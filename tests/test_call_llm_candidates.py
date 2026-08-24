@@ -44,6 +44,42 @@ def test_deepseek_legacy_disabled_request_keeps_thinking_enabled():
     assert payload["reasoning_effort"] == "high"
 
 
+def test_reused_tool_call_ids_have_a_stable_wire_projection():
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "reused",
+                "type": "function",
+                "function": {"name": "read", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "reused", "content": "first"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "reused",
+                "type": "function",
+                "function": {"name": "read", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "reused", "content": "second"},
+    ]
+
+    first = cl.sanitize_messages_for_llm(messages)
+    second = cl.sanitize_messages_for_llm(messages)
+
+    assert first == second
+    assert first[0]["tool_calls"][0]["id"] == "reused"
+    remapped = first[2]["tool_calls"][0]["id"]
+    assert remapped.startswith("call_")
+    assert remapped != "reused"
+    assert first[3]["tool_call_id"] == remapped
+    assert messages[2]["tool_calls"][0]["id"] == "reused"
+
+
 def test_deepseek_tool_turn_replays_reasoning_content_only_when_required():
     messages = [
         {
@@ -86,7 +122,7 @@ def test_deepseek_tool_turn_replays_reasoning_content_only_when_required():
     assert all("reasoning_content" not in message for message in generic_payload["messages"])
 
 
-def test_deepseek_tool_turn_restores_empty_reasoning_content_field():
+def test_deepseek_tool_turn_without_reasoning_becomes_recovery_receipt():
     messages = [
         {
             "role": "assistant",
@@ -109,10 +145,20 @@ def test_deepseek_tool_turn_restores_empty_reasoning_content_field():
         thinking="auto",
     )
 
-    assert payload["messages"][0]["reasoning_content"] == ""
+    assert len(payload["messages"]) == 1
+    receipt = json.loads(payload["messages"][0]["content"])
+    assert payload["messages"][0]["role"] == "system"
+    assert receipt["type"] == "deepseek_tool_episode_recovery"
+    assert receipt["reason"] == "missing_or_empty_reasoning_content"
+    assert receipt["calls"] == [{
+        "tool": "lookup",
+        "tool_call_id": "call_1",
+        "result_available": True,
+        "result": "result",
+    }]
 
 
-def test_deepseek_tool_turn_normalizes_null_reasoning_content_field():
+def test_deepseek_tool_turn_with_null_reasoning_becomes_recovery_receipt():
     messages = [
         {
             "role": "assistant",
@@ -136,7 +182,110 @@ def test_deepseek_tool_turn_normalizes_null_reasoning_content_field():
         thinking="auto",
     )
 
-    assert payload["messages"][0]["reasoning_content"] == ""
+    assert len(payload["messages"]) == 1
+    receipt = json.loads(payload["messages"][0]["content"])
+    assert receipt["type"] == "deepseek_tool_episode_recovery"
+    assert receipt["reason"] == "missing_or_empty_reasoning_content"
+
+
+def test_deepseek_hidden_phase1_and_multitool_phase2_replay_reasoning_exactly():
+    messages = [
+        {"role": "user", "content": "check the weather"},
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "phase1 original reasoning",
+            "hidden_from_ui": True,
+            "tool_calls": [{
+                "id": "use-1",
+                "type": "function",
+                "function": {"name": "use_tools", "arguments": "{}"},
+            }],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "use-1",
+            "content": "Execution phase entered.",
+            "hidden_from_ui": True,
+        },
+        {
+            "role": "assistant",
+            "content": "checking",
+            "reasoning_content": "phase2 original reasoning",
+            "tool_calls": [
+                {
+                    "id": "message-1",
+                    "type": "function",
+                    "function": {"name": "send_message", "arguments": "{}"},
+                },
+                {
+                    "id": "search-1",
+                    "type": "function",
+                    "function": {"name": "WebSearch", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "message-1", "content": "sent"},
+        {"role": "tool", "tool_call_id": "search-1", "content": "weather"},
+    ]
+
+    payload = cl._build_payload(
+        messages,
+        tools=None,
+        max_tokens=24,
+        stream=False,
+        model="deepseek-v4-flash",
+        thinking="auto",
+    )
+
+    assistant_turns = [
+        message
+        for message in payload["messages"]
+        if message.get("role") == "assistant" and message.get("tool_calls")
+    ]
+    assert [message["reasoning_content"] for message in assistant_turns] == [
+        "phase1 original reasoning",
+        "phase2 original reasoning",
+    ]
+    assert [
+        message["tool_call_id"]
+        for message in payload["messages"]
+        if message.get("role") == "tool"
+    ] == ["use-1", "message-1", "search-1"]
+
+
+def test_deepseek_noncontiguous_tool_episode_is_recovered_atomically():
+    messages = [
+        {
+            "role": "assistant",
+            "content": "checking",
+            "reasoning_content": "complete reasoning",
+            "tool_calls": [{
+                "id": "search-1",
+                "type": "function",
+                "function": {"name": "WebSearch", "arguments": "{}"},
+            }],
+        },
+        {"role": "system", "content": "intervening observation"},
+        {"role": "tool", "tool_call_id": "search-1", "content": "weather"},
+        {"role": "user", "content": "continue"},
+    ]
+
+    payload = cl._build_payload(
+        messages,
+        tools=None,
+        max_tokens=24,
+        stream=False,
+        model="deepseek-v4-flash",
+        thinking="auto",
+    )
+
+    assert not any(message.get("role") == "tool" for message in payload["messages"])
+    assert not any(message.get("tool_calls") for message in payload["messages"])
+    receipt = json.loads(payload["messages"][0]["content"])
+    assert receipt["reason"] == "incomplete_or_noncontiguous_tool_results"
+    assert payload["messages"][1]["content"] == "intervening observation"
+    assert payload["messages"][-1] == {"role": "user", "content": "continue"}
 
 
 @pytest.mark.parametrize(
@@ -177,6 +326,96 @@ def test_generic_model_does_not_receive_deepseek_thinking_extension():
 
     assert "thinking" not in payload
     assert "reasoning_effort" not in payload
+
+
+def test_kimi_k3_preserves_reasoning_without_sending_unsupported_thinking_field():
+    payload = cl._build_payload(
+        [
+            {"role": "assistant", "content": "first", "reasoning_content": "trace"},
+            {"role": "user", "content": "continue"},
+        ],
+        tools=None,
+        max_tokens=24,
+        stream=False,
+        model="kimi-k3",
+        thinking="enabled",
+        reasoning_effort="xhigh",
+    )
+
+    assert payload["messages"][0]["reasoning_content"] == "trace"
+    assert "thinking" not in payload
+    assert payload["reasoning_effort"] == "max"
+
+
+def test_kimi_k26_enables_preserved_thinking_for_tool_loops():
+    payload = cl._build_payload(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "inspect",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+        ],
+        tools=None,
+        max_tokens=24,
+        stream=False,
+        model="kimi-k2.6",
+        thinking="auto",
+    )
+
+    assert payload["thinking"] == {"type": "enabled", "keep": "all"}
+    assert payload["messages"][0]["reasoning_content"] == "inspect"
+
+
+def test_glm_enables_interleaved_thinking_and_replays_reasoning():
+    payload = cl._build_payload(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "inspect",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+        ],
+        tools=None,
+        max_tokens=24,
+        stream=False,
+        model="glm-5.3",
+        thinking="auto",
+    )
+
+    assert payload["thinking"] == {"type": "enabled", "clear_thinking": False}
+    assert payload["messages"][0]["reasoning_content"] == "inspect"
+
+
+@pytest.mark.parametrize("provider_preset", ["openrouter", "amd_gpu_cloud"])
+@pytest.mark.parametrize("thinking", ["auto", "enabled"])
+def test_aggregate_providers_do_not_receive_upstream_private_extensions(
+    provider_preset,
+    thinking,
+):
+    payload = cl._build_payload(
+        [{"role": "user", "content": "ping"}],
+        tools=None,
+        max_tokens=24,
+        stream=False,
+        model="moonshotai/kimi-k2.6",
+        thinking=thinking,
+        provider_preset=provider_preset,
+    )
+
+    assert "thinking" not in payload
 
 
 def test_minimax_request_splits_reasoning_and_replays_tool_turn_details():
@@ -517,6 +756,49 @@ async def test_transient_server_error_retries_then_succeeds(stub_server_factory,
     assert not cl._candidate_cooling(cl._candidate_key(candidate))
 
 
+async def test_retry_reuses_precomputed_request_fingerprints(
+    stub_server_factory,
+    monkeypatch,
+):
+    server, candidate = stub_server_factory(
+        200, transient_failures=cl.SERVER_ERROR_RETRY_LIMIT, transient_status=503
+    )
+    monkeypatch.setattr(cl, "_SERVER_ERROR_RETRY_BASE_DELAY_SECONDS", 0)
+    original_fingerprint = cl._stable_request_fingerprint
+    fingerprint_calls = 0
+
+    def counted_fingerprint(value):
+        nonlocal fingerprint_calls
+        fingerprint_calls += 1
+        return original_fingerprint(value)
+
+    class Lease:
+        def __init__(self):
+            self.observed = []
+
+        def observe_request(self, model_type, **kwargs):
+            self.observed.append((model_type, kwargs))
+            return {}
+
+    lease = Lease()
+    monkeypatch.setattr(cl, "_stable_request_fingerprint", counted_fingerprint)
+
+    result = await cl.call_llm(
+        [{"role": "user", "content": "inspect"}],
+        candidates=[candidate],
+        candidate_lease=lease,
+        publish_events=False,
+        record_usage=False,
+        record_latency=False,
+    )
+
+    assert result["content"] == "pong"
+    assert server.hits == cl.SERVER_ERROR_RETRY_LIMIT + 1
+    assert fingerprint_calls == 3  # one message, tools, and final payload
+    assert len(lease.observed) == server.hits
+    assert len({id(item[1]["message_fingerprints"]) for item in lease.observed}) == 1
+
+
 async def test_client_error_is_not_retried(stub_server_factory, monkeypatch):
     monkeypatch.setattr(cl, "_SERVER_ERROR_RETRY_BASE_DELAY_SECONDS", 0)
     bad_server, bad = stub_server_factory(400)
@@ -722,11 +1004,206 @@ def test_openai_adapter_normalizes_unversioned_deepseek(monkeypatch):
     ]
 
 
+async def test_official_openai_chat_payload_uses_stable_independent_lane_keys(
+    monkeypatch,
+):
+    payloads = []
+
+    async def handler(request):
+        payloads.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+                "usage": {},
+            },
+    )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(
+        cl, "_get_http_client", lambda _timeout: (client, "test", False)
+    )
+    candidate = {
+        "id": "openai-primary",
+        "profile_id": "openai-primary",
+        "connection_id": "openai",
+        "model": "gpt-5.4",
+        "provider": "openai",
+        "adapter": "openai",
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "test-key",
+        "endpoints": ["https://api.openai.com/v1/chat/completions"],
+    }
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "use_tools",
+            "description": "handoff",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }]
+    first_messages = [
+        {"role": "system", "content": "stable decision prompt"},
+        {"role": "user", "content": "first"},
+    ]
+
+    try:
+        await cl.call_llm(
+            first_messages,
+            tools=tools,
+            candidates=[candidate],
+            cache_scope="decision",
+            publish_events=False,
+            record_usage=False,
+        )
+        await cl.call_llm(
+            [
+                *first_messages,
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": "next"},
+            ],
+            tools=tools,
+            candidates=[candidate],
+            cache_scope="decision",
+            publish_events=False,
+            record_usage=False,
+        )
+        await cl.call_llm(
+            first_messages,
+            tools=tools,
+            candidates=[candidate],
+            cache_scope="execution",
+            publish_events=False,
+            record_usage=False,
+        )
+        await cl.call_llm(
+            first_messages,
+            tools=tools,
+            candidates=[candidate],
+            cache_scope="decision",
+            cache_epoch="lane-v1:decision:s0:e1",
+            publish_events=False,
+            record_usage=False,
+        )
+    finally:
+        await client.aclose()
+
+    keys = [payload["prompt_cache_key"] for payload in payloads]
+    assert keys[0] == keys[1]
+    assert keys[0] != keys[2]
+    assert keys[0] != keys[3]
+    assert keys[0].startswith("cyrene-v1-decision-")
+    assert keys[2].startswith("cyrene-v1-execution-")
+
+
+async def test_official_openai_responses_payload_receives_lane_cache_key(
+    monkeypatch,
+):
+    payloads = []
+
+    async def handler(request):
+        payloads.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "OK"}],
+                }],
+                "usage": {},
+            },
+    )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(
+        cl, "_get_http_client", lambda _timeout: (client, "test", False)
+    )
+    candidate = {
+        "id": "responses-primary",
+        "model": "gpt-5.4",
+        "provider": "openai_responses",
+        "adapter": "openai_responses",
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "test-key",
+        "endpoints": ["https://api.openai.com/v1/responses"],
+    }
+
+    try:
+        response = await cl.call_llm(
+            [
+                {"role": "system", "content": "stable execution prompt"},
+                {"role": "user", "content": "run"},
+            ],
+            candidates=[candidate],
+            cache_scope="execution",
+            publish_events=False,
+            record_usage=False,
+        )
+    finally:
+        await client.aclose()
+
+    assert response["content"] == "OK"
+    assert payloads[0]["prompt_cache_key"].startswith("cyrene-v1-execution-")
+
+
+def test_prompt_cache_key_field_is_capability_driven_for_compatible_endpoints():
+    generic = {
+        "id": "generic",
+        "model": "model",
+        "provider": "openai_compatible",
+        "adapter": "openai_compatible",
+        "base_url": "https://compatible.example/v1",
+    }
+
+    assert cl._candidate_accepts_prompt_cache_key(generic) is False
+    assert cl._candidate_accepts_prompt_cache_key({
+        **generic,
+        "options": {"prompt_cache_key_supported": True},
+    }) is True
+    assert cl._candidate_accepts_prompt_cache_key({
+        **generic,
+        "capabilities": ["chat", "prompt_cache_key"],
+    }) is True
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://api.deepseek.com/v1",
+        "https://api.minimax.io/v1",
+        "https://api.minimaxi.com/v1",
+    ],
+)
+def test_automatic_prefix_cache_providers_never_receive_openai_cache_key(base_url):
+    candidate = {
+        "id": "automatic-cache",
+        "model": "model",
+        "provider": "openai_compatible",
+        "adapter": "openai_compatible",
+        "base_url": base_url,
+        "options": {"prompt_cache_key_supported": True},
+    }
+
+    assert cl._candidate_accepts_prompt_cache_key(candidate) is False
+    assert cl._provider_prompt_cache_route_key(
+        candidate,
+        model="model",
+        cache_scope="decision",
+        message_units=[{"role": "system", "content": "stable"}],
+        tool_schema=[],
+    ).startswith("cyrene-v1-decision-")
+
+
 async def test_unversioned_deepseek_uses_only_v1(monkeypatch):
     requested_paths = []
+    requested_payloads = []
 
     async def handler(request):
         requested_paths.append(request.url.path)
+        requested_payloads.append(json.loads(request.content))
         return httpx.Response(
             200,
             request=request,
@@ -737,10 +1214,12 @@ async def test_unversioned_deepseek_uses_only_v1(monkeypatch):
                 }],
                 "usage": {},
             },
-        )
+    )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    monkeypatch.setattr(cl, "_get_http_client", lambda _timeout: (client, "test", False))
+    monkeypatch.setattr(
+        cl, "_get_http_client", lambda _timeout: (client, "test", False)
+    )
     candidate = {
         "id": "deepseek",
         "model": "deepseek-v4-flash",
@@ -755,6 +1234,7 @@ async def test_unversioned_deepseek_uses_only_v1(monkeypatch):
         response = await cl.call_llm(
             [{"role": "user", "content": "ping"}],
             candidates=[candidate],
+            cache_scope="execution",
             publish_events=False,
             record_usage=False,
         )
@@ -763,6 +1243,7 @@ async def test_unversioned_deepseek_uses_only_v1(monkeypatch):
 
     assert response["content"] == "OK"
     assert requested_paths == ["/v1/chat/completions"]
+    assert "prompt_cache_key" not in requested_payloads[0]
 
 
 def test_saved_deepseek_root_keeps_only_versioned_endpoint(monkeypatch):
@@ -1188,7 +1669,7 @@ def test_retry_policy_uses_fixed_ten_second_intervals():
     assert cl._NETWORK_RETRY_BASE_DELAY_SECONDS == 10.0
 
 
-async def test_codex_quota_failure_publishes_actionable_notice_before_fallback(
+async def test_codex_quota_failure_publishes_actionable_notice_without_cross_family_fallback(
     monkeypatch,
 ):
     availability_notices = []
@@ -1237,26 +1718,20 @@ async def test_codex_quota_failure_publishes_actionable_notice_before_fallback(
             "api_key": "",
             "endpoints": ["codex://oauth"],
         },
-        {
-            "id": "backup",
-            "model": "backup",
-            "provider": "openai_compatible",
-            "base_url": "https://backup/v1",
-            "api_key": "",
-            "endpoints": ["https://backup/v1/chat/completions"],
-        },
     ]
 
-    result = await cl.call_llm(
-        [{"role": "user", "content": "hi"}],
-        candidates=candidates,
-        publish_events=False,
-        record_usage=False,
-        session_id="chat_codex",
-        round_id="round_codex",
-    )
+    from cyrene.model_runtime.codex_provider import CodexAvailabilityError
 
-    assert result["content"] == "backup"
+    with pytest.raises(CodexAvailabilityError, match="quota is exhausted"):
+        await cl.call_llm(
+            [{"role": "user", "content": "hi"}],
+            candidates=candidates,
+            publish_events=False,
+            record_usage=False,
+            session_id="chat_codex",
+            round_id="round_codex",
+        )
+
     assert availability_notices == [
         {
             "session_id": "chat_codex",
@@ -1267,7 +1742,7 @@ async def test_codex_quota_failure_publishes_actionable_notice_before_fallback(
     ]
 
 
-async def test_codex_auth_failure_falls_back_without_arming_cooldown(
+async def test_codex_auth_failure_does_not_arm_cooldown_or_cross_family_fallback(
     monkeypatch,
 ):
     class FakeCodex:
@@ -1332,26 +1807,20 @@ async def test_codex_auth_failure_falls_back_without_arming_cooldown(
             "api_key": "",
             "endpoints": ["codex://oauth"],
         },
-        {
-            "id": "backup",
-            "model": "backup",
-            "provider": "openai_compatible",
-            "base_url": "https://backup/v1",
-            "api_key": "",
-            "endpoints": ["https://backup/v1/chat/completions"],
-        },
     ]
 
-    result = await cl.call_llm(
-        [{"role": "user", "content": "hi"}],
-        candidates=candidates,
-        publish_events=False,
-        record_usage=False,
-        session_id="chat_auth",
-        round_id="round_auth",
-    )
+    from cyrene.model_runtime.codex_provider import CodexAvailabilityError
 
-    assert result["content"] == "backup"
+    with pytest.raises(CodexAvailabilityError, match="log in again"):
+        await cl.call_llm(
+            [{"role": "user", "content": "hi"}],
+            candidates=candidates,
+            publish_events=False,
+            record_usage=False,
+            session_id="chat_auth",
+            round_id="round_auth",
+        )
+
     assert not cl._candidate_cooling(
         cl._candidate_key(candidates[0], "chat_auth")
     )
@@ -1589,13 +2058,15 @@ async def test_actionable_llm_latency_event_is_persisted(tmp_path):
             "model_lease_id, request_messages_fingerprint, "
             "request_tools_fingerprint, request_payload_fingerprint, "
             "previous_payload_fingerprint, cache_prefix_status, "
-            "cache_invalidation_reason, cache_prefix_message_count "
+            "cache_invalidation_reason, cache_prefix_message_count, "
+            "error_body, error_body_truncated "
             "FROM llm_latency_events"
         ).fetchone()
     assert row == (
         "llm_1", 900.0, 120.0, 300.0, 180.0, 600.0, 100.0,
         "loop:1:timeout:120", 80, 20, 0.8, "lease-1", "messages-1",
         "tools-1", "payload-1", "payload-0", "strict_prefix_reuse", "", 3,
+        "", 0,
     )
     phase_stats = await get_llm_cache_stats_by_phase(str(db_path))
     assert phase_stats == [{
@@ -1606,3 +2077,42 @@ async def test_actionable_llm_latency_event_is_persisted(tmp_path):
         "cache_miss_tokens": 20,
         "cache_hit_ratio": 0.8,
     }]
+
+
+async def test_4xx_response_body_is_redacted_and_persisted(tmp_path):
+    from cyrene.model_runtime.errors import httpx_error_body_for_persistence
+    from cyrene.runtime.database import record_llm_latency
+
+    request = httpx.Request("POST", "https://api.deepseek.com/v1/chat/completions")
+    response = httpx.Response(
+        400,
+        request=request,
+        json={
+            "error": {
+                "message": "reasoning_content is required",
+                "api_key": "sk-super-secret-value",
+            }
+        },
+    )
+    exc = httpx.HTTPStatusError("Bad Request", request=request, response=response)
+    body, truncated = httpx_error_body_for_persistence(exc)
+
+    assert body == '{"error":{"message":"reasoning_content is required","api_key":"[REDACTED]"}}'
+    assert truncated is False
+
+    db_path = tmp_path / "latency-4xx.db"
+    await record_llm_latency(
+        str(db_path),
+        call_id="llm_400",
+        outcome="http_error",
+        status_code=400,
+        error_type="HTTPStatusError",
+        error_body=body,
+        error_body_truncated=truncated,
+    )
+    with sqlite3.connect(db_path) as conn:
+        persisted = conn.execute(
+            "SELECT status_code, error_type, error_body, error_body_truncated "
+            "FROM llm_latency_events"
+        ).fetchone()
+    assert persisted == (400, "HTTPStatusError", body, 0)

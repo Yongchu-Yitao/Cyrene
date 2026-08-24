@@ -43,30 +43,10 @@ BUILTIN_PROFILE_ARGS: dict[str, tuple[str, ...]] = {
 
 
 def configured_agent_proxy_environment() -> dict[str, str]:
-    """Return the explicit localhost proxy selected in Settings, or nothing."""
-    from cyrene.runtime.config_store import get_setting
+    """Return the explicit HTTP proxy selected in Settings, or nothing."""
+    from cyrene.runtime.network_proxy import proxy_environment
 
-    if get_setting("external_agent_proxy_enabled", False) is not True:
-        return {}
-    try:
-        port = int(get_setting("external_agent_proxy_port", 7897))
-    except (TypeError, ValueError):
-        return {}
-    if not 1 <= port <= 65535:
-        return {}
-    proxy_url = f"http://127.0.0.1:{port}"
-    return {
-        "HTTP_PROXY": proxy_url,
-        "HTTPS_PROXY": proxy_url,
-        "ALL_PROXY": proxy_url,
-        "http_proxy": proxy_url,
-        "https_proxy": proxy_url,
-        "all_proxy": proxy_url,
-        # Cyrene-managed model access uses a loopback gateway.  It must never
-        # leave the machine or be routed back through the user's proxy.
-        "NO_PROXY": "127.0.0.1,localhost,::1",
-        "no_proxy": "127.0.0.1,localhost,::1",
-    }
+    return proxy_environment()
 
 
 def profile_args_for(agent_id: str) -> tuple[str, ...]:

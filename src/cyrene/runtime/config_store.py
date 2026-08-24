@@ -76,6 +76,7 @@ _DEFAULT_ENV: dict[str, str] = {
 }
 
 _REMOVED_ENV_KEYS = frozenset({"MAX_TOOL_ROUNDS"})
+_REMOVED_SETTING_KEYS = frozenset({"budget_mode"})
 
 # Older installs persisted the former 12k global tool-output default into the
 # encrypted store.  Changing _DEFAULT_ENV to zero did not affect those stores,
@@ -136,7 +137,12 @@ _DEFAULT_SETTINGS: dict = {
     # Explicit opt-in proxy for Cyrene-launched external Agent processes.
     # Disabled means proxy variables are not inherited from the parent app.
     "external_agent_proxy_enabled": False,
+    # Empty preserves the legacy localhost + port setting on existing installs.
+    "external_agent_proxy_url": "",
     "external_agent_proxy_port": 7897,
+    "proxy_search_enabled": False,
+    "proxy_browser_enabled": False,
+    "proxy_extensions_enabled": False,
     # Custom/API models use a currency budget. Keep the persisted defaults in
     # sync with the values shown by BudgetPanel so enabling the switch without
     # editing the amount still creates a real, visible budget.
@@ -144,7 +150,6 @@ _DEFAULT_SETTINGS: dict = {
     "budget_monthly": 50.0,
     "budget_currency": "CNY",
     "budget_action": "warn",
-    "budget_mode": "normal",
     "budget_start_day": 1,
     # Codex OAuth has a separate account quota and enforcement switch.
     "codex_budget_enabled": True,
@@ -368,6 +373,8 @@ def _migrate_if_needed() -> dict:
     merged_settings = dict(_DEFAULT_SETTINGS)
     if settings_from_legacy:
         for key, val in settings_from_legacy.items():
+            if key in _REMOVED_SETTING_KEYS:
+                continue
             if key in merged_settings and isinstance(merged_settings[key], dict) and isinstance(val, dict):
                 merged_settings[key] = {**merged_settings[key], **val}
             else:
@@ -475,6 +482,11 @@ def _apply_settings_migrations(config: dict) -> dict:
             os.environ.pop(key, None)
             changed = True
 
+    for key in _REMOVED_SETTING_KEYS:
+        if key in settings:
+            settings.pop(key)
+            changed = True
+
     if str(env.get("MAX_TOOL_OUTPUT_CHARS", "")).strip() == _LEGACY_MAX_TOOL_OUTPUT_CHARS:
         env["MAX_TOOL_OUTPUT_CHARS"] = "0"
         os.environ.pop("MAX_TOOL_OUTPUT_CHARS", None)
@@ -560,6 +572,20 @@ def export_snapshot() -> dict:
                     values = server.get(field)
                     if isinstance(values, dict) and values:
                         server[field] = {str(key): "[requires re-entry]" for key in values}
+        media = settings.get("media")
+        if isinstance(media, dict):
+            # Provider-specific options evolve independently and may contain
+            # nested credential-shaped fields (for example a future auth
+            # header map).  Use the media boundary's recursive policy instead
+            # of maintaining a fragile list of only today's ``api_key`` fields.
+            from cyrene.media.settings import redact_media_secrets
+
+            settings["media"] = redact_media_secrets(
+                media,
+                # Restored values must remain genuinely unconfigured rather
+                # than turning a redaction marker into a usable-looking key.
+                replacement="",
+            )
     return snapshot
 
 
@@ -580,9 +606,14 @@ def _normalize_restored_snapshot(snapshot: dict) -> dict:
     revision = snapshot.get("settings_revision", 0)
     if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
         raise ValueError("configuration settings_revision must be a non-negative integer")
+    normalized_settings = {
+        key: deepcopy(value)
+        for key, value in settings.items()
+        if key not in _REMOVED_SETTING_KEYS
+    }
     return {
         "env": normalized_env,
-        "settings": deepcopy(settings),
+        "settings": normalized_settings,
         "settings_revision": revision,
     }
 
@@ -757,6 +788,11 @@ def update_settings_and_env_atomic(
         raise ValueError("settings patch must be a non-empty object")
     if not isinstance(env_updates, dict):
         raise ValueError("environment patch must be an object")
+    removed_settings = sorted(set(settings_updates) & _REMOVED_SETTING_KEYS)
+    if removed_settings:
+        raise ValueError(
+            "Setting(s) have been removed: " + ", ".join(removed_settings)
+        )
     removed = sorted(set(env_updates) & _REMOVED_ENV_KEYS)
     if removed:
         raise ValueError(
@@ -809,6 +845,9 @@ def patch_settings_atomic(
     """
     if not isinstance(updates, dict) or not updates:
         raise ValueError("settings patch must be a non-empty object")
+    removed = sorted(set(updates) & _REMOVED_SETTING_KEYS)
+    if removed:
+        raise ValueError("Setting(s) have been removed: " + ", ".join(removed))
     with _PERSIST_LOCK:
         current = _ensure_loaded()
         actual_revision = int(current.get("settings_revision", 0) or 0)

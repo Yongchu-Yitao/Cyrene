@@ -517,18 +517,28 @@ class MCPServerConnection:
         """Call a tool and serialize supported MCP content for the Agent loop."""
         from cyrene.tooling.mcp_content import serialize_mcp_content_blocks
 
+        result = await self.call_tool_raw(name, arguments)
+        text = serialize_mcp_content_blocks(name, result.get("content") or [])
+        if result.get("is_error"):
+            raise RuntimeError(text)
+        return text
+
+    async def call_tool_raw(
+        self, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Call a tool without discarding structured or non-text MCP content."""
+
         if self.transport == "stdio":
             # Raw JSON-RPC for stdio
             result = await self._json_rpc_request("tools/call", {
                 "name": name,
                 "arguments": arguments or {},
             }, timeout=self.tool_timeout_seconds())
-            content_items = result.get("content", [])
-            is_error = result.get("isError", False)
-            text = serialize_mcp_content_blocks(name, content_items)
-            if is_error:
-                raise RuntimeError(text)
-            return text
+            return {
+                "content": list(result.get("content") or []),
+                "structured_content": result.get("structuredContent") or {},
+                "is_error": bool(result.get("isError", False)),
+            }
         else:
             # SSE transport uses the MCP SDK session
             if self._session is None:
@@ -537,14 +547,16 @@ class MCPServerConnection:
                 self._session.call_tool(name, arguments or {}),
                 timeout=30.0,
             )
-            content_items = [
-                item.model_dump(by_alias=True, exclude_none=True)
-                for item in result.content
-            ]
-            text = serialize_mcp_content_blocks(name, content_items)
-            if result.isError:
-                raise RuntimeError(text)
-            return text
+            dumped = result.model_dump(by_alias=True, exclude_none=True)
+            return {
+                "content": list(dumped.get("content") or []),
+                "structured_content": (
+                    dumped.get("structuredContent")
+                    or dumped.get("structured_content")
+                    or {}
+                ),
+                "is_error": bool(dumped.get("isError") or dumped.get("is_error")),
+            }
 
     async def disconnect(self) -> None:
         """Disconnect from the server and clean up resources."""
@@ -664,6 +676,14 @@ class MCPManager:
         """Return whether a connected MCP server currently exposes ``name``."""
         return any(conn.has_tool(name) for conn in self._servers.values())
 
+    def get_server_tool_defs(self, server_name: str) -> list[dict[str, Any]]:
+        conn = self._servers.get(str(server_name or "").strip())
+        return conn.get_tool_defs() if conn is not None else []
+
+    def has_server_tool(self, server_name: str, tool_name: str) -> bool:
+        conn = self._servers.get(str(server_name or "").strip())
+        return bool(conn is not None and conn.has_tool(str(tool_name or "").strip()))
+
     async def execute_tool(self, name: str, arguments: dict[str, Any]) -> str:
         """Find the server that owns *name* and call it.
 
@@ -678,6 +698,30 @@ class MCPManager:
                 return await conn.call_tool(name, arguments)
         raise ValueError(f"MCP tool '{name}' not found on any connected server")
 
+    async def _server_connection(self, server_name: str) -> MCPServerConnection:
+        target = str(server_name or "").strip()
+        async with self._lock:
+            conn = self._servers.get(target)
+        if conn is None:
+            raise ValueError(f"MCP server '{target}' is not connected")
+        return conn
+
+    async def execute_tool_on(
+        self, server_name: str, name: str, arguments: dict[str, Any]
+    ) -> str:
+        conn = await self._server_connection(server_name)
+        if not conn.has_tool(name):
+            raise ValueError(f"MCP tool '{name}' not found on server '{server_name}'")
+        return await conn.call_tool(name, arguments)
+
+    async def execute_tool_raw_on(
+        self, server_name: str, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        conn = await self._server_connection(server_name)
+        if not conn.has_tool(name):
+            raise ValueError(f"MCP tool '{name}' not found on server '{server_name}'")
+        return await conn.call_tool_raw(name, arguments)
+
     def get_tool_timeout(self, name: str) -> float:
         """Return the configured wall-clock timeout for the server owning a tool."""
         for conn in self._servers.values():
@@ -688,6 +732,12 @@ class MCPManager:
                     else 30.0
                 )
         return _DEFAULT_TOOL_TIMEOUT_SECONDS
+
+    def get_server_tool_timeout(self, server_name: str, name: str) -> float:
+        conn = self._servers.get(str(server_name or "").strip())
+        if conn is None or not conn.has_tool(name):
+            return _DEFAULT_TOOL_TIMEOUT_SECONDS
+        return conn.tool_timeout_seconds() if conn.transport == "stdio" else 30.0
 
     def get_server_status(self) -> list[dict[str, Any]]:
         """Return status for all configured servers."""

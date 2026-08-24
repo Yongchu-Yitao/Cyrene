@@ -75,6 +75,7 @@ def test_settings_api_exposes_stable_package_groups(monkeypatch):
     payload = response.json()
     assert [item["id"] for item in payload["packages"]] == [
         "code_tools",
+        "media_tools",
         "browser_tools",
         "desktop_tools",
         "memory_tools",
@@ -94,7 +95,7 @@ def test_settings_api_exposes_stable_package_groups(monkeypatch):
         "custom_tools",
     ]
     groups = payload["tool_groups"]
-    assert len(groups) == 18
+    assert len(groups) == 19
     assert all(item["kind"] == "package" for item in groups)
     browser = next(
         item for item in payload["packages"]

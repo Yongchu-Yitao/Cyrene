@@ -38,7 +38,6 @@ DIRECT_TOOL_NAMES = (
     "WebFetch",
     "AnalyzeAttachment",
     "LoadRendererContract",
-    "GenerateImage",
     "PowerPointGetContext",
     "PowerPointInspect",
     "PowerPointApplyBatch",
@@ -179,24 +178,10 @@ def enabled_module_tool_names(actor: str = "main") -> tuple[str, ...]:
     )
 
 
-def _oauth_image_generation_enabled() -> bool:
-    try:
-        from cyrene.runtime.settings_store import get_models
-
-        models = get_models() or []
-        return bool(
-            models
-            and str(models[0].get("provider") or "") == "codex_oauth"
-        )
-    except Exception:
-        return False
-
-
 @lru_cache(maxsize=64)
 def _wire_bundle(
     actor: str,
     enabled_modules: tuple[str, ...],
-    oauth_image_generation: bool,
     interactive_blocks: bool,
     powerpoint_installed: bool,
 ) -> tuple[dict[str, Any], ...]:
@@ -205,10 +190,6 @@ def _wire_bundle(
     )
     if actor != "main" or "office_tools" not in enabled_modules or not powerpoint_installed:
         direct_names = tuple(name for name in direct_names if name not in POWERPOINT_CORE_TOOL_NAMES)
-    if not oauth_image_generation:
-        direct_names = tuple(
-            name for name in direct_names if name != "GenerateImage"
-        )
     if actor != "main" or not interactive_blocks:
         direct_names = tuple(
             name for name in direct_names if name != "LoadRendererContract"
@@ -231,7 +212,6 @@ def get_main_wire_tool_defs() -> list[dict[str, Any]]:
     return deepcopy(list(_wire_bundle(
         "main",
         enabled_module_tool_names("main"),
-        _oauth_image_generation_enabled(),
         has_response_capability("interactive_blocks"),
         _powerpoint_addin_installed(),
     )))
@@ -244,7 +224,6 @@ def get_subagent_wire_tool_defs() -> list[dict[str, Any]]:
         enabled_module_tool_names("subagent"),
         False,
         False,
-        False,
     )))
 
 
@@ -252,7 +231,6 @@ def get_subagent_wire_tool_defs() -> list[dict[str, Any]]:
 def _get_wire_tool_bundle(
     actor: str,
     enabled_modules: tuple[str, ...],
-    oauth_image_generation: bool,
     interactive_blocks: bool,
     powerpoint_installed: bool,
 ) -> WireToolBundle:
@@ -260,7 +238,6 @@ def _get_wire_tool_bundle(
     definitions = _wire_bundle(
         normalized_actor,
         enabled_modules,
-        oauth_image_generation,
         interactive_blocks,
         powerpoint_installed,
     )
@@ -286,7 +263,6 @@ def get_wire_tool_bundle(actor: str = "main") -> WireToolBundle:
     return _get_wire_tool_bundle(
         normalized_actor,
         enabled_module_tool_names(normalized_actor),
-        _oauth_image_generation_enabled() if normalized_actor == "main" else False,
         (
             has_response_capability("interactive_blocks")
             if normalized_actor == "main"

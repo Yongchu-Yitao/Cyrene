@@ -415,6 +415,7 @@
   async function focusSlide(context, slideId) {
     const target = String(slideId || "");
     if (!target) return;
+    if (state.selectedSlideId === target) return;
     context.presentation.setSelectedSlides([target]);
     await context.sync();
     state.selectedSlideId = target;
@@ -766,6 +767,31 @@
     }
   }
 
+  function operationGroups(operations, granularity) {
+    if (granularity === "element") {
+      return operations.map((operation, index) => [{ operation: operation, index: index }]);
+    }
+    const groups = [];
+    let current = [];
+    const flush = function () {
+      if (current.length) groups.push(current);
+      current = [];
+    };
+    operations.forEach((operation, index) => {
+      // Common API image insertion has its own host round trips and selection
+      // dependency, so keep it isolated from the dependency-safe JS batch.
+      if (operation.op === "insert_image") {
+        flush();
+        groups.push([{ operation: operation, index: index }]);
+        return;
+      }
+      current.push({ operation: operation, index: index });
+      if (current.length >= 32) flush();
+    });
+    flush();
+    return groups;
+  }
+
   async function applyBatch(params) {
     const replay = checkMutation(params);
     if (replay) return Object.assign({}, replay, { replayed: true });
@@ -784,20 +810,34 @@
         await context.sync();
         automaticRollback = { base64: exported.value, slideId: slide.id };
         await focusSlide(context, slide.id);
-        for (const [index, op] of params.operations.entries()) {
+        const groups = operationGroups(params.operations, params.progressiveGranularity || "stage");
+        for (const group of groups) {
+          for (const entry of group) {
+            const op = entry.operation;
+            const index = entry.index;
+            try {
+              await applyBatchOperation(context, slide, op, batch);
+            } catch (error) {
+              error.message = "Operation " + index + " (" + op.op + ") failed: " + error.message;
+              error.details = Object.assign({}, error.debugInfo || error.details || {}, {
+                phase: "component_stage",
+                operationIndex: index,
+                operation: { op: op.op, target: op.shapeRef || op.target || op.ref || null },
+              });
+              throw error;
+            }
+          }
           try {
-            await applyBatchOperation(context, slide, op, batch);
             await context.sync();
-            await livePreviewTick();
           } catch (error) {
-            error.message = "Operation " + index + " (" + op.op + ") failed: " + error.message;
             error.details = Object.assign({}, error.debugInfo || error.details || {}, {
-              phase: "component_sync",
-              operationIndex: index,
-              operation: { op: op.op, target: op.shapeRef || op.target || op.ref || null },
+              phase: "stage_sync",
+              operationIndexes: group.map((entry) => entry.index),
+              operations: group.map((entry) => entry.operation.op),
             });
             throw error;
           }
+          await livePreviewTick();
         }
         batch.created.forEach((item) => {
           rememberShapeRef(slideRefMap(slide.id, false), item.proxy.id, item.proxy.name, item.ref);
@@ -814,6 +854,8 @@
           undoToken: undoToken,
           audit: {
             operationCount: params.operations.length,
+            syncStageCount: operationGroups(params.operations, params.progressiveGranularity || "stage").length,
+            progressiveGranularity: params.progressiveGranularity || "stage",
             summary: params.operations.map((op) => ({ op: op.op, target: op.shapeRef || op.target || op.ref || null })),
           },
         });
@@ -884,6 +926,16 @@
       }
       const shapes = loaded.data;
       shapes.forEach((shape) => {
+        if (
+          String(shape.type || "").toLowerCase() === "placeholder"
+          && !String(shape.text || "").trim()
+        ) {
+          warnings.push({
+            code: "unresolved_placeholder",
+            shapeId: shape.id,
+            message: "Empty inherited placeholder remains visible in PowerPoint edit mode.",
+          });
+        }
         if (shape.x < 0 || shape.y < 0 || shape.x + shape.width > slideWidth || shape.y + shape.height > slideHeight) {
           warnings.push({ code: "out_of_bounds", shapeId: shape.id, message: "Shape extends outside the slide." });
         }
@@ -1003,9 +1055,14 @@
     if (replay) return Object.assign({}, replay, { replayed: true });
     const result = await PowerPoint.run(async (context) => {
       const slides = context.presentation.slides;
-      slides.load("items/id");
-      await context.sync();
-      const before = new Set(slides.items.map((slide) => slide.id));
+      let before;
+      if (state.slideIds.length) {
+        before = new Set(state.slideIds);
+      } else {
+        slides.load("items/id");
+        await context.sync();
+        before = new Set(slides.items.map((slide) => slide.id));
+      }
       const options = { formatting: params.formatting || "KeepSourceFormatting" };
       const targetSlideId = params.targetSlideId;
       const sourceSlideIds = params.sourceSlideIds;
@@ -1088,9 +1145,14 @@
 
   async function addSlideAndGetId(context, options) {
     const slides = context.presentation.slides;
-    slides.load("items/id");
-    await context.sync();
-    const before = new Set(slides.items.map((item) => item.id));
+    let before;
+    if (state.slideIds.length) {
+      before = new Set(state.slideIds);
+    } else {
+      slides.load("items/id");
+      await context.sync();
+      before = new Set(slides.items.map((item) => item.id));
+    }
     slides.add(options || {});
     await context.sync();
     slides.load("items/id");
@@ -1104,6 +1166,23 @@
     const createdSlideId = createdIds[createdIds.length - 1];
     await focusSlide(context, createdSlideId);
     return createdSlideId;
+  }
+
+  async function removeInheritedPlaceholders(context, slide) {
+    // Fresh generic pages receive Cyrene-owned content shapes, so inherited
+    // prompt boxes must not remain underneath them. Template pages use the
+    // duplication path instead, which deliberately preserves and binds shapes.
+    const shapes = slide.shapes;
+    shapes.load("items/id,items/name,items/type");
+    await context.sync();
+    const removed = [];
+    for (const shape of shapes.items) {
+      if (String(shape.type || "").toLowerCase() !== "placeholder") continue;
+      removed.push({ id: shape.id, name: shape.name, type: shape.type });
+      shape.delete();
+    }
+    if (removed.length) await context.sync();
+    return removed;
   }
 
   async function rollbackCreatedSlide(slideId) {
@@ -1168,6 +1247,7 @@
         createdSlideId = await addSlideAndGetId(context, addOptions);
         const slide = slides.getItem(createdSlideId);
         slide.load("id");
+        const removedPlaceholders = await removeInheritedPlaceholders(context, slide);
         if (spec.background) {
           requireApi("1.10", "Slide background editing");
           slide.background.fill.setSolidFill({ color: String(spec.background), transparency: 0 });
@@ -1190,7 +1270,12 @@
           deleted: [],
           warnings: [],
           undoToken: undoToken,
-          audit: { action: "create_slide", layout: spec.layout || "blank", elementCount: created.length },
+          audit: {
+            action: "create_slide",
+            layout: spec.layout || "blank",
+            elementCount: created.length,
+            removedPlaceholderCount: removedPlaceholders.length,
+          },
         });
       });
     } catch (error) {
@@ -1307,7 +1392,10 @@
         const options = {};
         if (spec.slideMasterId) options.slideMasterId = spec.slideMasterId;
         if (spec.layoutId) options.layoutId = spec.layoutId;
-        return addSlideAndGetId(context, options);
+        const createdSlideId = await addSlideAndGetId(context, options);
+        const slide = context.presentation.slides.getItem(createdSlideId);
+        await removeInheritedPlaceholders(context, slide);
+        return createdSlideId;
       });
       changed({ created: [{ slideId: slideId }], audit: { action: "progressive_create_slide", stage: "slide" } });
       stages.push({ name: "slide", status: "applied", revision: state.revision, created: [{ slideId: slideId }] });
@@ -1316,7 +1404,7 @@
         changed({ changed: ["slide-background"], audit: { action: "progressive_create_slide", stage: "background" } });
         stages.push({ name: "background", status: "applied", revision: state.revision, changed: ["slide-background"] });
       }
-      const groups = progressiveElementGroups(preparedElements, "element");
+      const groups = progressiveElementGroups(preparedElements, params.progressiveGranularity || "stage");
       for (const group of groups) {
         const records = await addProgressiveElements(slideId, group.elements);
         allCreated.push(...records);
@@ -1375,6 +1463,8 @@
           await focusSlide(context, initial.slideId);
           for (const shape of shapes.items) {
             shape.delete();
+          }
+          if (shapes.items.length) {
             await context.sync();
             await livePreviewTick();
           }
@@ -1390,7 +1480,7 @@
         changed({ changed: ["slide-background"], audit: { action: "progressive_apply_slide_spec", stage: "background" } });
         stages.push({ name: "background", status: "applied", revision: state.revision, changed: ["slide-background"] });
       }
-      const groups = progressiveElementGroups(preparedElements, "element");
+      const groups = progressiveElementGroups(preparedElements, params.progressiveGranularity || "stage");
       for (const group of groups) {
         try {
           const records = await addProgressiveElements(initial.slideId, group.elements);
@@ -1459,6 +1549,47 @@
     return result;
   }
 
+  async function applyTemplateBindings(slideId, bindings) {
+    return PowerPoint.run(async (context) => {
+      const slide = context.presentation.slides.getItem(slideId);
+      slide.load("id");
+      const shapes = slide.shapes;
+      shapes.load("items/id,items/name,items/type");
+      await context.sync();
+      const targets = targetMap(shapes.items);
+      const changedTargets = [];
+      const deletedTargets = [];
+      for (let index = 0; index < bindings.length; index += 1) {
+        const binding = bindings[index] || {};
+        const target = String(binding.shapeRef || "");
+        if (!target) throw Object.assign(new Error("Template binding " + index + " requires shapeRef."), { code: "shape_ref_required" });
+        const shape = requireTarget(targets, target);
+        if (binding.delete === true) {
+          shape.delete();
+          deletedTargets.push(target);
+          continue;
+        }
+        if (!Object.prototype.hasOwnProperty.call(binding, "text")) {
+          throw Object.assign(new Error("Template binding " + index + " must provide text or delete=true."), { code: "empty_template_binding" });
+        }
+        if (!mayHaveText(shape.type)) {
+          throw Object.assign(new Error("Template target does not support text replacement: " + target), { code: "shape_has_no_text" });
+        }
+        shape.textFrame.textRange.text = String(binding.text);
+        changedTargets.push(target);
+      }
+      if (bindings.length) await context.sync();
+      return changed({
+        slideId: slide.id,
+        changed: changedTargets,
+        created: [],
+        deleted: deletedTargets,
+        warnings: [],
+        audit: { action: "apply_template_bindings", bindingCount: bindings.length },
+      });
+    });
+  }
+
   async function createFromTemplate(params) {
     const replay = checkMutation(params);
     if (replay) return Object.assign({}, replay, { replayed: true });
@@ -1471,19 +1602,30 @@
     }));
     const slideId = duplicate.created[0] && duplicate.created[0].slideId;
     const spec = params.slideSpec || {};
-    if (!(spec.background || (spec.elements || []).length)) {
+    const bindings = Array.isArray(spec.templateBindings) ? spec.templateBindings : [];
+    if (!(bindings.length || spec.background || (spec.elements || []).length)) {
       const result = Object.assign({}, duplicate, { audit: { action: "create_from_template", templateSlideId: templateSlideId } });
       rememberIdempotent(idempotencyKey, result);
       return result;
     }
-    let applied;
+    let revision = duplicate.revision;
+    const appliedResults = [];
     try {
-      applied = await applySlideSpec(Object.assign({}, params, {
-        slideId: slideId,
-        expectedRevision: duplicate.revision,
-        idempotencyKey: idempotencyKey + ":spec",
-        replaceExisting: false,
-      }));
+      if (bindings.length) {
+        const bindingResult = await applyTemplateBindings(slideId, bindings);
+        revision = bindingResult.revision;
+        appliedResults.push(bindingResult);
+      }
+      if (spec.background || (spec.elements || []).length) {
+        const specResult = await applySlideSpec(Object.assign({}, params, {
+          slideId: slideId,
+          expectedRevision: revision,
+          idempotencyKey: idempotencyKey + ":spec",
+          replaceExisting: false,
+        }));
+        revision = specResult.revision;
+        appliedResults.push(specResult);
+      }
     } catch (error) {
       try {
         await rollbackCreatedSlide(slideId);
@@ -1502,20 +1644,22 @@
     }
     const duplicateUndo = state.undo.get(duplicate.undoToken);
     if (duplicateUndo) duplicateUndo.revisionAfter = state.revision;
-    if (applied.undoToken && applied.undoToken !== duplicate.undoToken) state.undo.delete(applied.undoToken);
+    appliedResults.forEach((item) => {
+      if (item.undoToken && item.undoToken !== duplicate.undoToken) state.undo.delete(item.undoToken);
+    });
     const result = {
-      status: applied.status,
-      revision: applied.revision,
+      status: appliedResults.some((item) => item.status === "warning") ? "warning" : "applied",
+      revision: revision,
       slideId: slideId,
-      changed: applied.changed || [],
-      created: (duplicate.created || []).concat(applied.created || []),
-      deleted: applied.deleted || [],
-      warnings: applied.warnings || [],
+      changed: appliedResults.flatMap((item) => item.changed || []),
+      created: (duplicate.created || []).concat(appliedResults.flatMap((item) => item.created || [])),
+      deleted: appliedResults.flatMap((item) => item.deleted || []),
+      warnings: appliedResults.flatMap((item) => item.warnings || []),
       undoToken: duplicate.undoToken,
-      renderId: applied.renderId || null,
-      commitMode: applied.commitMode,
-      stages: applied.stages || [],
-      audit: { action: "create_from_template", templateSlideId: templateSlideId },
+      renderId: null,
+      commitMode: params.commitMode || "progressive",
+      stages: appliedResults.flatMap((item) => item.stages || []),
+      audit: { action: "create_from_template", templateSlideId: templateSlideId, bindingCount: bindings.length },
     };
     rememberIdempotent(idempotencyKey, result);
     return result;

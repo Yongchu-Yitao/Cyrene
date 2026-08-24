@@ -206,7 +206,6 @@ function BudgetPanel(p) {
   var [budgetMonthly, setBudgetMonthly] = useStateSt(String(config.budget_monthly != null ? config.budget_monthly : 50));
   var [budgetCurrency, setBudgetCurrency] = useStateSt(config.budget_currency || "CNY");
   var [budgetAction, setBudgetAction] = useStateSt(config.budget_action || "warn");
-  var [budgetMode, setBudgetMode] = useStateSt(config.budget_mode || "normal");
   var [budgetStartDay, setBudgetStartDay] = useStateSt(String(config.budget_start_day != null ? config.budget_start_day : 1));
   var [budgetSaved, setBudgetSaved] = useStateSt("");
   var codexQuotaModel = workbenchServices.model();
@@ -227,7 +226,6 @@ function BudgetPanel(p) {
         monthly: budgetMonthly,
         currency: budgetCurrency,
         action: budgetAction,
-        mode: budgetMode,
         startDay: budgetStartDay,
       }));
     } catch (e) {}
@@ -299,7 +297,6 @@ function BudgetPanel(p) {
       budget_monthly: Number(budgetMonthly) || 0,
       budget_currency: budgetCurrency,
       budget_action: budgetAction,
-      budget_mode: budgetMode,
       budget_start_day: Number(budgetStartDay) || 1,
     }).then(fetchStats);
   }
@@ -567,18 +564,6 @@ function BudgetPanel(p) {
     mode === "budget" && React.cloneElement(SectionBlock(t("settings.budgetConfig"), null,
       FieldRow(t("settings.budgetEnable"), t("settings.budgetEnableHint"),
         Toggle(budgetEnabled, toggleEnabled),
-      ),
-      // Budget mode — always visible, independent of the budget toggle
-      FieldRow(t("settings.budgetMode"), t("settings.budgetModeHint"),
-        React.createElement("select", {
-          className: "wb-select",
-          value: budgetMode,
-          onChange: function (e) { setBudgetMode(e.target.value); },
-          style: { maxWidth: 160 },
-        },
-          React.createElement("option", { value: "economy" }, t("settings.budgetModeEconomy")),
-          React.createElement("option", { value: "normal" }, t("settings.budgetModeNormal")),
-        ),
       ),
       budgetEnabled && React.createElement(React.Fragment, null,
         FieldRow(t("settings.budgetMonthly"), t("settings.budgetMonthlyHint"),

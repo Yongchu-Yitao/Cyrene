@@ -32,6 +32,8 @@ ANALYSIS_CACHE_DIR = DATA_DIR / "attachment_cache"
 _ANALYSIS_PARSER_VERSION = "4"
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff"}
+_AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav"}
+_VIDEO_EXTENSIONS = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"}
 _PDF_EXTENSIONS = {".pdf"}
 _MAP_EXTENSIONS = {".geojson", ".topojson"}
 _MAP_CONTENT_TYPES = {"application/geo+json", "application/vnd.geo+json"}
@@ -150,6 +152,29 @@ def resolve_managed_attachment_path(path_str: str) -> Path | None:
     return None
 
 
+def resolve_managed_attachment_id(attachment_id: str) -> Path | None:
+    """Resolve an upload/export attachment id without accepting path syntax."""
+    value = str(attachment_id or "").strip()
+    if (
+        not value
+        or value in {".", ".."}
+        or "\x00" in value
+        or "/" in value
+        or "\\" in value
+        or Path(value).name != value
+    ):
+        return None
+    for root in (UPLOADS_DIR, EXPORTS_DIR):
+        resolved_root = root.resolve()
+        try:
+            candidate = (resolved_root / value).resolve()
+        except Exception:
+            continue
+        if _path_within(candidate, resolved_root) and candidate.is_file():
+            return candidate
+    return None
+
+
 def is_uploaded_attachment_path(path_str: str) -> bool:
     try:
         return _resolve_attachment_under(path_str, UPLOADS_DIR) is not None
@@ -244,9 +269,9 @@ def attachment_kind_from_meta(content_type: str, filename: str) -> str:
     suffix = Path(str(filename or "")).suffix.lower()
     if normalized_type.startswith("image/") or suffix in _IMAGE_EXTENSIONS:
         return "image"
-    if normalized_type.startswith("audio/"):
+    if normalized_type.startswith("audio/") or suffix in _AUDIO_EXTENSIONS:
         return "audio"
-    if normalized_type.startswith("video/"):
+    if normalized_type.startswith("video/") or suffix in _VIDEO_EXTENSIONS:
         return "video"
     if normalized_type == "application/pdf" or suffix in _PDF_EXTENSIONS:
         return "pdf"

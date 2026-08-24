@@ -155,14 +155,23 @@ def _register_create_route(router: APIRouter, context: ChatRouteContext):
 
         memory_snapshot = await asyncio.to_thread(current_snapshot, project_id)
 
+        from cyrene.workbench.composer_context import validate_context_activations
+
+        try:
+            context_activations = validate_context_activations(
+                body.get("contextActivations")
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
         requested_agent = body.get("agent") if isinstance(body.get("agent"), dict) else None
         requested_installation_id = str((requested_agent or {}).get("installationId") or "").strip()
+        from cyrene.agent_runtime.builtin import BUILTIN_INSTALLATION_ID
+
         agent_snapshot = None
         model_access_snapshot = None
         capabilities_snapshot = None
         if requested_installation_id:
-            from cyrene.agent_runtime.builtin import BUILTIN_INSTALLATION_ID
-
             if requested_installation_id == BUILTIN_INSTALLATION_ID:
                 agent_snapshot = {"installationId": BUILTIN_INSTALLATION_ID}
                 model_access_snapshot = body.get("modelAccess") if isinstance(body.get("modelAccess"), dict) else None
@@ -204,6 +213,16 @@ def _register_create_route(router: APIRouter, context: ChatRouteContext):
                 model_access_snapshot = dict(installation.get("model_access") or {"mode": "cyrene_managed", "profileId": "primary"})
                 capabilities_snapshot = dict(installation.get("capabilities") or {})
 
+        if (
+            requested_installation_id
+            and requested_installation_id != BUILTIN_INSTALLATION_ID
+            and any(context_activations.values())
+        ):
+            return JSONResponse(
+                {"error": "Composer context capabilities require the built-in Cyrene Agent"},
+                status_code=400,
+            )
+
         def create_and_persist() -> dict[str, Any]:
             payload = service.repository.read()
             chat = service.create_chat(
@@ -218,6 +237,7 @@ def _register_create_route(router: APIRouter, context: ChatRouteContext):
                 workspace_active=body.get("workspaceActive"),
                 reasoning_effort=str(body.get("reasoningEffort") or ""),
             )
+            chat["contextActivations"] = context_activations
             payload.setdefault("chats", []).insert(0, chat)
             service.repository.write(payload)
             return chat

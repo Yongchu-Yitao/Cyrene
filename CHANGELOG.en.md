@@ -5,6 +5,98 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.8.0-beta2] - 2026-08-25
+
+`0.8.0-beta2` brings together every feature and interface change since `0.8.0-beta1`, led by independent image, video, and music generation, reference media and rich media messages, per-chat context capabilities and slash commands, unified proxy controls, and managed remote terminals. It also improves model services, continuous Agent execution, PowerPoint, search, terminal performance, Settings, and desktop startup. This section contains user-visible capabilities and experience changes only.
+
+### Image, video, and music generation
+
+- Added an independent media-generation tool package for creating and editing images and generating videos or music directly from a conversation. Jobs continue in the background without occupying the chat, so users can keep working or navigate elsewhere.
+- When a media job finishes, Cyrene wakes the originating conversation and adds the result directly as an image, video, or audio attachment. Repeated notifications do not create duplicate attachments, and a busy conversation waits for a safe delivery opportunity.
+- Media jobs support parallel execution, retries, progress checks, timeouts, and file-size limits. After an app interruption or restart, Cyrene can resume checking jobs already submitted to a provider instead of submitting and charging for them again.
+- Added OpenAI GPT Image generation and editing, including reference images, masks, and common output formats, together with a GPT Image model catalog and recommended choices.
+- Added Seedream image generation with reference images and Seedance text-to-video, image-to-video, and provider-supported reference-video workflows.
+- Added MiniMax video and music generation, including both downloadable results and directly returned audio data, with asynchronous result retrieval.
+- Added Google Gemini image generation, Gemini Omni generation from image or video references, and Veo video generation. Reference combinations, duration, resolution, and output counts are checked against model capabilities before submission.
+- Added support for compatible ComfyUI MCP workflows, including prompt, reference media, mask, aspect ratio, resolution, duration, and custom parameter injection. Advanced ComfyUI settings stay hidden from the normal Settings experience to avoid unnecessary configuration complexity.
+- Generation requests can reference images or videos from the current conversation while preserving reference order and purpose. Unsupported media types, combinations, and cross-conversation attachments are rejected with a clear explanation before submission.
+- Images, videos, and audio can all be displayed directly as chat messages. Images keep the existing preview experience, videos play inline, audio uses native playback controls, and every result remains available as a normal downloadable attachment.
+
+### Media Settings and model selection
+
+- Added a dedicated Media Generation page in Settings with a clear photo-and-video icon, centralizing service connections, preferred image/video/music services, and background job limits.
+- The page uses a user-oriented “connect services → generate in the background → receive attachments” explanation and hides implementation terms related to queues, polling, and internal wakeups.
+- OpenAI, Seedream, Seedance, MiniMax, and Google use consistent expandable connection cards that show supported media types, connection state, and whether each service is enabled.
+- Model fields are now dropdowns that can discover models available to the current account while also offering common choices, recommendation labels, and manual refresh. A safe common catalog remains available when live discovery is unavailable.
+- A saved model that no longer appears in the current catalog remains available as the current configuration instead of being overwritten. Users can also choose Custom Model and enter a newly released provider model name.
+- Updating an API key or service address automatically refreshes available models. Saved keys are represented only by their saved state and are never shown again.
+- Service switches, preferred services, models, connection details, and advanced job controls all save automatically. The page no longer has a Save button and clearly shows saving, saved, conflict, and retry states.
+- Fixed duplicate separators in expanded service cards, descriptions collapsing into vertical text, and narrow-window overflow. Fields and touch targets now remain clear on desktop and mobile widths.
+
+### Model services and network connections
+
+- Model Settings now includes presets for MiniMax, DeepSeek, Kimi, GLM, OpenCode Go, Gemini, OpenRouter, AMD GPU Cloud, Codex OAuth, and Local ONNX, with more recognizable icons for the newly added services.
+- Model lists are fetched dynamically from providers whenever possible instead of relying on fixed built-in names. OpenRouter uses catalog metadata to present more accurate choices.
+- OpenCode Go automatically selects the appropriate Chat, Responses, or Anthropic Messages connection style for the chosen model, reducing manual protocol decisions.
+- Thinking models from Kimi, GLM, DeepSeek, and MiniMax keep context more reliably across multi-step tool work, while aggregating services that do not support private model fields no longer receive incompatible requests.
+- Each model connection now has its own proxy switch, allowing selected services to use the proxy without affecting other model connections.
+- Settings now provides one Network Proxy area for a local or remote HTTP proxy, with separate scopes for external Agents, Cyrene search, the in-app browser, and extension downloads.
+- Turning off the proxy master switch pauses every scope and per-model proxy choice. Local Cyrene services and loopback traffic always remain direct so a proxy cannot disrupt internal app communication.
+- Authentication, quota, and provider errors now produce clearer privacy-safe messages. Cyrene no longer hides a real account or configuration problem by silently switching across incompatible provider families.
+- Removed the obsolete Economy mode configuration so the same task is not affected by a hidden behavior tier.
+
+### Composer, context capabilities, and slash commands
+
+- The built-in Cyrene Agent composer now offers per-chat Context Capabilities for MCP servers, skills, tool packages, and Custom Tools. Disabled or unavailable entries are clearly identified.
+- Context selections stay within the current conversation and project. Switching Agents or projects does not carry unrelated choices into another chat, and stale capabilities are pruned automatically.
+- Typing `/` opens a searchable, keyboard-accessible command menu containing built-in commands, skill commands, and commands contributed by project plugins, with optional arguments entered directly after the command.
+- A selected command can be sent without ordinary message text. Skill and plugin commands can activate the context they require at send time while continuing to follow normal permission reviews.
+- Project plugins can now contribute slash commands using a fixed instruction or dynamically prepare one from the current conversation. Name conflicts with built-in commands receive stable, recognizable names automatically.
+- The composer adds a Reference Media group so image and video attachments can be explicitly used for media generation, with the same add, preview, and remove experience as other attachments.
+
+### Continuous Agent execution and reply reliability
+
+- OpenAI-compatible models now keep understanding and routing separate from continuous tool execution. Complex tasks, follow-ups, and long tool runs retain more stable context while unrelated history no longer has to be repeated in every step.
+- Pure conversation returns directly, while real work enters a continuous execution path. Plans, attempts, and raw tool output do not crowd later conversation, but final results, created artifacts, and unresolved items remain available for follow-ups such as “continue” or “change the file you just made.”
+- The Agent must explicitly finish a task before the final reply is published, preventing an intermediate explanation or progress note from being mistaken for completion. A missing conclusion receives one self-contained finalization attempt.
+- When the Agent needs user input, the answer returns to the execution stage that asked the question. Work resumes directly without repeating intent routing or redoing completed steps.
+- Failure, cancellation, retry, process recovery, and unexpected interruption now produce a clear terminal state instead of leaving a chat permanently generating. Retries preserve the original task identity to avoid duplicate user messages and repeated side effects.
+- Reused tool-call identifiers, missing thinking segments, and incomplete history are recovered safely, reducing interruptions during long DeepSeek, MiniMax, Kimi, and GLM tool chains.
+- Codex OAuth authentication and quota failures now show actionable notices and preserve the selected service instead of silently moving to another model family.
+- Internal tool markup, private reasoning, credentials, absolute paths, and sensitive provider details are removed before a final reply reaches the chat, while errors retain enough information to remain useful to users.
+- Large tool results and PowerPoint results are stored as recoverable references so long tasks can continue using their outputs without filling the conversation context with entire payloads.
+
+### Terminals, managed SSH, and sustained output
+
+- Added managed SSH terminal sessions with a selectable remote directory and tmux session. One authentication flow connects, installs the needed shell integration, and attaches to a recoverable remote session.
+- Remote terminals report the correct remote working directory, title, connection state, and exit reason. Temporary transport loss can reconnect, while an intentional exit or tmux detach does not trigger an unwanted reconnection.
+- The Agent waits until a remote connection is genuinely ready before sending its first command, preventing input from landing in an authentication prompt, startup script, or incomplete environment.
+- Bash, Zsh, Fish, PowerShell, and CMD integration is more reliable, with command boundaries, working directory, title, and run state preserved through child shells and tmux.
+- Large plain-text streams, colored build logs, and continuously repainting terminal interfaces are handled more smoothly. One noisy terminal is less likely to slow another interactive terminal or the overall Workbench.
+- Long terminal history uses continuous searchable segments that preserve order and recovery when retention limits are crossed, multiple viewers are attached, background storage is slow, or the app restarts.
+- When the Agent reads a terminal, it can use detected commands and their matching output instead of repeatedly scanning unrelated parts of a very large scrollback.
+- Installed and portable Electron builds now settle terminal processes more completely during quit, restart, terminal deletion, and session recovery, reducing orphaned processes, stale state, and incorrect recovery on the next launch.
+
+### PowerPoint creation improvements
+
+- PowerPoint slide creation accepts richer semantic descriptions. The Agent can provide titles, body text, bullets, sections, columns, images, and themes while Cyrene generates stable layouts instead of requiring coordinates for every element.
+- Live creation now previews work in stages such as background and layout, text, media, and decoration. This is faster while preserving a visible construction process, and an element-by-element mode remains available when explicitly desired.
+- Editing switches the foreground PowerPoint slide only when needed, and related changes are applied in a safe grouped order, reducing frequent slide jumps and visible flicker.
+- Semantic layout preserves specified images and chooses a media-compatible layout instead of silently dropping them in a text-oriented design. Slide, shape, and edit references stay stable across consecutive operations.
+- Direct creation, template composition, live mode, and file mode share the same slide description. File editing remains atomic rather than pretending to be a live construction process.
+- PowerPoint failures now expose the actual user-facing reason instead of returning only a generic generation error.
+
+### Search, chat streams, and desktop experience
+
+- Web search adds quick preview and full-content modes. Preview prioritizes a small number of the most relevant pages, while full mode retrieves more content only when needed, preventing one slow page from blocking the entire task.
+- After the first useful page arrives, remaining search candidates receive a bounded time to finish. Proxy, search-service, and page-fetch failures move to later candidates sooner while retaining an understandable explanation.
+- Chat text, tool calls, and completion states connect more reliably. After a reply has been saved, a late terminal cleanup event or status update cannot revoke it or contaminate the next turn.
+- User-input prompts are deduplicated between live events and page hydration. Stop, reconnect, and background completion are owned by one task state, reducing repeated questions, duplicate completion, and stuck replies.
+- Notifications, message attachments, and background media results remain consistent across several windows and rapid navigation. Slow background storage no longer blocks visible replies or live terminal output.
+- Removed the old Welcome/Get Started page and its automatic startup entry. Cyrene now opens directly into the unified Workbench, while required first-use model and personality setup remains in the supported onboarding flow.
+- Settings further unifies cards, fields, dropdowns, status labels, autosave feedback, keyboard focus, and narrow-window layouts so model, proxy, and media configuration behave consistently.
+- Current version presentation across the README, application, web assets, and desktop packages is unified as `0.8.0-beta2`.
+
 ## [0.8.0-beta1] - 2026-08-24
 
 `0.8.0-beta1` brings together every feature and interface change since `0.7.13`, led by live PowerPoint creation, project plugins, a local embedding model, configurable search services, and a more complete Codex experience, alongside broad improvements to Agents, chats, terminals, knowledge, memory, schedules, Settings, and desktop interaction. This section contains user-visible capabilities and experience changes only.

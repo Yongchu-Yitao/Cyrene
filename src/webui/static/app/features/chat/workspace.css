@@ -208,6 +208,10 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip {
   background: var(--wb-card-bg) !important;
 }
 
+html[data-performance-mode="on"] .wbc-command-chip {
+  background: var(--wb-card-bg) !important;
+}
+
 html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   background: var(--wb-accent) !important;
 }

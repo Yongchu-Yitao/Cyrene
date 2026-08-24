@@ -80,6 +80,7 @@ def normalize_embedding(raw: Any = None, *, include_legacy: bool = True) -> dict
         "api_key": str(source.get("api_key") or legacy_api_key or "").strip(),
         "model": str(source.get("model") or legacy_model or "").strip(),
         "dimensions": dimensions,
+        "use_proxy": source.get("use_proxy") is True,
     }
 
 
@@ -101,6 +102,7 @@ def public_settings() -> dict[str, Any]:
             "base_url": embedding["base_url"],
             "model": embedding["model"],
             "dimensions": embedding["dimensions"],
+            "use_proxy": embedding["use_proxy"],
             "api_key_configured": bool(embedding["api_key"]),
         },
     }

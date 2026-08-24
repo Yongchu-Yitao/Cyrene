@@ -48,6 +48,11 @@ Portable Backup ZIP 不由 Cyrene 加密。为了让 Restore 能用目标 Instal
 | `OPENAI_BASE_URL` | API Endpoint | `https://api.deepseek.com/v1` |
 | `OPENAI_MODEL` | 模型名称 | `deepseek-v4-flash` |
 
+Settings → Models 内置 MiniMax、DeepSeek、Kimi、GLM、OpenCode Go、Gemini、
+OpenRouter、AMD GPU Cloud、Codex OAuth 与 Local ONNX 服务预设；模型列表从
+各服务商动态获取，不固化在应用中。OpenCode Go 会依据所选模型自动使用 Chat
+Completions、Responses 或 Anthropic Messages 协议。
+
 ### Agent
 
 | 变量 | 说明 | 默认 |

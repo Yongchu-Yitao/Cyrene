@@ -15,6 +15,7 @@ from PIL import Image, UnidentifiedImageError
 from cyrene.config import DATA_DIR
 from cyrene.office.gateway import get_office_gateway_runtime
 from cyrene.office.file_engine import PptxFileError, get_pptx_file_engine
+from cyrene.office.slide_layout import compile_slide_spec
 from cyrene.office.service import OfficeBridgeError, get_office_bridge
 from cyrene.tooling.runtime_api import json_result, resolve_workspace_path
 
@@ -160,12 +161,13 @@ READ_TEXT_DEF = tool_def(
 )
 APPLY_BATCH_DEF = tool_def(
     "PowerPointApplyBatch",
-    "Apply one ordered typed mutation to a slide. Live PowerPoint switches to the target slide, then synchronizes every component in operation order so each change is visible. The batch still returns one revision and undo token. Prefer one slide per batch.",
+    "Apply one ordered typed mutation to a slide. Live PowerPoint synchronizes dependency-safe operation stages by default; request element granularity only for an explicitly visible step-by-step build. The batch returns one revision and undo token. Prefer one slide per batch.",
     {
         **SESSION_PROPERTY,
         **SLIDE_PROPERTIES,
         **MUTATION_PROPERTIES,
         "operations": {"type": "array", "items": OPERATION_SCHEMA, "maxItems": 200},
+        "progressiveGranularity": {"type": "string", "enum": ["stage", "element"], "description": "stage batches compatible operations to reduce Office.js round trips; element is a slower presentation mode."},
     },
     ["expectedRevision", "idempotencyKey", "operations"],
 )
@@ -327,7 +329,30 @@ def _normalize_operation(value: Any, index: int) -> dict[str, Any]:
 def _normalize_slide_spec(spec: Any) -> Any:
     if not isinstance(spec, dict):
         return spec
-    result = dict(spec)
+    bindings = spec.get("templateBindings")
+    if bindings is not None:
+        if not isinstance(bindings, list):
+            raise PowerPointRequestError(
+                "invalid_template_bindings",
+                "templateBindings must be an array.",
+                details={"field": "templateBindings"},
+            )
+        for index, binding in enumerate(bindings):
+            if not isinstance(binding, dict) or not str(binding.get("shapeRef") or ""):
+                raise PowerPointRequestError(
+                    "shape_ref_required",
+                    "Every template binding requires shapeRef.",
+                    details={"bindingIndex": index, "field": "templateBindings.shapeRef"},
+                )
+            has_text = "text" in binding
+            wants_delete = binding.get("delete") is True
+            if has_text == wants_delete:
+                raise PowerPointRequestError(
+                    "invalid_template_binding",
+                    "A template binding must provide exactly one of text or delete=true.",
+                    details={"bindingIndex": index, "suggestion": "Replace inherited content with text, or delete the shape explicitly."},
+                )
+    result = compile_slide_spec(spec)
     elements = result.get("elements")
     if isinstance(elements, list):
         normalized = []
@@ -351,6 +376,8 @@ def _prepare_request(method: str, args: dict[str, Any]) -> dict[str, Any]:
     params = normalize_powerpoint_arguments(args)
     if "slideSpec" in params:
         params["slideSpec"] = _normalize_slide_spec(params["slideSpec"])
+    if isinstance(params.get("slideSpecs"), list):
+        params["slideSpecs"] = [_normalize_slide_spec(spec) for spec in params["slideSpecs"]]
     operations = params.get("operations")
     if method == "ppt.apply_batch" and (not isinstance(operations, list) or not operations):
         raise PowerPointRequestError("invalid_batch", "operations must contain at least one operation.", details={"field": "operations"})

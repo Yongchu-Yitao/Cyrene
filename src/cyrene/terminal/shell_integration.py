@@ -27,6 +27,26 @@ unset __cyrene_launcher_dir
 _BASH_INTEGRATION_SCRIPT = r'''# Cyrene shell integration. Safe to source in child shells.
 if [[ -z "${__CYRENE_SHELL_INTEGRATION_LOADED:-}" ]]; then
   __CYRENE_SHELL_INTEGRATION_LOADED=1
+  __cyrene_emit_osc() {
+    if [[ -n "${TMUX:-}" ]]; then
+      printf '\033Ptmux;\033\033]%s\007\033\\' "$1"
+    else
+      printf '\033]%s\007' "$1"
+    fi
+  }
+  if [[ -n "${TMUX_PANE:-}" ]]; then
+    command tmux set-option -p -t "${TMUX_PANE}" allow-passthrough on >/dev/null 2>&1 || true
+    if [[ -n "${CYRENE_REMOTE_SHELL_LAUNCHER:-}" ]]; then
+      command tmux set-option default-command "${CYRENE_REMOTE_SHELL_LAUNCHER}" >/dev/null 2>&1 || true
+    fi
+  fi
+  if [[ -n "${TMUX:-}" ]]; then
+    __cyrene_prompt_marker_b=$'\033Ptmux;\033\033]133;B\007\033\\'
+    __cyrene_prompt_marker_c=$'\033Ptmux;\033\033]133;C\007\033\\'
+  else
+    __cyrene_prompt_marker_b=$'\033]133;B\007'
+    __cyrene_prompt_marker_c=$'\033]133;C\007'
+  fi
   __cyrene_integration_level=basic
   if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )); then
     __cyrene_integration_level=full
@@ -44,20 +64,20 @@ if [[ -z "${__CYRENE_SHELL_INTEGRATION_LOADED:-}" ]]; then
     fi
     local __cyrene_path="${PWD//\%/%25}"
     __cyrene_path="${__cyrene_path// /%20}"
-    printf '\033]133;D;%s\033\\' "${__cyrene_status}"
-    printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-localhost}" "${__cyrene_path}"
-    printf '\033]2;%s\033\\' "${PWD}"
-    printf '\033]133;P;Integration=%s\033\\' "${__cyrene_integration_level}"
-    printf '\033]133;A\033\\'
+    __cyrene_emit_osc "133;D;${__cyrene_status}"
+    __cyrene_emit_osc "7;file://${HOSTNAME:-localhost}${__cyrene_path}"
+    __cyrene_emit_osc "2;${PWD}"
+    __cyrene_emit_osc "133;P;Integration=${__cyrene_integration_level}"
+    __cyrene_emit_osc "133;A"
   }
   PROMPT_COMMAND=__cyrene_prompt_command
-  PS1="${PS1}"'\[\e]133;B\e\\\]'
+  PS1="${PS1}"'\['"${__cyrene_prompt_marker_b}"'\]'
   if [[ "${__cyrene_integration_level}" == full ]]; then
-    PS0="${PS0-}"'\[\e]133;C\e\\\]'
+    PS0="${PS0-}"'\['"${__cyrene_prompt_marker_c}"'\]'
   fi
   export PROMPT_COMMAND PS0 PS1
   export __cyrene_integration_level __cyrene_original_prompt_command
-  export -f __cyrene_restore_status __cyrene_prompt_command
+  export -f __cyrene_emit_osc __cyrene_restore_status __cyrene_prompt_command
 fi
 '''
 
@@ -78,48 +98,81 @@ source "${CYRENE_SHELL_INTEGRATION_SCRIPT}"
 _ZSH_INTEGRATION_SCRIPT = r'''# Cyrene shell integration. Safe to source in child shells.
 if [[ -z "${__CYRENE_SHELL_INTEGRATION_LOADED:-}" ]]; then
   typeset -g __CYRENE_SHELL_INTEGRATION_LOADED=1
+  __cyrene_emit_osc() {
+    if [[ -n "${TMUX:-}" ]]; then
+      printf '\033Ptmux;\033\033]%s\007\033\\' "$1"
+    else
+      printf '\033]%s\007' "$1"
+    fi
+  }
+  if [[ -n "${TMUX_PANE:-}" ]]; then
+    command tmux set-option -p -t "${TMUX_PANE}" allow-passthrough on >/dev/null 2>&1 || true
+    if [[ -n "${CYRENE_REMOTE_SHELL_LAUNCHER:-}" ]]; then
+      command tmux set-option default-command "${CYRENE_REMOTE_SHELL_LAUNCHER}" >/dev/null 2>&1 || true
+    fi
+  fi
+  if [[ -n "${TMUX:-}" ]]; then
+    __cyrene_prompt_marker_b=$'\033Ptmux;\033\033]133;B\007\033\\'
+  else
+    __cyrene_prompt_marker_b=$'\033]133;B\007'
+  fi
   autoload -Uz add-zsh-hook
   __cyrene_zsh_precmd() {
     local __cyrene_status=$?
     local __cyrene_path="${PWD//\%/%25}"
     __cyrene_path="${__cyrene_path// /%20}"
-    printf '\033]133;D;%s\033\\' "${__cyrene_status}"
-    printf '\033]7;file://%s%s\033\\' "${HOST:-localhost}" "${__cyrene_path}"
-    printf '\033]2;%s\033\\' "${PWD}"
-    printf '\033]133;A\033\\'
+    __cyrene_emit_osc "133;D;${__cyrene_status}"
+    __cyrene_emit_osc "7;file://${HOST:-localhost}${__cyrene_path}"
+    __cyrene_emit_osc "2;${PWD}"
+    __cyrene_emit_osc "133;P;Integration=full"
+    __cyrene_emit_osc "133;A"
   }
-  __cyrene_zsh_preexec() { printf '\033]133;C\033\\'; }
+  __cyrene_zsh_preexec() { __cyrene_emit_osc "133;C"; }
   add-zsh-hook precmd __cyrene_zsh_precmd
   add-zsh-hook preexec __cyrene_zsh_preexec
   precmd_functions=(__cyrene_zsh_precmd ${precmd_functions:#__cyrene_zsh_precmd})
   preexec_functions=(__cyrene_zsh_preexec ${preexec_functions:#__cyrene_zsh_preexec})
-  PROMPT="${PROMPT}"$'%{\033]133;B\033\\%}'
+  PROMPT="${PROMPT}"$'%{'"${__cyrene_prompt_marker_b}"$'%}'
 fi
 '''
 
 _FISH_SCRIPT = r'''# Cyrene shell integration. Loaded after config.fish.
 if not set -q __CYRENE_SHELL_INTEGRATION_LOADED
     set -g __CYRENE_SHELL_INTEGRATION_LOADED 1
+    function __cyrene_emit_osc
+        if set -q TMUX
+            printf '\033Ptmux;\033\033]%s\007\033\\' "$argv[1]"
+        else
+            printf '\033]%s\007' "$argv[1]"
+        end
+    end
+    if set -q TMUX_PANE
+        command tmux set-option -p -t "$TMUX_PANE" allow-passthrough on >/dev/null 2>&1
+        if set -q CYRENE_REMOTE_SHELL_LAUNCHER
+            command tmux set-option default-command "$CYRENE_REMOTE_SHELL_LAUNCHER" >/dev/null 2>&1
+        end
+    end
     if functions -q fish_prompt
         functions -c fish_prompt __cyrene_original_fish_prompt
     end
     function __cyrene_fish_preexec --on-event fish_preexec
-        printf '\033]133;C\033\\'
+        __cyrene_emit_osc '133;C'
     end
     function __cyrene_fish_postexec --on-event fish_postexec
         set -l __cyrene_status $status
-        printf '\033]133;D;%s\033\\' $__cyrene_status
+        __cyrene_emit_osc "133;D;$__cyrene_status"
     end
     function fish_prompt
         set -l __cyrene_path (string replace -a '%' '%25' "$PWD")
         set __cyrene_path (string replace -a ' ' '%20' "$__cyrene_path")
-        printf '\033]7;file://%s%s\033\\' (hostname) "$__cyrene_path"
-        printf '\033]2;%s\033\\' "$PWD"
-        printf '\033]133;A\033\\'
+        __cyrene_emit_osc "7;file://"(hostname)"$__cyrene_path"
+        __cyrene_emit_osc "2;$PWD"
+        __cyrene_emit_osc '133;P;Integration=full'
+        __cyrene_emit_osc '133;A'
         if functions -q __cyrene_original_fish_prompt
             __cyrene_original_fish_prompt
         end
-        printf '\033]133;B\033\\'
+        __cyrene_emit_osc '133;B'
     end
 end
 '''
@@ -276,6 +329,18 @@ def prepare_shell_integration(
     return ShellIntegrationLaunch(launch_argv, prepared_env, level, kind)
 
 
+def remote_shell_integration_files() -> dict[str, str]:
+    """Return the versioned files installed by the managed SSH bootstrap."""
+    return {
+        "cyrene.bash": _BASH_SCRIPT,
+        "cyrene.bash.integration": _BASH_INTEGRATION_SCRIPT,
+        "cyrene.zshenv": _ZSH_ENV_SCRIPT,
+        "cyrene.zshrc": _ZSH_RC_SCRIPT,
+        "cyrene.zsh.integration": _ZSH_INTEGRATION_SCRIPT,
+        "cyrene.fish": _FISH_SCRIPT,
+    }
+
+
 class OscMetadataParser:
     """Incrementally parse OSC metadata across arbitrary PTY chunk boundaries."""
 
@@ -291,6 +356,15 @@ class OscMetadataParser:
         self._mode = "normal"
         self._payload.clear()
         self._next_seq = None
+
+    @property
+    def pending_sequence_start(self) -> int | None:
+        """Absolute start of an escape sequence awaiting more PTY bytes."""
+        if self._mode == "escape":
+            return self._escape_seq
+        if self._mode in {"osc", "osc_escape"}:
+            return self._osc_start_seq
+        return None
 
     def feed(self, data: bytes, *, start_seq: int) -> list[dict[str, Any]]:
         """Return metadata events; ``data`` itself is never modified or returned."""
@@ -387,6 +461,19 @@ class OscMetadataParser:
                     "startSeq": start_seq,
                     "endSeq": end_seq,
                 }
+            property_kinds = {
+                b"Context": "context",
+                b"ProfileId": "profile",
+                b"Lifecycle": "lifecycle",
+            }
+            kind = property_kinds.get(name)
+            if separator and kind is not None and len(value) <= 4096:
+                return {
+                    "kind": kind,
+                    "value": value.decode("utf-8", errors="replace"),
+                    "startSeq": start_seq,
+                    "endSeq": end_seq,
+                }
             return None
         names = {b"A": "prompt", b"B": "command", b"C": "output", b"D": "finished"}
         kind = names.get(marker)
@@ -411,5 +498,6 @@ __all__ = [
     "OscMetadataParser",
     "ShellIntegrationLaunch",
     "prepare_shell_integration",
+    "remote_shell_integration_files",
     "shell_kind",
 ]

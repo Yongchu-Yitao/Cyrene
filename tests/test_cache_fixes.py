@@ -188,6 +188,67 @@ def test_run_model_lease_reports_strict_prefix_and_invalidation_reasons():
     }
 
 
+def test_run_model_lease_can_partition_diagnostics_without_changing_default_scope():
+    lease = _agent_state.RunModelLease("lease-scopes", {"primary": ()})
+    identity = {
+        "candidateId": "primary",
+        "provider": "openai_compatible",
+        "model": "model",
+        "endpoint": "https://model.example/v1",
+        "reasoningEffort": "high",
+    }
+    request = {
+        "identity": identity,
+        "message_fingerprints": ["system", "user"],
+        "tools_fingerprint": "tools-a",
+        "payload_fingerprint": "payload-a",
+    }
+
+    default_first = lease.observe_request("primary", **request)
+    decision_first = lease.observe_request(
+        "primary", **request, cache_scope="decision"
+    )
+    execution_first = lease.observe_request(
+        "primary", **request, cache_scope="execution"
+    )
+    decision_retry = lease.observe_request(
+        "primary", **request, cache_scope="decision"
+    )
+
+    assert default_first["cache_prefix_status"] == "first_request"
+    assert decision_first["cache_prefix_status"] == "first_request"
+    assert execution_first["cache_prefix_status"] == "first_request"
+    assert decision_retry["cache_prefix_status"] == "identical_retry"
+
+
+def test_run_model_lease_reports_lane_cache_epoch_rotation():
+    lease = _agent_state.RunModelLease("lease-epoch", {"primary": ()})
+    identity = {
+        "candidateId": "primary",
+        "provider": "openai_compatible",
+        "model": "model",
+        "endpoint": "https://model.example/v1",
+        "reasoningEffort": "high",
+        "cacheRouteKey": "decision-epoch-0",
+    }
+    request = {
+        "message_fingerprints": ["system", "user"],
+        "tools_fingerprint": "tools-a",
+        "payload_fingerprint": "payload-a",
+        "cache_scope": "decision",
+    }
+
+    lease.observe_request("primary", identity=identity, **request)
+    rotated = lease.observe_request(
+        "primary",
+        identity={**identity, "cacheRouteKey": "decision-epoch-1"},
+        **request,
+    )
+
+    assert rotated["cache_prefix_status"] == "invalidated"
+    assert rotated["cache_invalidation_reason"] == "cache_epoch_changed"
+
+
 def test_workbench_new_session_memory_moves_to_volatile_tail(monkeypatch, tmp_path):
     from cyrene.workbench import runtime as routes
     from cyrene.workbench import memory as memory
@@ -767,6 +828,91 @@ async def test_fixed_ephemeral_stays_before_user_across_tool_rounds():
     assert phase2_second[len(phase2_first) + 1]["role"] == "tool"
     assert saved_messages
     assert all(m.get("content") != "FIXED_CONTEXT" for m in saved_messages[-1])
+
+
+async def test_dual_lane_dynamic_context_follows_cached_history():
+    """Run-specific tails do not invalidate the lane history before them."""
+    from cyrene import agent
+    from cyrene.agent.transcript_policy import ProviderFamily, TranscriptPolicy
+
+    llm_inputs = []
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "u1",
+                "function": {
+                    "name": "use_tools",
+                    "arguments": json.dumps({"execution_brief": "inspect"}),
+                },
+            }],
+        },
+        {
+            "content": "inspection complete",
+            "tool_calls": [{
+                "id": "q1",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+        },
+    ])
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        llm_inputs.append([dict(message) for message in messages])
+        return next(responses)
+
+    history = [
+        {"role": "user", "content": "older request", "message_id": "old-user"},
+        {
+            "role": "assistant",
+            "content": "older answer",
+            "message_id": "old-assistant",
+        },
+    ]
+    lease = _agent_state.RunModelLease(
+        "dual-prefix-test",
+        {"primary": ()},
+        provider_family=ProviderFamily.OPENAI_COMPATIBLE,
+        transcript_policy=TranscriptPolicy.DUAL_LANE,
+    )
+    lease_token = _agent_state._run_model_lease.set(lease)
+    _orig_llm = _patch(_agent_core, "_call_llm", fake_call_llm)
+    _orig_save = _patch(_agent_core, "_save_session_messages", AsyncMock())
+    _orig_append = _patch(_agent_core, "_append_session_message", AsyncMock())
+    _orig_lane_append = _patch(
+        _agent_core,
+        "append_or_upsert_lane_record",
+        AsyncMock(),
+    )
+    try:
+        result = await agent._run_main_agent(
+            "current request",
+            history,
+            None,
+            0,
+            "db.sqlite3",
+            fixed_ephemeral_system="FIXED_CONTEXT",
+        )
+    finally:
+        _patch(_agent_core, "append_or_upsert_lane_record", _orig_lane_append)
+        _patch(_agent_core, "_append_session_message", _orig_append)
+        _patch(_agent_core, "_save_session_messages", _orig_save)
+        _patch(_agent_core, "_call_llm", _orig_llm)
+        _agent_state._run_model_lease.reset(lease_token)
+
+    assert result == "inspection complete"
+    decision_messages, execution_messages = llm_inputs
+    assert [message.get("content") for message in decision_messages[:4]] == [
+        decision_messages[0]["content"],
+        "older request",
+        "older answer",
+        "FIXED_CONTEXT",
+    ]
+    assert [message.get("content") for message in execution_messages[:4]] == [
+        execution_messages[0]["content"],
+        "older request",
+        "older answer",
+        "FIXED_CONTEXT",
+    ]
 
 
 async def test_subagent_stable_system_prompt():

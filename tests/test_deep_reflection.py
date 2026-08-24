@@ -3,7 +3,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from cyrene.agent.commands import DEEP_REFLECT_COMMAND_ID, parse_deep_reflect_command
+from cyrene.agent.commands import (
+    BUILTIN_COMMAND_IDS,
+    DEEP_REFLECT_COMMAND_ID,
+    parse_deep_reflect_command,
+    parse_slash_command,
+    parse_slash_invocation,
+)
 from cyrene.agent.deep_reflection import (
     build_reflection_evidence,
     make_reflection_record,
@@ -37,6 +43,31 @@ def test_parse_deep_reflect_slash_commands() -> None:
     assert parsed_multiline["focus"] == "focus on the goal"
 
     assert parse_deep_reflect_command("/deep-research topic")["matched"] is False
+
+
+def test_parse_all_builtin_slash_commands_with_optional_arguments() -> None:
+    for command in BUILTIN_COMMAND_IDS:
+        no_args = parse_slash_command(f"/{command}")
+        assert no_args == {
+            "matched": True,
+            "command": command,
+            "arguments": "",
+            "public_text": f"/{command}",
+        }
+
+        with_args = parse_slash_command(f"/{command}\n  detailed request")
+        assert with_args["matched"] is True
+        assert with_args["command"] == command
+        assert with_args["arguments"] == "detailed request"
+
+    assert parse_slash_command("/not-a-command payload")["matched"] is False
+    assert parse_slash_command("ordinary message")["matched"] is False
+    assert parse_slash_invocation("/skill:writer draft a launch plan") == {
+        "matched": True,
+        "command": "skill:writer",
+        "arguments": "draft a launch plan",
+        "public_text": "/skill:writer draft a launch plan",
+    }
 
 
 def test_evidence_serialization_is_deterministic_and_redacts_args() -> None:

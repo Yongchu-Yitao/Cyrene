@@ -95,3 +95,23 @@ def test_quick_chat_tracks_workbench_background_preferences():
     assert 'quickChatReadTweak("backgroundDark", null)' in quick_chat
     assert 'e.key === "cyrene-tweak-backgroundLight"' in quick_chat
     assert 'e.key === "cyrene-tweak-backgroundDark"' in quick_chat
+
+
+def test_enabled_command_chip_uses_the_composer_glass_material():
+    styles = workbench_style_source()
+
+    chip_styles = styles.split(".wbc-command-chip {", 1)[1].split("}", 1)[0]
+    light_chip_styles = styles.split(
+        'html[data-theme="light"] .wbc-command-chip {', 1
+    )[1].split("}", 1)[0]
+    dark_chip_styles = styles.split(
+        'html[data-theme="dark"] .wbc-command-chip {', 1
+    )[1].split("}", 1)[0]
+
+    assert "background: var(--wbc-composer-glass-background);" in chip_styles
+    assert "box-shadow: var(--wbc-composer-glass-shadow);" in chip_styles
+    assert "-webkit-backdrop-filter: var(--wbc-composer-glass-filter);" in chip_styles
+    assert "backdrop-filter: var(--wbc-composer-glass-filter);" in chip_styles
+    assert "#fff 76%" in light_chip_styles
+    assert "var(--wb-conversation-surface)" in dark_chip_styles
+    assert 'html[data-performance-mode="on"] .wbc-command-chip {' in styles

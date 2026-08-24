@@ -36,6 +36,11 @@ def _proxied_session() -> requests.Session:
     from cyrene.tooling.backends.searxng_manager import get_effective_search_proxy
 
     s = requests.Session()
+    # Proxy selection is centralized in get_effective_search_proxy().  Letting
+    # requests merge OS/environment proxies again can override the explicit
+    # Cyrene address (notably on macOS) or resurrect a proxy rejected as
+    # unreachable by the policy layer.
+    s.trust_env = False
     s.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
     proxy_url = get_effective_search_proxy()
     if proxy_url:
@@ -226,6 +231,7 @@ async def _fetch_preview_pages(
             )
         },
         proxy=proxy_url or None,
+        trust_env=False,
         timeout=None,
         follow_redirects=True,
     ) as client:

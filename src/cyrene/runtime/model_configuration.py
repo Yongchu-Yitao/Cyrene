@@ -17,10 +17,15 @@ from urllib.parse import urlsplit
 
 from cyrene.model_runtime.adapter_registry import list_adapters, require_adapter
 from cyrene.model_runtime.cache_invalidation import invalidate_model_runtime_caches
+from cyrene.model_runtime.transcript_policy import (
+    ProviderFamily,
+    ProviderFamilyError,
+    provider_family_for_candidate,
+)
 from cyrene.runtime import config_store
 
 
-CONFIG_VERSION = 7
+CONFIG_VERSION = 9
 ROUTE_NAMES = ("primary", "secondary", "vision", "embedding")
 RETIRED_MODEL_SETTING_KEYS = frozenset({
     "models",
@@ -40,6 +45,11 @@ _DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 _DEEPSEEK_REPLACED_DEFAULT_BASE_URLS = {
     "https://api.deepseek.com",
 }
+_KIMI_DEFAULT_BASE_URL = "https://api.moonshot.cn/v1"
+_GLM_DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+_OPENCODE_GO_DEFAULT_BASE_URL = "https://opencode.ai/zen/go/v1"
+_OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+_AMD_GPU_CLOUD_DEFAULT_BASE_URL = "https://developer.amd.com.cn/radeon/api/v1"
 
 # Built-in providers are connection presets, not protocol adapters. This keeps
 # the adapter picker focused on wire formats while still giving new and
@@ -85,11 +95,77 @@ _DEFAULT_PROVIDER_CONNECTIONS: tuple[dict[str, Any], ...] = (
         "api_key": "",
         "options": {"provider_preset": "local_onnx"},
     },
+    {
+        "introduced_version": 8,
+        "id": "kimi",
+        "name": "Kimi",
+        "adapter": "openai",
+        "enabled": True,
+        "base_url": _KIMI_DEFAULT_BASE_URL,
+        "api_key": "",
+        "options": {"provider_preset": "kimi"},
+    },
+    {
+        "introduced_version": 8,
+        "id": "glm",
+        "name": "GLM",
+        "adapter": "openai",
+        "enabled": True,
+        "base_url": _GLM_DEFAULT_BASE_URL,
+        "api_key": "",
+        "options": {"provider_preset": "glm"},
+    },
+    {
+        "introduced_version": 8,
+        "id": "opencode_go",
+        "name": "OpenCode Go",
+        "adapter": "openai",
+        "enabled": True,
+        "base_url": _OPENCODE_GO_DEFAULT_BASE_URL,
+        "api_key": "",
+        "options": {"provider_preset": "opencode_go"},
+    },
+    {
+        "introduced_version": 8,
+        "id": "gemini",
+        "name": "Gemini",
+        "adapter": "gemini",
+        "enabled": True,
+        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "api_key": "",
+        "options": {"provider_preset": "gemini"},
+    },
+    {
+        "introduced_version": 8,
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "adapter": "openai",
+        "enabled": True,
+        "base_url": _OPENROUTER_DEFAULT_BASE_URL,
+        "api_key": "",
+        "options": {"provider_preset": "openrouter"},
+    },
+    {
+        "introduced_version": 8,
+        "id": "amd_gpu_cloud",
+        "name": "AMD GPU Cloud",
+        "adapter": "openai",
+        "enabled": True,
+        "base_url": _AMD_GPU_CLOUD_DEFAULT_BASE_URL,
+        "api_key": "",
+        "options": {"provider_preset": "amd_gpu_cloud"},
+    },
 )
 
 _DEFAULT_PROVIDER_HOSTS = {
     "minimax": {"api.minimax.io", "api.minimaxi.com"},
     "deepseek": {"api.deepseek.com"},
+    "kimi": {"api.moonshot.cn"},
+    "glm": {"open.bigmodel.cn"},
+    "opencode_go": {"opencode.ai"},
+    "gemini": {"generativelanguage.googleapis.com"},
+    "openrouter": {"openrouter.ai"},
+    "amd_gpu_cloud": {"developer.amd.com.cn"},
 }
 
 
@@ -230,6 +306,7 @@ def normalize_model_configuration(
             "name": str(source.get("name") or definition.label).strip() or definition.label,
             "adapter": adapter_id,
             "enabled": source.get("enabled") is not False,
+            "use_proxy": source.get("use_proxy") is True,
             "base_url": base_url,
             "api_key": api_key,
             "options": deepcopy(options),
@@ -496,7 +573,7 @@ def migrate_legacy_model_configuration(
     connections: list[dict[str, Any]] = []
     profiles: list[dict[str, Any]] = []
     routes = {name: [] for name in ROUTE_NAMES}
-    connection_keys: dict[tuple[str, str, str], str] = {}
+    connection_keys: dict[tuple[str, str, str, bool], str] = {}
     profile_keys: dict[tuple[str, str], str] = {}
     used_profile_ids: set[str] = set()
 
@@ -520,7 +597,8 @@ def migrate_legacy_model_configuration(
         elif not base_url:
             base_url = definition.default_base_url
         api_key = "" if definition.auth_type != "api_key" else str(raw.get("api_key") or "").strip()
-        key = (adapter, base_url, api_key)
+        use_proxy = raw.get("use_proxy") is True
+        key = (adapter, base_url, api_key, use_proxy)
         connection_id = connection_keys.get(key)
         if not connection_id:
             connection_id = f"connection-{len(connections) + 1}"
@@ -530,6 +608,7 @@ def migrate_legacy_model_configuration(
                 "name": str(raw.get("provider_name") or definition.label).strip() or definition.label,
                 "adapter": adapter,
                 "enabled": True,
+                "use_proxy": use_proxy,
                 "base_url": base_url,
                 "api_key": api_key,
                 "options": {},
@@ -737,6 +816,19 @@ def candidate_for_profile(
         "context_limit": limit,
         "dimensions": int(profile.get("dimensions") or 0),
         "max_concurrency": int(profile.get("max_concurrency") or 0),
+        "use_proxy": connection.get("use_proxy") is True,
+        "options": {
+            **(
+                deepcopy(connection.get("options"))
+                if isinstance(connection.get("options"), dict)
+                else {}
+            ),
+            **(
+                deepcopy(profile.get("options"))
+                if isinstance(profile.get("options"), dict)
+                else {}
+            ),
+        },
         "desc": profile.get("description", ""),
         "price": profile.get("price", ""),
         "base_url": _legacy_base_url(connection),
@@ -802,6 +894,7 @@ def _legacy_mirrors(configuration: dict[str, Any]) -> tuple[dict[str, object], d
         "api_key": str(selected_embedding.get("api_key") or ""),
         "model": str(selected_embedding.get("model") or ""),
         "dimensions": int(selected_embedding.get("dimensions") or 0),
+        "use_proxy": selected_embedding.get("use_proxy") is True,
     }
     settings_updates: dict[str, object] = {
         "model_configuration": configuration,
@@ -819,6 +912,60 @@ def _legacy_mirrors(configuration: dict[str, Any]) -> tuple[dict[str, object], d
     return settings_updates, env_updates
 
 
+def validate_active_route_provider_families(
+    configuration: dict[str, Any],
+) -> None:
+    """Reject automatic chat routes that could cross provider families."""
+    enabled_connections = {
+        str(connection.get("id") or ""): connection
+        for connection in configuration.get("connections") or []
+        if isinstance(connection, dict) and connection.get("enabled", True)
+    }
+    enabled_profiles = {
+        str(profile.get("id") or ""): profile
+        for profile in configuration.get("profiles") or []
+        if isinstance(profile, dict) and profile.get("enabled", True)
+    }
+    route_families: dict[str, ProviderFamily] = {}
+    routes = configuration.get("routes") or {}
+    for route_name in ("primary", "secondary", "vision"):
+        families: list[ProviderFamily] = []
+        for profile_id in routes.get(route_name) or []:
+            profile = enabled_profiles.get(str(profile_id or ""))
+            if profile is None:
+                continue
+            connection = enabled_connections.get(
+                str(profile.get("connection_id") or "")
+            )
+            if connection is None:
+                continue
+            family = provider_family_for_candidate({
+                "adapter": connection.get("adapter"),
+                "provider": connection.get("adapter"),
+            })
+            if family not in families:
+                families.append(family)
+        if len(families) > 1:
+            raise ProviderFamilyError(
+                f"route {route_name!r} mixes Codex and OpenAI-compatible "
+                "models; automatic fallback across provider families is not allowed"
+            )
+        if families:
+            route_families[route_name] = families[0]
+
+    primary_family = route_families.get("primary")
+    if primary_family is None:
+        return
+    for route_name in ("secondary", "vision"):
+        family = route_families.get(route_name)
+        if family is not None and family is not primary_family:
+            raise ProviderFamilyError(
+                f"route {route_name!r} uses {family.value} while the primary "
+                f"route uses {primary_family.value}; automatic fallback across "
+                "Codex and OpenAI-compatible provider families is not allowed"
+            )
+
+
 def save_model_configuration(
     raw: Any,
     *,
@@ -826,6 +973,7 @@ def save_model_configuration(
 ) -> tuple[dict[str, Any], int]:
     previous = get_model_configuration()
     normalized = normalize_model_configuration(raw, previous=previous)
+    validate_active_route_provider_families(normalized)
     settings_updates, env_updates = _legacy_mirrors(normalized)
     revision, _settings = config_store.update_settings_and_env_atomic(
         settings_updates,
@@ -885,4 +1033,5 @@ __all__ = [
     "save_model_configuration",
     "save_primary_model_candidates",
     "selectable_model_candidates",
+    "validate_active_route_provider_families",
 ]

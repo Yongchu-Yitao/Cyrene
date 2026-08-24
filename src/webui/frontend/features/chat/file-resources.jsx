@@ -160,6 +160,7 @@ var WorkbenchChatRuntimes = (function () {
   var reconnectTimers = {};     // chatId -> bounded transport-reconnect timer
   var deferredSends = {};       // chatId -> terminal-race guidance promoted to the next normal turn
   var failures = {};            // chatId -> terminal Error; retained until the next explicit run attempt
+  var streamGenerations = {};   // chatId -> latest send/reconnect generation
   var subscribers = new Set();
   var summarySubscribers = new Set();
   var hooks = null;             // live transcript hooks from the mounted page
@@ -307,8 +308,17 @@ var WorkbenchChatRuntimes = (function () {
     delete failures[String(chatId || "")];
   }
 
-  function failRun(chatId, err) {
-    if (!chatId) return;
+  function ownsStreamGeneration(chatId, generation) {
+    var current = runtimes[String(chatId || "")];
+    return !!(
+      current
+      && generation
+      && String(current.streamGeneration || "") === String(generation)
+    );
+  }
+
+  function failRun(chatId, err, generation) {
+    if (!chatId || !ownsStreamGeneration(chatId, generation)) return;
     clearReconnectTimer(chatId);
     failures[chatId] = err || new Error(wbcT("workbenchChat.agentError.failed", "Agent run failed"));
     // The provider has exhausted its bounded retries and emitted the terminal
@@ -664,7 +674,7 @@ var WorkbenchChatRuntimes = (function () {
       if (!cur) return null;
       var patch = { lastEventAt: Date.now() };
       if (session.sessionId) patch.externalSessionId = session.sessionId;
-      if (session.commands.length) patch.agentCommands = session.commands;
+      if (session.updateKind === "available_commands_update" || session.commands.length) patch.agentCommands = session.commands;
       if (session.mode != null) patch.agentMode = session.mode;
       if (session.plan) patch.activePlan = session.plan;
       if (session.configOption || session.configOptions.length) {
@@ -693,8 +703,8 @@ var WorkbenchChatRuntimes = (function () {
     fire("onAgentRequestResolved", chatId, event);
   }
 
-  function streamHandlers(chatId) {
-    return {
+  function streamHandlers(chatId, generation) {
+    var handlers = {
       onEventCursor: function (cursor) {
         update(chatId, function (cur) {
           if (!cur) return null;
@@ -949,9 +959,21 @@ var WorkbenchChatRuntimes = (function () {
         fire("onInterrupted", chatId);
       },
       onError: function (err) {
-        failRun(chatId, err);
+        failRun(chatId, err, generation);
       },
     };
+    // A completed stream may remain open briefly while the server persists
+    // projections.  If the user starts another turn in that window, callbacks
+    // from the old transport must not mutate or fail the new runtime merely
+    // because both runs share a chatId.
+    Object.keys(handlers).forEach(function (name) {
+      var handler = handlers[name];
+      handlers[name] = function () {
+        if (!ownsStreamGeneration(chatId, generation)) return undefined;
+        return handler.apply(null, arguments);
+      };
+    });
+    return handlers;
   }
 
   function scheduleReconnect(chatId, model) {
@@ -968,9 +990,13 @@ var WorkbenchChatRuntimes = (function () {
     }, delay);
   }
 
-  function ownStream(chatId, streamPromise, ac, model) {
+  function ownStream(chatId, generation, streamPromise, ac, model) {
     var shouldReconnect = true;
     return streamPromise.catch(function (err) {
+      if (!ownsStreamGeneration(chatId, generation)) {
+        shouldReconnect = false;
+        return;
+      }
       if (err && err.name === "AbortError") {
         shouldReconnect = false;
         return;
@@ -986,10 +1012,13 @@ var WorkbenchChatRuntimes = (function () {
       // A rejected/reconnecting transport is not yet the run's terminal
       // result. The backend/provider owns its bounded retries and will emit a
       // final `error` / `run.failed` event only after those attempts are spent.
-      if (!(err && err.code === "chat_run_not_found")) fire("onError", chatId, err, { terminal: false });
+      if (
+        ownsStreamGeneration(chatId, generation)
+        && !(err && err.code === "chat_run_not_found")
+      ) fire("onError", chatId, err, { terminal: false });
     }).finally(function () {
       if (aborts[chatId] === ac) delete aborts[chatId];
-      if (runtimes[chatId]) {
+      if (ownsStreamGeneration(chatId, generation)) {
         if (shouldReconnect && model && model.reconnectRun) {
           // A transport ending is not a run ending. Keep the assembled
           // activities/segments visible and resume after the highest event
@@ -1008,7 +1037,7 @@ var WorkbenchChatRuntimes = (function () {
       // when this stream closes. No timer/polling is involved—the stream's
       // terminal event wakes the deferred send.
       var deferred = deferredSends[chatId];
-      if (deferred) {
+      if (deferred && String(streamGenerations[chatId] || "") === String(generation)) {
         delete deferredSends[chatId];
         start(chatId, deferred.input, deferred.model);
       }
@@ -1026,6 +1055,8 @@ var WorkbenchChatRuntimes = (function () {
     if (ac) aborts[chatId] = ac;
     var startedAt = Date.now();
     var clientRequestId = String(input.clientRequestId || ("send_" + startedAt + "_" + Math.random().toString(36).slice(2, 9)));
+    var generation = "stream_" + clientRequestId;
+    streamGenerations[chatId] = generation;
     input = { ...input, clientRequestId: clientRequestId };
     var optimisticUserMessage = null;
     if (!input.retry) {
@@ -1060,10 +1091,12 @@ var WorkbenchChatRuntimes = (function () {
       optimisticUserMessageId: optimisticUserMessage ? optimisticUserMessage.id : "",
       userMessages: optimisticUserMessage ? [optimisticUserMessage] : [],
       clientRequestId: clientRequestId,
+      streamGeneration: generation,
     });
     return ownStream(
       chatId,
-      model.sendMessage(chatId, input, streamHandlers(chatId), ac ? ac.signal : undefined),
+      generation,
+      model.sendMessage(chatId, input, streamHandlers(chatId, generation), ac ? ac.signal : undefined),
       ac,
       model
     );
@@ -1076,17 +1109,20 @@ var WorkbenchChatRuntimes = (function () {
     clearReconnectTimer(chatId);
     var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
     if (ac) aborts[chatId] = ac;
+    var generation = "stream_reconnect_" + Date.now() + "_" + Math.random().toString(36).slice(2, 9);
+    streamGenerations[chatId] = generation;
     if (existing) {
       update(chatId, function (cur) {
-        return cur ? { ...cur, reconnecting: true } : null;
+        return cur ? { ...cur, reconnecting: true, streamGeneration: generation } : null;
       });
     } else {
-      update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], notifications: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: false, reconnecting: true, reconnectAttempts: 0, eventCursor: 0 });
+      update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], notifications: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: false, reconnecting: true, reconnectAttempts: 0, eventCursor: 0, streamGeneration: generation });
     }
     var cursor = Number(existing && existing.eventCursor || 0);
     return ownStream(
       chatId,
-      model.reconnectRun(chatId, streamHandlers(chatId), ac ? ac.signal : undefined, cursor),
+      generation,
+      model.reconnectRun(chatId, streamHandlers(chatId, generation), ac ? ac.signal : undefined, cursor),
       ac,
       model
     );

@@ -163,7 +163,7 @@ function wbcRuntimeAgentSession(context, chatId, session) {
     if (!previous || previous.id !== chatId) return previous;
     var next = { ...previous };
     if (session.sessionId) next.agent = { ...(previous.agent || {}), externalSessionId: session.sessionId, runtimeState: "ready" };
-    if (session.commands.length) next.agentCommands = session.commands;
+    if (session.updateKind === "available_commands_update" || session.commands.length) next.agentCommands = session.commands;
     if (session.mode != null) next.agentMode = session.mode;
     if (session.plan) next.activePlan = session.plan;
     if (session.configOption || session.configOptions.length) {

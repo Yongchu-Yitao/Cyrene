@@ -1280,7 +1280,7 @@ def test_normalize_dsml_tool_calls_rejects_unknown_tools():
     assert cll._normalize_dsml_tool_calls(message, [{"type": "function", "function": {"name": "WebSearch"}}]) == message
 
 
-async def test_final_reply_retries_visible_dsml_tool_markup(monkeypatch):
+async def test_final_reply_corrects_visible_dsml_tool_markup_once(monkeypatch):
     from cyrene.agent import guidance, replies
 
     calls: list[list[dict]] = []
@@ -2666,8 +2666,10 @@ async def test_permission_pending_question_does_not_persist_chat_message(monkeyp
     assert any(event.get("type") == "user_question" and event.get("question_id") == question["id"] for event in seen)
 
 
-async def test_ask_user_wait_state_does_not_persist_assistant_trace(monkeypatch, tmp_path):
+async def test_ask_user_wait_state_preserves_control_protocol_and_ui_projection(monkeypatch, tmp_path):
     from cyrene import agent
+    from cyrene.agent import agent as agent_core
+    from cyrene.agent.transcript_policy import TranscriptPolicy
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
@@ -2676,6 +2678,11 @@ async def test_ask_user_wait_state_does_not_persist_assistant_trace(monkeypatch,
         if "use_tools" in names:
             return {
                 "content": "我应该先问清楚。",
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 2,
+                    "total_tokens": 12,
+                },
                 "tool_calls": [
                     {
                         "id": "ask_1",
@@ -2691,7 +2698,15 @@ async def test_ask_user_wait_state_does_not_persist_assistant_trace(monkeypatch,
             }
         raise AssertionError("Unexpected heavy tool loop")
 
-    async def fake_execute_tool(name, arguments, bot, chat_id, db_path, notify_state):
+    async def fake_execute_tool(
+        name,
+        arguments,
+        bot,
+        chat_id,
+        db_path,
+        notify_state,
+        **kwargs,
+    ):
         assert name == "ask_user"
         await agent._upsert_pending_question({
             "text": str(arguments.get("text", "")),
@@ -2707,18 +2722,135 @@ async def test_ask_user_wait_state_does_not_persist_assistant_trace(monkeypatch,
 
     _patch_call_llm(monkeypatch, fake_call_llm)
     _patch_execute_tool(monkeypatch, fake_execute_tool)
+    monkeypatch.setattr(agent_core, "execute_wire_tool", fake_execute_tool)
+    monkeypatch.setattr(
+        agent_core,
+        "current_run_transcript_policy",
+        lambda: TranscriptPolicy.DUAL_LANE,
+    )
+    monkeypatch.setattr(agent_core, "has_active_run_model_lease", lambda: True)
 
     result = await agent._run_chat_agent("帮我继续", None, 0, "db.sqlite3", client_request_id="req_wait")
     state = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))
     messages = state["messages"]
 
     assert result == agent._AWAITING_USER_SENTINEL
-    assert [msg["role"] for msg in messages] == ["user", "assistant"]
     assert messages[0]["content"] == "帮我继续"
-    assert messages[1]["question_prompt"] is True
-    assert messages[1]["content"] == "你更想看攻略还是代码？"
-    assert "tool_calls" not in messages[1]
+    question_projection = next(
+        msg for msg in messages if msg.get("question_prompt") is True
+    )
+    assert question_projection["content"] == "你更想看攻略还是代码？"
+    assert question_projection["persist_model_record"] is False
+    assert question_projection["hidden_from_llm"] is True
+    assert question_projection["usage"]["total_tokens"] == 12
+    assistant_protocol = next(
+        msg
+        for msg in messages
+        if msg.get("role") == "assistant" and msg.get("tool_calls")
+    )
+    assert assistant_protocol["hidden_from_ui"] is True
+    assert assistant_protocol["persist_model_record"] is True
+    assert assistant_protocol["lane_refs"] == ["decision"]
+    assert "usage" not in assistant_protocol
+    assert assistant_protocol["message_id"] == "msg_ask_user_ask_1_assistant"
+    assert assistant_protocol["tool_calls"][0]["id"] == "ask_1"
+    tool_protocol = next(
+        msg for msg in messages if msg.get("tool_call_id") == "ask_1"
+    )
+    assert tool_protocol["hidden_from_ui"] is True
+    assert tool_protocol["persist_model_record"] is True
+    assert tool_protocol["lane_refs"] == ["decision"]
+    assert tool_protocol["message_id"] == "msg_ask_user_ask_1_result"
+    from cyrene.agent.deep_reflection import project_history_for_llm
+    resumed_model_history = project_history_for_llm([
+        *messages,
+        {"role": "user", "content": "攻略"},
+    ])
+    assert not any(msg.get("question_prompt") for msg in resumed_model_history)
+    assert any(msg.get("tool_calls") for msg in resumed_model_history)
+    assert any(msg.get("tool_call_id") == "ask_1" for msg in resumed_model_history)
+    assert resumed_model_history[-1]["content"] == "攻略"
     assert state["pending_question"]["text"] == "你更想看攻略还是代码？"
+
+
+async def test_legacy_ask_user_wait_keeps_normalized_question_history(
+    monkeypatch,
+    tmp_path,
+):
+    from cyrene import agent
+    from cyrene.agent import agent as agent_core
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        return {
+            "content": "I need one clarification.",
+            "usage": {
+                "prompt_tokens": 8,
+                "completion_tokens": 2,
+                "total_tokens": 10,
+            },
+            "tool_calls": [{
+                "id": "ask-legacy",
+                "function": {
+                    "name": "ask_user",
+                    "arguments": json.dumps({
+                        "text": "Which format?",
+                        "options": ["Markdown", "PDF"],
+                    }),
+                },
+            }],
+        }
+
+    async def fake_execute_wire_tool(
+        name,
+        arguments,
+        bot,
+        chat_id,
+        db_path,
+        notify_state,
+        **kwargs,
+    ):
+        await agent._upsert_pending_question({
+            "text": arguments["text"],
+            "options": arguments["options"],
+            "round_id": agent._current_round_id.get(),
+        })
+        return json.dumps({"status": "awaiting_user"})
+
+    monkeypatch.setattr(agent_core, "_call_llm", fake_call_llm)
+    monkeypatch.setattr(
+        agent_core,
+        "execute_wire_tool",
+        fake_execute_wire_tool,
+    )
+
+    round_token = agent._current_round_id.set("round-legacy-ask")
+    try:
+        result = await agent_core._run_main_agent(
+            "Prepare a report",
+            [],
+            None,
+            0,
+            "db.sqlite3",
+        )
+    finally:
+        agent._current_round_id.reset(round_token)
+
+    state = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))
+    assert result == agent._AWAITING_USER_SENTINEL
+    assert [message["role"] for message in state["messages"]] == [
+        "user",
+        "assistant",
+    ]
+    question = state["messages"][-1]
+    assert question["question_prompt"] is True
+    assert question["content"] == "Which format?"
+    assert question["persist_model_record"] is True
+    assert question["usage"]["total_tokens"] == 10
+    assert not any(message.get("tool_calls") for message in state["messages"])
+    assert not any(message.get("role") == "tool" for message in state["messages"])
 
 
 async def test_answer_pending_question_resumes_same_round(monkeypatch, tmp_path):
@@ -5898,16 +6030,19 @@ async def test_run_main_agent_retries_invalid_phase1_tool_and_returns_model_expl
     responses = iter([
         {
             "content": "好的，先看天气。",
+            "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
             "tool_calls": [
                 {"id": "w1", "function": {"name": "UnavailableTool", "arguments": '{"query":"Toronto weather today"}'}},
             ],
         },
         {
             "content": "当前阶段没有合适工具，请改用 use_tools 进入完整工具阶段。",
+            "usage": {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9},
             "tool_calls": [],
         },
         {
             "content": "当前阶段没有合适工具，请改用 use_tools 进入完整工具阶段。",
+            "usage": {"prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14},
             "tool_calls": [{
                 "id": "q1",
                 "function": {"name": "quit", "arguments": "{}"},
@@ -5934,14 +6069,30 @@ async def test_run_main_agent_retries_invalid_phase1_tool_and_returns_model_expl
     assert {"use_tools", "ask_user", "quit", "WebSearch"} <= tool_names
     assert calls[0] is not _agent_state._LIGHT_TOOL_DEFS
     assert saved
+    assert saved[-1][-1]["usage"] == {
+        "prompt_tokens": 23,
+        "completion_tokens": 6,
+        "total_tokens": 29,
+    }
 
 
-async def test_phase1_plain_text_completes_after_one_missing_control_repair(monkeypatch):
+async def test_phase1_missing_control_usage_rolls_into_explicit_quit(monkeypatch):
     from cyrene.agent import agent as _agent_core
 
     responses = iter([
-        {"content": "first answer", "tool_calls": []},
-        {"content": "repaired answer", "tool_calls": []},
+        {
+            "content": "first answer",
+            "tool_calls": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+        },
+        {
+            "content": "repaired answer",
+            "tool_calls": [{
+                "id": "quit-repaired",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 3, "total_tokens": 23},
+        },
     ])
     calls = []
     saved = []
@@ -5970,16 +6121,110 @@ async def test_phase1_plain_text_completes_after_one_missing_control_repair(monk
     assert len(calls) == 2
     assert saved[-1][-1]["content"] == "repaired answer"
     assert saved[-1][-1]["client_request_id"] == "req_phase1_fallback"
+    assert saved[-1][-1]["usage"] == {
+        "prompt_tokens": 30,
+        "completion_tokens": 5,
+        "total_tokens": 35,
+    }
+    assert sum(
+        int(message.get("usage", {}).get("total_tokens") or 0)
+        for message in saved[-1]
+    ) == 35
 
 
-async def test_phase1_empty_reply_fails_after_one_missing_control_repair(monkeypatch):
+async def test_phase1_terminal_guidance_redecision_rolls_usage_into_public_reply(
+    monkeypatch,
+):
+    from cyrene.agent import agent as _agent_core
+
+    class GuidanceAtFirstTerminal:
+        round_id = ""
+
+        def __init__(self):
+            self.terminal_checks = 0
+
+        def collect_guidance_nowait(self):
+            return []
+
+        async def wait_for_guidance(self):
+            await asyncio.Event().wait()
+
+        async def collect_guidance_or_seal(self):
+            self.terminal_checks += 1
+            if self.terminal_checks == 1:
+                return [{
+                    "event_id": "guidance-1",
+                    "payload": {"text": "Use the updated wording."},
+                }]
+            return []
+
+        def acknowledge(self, events):
+            return None
+
+        async def wait_for_active_tools(self):
+            return None
+
+    responses = iter([
+        {
+            "content": "first terminal answer",
+            "tool_calls": [{
+                "id": "quit-before-guidance",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+        },
+        {
+            "content": "updated terminal answer",
+            "tool_calls": [{
+                "id": "quit-after-guidance",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+            "usage": {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9},
+        },
+    ])
+    saved = []
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        return next(responses)
+
+    async def fake_save(messages, **kwargs):
+        saved.append(messages)
+
+    monkeypatch.setattr(
+        _agent_core,
+        "current_workbench_inbox",
+        lambda: GuidanceAtFirstTerminal(),
+    )
+    monkeypatch.setattr(_agent_core, "_call_llm", fake_call_llm)
+    monkeypatch.setattr(_agent_core, "_append_session_message", AsyncMock())
+    monkeypatch.setattr(_agent_core, "_save_session_messages", fake_save)
+    monkeypatch.setattr(_agent_core, "_publish_runtime_event", AsyncMock())
+
+    result = await _agent_core._run_main_agent(
+        "answer",
+        [],
+        None,
+        0,
+        "db.sqlite3",
+        persist_user_message=False,
+    )
+
+    assert result == "updated terminal answer"
+    assert saved[-1][-1]["usage"] == {
+        "prompt_tokens": 12,
+        "completion_tokens": 3,
+        "total_tokens": 15,
+    }
+
+
+async def test_phase1_repeated_plain_text_fails_after_one_control_repair(monkeypatch):
     from cyrene.agent import agent as _agent_core
 
     calls = []
 
     async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         calls.append(messages)
-        return {"content": "", "tool_calls": []}
+        return {"content": "still plain text", "tool_calls": []}
 
     _patch_call_llm(monkeypatch, fake_call_llm)
     _patch_append_session(monkeypatch, AsyncMock())
@@ -5987,7 +6232,7 @@ async def test_phase1_empty_reply_fails_after_one_missing_control_repair(monkeyp
 
     with pytest.raises(
         _agent_core.AgentControlProtocolError,
-        match="neither a control signal nor a usable answer",
+        match="no explicit control signal",
     ):
         await _agent_core._run_main_agent(
             "answer directly",
@@ -6000,7 +6245,7 @@ async def test_phase1_empty_reply_fails_after_one_missing_control_repair(monkeyp
     assert len(calls) == 2
 
 
-async def test_phase2_plain_text_completes_after_one_missing_control_repair(monkeypatch):
+async def test_phase2_rejected_plain_text_is_not_committed_by_empty_quit(monkeypatch):
     from cyrene.agent import agent as _agent_core
 
     responses = iter([
@@ -6012,7 +6257,14 @@ async def test_phase2_plain_text_completes_after_one_missing_control_repair(monk
             }],
         },
         {"content": "first execution answer", "tool_calls": []},
-        {"content": "repaired execution answer", "tool_calls": []},
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "quit-phase2",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+        },
+        {"content": "self-contained execution answer", "tool_calls": []},
     ])
     calls = []
     saved = []
@@ -6037,13 +6289,13 @@ async def test_phase2_plain_text_completes_after_one_missing_control_repair(monk
         client_request_id="req_phase2_fallback",
     )
 
-    assert result == "repaired execution answer"
-    assert len(calls) == 3
-    assert saved[-1][-1]["content"] == "repaired execution answer"
+    assert result == "self-contained execution answer"
+    assert len(calls) == 4
+    assert saved[-1][-1]["content"] == "self-contained execution answer"
     assert saved[-1][-1]["client_request_id"] == "req_phase2_fallback"
 
 
-async def test_phase2_empty_reply_fails_after_one_missing_control_repair(monkeypatch):
+async def test_phase2_repeated_safe_plain_text_fails_without_explicit_quit(monkeypatch):
     from cyrene.agent import agent as _agent_core
 
     responses = iter([
@@ -6054,8 +6306,8 @@ async def test_phase2_empty_reply_fails_after_one_missing_control_repair(monkeyp
                 "function": {"name": "use_tools", "arguments": '{"task":"check"}'},
             }],
         },
-        {"content": "", "tool_calls": []},
-        {"content": "", "tool_calls": []},
+        {"content": "first safe execution answer", "tool_calls": []},
+        {"content": "second safe execution answer", "tool_calls": []},
     ])
     calls = []
 
@@ -6069,7 +6321,7 @@ async def test_phase2_empty_reply_fails_after_one_missing_control_repair(monkeyp
 
     with pytest.raises(
         _agent_core.AgentControlProtocolError,
-        match="neither a control signal nor a usable answer",
+        match="no explicit control signal",
     ):
         await _agent_core._run_main_agent(
             "inspect first",
@@ -6080,6 +6332,153 @@ async def test_phase2_empty_reply_fails_after_one_missing_control_repair(monkeyp
         )
 
     assert len(calls) == 3
+
+
+@pytest.mark.parametrize("failure_mode", ["runtime_error", "protocol_error"])
+async def test_dual_lane_phase2_failure_closes_decision_handoff(
+    monkeypatch,
+    failure_mode,
+):
+    from cyrene.agent import agent as _agent_core
+    from cyrene.agent.transcript_policy import TranscriptPolicy
+
+    calls = 0
+    lane_records = []
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {
+                "content": "",
+                "tool_calls": [{
+                    "id": "route-failed",
+                    "function": {
+                        "name": "use_tools",
+                        "arguments": '{"execution_brief":"inspect"}',
+                    },
+                }],
+            }
+        if failure_mode == "runtime_error":
+            raise RuntimeError("provider failed")
+        return {
+            "content": f"safe plain response {calls}",
+            "tool_calls": [],
+        }
+
+    async def capture_lane_record(message, session_id=None):
+        lane_records.append(message)
+        return message
+
+    monkeypatch.setattr(
+        _agent_core,
+        "current_run_transcript_policy",
+        lambda: TranscriptPolicy.DUAL_LANE,
+    )
+    monkeypatch.setattr(_agent_core, "has_active_run_model_lease", lambda: True)
+    monkeypatch.setattr(_agent_core, "_call_llm", fake_call_llm)
+    monkeypatch.setattr(_agent_core, "_append_session_message", AsyncMock())
+    monkeypatch.setattr(_agent_core, "_save_session_messages", AsyncMock())
+    monkeypatch.setattr(_agent_core, "_publish_runtime_event", AsyncMock())
+    monkeypatch.setattr(
+        _agent_core,
+        "append_or_upsert_lane_record",
+        capture_lane_record,
+    )
+
+    expected_error = (
+        RuntimeError
+        if failure_mode == "runtime_error"
+        else _agent_core.AgentControlProtocolError
+    )
+    with pytest.raises(expected_error):
+        await _agent_core._run_main_agent(
+            "inspect",
+            [],
+            None,
+            0,
+            "db.sqlite3",
+            persist_user_message=False,
+        )
+
+    outcome_messages = [
+        message
+        for message in lane_records
+        if message.get("record_kind") == "execution_outcome"
+    ]
+    outcomes = [json.loads(message["content"]) for message in outcome_messages]
+    assert len(outcomes) == 1
+    assert outcome_messages[0]["tool_call_id"] == "route-failed"
+    assert outcomes[0]["status"] == "failed"
+    assert outcomes[0]["public_reply"] == ""
+    assert outcomes[0]["state_summary"] == "Execution failed before completion."
+    assert outcomes[0]["unresolved"] == ["Execution failed before completion."]
+    assert "provider failed" not in json.dumps(outcomes[0])
+
+
+async def test_dual_lane_phase2_cancellation_closes_decision_handoff(monkeypatch):
+    from cyrene.agent import agent as _agent_core
+    from cyrene.agent.transcript_policy import TranscriptPolicy
+
+    calls = 0
+    lane_records = []
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {
+                "content": "",
+                "tool_calls": [{
+                    "id": "route-cancelled",
+                    "function": {
+                        "name": "use_tools",
+                        "arguments": '{"execution_brief":"inspect"}',
+                    },
+                }],
+            }
+        raise asyncio.CancelledError
+
+    async def capture_lane_record(message, session_id=None):
+        lane_records.append(message)
+        return message
+
+    monkeypatch.setattr(
+        _agent_core,
+        "current_run_transcript_policy",
+        lambda: TranscriptPolicy.DUAL_LANE,
+    )
+    monkeypatch.setattr(_agent_core, "has_active_run_model_lease", lambda: True)
+    monkeypatch.setattr(_agent_core, "_call_llm", fake_call_llm)
+    monkeypatch.setattr(_agent_core, "_append_session_message", AsyncMock())
+    monkeypatch.setattr(_agent_core, "_save_session_messages", AsyncMock())
+    monkeypatch.setattr(_agent_core, "_publish_runtime_event", AsyncMock())
+    monkeypatch.setattr(
+        _agent_core,
+        "append_or_upsert_lane_record",
+        capture_lane_record,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await _agent_core._run_main_agent(
+            "inspect",
+            [],
+            None,
+            0,
+            "db.sqlite3",
+            persist_user_message=False,
+        )
+
+    outcome_messages = [
+        message
+        for message in lane_records
+        if message.get("record_kind") == "execution_outcome"
+    ]
+    outcomes = [json.loads(message["content"]) for message in outcome_messages]
+    assert len(outcomes) == 1
+    assert outcome_messages[0]["tool_call_id"] == "route-cancelled"
+    assert outcomes[0]["status"] == "cancelled"
+    assert outcomes[0]["public_reply"] == ""
 
 
 def test_build_current_session_uses_saved_session_and_round_titles(tmp_path, monkeypatch):

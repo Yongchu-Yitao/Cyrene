@@ -34,7 +34,11 @@ async def _tool_list_shells(_args: dict[str, Any], _bot: Any, _chat_id: int, _db
         {
             "shell_id": item.get("id", ""),
             "title": item.get("title", "independent shell"),
-            "cwd": item.get("cwd", "."),
+            "cwd": (
+                item.get("remoteCwd", "") or item.get("cwd", ".")
+                if item.get("connectionKind") == "ssh"
+                else item.get("cwd", ".")
+            ),
             "status": item.get("status", ""),
             "exit_code": item.get("exitCode"),
             "wake_id": item.get("wakeId", ""),
@@ -47,6 +51,14 @@ async def _tool_list_shells(_args: dict[str, Any], _bot: Any, _chat_id: int, _db
             "visible_side": str(
                 (visible_by_id.get(str(item.get("id") or "")) or {}).get("visibleSide") or ""
             ),
+            **({
+                "connection_kind": "ssh",
+                "connection_status": item.get("connectionStatus", ""),
+                "ssh_target": item.get("sshTarget", ""),
+                "remote_cwd": item.get("remoteCwd", ""),
+                "tmux_session": item.get("tmuxSession", ""),
+                "disconnect_reason": item.get("disconnectReason", ""),
+            } if item.get("connectionKind") == "ssh" else {}),
         }
         for item in shells
     ])

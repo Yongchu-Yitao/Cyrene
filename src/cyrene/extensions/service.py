@@ -62,6 +62,17 @@ _TASK_FILE = DATA_DIR / "extension_install_tasks.json"
 _AUDIT_FILE = DATA_DIR / "extension_audit.jsonl"
 _AQUA_REGISTRY_TREE_URL = "https://api.github.com/repos/aquaproj/aqua-registry/git/trees/main?recursive=1"
 
+
+def _extension_proxy_url() -> str:
+    from cyrene.runtime.network_proxy import scoped_proxy_url
+
+    return scoped_proxy_url("extensions")
+
+
+def _extension_http_client(**kwargs: Any) -> httpx.AsyncClient:
+    kwargs.setdefault("proxy", _extension_proxy_url() or None)
+    return httpx.AsyncClient(**kwargs)
+
 _COMMON_PATHS = {
     "darwin": ("/opt/homebrew/bin", "/usr/local/bin", "/Library/TeX/texbin"),
     "linux": ("/usr/local/bin", "/usr/bin", "/snap/bin", str(Path.home() / ".local/bin")),
@@ -293,6 +304,9 @@ def extension_environment() -> dict[str, str]:
     _UV_BIN_DIR.mkdir(parents=True, exist_ok=True)
     _UV_TOOL_DIR.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
+    from cyrene.runtime.network_proxy import proxy_environment
+
+    env.update(proxy_environment(opt_in=bool(_extension_proxy_url())))
     env.update({
         "MISE_DATA_DIR": str(_MISE_DATA),
         "MISE_CONFIG_DIR": str(_MISE_CONFIG),
@@ -1148,7 +1162,7 @@ class ExtensionService:
     async def _search_npm_registry(self, query: str) -> list[dict[str, Any]]:
         sources = source_settings(include_secret=True)
         base = str(sources.get("npm_registry") or "https://registry.npmjs.org").rstrip("/")
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        async with _extension_http_client(timeout=15, follow_redirects=True) as client:
             response = await client.get(base + "/-/v1/search", params={"text": query, "size": "20"})
             response.raise_for_status()
             payload = response.json()
@@ -1171,7 +1185,7 @@ class ExtensionService:
         package = query.strip()
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", package):
             return []
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        async with _extension_http_client(timeout=15, follow_redirects=True) as client:
             response = await client.get(f"https://pypi.org/pypi/{urllib.parse.quote(package, safe='')}/json")
             if response.status_code == 404:
                 return []
@@ -1187,7 +1201,7 @@ class ExtensionService:
         )]
 
     async def _search_rubygems(self, query: str) -> list[dict[str, Any]]:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        async with _extension_http_client(timeout=15, follow_redirects=True) as client:
             response = await client.get("https://rubygems.org/api/v1/search.json", params={"query": query})
             response.raise_for_status()
             payload = response.json()
@@ -1209,7 +1223,7 @@ class ExtensionService:
         token = str(sources.get("github_token") or "")
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=headers) as client:
+        async with _extension_http_client(timeout=20, follow_redirects=True, headers=headers) as client:
             response = await client.get(_AQUA_REGISTRY_TREE_URL)
             response.raise_for_status()
             payload = response.json()
@@ -1247,7 +1261,7 @@ class ExtensionService:
         params = {"search": query, "version": "latest", "limit": "30"}
         if cursor:
             params["cursor"] = cursor
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        async with _extension_http_client(timeout=20, follow_redirects=True) as client:
             response = await client.get(base + "/v0.1/servers", params=params)
             response.raise_for_status()
             payload = response.json()
@@ -1270,7 +1284,7 @@ class ExtensionService:
                 return identifier, ""
 
         if pypi_identifiers:
-            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as pypi_client:
+            async with _extension_http_client(timeout=10, follow_redirects=True) as pypi_client:
                 pypi_versions = dict(await asyncio.gather(*(
                     latest_pypi_version(pypi_client, identifier) for identifier in pypi_identifiers
                 )))
@@ -1363,7 +1377,7 @@ class ExtensionService:
         sources = source_settings(include_secret=True)
         catalog = str(sources.get("skill_catalog_url") or "").rstrip("/")
         if catalog:
-            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            async with _extension_http_client(timeout=20, follow_redirects=True) as client:
                 response = await client.get(catalog, params={"q": query, "limit": "30"})
                 response.raise_for_status()
                 payload = response.json()
@@ -1387,7 +1401,7 @@ class ExtensionService:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         params = {"q": f"{query} skill SKILL.md", "sort": "stars", "order": "desc", "per_page": "30"}
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=headers) as client:
+        async with _extension_http_client(timeout=20, follow_redirects=True, headers=headers) as client:
             response = await client.get("https://api.github.com/search/repositories", params=params)
             response.raise_for_status()
             payload = response.json()
@@ -1418,7 +1432,12 @@ class ExtensionService:
         if parsed.scheme not in {"https"}:
             raise ValueError("Skill repository URL must use HTTPS")
         root = destination / "repo"
-        proc = await asyncio.create_subprocess_exec("git", "clone", "--depth", "1", "--", url, str(root), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        proc = await asyncio.create_subprocess_exec(
+            "git", "clone", "--depth", "1", "--", url, str(root),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=extension_environment(),
+        )
         _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
         if proc.returncode != 0:
             raise RuntimeError(stderr.decode("utf-8", errors="replace")[-1000:] or "Git clone failed")
@@ -1842,7 +1861,7 @@ class ExtensionService:
         if sources.get("github_token"):
             headers["Authorization"] = f"Bearer {sources['github_token']}"
         url = f"https://api.github.com/repos/{repo}/releases/{'latest' if tag == 'latest' else 'tags/' + urllib.parse.quote(tag)}"
-        async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
+        async with _extension_http_client(timeout=30, headers=headers, follow_redirects=True) as client:
             response = await client.get(url)
             response.raise_for_status()
             return response.json()
@@ -1866,7 +1885,7 @@ class ExtensionService:
         for actual_url in dict.fromkeys(candidates):
             digest = hashlib.sha256()
             try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=300), follow_redirects=True) as client:
+                async with _extension_http_client(timeout=httpx.Timeout(30, read=300), follow_redirects=True) as client:
                     async with client.stream("GET", actual_url) as response:
                         response.raise_for_status()
                         total = int(response.headers.get("content-length") or 0)

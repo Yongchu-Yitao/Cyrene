@@ -249,6 +249,7 @@ async def search_with_deepseek(
             timeout=timeout,
             follow_redirects=False,
             proxy=proxy_url or None,
+            trust_env=False,
         ) as client:
             response = await client.post(
                 _RESPONSES_ENDPOINT,

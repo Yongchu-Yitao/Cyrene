@@ -27,7 +27,8 @@ def test_main_wire_bundle_has_stable_progressive_tool_contract(monkeypatch):
         "update_plan_progress", "DeepReflect", "Read", "read_tool_result", "Write", "Edit",
         "Glob", "Grep", "Bash", "WebSearch", "WebFetch",
         "AnalyzeAttachment", "PowerPointGetContext", "PowerPointInspect",
-        "PowerPointApplyBatch", "PowerPointRenderSlide", "PowerPointToolSearch",
+        "PowerPointApplyBatch", "PowerPointRenderSlide",
+        "PowerPointToolSearch",
         "toolbox",
     ]
     assert json.dumps(defs, sort_keys=True) == json.dumps(
@@ -91,6 +92,22 @@ def test_powerpoint_core_tools_are_hidden_until_addin_is_installed(monkeypatch):
 
     monkeypatch.setattr(wire, "_powerpoint_addin_installed", lambda: True)
     assert set(wire.POWERPOINT_CORE_TOOL_NAMES) <= set(_names(wire.get_main_wire_tool_defs()))
+
+
+def test_direct_powerpoint_create_slides_coerces_integral_revision_string():
+    from cyrene.tooling.gateway import resolve_wire_call
+
+    resolution = resolve_wire_call(
+        "PowerPointCreateSlides",
+        {
+            "expectedRevision": "722",
+            "idempotencyKey": "create-capybara-section",
+            "slideSpecs": [{"layout": "title-body", "title": "Capybara"}],
+        },
+    )
+
+    assert resolution.concrete_arguments["expectedRevision"] == 722
+    assert isinstance(resolution.concrete_arguments["expectedRevision"], int)
 
 
 def test_browser_click_text_is_not_exposed_to_agents():
@@ -1044,6 +1061,7 @@ def test_final_tooling_layout_has_no_legacy_monoliths():
         "control",
         "core",
         "code",
+        "media",
         "browser",
         "desktop",
         "memory",

@@ -287,7 +287,13 @@ async def fetch_manifest_from_source(source: dict[str, Any], inline_manifest: An
     """
     if source.get("type") == "manifest_url":
         url = str(source.get("url") or "")
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10, read=30), follow_redirects=False) as client:
+        from cyrene.runtime.network_proxy import scoped_proxy_url
+
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(10, read=30),
+            follow_redirects=False,
+            proxy=scoped_proxy_url("extensions") or None,
+        ) as client:
             current_url = url
             content = bytearray()
             for _redirect in range(6):

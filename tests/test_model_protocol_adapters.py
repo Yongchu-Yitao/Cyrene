@@ -13,6 +13,7 @@ from cyrene.model_runtime.protocol_adapters import (
     parse_response,
     prepare_request,
     protocol_endpoints,
+    runtime_adapter_for_provider,
 )
 
 
@@ -52,10 +53,44 @@ def test_protocol_endpoints_use_native_provider_routes() -> None:
 
 
 @pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("kimi-k3", "openai"),
+        ("glm-5.3", "openai"),
+        ("deepseek-v4-flash", "openai"),
+        ("minimax-m3", "anthropic"),
+        ("qwen3.8-max", "anthropic"),
+        ("gpt-5.6-luna", "openai_responses"),
+        ("grok-4.5", "openai_responses"),
+        ("muse-spark-1.2-contributor", "openai_responses"),
+    ],
+)
+def test_opencode_go_selects_each_models_documented_protocol(
+    model: str,
+    expected: str,
+) -> None:
+    assert runtime_adapter_for_provider(
+        "openai",
+        model,
+        provider_preset="opencode_go",
+    ) == expected
+
+
+def test_other_provider_presets_keep_the_configured_adapter() -> None:
+    assert runtime_adapter_for_provider(
+        "gemini",
+        "gemini-3.7-flash",
+        provider_preset="gemini",
+    ) == "gemini"
+
+
+@pytest.mark.parametrize(
     ("base_url", "expected"),
     [
         ("https://api.deepseek.com", "https://api.deepseek.com/v1/chat/completions"),
         ("https://api.deepseek.com/v1", "https://api.deepseek.com/v1/chat/completions"),
+        ("https://api.moonshot.cn", "https://api.moonshot.cn/v1/chat/completions"),
+        ("https://api.moonshot.cn/v1", "https://api.moonshot.cn/v1/chat/completions"),
         ("https://api.minimaxi.com", "https://api.minimaxi.com/v1/chat/completions"),
         ("https://api.minimaxi.com/v1", "https://api.minimaxi.com/v1/chat/completions"),
         ("https://api.minimax.io", "https://api.minimax.io/v1/chat/completions"),
@@ -73,6 +108,7 @@ def test_official_openai_compatible_providers_use_only_v1_chat_endpoint(
     ("base_url", "expected"),
     [
         ("https://api.deepseek.com", "https://api.deepseek.com/v1/models"),
+        ("https://api.moonshot.cn", "https://api.moonshot.cn/v1/models"),
         ("https://api.minimaxi.com", "https://api.minimaxi.com/v1/models"),
         ("https://api.minimax.io", "https://api.minimax.io/v1/models"),
     ],
@@ -134,6 +170,27 @@ def test_minimax_openai_discovery_uses_models_endpoint_and_bearer_auth() -> None
         "model": "MiniMax-M2.7",
         "name": "MiniMax-M2.7",
         "capabilities": ["chat"],
+    }]
+
+
+def test_openrouter_discovery_uses_catalog_metadata() -> None:
+    assert parse_discovery_response(
+        "openai",
+        {
+            "data": [{
+                "id": "vendor/model",
+                "name": "Vendor Model",
+                "context_length": 262_144,
+                "architecture": {"input_modalities": ["text", "image"]},
+                "supported_parameters": ["tools", "reasoning"],
+            }],
+        },
+    ) == [{
+        "id": "vendor/model",
+        "model": "vendor/model",
+        "name": "Vendor Model",
+        "capabilities": ["chat", "vision", "tools", "reasoning"],
+        "context_limit": 262_144,
     }]
 
 

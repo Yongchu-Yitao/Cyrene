@@ -214,6 +214,25 @@ def test_office_gateway_generates_tls_material_manifest_and_protected_assets(mon
     assert files.secret not in files.public_info(running=False)["install_command"]
 
     client = TestClient(create_office_gateway_app(files))
+    from cyrene.tool_impl.office import kit
+
+    async def fake_benchmark_tool(method, args, *_rest):
+        return json.dumps({"status": "success", "method": method, "arguments": args})
+
+    monkeypatch.setattr(kit, "_method_handler", fake_benchmark_tool)
+    assert client.post("/benchmark/invoke", json={"method": "ppt.get_context", "arguments": {}}).status_code == 401
+    benchmark_response = client.post(
+        "/benchmark/invoke",
+        params={"token": files.secret},
+        json={"method": "ppt.get_context", "arguments": {"sessionId": "one"}},
+    )
+    assert benchmark_response.status_code == 200
+    assert benchmark_response.json()["method"] == "ppt.get_context"
+    assert client.post(
+        "/benchmark/invoke",
+        params={"token": files.secret},
+        json={"method": "ppt.execute_officejs", "arguments": {}},
+    ).status_code == 400
     assert client.get("/taskpane.html").status_code == 401
     page = client.get("/taskpane.html", params={"token": files.secret})
     assert page.status_code == 200
@@ -275,15 +294,27 @@ def test_office_tools_are_progressively_discoverable_and_strictly_described():
         get_tool_execution_metadata,
     )
     from cyrene.tooling.gateway import resolve_wire_call
+    from cyrene.tooling.wire import DIRECT_TOOL_NAMES
 
     discovered = discover_capabilities("office_tools", query="create slide layout", limit=20)
     ids = {item["id"] for item in discovered}
     assert "ppt.create_slide" in ids
-    assert "ppt.create_slides" in {item["id"] for item in discover_capabilities("office_tools", query="multiple slides", limit=20)}
+    assert "ppt.create_slides" in {
+        item["id"]
+        for item in discover_capabilities(
+            "office_tools", query="multiple slides", limit=20
+        )
+    }
+    assert "PowerPointCreateSlides" not in DIRECT_TOOL_NAMES
 
     detail = describe_capabilities("office_tools", ["ppt.create_slide"])[0]
     schema = detail["input_schema"]
     assert {"expectedRevision", "idempotencyKey", "slideSpec"} <= set(schema["properties"])
+    assert {"title", "body", "bullets", "sections", "theme"} <= set(schema["properties"]["slideSpec"]["properties"])
+    assert {"templateSlideId", "templateBindings"} <= set(schema["properties"]["slideSpec"]["properties"])
+    binding_schema = schema["properties"]["slideSpec"]["properties"]["templateBindings"]["items"]
+    assert binding_schema["required"] == ["shapeRef"]
+    assert "elements" not in schema["properties"]["slideSpec"].get("required", [])
     assert "expected_revision" not in schema["properties"]
     assert "session_id" not in schema["properties"]
 
@@ -324,6 +355,103 @@ def test_office_tools_are_progressively_discoverable_and_strictly_described():
         "ppt.apply_slide_spec", "ppt.check_overlap", "ppt.edit_table",
         "ppt.apply_ooxml_patch", "ppt.execute_officejs",
     } <= all_ids
+
+
+def test_stale_toolbox_snapshot_can_invoke_create_slides_after_direct_migration():
+    from dataclasses import replace
+    from types import MappingProxyType
+
+    from cyrene.tooling.gateway import resolve_wire_call
+    from cyrene.tooling.snapshot import build_catalog_snapshot
+
+    current = build_catalog_snapshot("main")
+    deferred = current.capabilities["ppt.create_slides"]
+    direct = replace(
+        deferred,
+        capability_id="PowerPointCreateSlides",
+        pack_id="direct",
+    )
+    capabilities = dict(current.capabilities)
+    capabilities.pop("ppt.create_slides")
+    capabilities[direct.capability_id] = direct
+    migrated = replace(
+        current,
+        capabilities=MappingProxyType(capabilities),
+        enabled_capability_ids=(
+            current.enabled_capability_ids - {"ppt.create_slides"}
+        ) | {"PowerPointCreateSlides"},
+    )
+
+    resolution = resolve_wire_call(
+        "toolbox",
+        {
+            "operation": "invoke",
+            "capability_id": "ppt.create_slides",
+            "arguments": {
+                "expectedRevision": 7,
+                "idempotencyKey": "migration-compat",
+                "slideSpecs": [{"title": "One"}],
+            },
+        },
+        catalog_snapshot=migrated,
+    )
+
+    assert resolution.capability_id == "ppt.create_slides"
+    assert resolution.concrete_name == "PowerPointCreateSlides"
+    assert resolution.concrete_compat is True
+
+
+def test_semantic_slide_spec_compiles_geometry_without_model_coordinates():
+    from cyrene.tool_impl.office import _shared
+
+    params = _shared._prepare_request("ppt.create_slide", {
+        "slideSpec": {
+            "layout": "section-grid",
+            "title": "Semantic slide",
+            "sections": [
+                {"heading": "One", "body": "First"},
+                {"heading": "Two", "bullets": ["Second", "Third"]},
+            ],
+            "theme": {"accent": "#0055AA"},
+        },
+    })
+
+    spec = params["slideSpec"]
+    assert spec["metadata"]["semanticLayoutCompiled"] is True
+    assert spec["background"]
+    assert {"title", "section-1-title", "section-2-body"} <= {
+        item["ref"] for item in spec["elements"]
+    }
+    assert all(len(item["box"]) == 4 for item in spec["elements"])
+    assert all(value > 0 for item in spec["elements"] for value in item["box"][2:])
+
+
+def test_semantic_image_is_never_silently_dropped_by_non_media_layout():
+    from cyrene.office.slide_layout import compile_slide_spec
+
+    spec = compile_slide_spec({
+        "layout": "quote",
+        "title": "Image-backed quote",
+        "quote": "Preserve the requested visual.",
+        "attribution": "Cyrene",
+        "image": {"assetRef": "assets/capybara.png", "caption": "Capybara"},
+    })
+
+    assert spec["layout"] == "image-right"
+    assert any(
+        element.get("type") == "image"
+        and element.get("assetRef") == "assets/capybara.png"
+        for element in spec["elements"]
+    )
+    body = next(element for element in spec["elements"] if element.get("ref") == "body")
+    assert "Preserve the requested visual." in body["text"]
+    assert "Cyrene" in body["text"]
+    assert spec["metadata"] == {
+        "semanticLayoutCompiled": True,
+        "requestedLayout": "quote",
+        "resolvedLayout": "image-right",
+        "layoutFallbackReason": "image_requires_media_layout",
+    }
 
 
 @pytest.mark.asyncio
@@ -387,7 +515,7 @@ def test_powerpoint_canonical_request_preflight_and_image_pipeline(
 
 
 @pytest.mark.asyncio
-async def test_create_slides_routes_one_progressive_page_at_a_time(monkeypatch):
+async def test_create_slides_routes_simple_pages_in_progressive_stages(monkeypatch):
     from cyrene.tool_impl.office import kit
 
     calls = []
@@ -414,12 +542,42 @@ async def test_create_slides_routes_one_progressive_page_at_a_time(monkeypatch):
     assert [call[0]["expectedRevision"] for call in calls] == [10, 11]
     assert [call[0]["idempotencyKey"] for call in calls] == ["deck:slide:1", "deck:slide:2"]
     assert all(call[0]["commitMode"] == "progressive" for call in calls)
-    assert all(call[0]["progressiveGranularity"] == "element" for call in calls)
+    assert all(call[0]["progressiveGranularity"] == "stage" for call in calls)
     assert [item["current"] for item in progress] == [0, 1, 2]
 
 
 @pytest.mark.asyncio
-async def test_live_slide_spec_forces_ordered_element_preview_but_file_mode_stays_atomic(monkeypatch):
+async def test_create_slides_routes_template_pages_through_template_composer(monkeypatch):
+    from cyrene.tool_impl.office import kit
+
+    calls = []
+
+    async def fake_call(args, operation, method, **_kwargs):
+        calls.append((dict(args), operation, method))
+        return json.dumps({"status": "applied", "revision": 8, "slideId": "401"})
+
+    monkeypatch.setattr(kit, "execute_powerpoint_request", fake_call)
+    monkeypatch.setattr(kit, "publish_tool_progress", lambda **_payload: asyncio.sleep(0))
+    payload = json.loads(await kit._create_slides_handler({
+        "expectedRevision": 7,
+        "idempotencyKey": "templated-deck",
+        "slideSpecs": [{
+            "templateSlideId": "256",
+            "templateBindings": [
+                {"shapeRef": "title", "text": "Inherited layout"},
+                {"shapeRef": "unused-subtitle", "delete": True},
+            ],
+        }],
+    }))
+
+    assert payload["status"] == "applied"
+    assert calls[0][1:] == ("ppt.create_from_template", "ppt.create_from_template")
+    assert calls[0][0]["templateSlideId"] == "256"
+    assert calls[0][0]["slideSpec"]["templateBindings"][1]["delete"] is True
+
+
+@pytest.mark.asyncio
+async def test_live_slide_spec_defaults_to_staged_preview_but_file_mode_stays_atomic(monkeypatch):
     from cyrene.tool_impl.office import kit
 
     calls = []
@@ -447,7 +605,7 @@ async def test_live_slide_spec_forces_ordered_element_preview_but_file_mode_stay
     })
 
     assert calls[0][0]["commitMode"] == "progressive"
-    assert calls[0][0]["progressiveGranularity"] == "element"
+    assert calls[0][0]["progressiveGranularity"] == "stage"
     assert calls[0][3]["timeout"] == 300
     assert calls[1][0]["commitMode"] == "atomic"
 
@@ -529,11 +687,13 @@ def test_powerpoint_addin_uses_typed_dispatch_without_eval():
     assert "slide.shapes.addImage" not in source
     assert "fill.setImage" not in source
     assert "const imageOperations =" not in source
-    assert "for (const [index, op] of params.operations.entries())" in source
+    assert 'operationGroups(params.operations, params.progressiveGranularity || "stage")' in source
     assert "await addImageElement(context, slide, op, batch.created)" in source
     assert "media_stage_failed" in source
     assert "agentKit: agentKit" in source
     assert '"ppt.create_from_template": createFromTemplate' in source
+    assert "async function applyTemplateBindings(slideId, bindings)" in source
+    assert "Template pages use the" in source
     assert '"ppt.apply_slide_spec": applySlideSpec' in source
     assert '"ppt.edit_table": editTable' in source
     assert "context.sync()" in source
@@ -554,6 +714,8 @@ def test_powerpoint_addin_uses_typed_dispatch_without_eval():
     assert "const slide = context.presentation.slides.add(" not in source
     assert "slides.add(options || {});" in source
     assert "createdSlideId = await addSlideAndGetId(context, addOptions);" in source
+    assert "await removeInheritedPlaceholders(context, slide);" in source
+    assert 'code: "unresolved_placeholder"' in source
     assert "await rollbackCreatedSlide(createdSlideId);" in source
     assert "state.mutationQueue.then(executeRequest, executeRequest)" in source
     assert "if (isMutation) state.mutationInFlight = true;" in source
@@ -567,9 +729,9 @@ def test_powerpoint_addin_uses_typed_dispatch_without_eval():
     assert "context.presentation.setSelectedSlides([target]);" in source
     assert "if (slideId) return context.presentation.slides.getItem(slideId);" in source
     assert "await focusSlide(context, slide.id);" in source
-    assert 'progressiveElementGroups(preparedElements, "element")' in source
+    assert 'progressiveElementGroups(preparedElements, params.progressiveGranularity || "stage")' in source
     assert "await livePreviewTick();" in source
-    batch_loop = source.split("for (const [index, op] of params.operations.entries())", 1)[1].split("batch.created.forEach", 1)[0]
+    batch_loop = source.split("for (const group of groups)", 1)[1].split("batch.created.forEach", 1)[0]
     assert "await applyBatchOperation(context, slide, op, batch);" in batch_loop
     assert "await context.sync();" in batch_loop
     assert batch_loop.index("await applyBatchOperation") < batch_loop.index("await context.sync();") < batch_loop.index("await livePreviewTick();")
@@ -804,6 +966,7 @@ async def test_file_backend_output_version_keeps_revision_across_multiple_create
     assert payload["status"] == "applied"
     assert payload["mode"] == "file"
     assert payload["audit"]["commitMode"] == "atomic"
+    assert payload["audit"]["packageWrites"] == 1
     engine = PptxFileEngine()
     assert len(engine.call("ppt.list_slides", {"filePath": str(source)})["slides"]) == 1
     assert len(engine.call("ppt.list_slides", {"filePath": str(output)})["slides"]) == 3
@@ -820,13 +983,15 @@ def test_template_creation_and_replacement_have_the_same_file_semantics(tmp_path
         "templateSlideId": "256",
         "expectedRevision": 0,
         "idempotencyKey": "from-template",
-        "slideSpec": {"elements": [{
+        "slideSpec": {"templateBindings": [{
+            "shapeRef": "title", "text": "Inherited title",
+        }], "elements": [{
             "ref": "template-caption", "type": "text", "box": [60, 320, 400, 30], "text": "Added to template",
         }]},
     })
     created_slide_id = created["created"][0]["slideId"]
     cloned = engine.call("ppt.get_slide", {"filePath": str(path), "slideId": created_slide_id})["slide"]
-    assert {shape.get("text") for shape in cloned["shapes"]} >= {"Old title", "Added to template"}
+    assert {shape.get("text") for shape in cloned["shapes"]} >= {"Inherited title", "Added to template"}
 
     replaced = engine.call("ppt.replace_slide", {
         "filePath": str(path),
@@ -949,16 +1114,19 @@ def test_file_backend_replaces_one_slide_from_presentation_and_keeps_single_undo
     assert any(shape["text"] == "Old title" for shape in restored["shapes"])
 
 
-def test_progressive_slide_build_is_exposed_without_library_prohibition_in_prompt():
+def test_semantic_staged_slide_build_is_exposed_without_library_prohibition_in_prompt():
     from cyrene.agent.prompts import _MAIN_OFFICE_PROMPT
     from cyrene.tooling.catalog import describe_capabilities
 
     create_schema = describe_capabilities("office_tools", ["ppt.create_slide"])[0]["input_schema"]
     assert create_schema["properties"]["commitMode"]["enum"] == ["atomic", "progressive"]
     assert create_schema["properties"]["progressiveGranularity"]["enum"] == ["stage", "element"]
-    assert "commitMode=progressive" in _MAIN_OFFICE_PROMPT
-    assert "progressiveGranularity=element" in _MAIN_OFFICE_PROMPT
-    assert "automatically brings the slide being edited to the foreground" in _MAIN_OFFICE_PROMPT
+    assert "compact semantic SlideSpecs" in _MAIN_OFFICE_PROMPT
+    assert "progressiveGranularity=stage" in _MAIN_OFFICE_PROMPT
+    assert "deterministic layout compiler owns geometry" in _MAIN_OFFICE_PROMPT
+    assert "Treat visual quality as a primary requirement" in _MAIN_OFFICE_PROMPT
+    assert "Preserve every image's intrinsic aspect ratio" in _MAIN_OFFICE_PROMPT
+    assert "never stretch an image by scaling width and height independently" in _MAIN_OFFICE_PROMPT
     assert "python-pptx" not in _MAIN_OFFICE_PROMPT
     assert "Do not install PPT" not in _MAIN_OFFICE_PROMPT
 

@@ -26,7 +26,6 @@ from cyrene.agent.message_utils import (
     merge_message_sequence as _merge_message_sequence,
     message_suffix_after_persisted_prefix as _message_suffix_after_persisted_prefix,
 )
-
 logger = logging.getLogger(__name__)
 
 
@@ -137,7 +136,6 @@ def _assistant_entry_from_response(response: dict[str, Any], round_id: str, incl
     entry: dict[str, Any] = {
         "role": "assistant",
         "content": response.get("content") or "",
-        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     if "reasoning_content" in response and response["reasoning_content"] is not None:
         # Keep the provider field even when it is an empty string. DeepSeek's
@@ -150,10 +148,7 @@ def _assistant_entry_from_response(response: dict[str, Any], round_id: str, incl
         entry["usage"] = response["usage"]
     if round_id:
         entry["round_id"] = round_id
-    extra_meta = current_assistant_meta()
-    if extra_meta:
-        entry.update(extra_meta)
-    return entry
+    return _apply_assistant_meta(entry)
 
 
 def _apply_assistant_meta(entry: dict[str, Any]) -> dict[str, Any]:

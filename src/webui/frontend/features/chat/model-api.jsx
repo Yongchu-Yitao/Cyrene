@@ -386,6 +386,9 @@ import { wbcErrorText } from "./errors.jsx"
     if (Object.prototype.hasOwnProperty.call(input, "workspaceActive")) {
       body.workspaceActive = !!input.workspaceActive;
     }
+    if (Object.prototype.hasOwnProperty.call(input, "contextActivations")) {
+      body.contextActivations = input.contextActivations || {};
+    }
     return fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

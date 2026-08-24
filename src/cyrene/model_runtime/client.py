@@ -14,18 +14,29 @@ import re
 import time as _time
 import uuid
 import weakref
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Callable, Awaitable
+from typing import Any, Callable, Awaitable, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
 from cyrene.model_runtime.cache_invalidation import register_model_cache_invalidator
 from cyrene.model_runtime.constants import NETWORK_RETRY_LIMIT
-from cyrene.model_runtime.errors import format_httpx_error as _format_httpx_error
+from cyrene.model_runtime.errors import (
+    format_httpx_error as _format_httpx_error,
+    httpx_error_body_for_persistence,
+)
 from cyrene.model_runtime.messages import (
     canonical_tool_arguments,
     parse_tool_arguments,
+)
+from cyrene.model_runtime.transcript_policy import (
+    ProviderFamily,
+    ProviderFamilyError,
+    TranscriptLane,
+    prompt_cache_key_for_lane,
+    require_single_provider_family,
 )
 from cyrene.model_runtime.status import persist_model_status
 from cyrene.config import (
@@ -54,7 +65,8 @@ _pending_token_tasks: set[asyncio.Task] = set()
 # calls on persistent HTTP/1.1 or HTTP/2 connections while avoiding cross-loop
 # reuse in tests, desktop restarts, and embedded runtimes.
 _http_clients: weakref.WeakKeyDictionary[
-    asyncio.AbstractEventLoop, dict[float, tuple[Any, httpx.AsyncClient]]
+    asyncio.AbstractEventLoop,
+    dict[float | tuple[float, str], tuple[Any, httpx.AsyncClient]],
 ] = weakref.WeakKeyDictionary()
 _HTTP_MAX_CONNECTIONS = 40
 _HTTP_MAX_KEEPALIVE_CONNECTIONS = 20
@@ -118,16 +130,27 @@ def invalidate_model_configuration() -> None:
     _published_fallback_notices.clear()
 
 
-def _get_http_client(timeout: float) -> tuple[httpx.AsyncClient, str, bool]:
+def _get_http_client(
+    timeout: float,
+    proxy_url: str = "",
+) -> tuple[httpx.AsyncClient, str, bool]:
     loop = asyncio.get_running_loop()
     timeout_key = float(timeout)
+    normalized_proxy = str(proxy_url or "").strip()
+    cache_key: float | tuple[float, str] = (
+        (timeout_key, normalized_proxy) if normalized_proxy else timeout_key
+    )
     per_loop = _http_clients.setdefault(loop, {})
     factory = httpx.AsyncClient
-    existing = per_loop.get(timeout_key)
+    existing = per_loop.get(cache_key)
     if existing is not None and existing[0] is factory:
-        return existing[1], f"loop:{id(loop)}:timeout:{timeout_key:g}", True
+        pool_key = f"loop:{id(loop)}:timeout:{timeout_key:g}"
+        if normalized_proxy:
+            pool_key += ":proxy:configured"
+        return existing[1], pool_key, True
     transport = httpx.AsyncHTTPTransport(
         retries=0,
+        proxy=normalized_proxy or None,
         limits=httpx.Limits(
             max_connections=_HTTP_MAX_CONNECTIONS,
             max_keepalive_connections=_HTTP_MAX_KEEPALIVE_CONNECTIONS,
@@ -138,8 +161,11 @@ def _get_http_client(timeout: float) -> tuple[httpx.AsyncClient, str, bool]:
         timeout, connect=min(_CONNECT_TIMEOUT_SECONDS, timeout)
     )
     client = factory(transport=transport, timeout=client_timeout, http2=False)
-    per_loop[timeout_key] = (factory, client)
-    return client, f"loop:{id(loop)}:timeout:{timeout_key:g}", False
+    per_loop[cache_key] = (factory, client)
+    pool_key = f"loop:{id(loop)}:timeout:{timeout_key:g}"
+    if normalized_proxy:
+        pool_key += ":proxy:configured"
+    return client, pool_key, False
 
 
 def _last_success_map() -> dict[str, dict[str, str]]:
@@ -550,12 +576,26 @@ def _normalized_llm_endpoints(base_url: str) -> list[str]:
 
 def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: str, active_base_url: str, active_api_key: str) -> dict[str, Any]:
     from cyrene.model_runtime.codex_provider import CODEX_BASE_URL, CODEX_PROVIDER
+    from cyrene.model_runtime.protocol_adapters import runtime_adapter_for_provider
 
     model = str(raw.get("model") or raw.get("name") or raw.get("id") or "").strip()
     if not model:
         model = active_model
+    options = (
+        dict(raw.get("options") or {})
+        if isinstance(raw.get("options"), dict)
+        else {}
+    )
     provider = str(raw.get("provider") or "openai_compatible").strip()
     adapter = str(raw.get("adapter") or provider).strip().lower()
+    provider_preset = str(options.get("provider_preset") or "").strip().lower()
+    adapter = runtime_adapter_for_provider(
+        adapter,
+        model,
+        provider_preset=provider_preset,
+    )
+    if provider_preset == "opencode_go":
+        provider = "opencode_go"
     base_url = (
         str(raw.get("base_url") or "plugin://local")
         if provider == "cyrene_plugin"
@@ -622,6 +662,12 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
         "api_key": api_key,
         "adapter": adapter,
         "capabilities": list(raw.get("capabilities") or []),
+        "use_proxy": raw.get("use_proxy") is True,
+        # Provider-specific transport features are opt-in for generic
+        # OpenAI-compatible endpoints.  Keep the options attached to the
+        # runtime candidate so the wire layer can make that decision without
+        # guessing from a model name.
+        "options": options,
         "ctx": str(raw.get("ctx") or "").strip(),
         "ctx_limit": max(0, int(explicit_ctx_limit or 0)),
         "context_limit": max(0, int(explicit_ctx_limit or 0)),
@@ -670,6 +716,148 @@ def _public_base_url(url: str) -> str:
         return urlunsplit((parsed.scheme, netloc, "", "", "")).rstrip("/")
     except (ValueError, TypeError):
         return ""
+
+
+_OPENAI_SHAPED_CACHE_ADAPTERS = frozenset({
+    "openai",
+    "openai_compatible",
+    "openai_responses",
+    "ollama",
+})
+_AUTOMATIC_PREFIX_CACHE_PRESETS = frozenset({"deepseek", "minimax"})
+
+
+def _candidate_provider_preset(candidate: dict[str, Any]) -> str:
+    options = candidate.get("options")
+    options = options if isinstance(options, dict) else {}
+    return str(
+        candidate.get("provider_preset")
+        or options.get("provider_preset")
+        or ""
+    ).strip().lower()
+
+
+def _is_known_automatic_prefix_cache_provider(
+    candidate: dict[str, Any],
+) -> bool:
+    """Whether the provider caches matching prefixes without a request key."""
+    if _candidate_provider_preset(candidate) in _AUTOMATIC_PREFIX_CACHE_PRESETS:
+        return True
+    try:
+        host = (
+            urlsplit(str(candidate.get("base_url") or "")).hostname or ""
+        ).lower()
+    except ValueError:
+        host = ""
+    return host in {
+        "api.deepseek.com",
+        "api.minimax.com",
+        "api.minimax.io",
+        "api.minimaxi.com",
+    }
+
+
+def _explicit_prompt_cache_key_support(
+    candidate: dict[str, Any],
+) -> bool | None:
+    """Return an explicit transport declaration, if the candidate has one."""
+    options = candidate.get("options")
+    options = options if isinstance(options, dict) else {}
+    for source in (candidate, options):
+        if "prompt_cache_key_supported" in source:
+            value = source.get("prompt_cache_key_supported")
+            if isinstance(value, bool):
+                return value
+    capabilities = {
+        str(value or "").strip().lower()
+        for value in candidate.get("capabilities") or []
+    }
+    if "prompt_cache_key" in capabilities:
+        return True
+    return None
+
+
+def _is_official_openai_endpoint(candidate: dict[str, Any]) -> bool:
+    try:
+        parsed = urlsplit(str(candidate.get("base_url") or ""))
+        return (
+            parsed.scheme.lower() == "https"
+            and (parsed.hostname or "").lower() == "api.openai.com"
+            and parsed.port in {None, 443}
+        )
+    except ValueError:
+        return False
+
+
+def _candidate_accepts_prompt_cache_key(candidate: dict[str, Any]) -> bool:
+    """Use the OpenAI field only where support is known or explicit.
+
+    DeepSeek and MiniMax intentionally never receive this field: their
+    OpenAI-compatible APIs cache stable prefixes automatically.  Unknown
+    compatibility endpoints default to omission so an optional optimization
+    can never turn into a provider 4xx.
+    """
+    provider = str(candidate.get("provider") or "openai_compatible").lower()
+    adapter = str(candidate.get("adapter") or provider).strip().lower()
+    if provider in {"codex_oauth", "cyrene_plugin"}:
+        return False
+    if adapter not in _OPENAI_SHAPED_CACHE_ADAPTERS:
+        return False
+    if _is_known_automatic_prefix_cache_provider(candidate):
+        return False
+    declared = _explicit_prompt_cache_key_support(candidate)
+    if declared is not None:
+        return declared
+    return _is_official_openai_endpoint(candidate)
+
+
+def _stable_system_prompt_prefix(
+    messages: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return only the stable leading system/developer prompt prefix."""
+    prefix: list[dict[str, Any]] = []
+    for message in messages:
+        if str(message.get("role") or "") not in {"system", "developer"}:
+            break
+        prefix.append(message)
+    return prefix
+
+
+def _provider_prompt_cache_route_key(
+    candidate: dict[str, Any],
+    *,
+    model: str,
+    cache_scope: str,
+    message_units: Sequence[dict[str, Any]],
+    tool_schema: Any,
+    cache_epoch: str | int = "",
+) -> str:
+    """Return a stable lane route even for providers using automatic caching."""
+    try:
+        lane = TranscriptLane(str(cache_scope or "").strip())
+    except ValueError:
+        return ""
+    provider = str(candidate.get("provider") or "openai_compatible").lower()
+    adapter = str(candidate.get("adapter") or provider).strip().lower()
+    if provider in {"codex_oauth", "cyrene_plugin"}:
+        return ""
+    if adapter not in _OPENAI_SHAPED_CACHE_ADAPTERS:
+        return ""
+    provider_profile = {
+        "profile_id": str(candidate.get("profile_id") or candidate.get("id") or ""),
+        "connection_id": str(candidate.get("connection_id") or ""),
+        "provider": provider,
+        "adapter": adapter,
+        "base_url": _public_base_url(candidate.get("base_url") or ""),
+    }
+    return prompt_cache_key_for_lane(
+        provider_profile=provider_profile,
+        model=model,
+        lane=lane,
+        system_prompt=_stable_system_prompt_prefix(message_units),
+        tool_schema=tool_schema or [],
+        cache_epoch=cache_epoch,
+    )
 
 
 def _inherit_sibling_keys(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -919,6 +1107,12 @@ _INTERNAL_MSG_KEYS = frozenset({
     "volatile_context_version",
     "ephemeral_model_observation",
     "_candidate_identity",
+    # Canonical lane/protocol metadata belongs to the local session store. The
+    # stable protocol JSON, when needed by a model, remains in ``content``.
+    "lane_refs", "record_kind", "persist_model_record",
+    "event_id", "turn_id", "owner_lane", "attempt",
+    "_externalized_powerpoint_arguments",
+    "powerpoint_episode_receipt",
     # Per-response metadata we attach to the returned message for callers to
     # inspect (e.g. detecting a max_tokens truncation), but which must not be
     # echoed back upstream when the message is replayed in history.
@@ -956,11 +1150,207 @@ def _materialize_internal_content(message: dict[str, Any]) -> dict[str, Any]:
     return prepared
 
 
+def _deduplicated_tool_call_id(
+    original_id: str,
+    *,
+    message_index: int,
+    call_index: int,
+    occupied_ids: set[str],
+) -> str:
+    """Return a stable replacement for one reused tool-call ID.
+
+    Tool-call IDs are transport correlation keys, not secrets or user-facing
+    identifiers.  Deriving the replacement from its durable position keeps a
+    replay byte-stable while the occupied-ID check avoids colliding with IDs
+    supplied by the provider elsewhere in the same transcript.
+    """
+    seed = f"cyrene-tool-call-v1\0{message_index}\0{call_index}\0{original_id}"
+    collision = 0
+    while True:
+        material = seed if collision == 0 else f"{seed}\0{collision}"
+        digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
+        candidate = f"call_{digest}"
+        if candidate not in occupied_ids:
+            occupied_ids.add(candidate)
+            return candidate
+        collision += 1
+
+
+_DEEPSEEK_RECOVERY_RESULT_PREVIEW_CHARS = 6000
+
+
+def _deepseek_recovery_result(content: Any) -> Any:
+    """Keep useful tool evidence while bounding an anomalous recovery receipt."""
+    if isinstance(content, str):
+        text = content
+    else:
+        try:
+            text = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError):
+            text = str(content or "")
+    if len(text) <= _DEEPSEEK_RECOVERY_RESULT_PREVIEW_CHARS:
+        try:
+            return json.loads(text)
+        except (TypeError, json.JSONDecodeError):
+            return text
+    return {
+        "preview": text[:_DEEPSEEK_RECOVERY_RESULT_PREVIEW_CHARS],
+        "truncated": True,
+        "original_chars": len(text),
+    }
+
+
+def _deepseek_tool_recovery_receipt(
+    assistant: dict[str, Any],
+    results: list[dict[str, Any]],
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    """Convert an unreplayable provider tool episode into ordinary context.
+
+    DeepSeek requires the original, complete ``reasoning_content`` for every
+    thinking-mode assistant tool turn.  Missing reasoning cannot be recreated
+    safely.  Keeping the assistant/tool protocol and fabricating an empty value
+    produces a provider 400, so preserve the useful evidence in a system
+    receipt and remove the invalid protocol markers as one atomic unit.
+    """
+    result_by_id = {
+        str(result.get("tool_call_id") or ""): result for result in results
+    }
+    calls: list[dict[str, Any]] = []
+    for raw_call in assistant.get("tool_calls") or []:
+        if not isinstance(raw_call, dict):
+            continue
+        function = raw_call.get("function")
+        function = function if isinstance(function, dict) else {}
+        call_id = str(raw_call.get("id") or "")
+        result = result_by_id.get(call_id)
+        call_receipt: dict[str, Any] = {
+            "tool": str(function.get("name") or ""),
+            "tool_call_id": call_id,
+            "result_available": result is not None,
+        }
+        if result is not None:
+            call_receipt["result"] = _deepseek_recovery_result(
+                result.get("content")
+            )
+        calls.append(call_receipt)
+    content = json.dumps(
+        {
+            "type": "deepseek_tool_episode_recovery",
+            "reason": reason,
+            "assistant_content": str(assistant.get("content") or "")[:2000],
+            "calls": calls,
+            "instruction": (
+                "Treat these tool results as ordinary evidence and continue "
+                "without attempting to resume the removed provider reasoning."
+            ),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return {"role": "system", "content": content}
+
+
+def _repair_deepseek_tool_history(messages: list[dict]) -> list[dict]:
+    """Make DeepSeek thinking-mode tool history structurally replay-safe.
+
+    Valid completed episodes retain their original non-empty reasoning byte for
+    byte.  Episodes whose reasoning is absent/empty, whose results are missing,
+    or whose assistant/tool messages are no longer contiguous are collapsed as
+    a whole into a recovery receipt.  This avoids both a provider 400 and
+    orphaned tool messages while retaining bounded tool evidence.
+    """
+    source = [message for message in messages if isinstance(message, dict)]
+    projected: list[dict] = []
+    recovered_call_ids: set[str] = set()
+    index = 0
+    while index < len(source):
+        message = source[index]
+        calls = message.get("tool_calls")
+        if (
+            message.get("role") != "assistant"
+            or not isinstance(calls, list)
+            or not calls
+        ):
+            if (
+                message.get("role") == "tool"
+                and str(message.get("tool_call_id") or "") in recovered_call_ids
+            ):
+                index += 1
+                continue
+            projected.append(message)
+            index += 1
+            continue
+
+        call_ids = [
+            str(call.get("id") or "")
+            for call in calls
+            if isinstance(call, dict)
+        ]
+        results: list[dict] = []
+        cursor = index + 1
+        complete = len(call_ids) == len(calls) and bool(call_ids)
+        for call_id in call_ids:
+            if cursor >= len(source):
+                complete = False
+                break
+            result = source[cursor]
+            if (
+                result.get("role") != "tool"
+                or str(result.get("tool_call_id") or "") != call_id
+            ):
+                complete = False
+                break
+            results.append(result)
+            cursor += 1
+
+        reasoning = message.get("reasoning_content")
+        reasoning_complete = isinstance(reasoning, str) and bool(reasoning)
+        if complete and reasoning_complete:
+            projected.append(message)
+            projected.extend(results)
+            index = cursor
+            continue
+
+        reason = (
+            "missing_or_empty_reasoning_content"
+            if not reasoning_complete
+            else "incomplete_or_noncontiguous_tool_results"
+        )
+        if not complete:
+            # Collect only immediately adjacent matching tool results.  Any
+            # later orphan with the same id is suppressed below rather than
+            # reordered across an intervening semantic message.
+            results = []
+            cursor = index + 1
+            expected_ids = set(call_ids)
+            while cursor < len(source):
+                result = source[cursor]
+                result_id = str(result.get("tool_call_id") or "")
+                if result.get("role") != "tool" or result_id not in expected_ids:
+                    break
+                results.append(result)
+                cursor += 1
+        recovered_call_ids.update(call_ids)
+        logger.warning(
+            "Recovered unreplayable DeepSeek tool episode [reason=%s calls=%s]",
+            reason,
+            ",".join(call_ids),
+        )
+        projected.append(
+            _deepseek_tool_recovery_receipt(message, results, reason=reason)
+        )
+        index = cursor
+    return projected
+
+
 def sanitize_messages_for_llm(
     messages: list[dict],
     *,
     materialize_internal_media: bool = True,
     preserve_tool_reasoning: bool = False,
+    preserve_all_reasoning: bool = False,
 ) -> list[dict]:
     """Normalize model messages without leaking internal transport metadata.
 
@@ -968,8 +1358,6 @@ def sanitize_messages_for_llm(
     Callers preparing a durable replay snapshot can keep the managed local
     references by setting ``materialize_internal_media=False``.
     """
-    import uuid as _uuid
-
     messages = [
         (
             _materialize_internal_content(_strip_internal_fields(m))
@@ -978,16 +1366,16 @@ def sanitize_messages_for_llm(
         )
         for m in strip_context_metadata(messages)
     ]
-    if not preserve_tool_reasoning:
+    if not preserve_all_reasoning and not preserve_tool_reasoning:
         for message in messages:
             message.pop("reasoning_content", None)
             message.pop("reasoning_details", None)
-    else:
+    elif not preserve_all_reasoning:
         # Reasoning providers require the complete assistant tool-call turn to
-        # be replayed. DeepSeek uses ``reasoning_content`` while MiniMax's
-        # split-thinking OpenAI format uses ``reasoning_details``. Reasoning
-        # from ordinary assistant turns is unnecessary and is omitted to avoid
-        # context growth and accidental cross-provider leakage.
+        # be replayed. DeepSeek, Kimi, and GLM use ``reasoning_content`` while
+        # MiniMax's split-thinking OpenAI format uses ``reasoning_details``.
+        # Reasoning from ordinary assistant turns is unnecessary unless the
+        # provider explicitly supports preserved thinking.
         for message in messages:
             if not (
                 message.get("role") == "assistant"
@@ -995,6 +1383,14 @@ def sanitize_messages_for_llm(
             ):
                 message.pop("reasoning_content", None)
                 message.pop("reasoning_details", None)
+    # Reserve every upstream ID, including IDs in later turns, so deterministic
+    # replacements cannot accidentally shadow a valid provider-supplied ID.
+    occupied_ids = {
+        str(tool_call.get("id") or "")
+        for message in messages
+        for tool_call in (message.get("tool_calls") or [])
+        if isinstance(tool_call, dict)
+    }
     seen_ids: set[str] = set()
     result: list[dict[str, Any]] = []
     i = 0
@@ -1017,15 +1413,23 @@ def sanitize_messages_for_llm(
 
             if all_valid:
                 old_ids = [tc.get("id", "") for tc in tc_list]
-                has_dupes = any(oid in seen_ids for oid in old_ids)
+                has_dupes = (
+                    any(oid in seen_ids for oid in old_ids)
+                    or len(set(old_ids)) != len(old_ids)
+                )
 
                 if has_dupes:
                     new_msg = dict(msg)
                     new_tc_list = []
                     new_ids = []
-                    for tc in tc_list:
+                    for call_index, tc in enumerate(tc_list):
                         new_tc = dict(tc)
-                        new_id = f"call_{_uuid.uuid4().hex[:12]}"
+                        new_id = _deduplicated_tool_call_id(
+                            str(tc.get("id") or ""),
+                            message_index=i,
+                            call_index=call_index,
+                            occupied_ids=occupied_ids,
+                        )
                         new_tc["id"] = new_id
                         new_tc_list.append(new_tc)
                         new_ids.append(new_id)
@@ -1218,12 +1622,28 @@ def _build_payload(
     thinking: str,
     response_format: dict[str, Any] | None = None,
     reasoning_effort: str = "",
+    provider_preset: str = "",
 ) -> dict[str, Any]:
-    is_deepseek = "deepseek" in model.lower()
-    is_minimax = _is_minimax_model(model)
+    provider_model = str(model or "").strip().lower().rsplit("/", 1)[-1]
+    preset = str(provider_preset or "").strip().lower()
+    # Aggregators expose a provider-neutral parameter surface. Do not leak an
+    # upstream vendor's private extensions merely because its id appears after
+    # the catalog namespace (for example ``moonshotai/kimi-k2.5``).
+    use_upstream_extensions = preset not in {"openrouter", "amd_gpu_cloud"}
+    is_deepseek = use_upstream_extensions and "deepseek" in provider_model
+    is_minimax = use_upstream_extensions and _is_minimax_model(model)
+    is_kimi = use_upstream_extensions and provider_model.startswith("kimi-")
+    is_kimi_k3 = is_kimi and provider_model.startswith("kimi-k3")
+    is_kimi_k27 = is_kimi and provider_model.startswith("kimi-k2.7")
+    is_kimi_k26 = is_kimi and provider_model.startswith("kimi-k2.6")
+    is_glm = use_upstream_extensions and provider_model.startswith("glm-")
+    provider_messages = (
+        _repair_deepseek_tool_history(messages) if is_deepseek else messages
+    )
     prepared_messages = sanitize_messages_for_llm(
-        messages,
-        preserve_tool_reasoning=is_deepseek or is_minimax,
+        provider_messages,
+        preserve_tool_reasoning=is_deepseek or is_minimax or is_kimi or is_glm,
+        preserve_all_reasoning=is_kimi_k3 or is_kimi_k27 or is_kimi_k26 or is_glm,
     )
     for message in prepared_messages:
         if is_minimax:
@@ -1243,21 +1663,6 @@ def _build_payload(
             message.pop("reasoning_content", None)
         elif is_deepseek:
             message.pop("reasoning_details", None)
-            if (
-                message.get("role") == "assistant"
-                and message.get("tool_calls")
-            ):
-                # DeepSeek thinking mode validates the presence of
-                # ``reasoning_content`` on every replayed assistant tool-call
-                # turn.  A continuation may legitimately emit no additional
-                # reasoning, and the agent's durable representation omits
-                # empty optional values.  Restore the required wire field here
-                # rather than teaching every agent loop about a
-                # provider-specific protocol requirement.
-                reasoning_content = message.get("reasoning_content")
-                message["reasoning_content"] = (
-                    "" if reasoning_content is None else str(reasoning_content)
-                )
     payload: dict[str, Any] = {
         "model": model,
         "messages": prepared_messages,
@@ -1284,13 +1689,24 @@ def _build_payload(
         if is_deepseek:
             payload["thinking"] = {"type": "enabled"}
     elif thinking == "enabled":
-        payload["thinking"] = {"type": "enabled"}
+        # Kimi K3 and K2.7 Code always think and reject an explicit thinking
+        # switch. Other compatible reasoning models accept the common shape.
+        if use_upstream_extensions and not (is_kimi_k3 or is_kimi_k27):
+            payload["thinking"] = {"type": "enabled"}
     elif thinking == "disabled":
         # Keep DeepSeek thinking enabled even for callers that request the
         # legacy "disabled" mode. Other OpenAI-compatible providers may reject
         # this extension, so keep it provider/model-specific.
         if is_deepseek:
             payload["thinking"] = {"type": "enabled"}
+        elif is_glm or (is_kimi and not (is_kimi_k3 or is_kimi_k27)):
+            payload["thinking"] = {"type": "disabled"}
+    if is_glm and thinking != "disabled":
+        # GLM's interleaved/preserved thinking contract requires both the
+        # original reasoning_content and clear_thinking=false on agent turns.
+        payload["thinking"] = {"type": "enabled", "clear_thinking": False}
+    elif is_kimi_k26 and thinking != "disabled":
+        payload["thinking"] = {"type": "enabled", "keep": "all"}
     if is_deepseek and payload.get("thinking", {}).get("type") == "enabled":
         effort = str(reasoning_effort or "").strip().lower()
         if effort in {"low", "medium", "high"}:
@@ -1301,6 +1717,14 @@ def _build_payload(
             # DeepSeek defaults ordinary thinking-mode requests to high.
             effort = "high"
         payload["reasoning_effort"] = effort
+    if is_kimi_k3 and reasoning_effort:
+        effort = str(reasoning_effort or "").strip().lower()
+        if effort == "low":
+            payload["reasoning_effort"] = "low"
+        elif effort in {"medium", "high"}:
+            payload["reasoning_effort"] = "high"
+        elif effort in {"xhigh", "max"}:
+            payload["reasoning_effort"] = "max"
     return payload
 
 
@@ -1316,27 +1740,67 @@ def _stable_request_fingerprint(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()[:24]
 
 
+@dataclass(frozen=True, slots=True)
+class _RequestFingerprintSnapshot:
+    """Content-free request hashes reusable across transport attempts."""
+
+    message_fingerprints: tuple[str, ...]
+    messages_fingerprint: str
+    tools_fingerprint: str
+    payload_fingerprint: str
+
+
+def _prepare_request_fingerprints(
+    candidate_lease: Any,
+    *,
+    message_units: Sequence[Any],
+    tools_material: Any,
+    payload_material: Any,
+) -> _RequestFingerprintSnapshot | None:
+    """Hash immutable request material once per candidate payload.
+
+    Endpoints and network retries change transport identity, not request
+    content.  Keeping those hashes outside both retry loops avoids repeatedly
+    serializing a long transcript while retaining per-attempt diagnostics.
+    """
+    if candidate_lease is None or not hasattr(candidate_lease, "observe_request"):
+        return None
+    message_fingerprints = tuple(
+        _stable_request_fingerprint(unit) for unit in message_units
+    )
+    return _RequestFingerprintSnapshot(
+        message_fingerprints=message_fingerprints,
+        messages_fingerprint=hashlib.sha256(
+            "\n".join(message_fingerprints).encode("utf-8")
+        ).hexdigest()[:24],
+        tools_fingerprint=_stable_request_fingerprint(tools_material or []),
+        payload_fingerprint=_stable_request_fingerprint(payload_material),
+    )
+
+
 def _request_cache_diagnostics(
     candidate_lease: Any,
     *,
     model_type: str,
     identity: dict[str, Any],
-    message_units: list[Any],
-    tools_material: Any,
-    payload_material: Any,
+    fingerprints: _RequestFingerprintSnapshot | None,
+    cache_scope: str = "",
 ) -> dict[str, Any]:
-    """Compute metadata-only provider request diagnostics for a run lease."""
-    if candidate_lease is None or not hasattr(candidate_lease, "observe_request"):
+    """Observe one attempt using a precomputed, metadata-only snapshot."""
+    if (
+        fingerprints is None
+        or candidate_lease is None
+        or not hasattr(candidate_lease, "observe_request")
+    ):
         return {}
-    message_fingerprints = [
-        _stable_request_fingerprint(unit) for unit in message_units
-    ]
     return candidate_lease.observe_request(
         model_type,
         identity=identity,
-        message_fingerprints=message_fingerprints,
-        tools_fingerprint=_stable_request_fingerprint(tools_material or []),
-        payload_fingerprint=_stable_request_fingerprint(payload_material),
+        message_fingerprints=fingerprints.message_fingerprints,
+        messages_fingerprint=fingerprints.messages_fingerprint,
+        tools_fingerprint=fingerprints.tools_fingerprint,
+        payload_fingerprint=fingerprints.payload_fingerprint,
+        cache_scope=cache_scope,
     )
 
 
@@ -1898,6 +2362,8 @@ async def _publish_llm_event(
     session_id: str = "",
     round_id: str = "",
     status: str = "completed",
+    prepared_messages: list[dict[str, Any]] | None = None,
+    prepared_context_trace: dict[str, Any] | None = None,
 ) -> None:
     from cyrene.observability import debug
 
@@ -1908,8 +2374,16 @@ async def _publish_llm_event(
         "model": model,
         "provider": str(provider or ""),
         "tools": [t.get("function", {}).get("name") for t in (tools or [])],
-        "messages": sanitize_messages_for_llm(messages),
-        "context_trace": summarize_context_trace(messages),
+        "messages": (
+            prepared_messages
+            if prepared_messages is not None
+            else sanitize_messages_for_llm(messages)
+        ),
+        "context_trace": (
+            prepared_context_trace
+            if prepared_context_trace is not None
+            else summarize_context_trace(messages)
+        ),
         "response": response,
         "usage": response.get("usage") or {},
         "duration_ms": duration_ms,
@@ -2134,6 +2608,8 @@ async def call_llm(
     record_latency: bool | None = None,
     round_id: str = "",
     session_id: str = "",
+    cache_scope: str = "",
+    cache_epoch: str | int = "",
 ) -> dict | str:
     """Unified LLM calling entry point.
 
@@ -2158,6 +2634,12 @@ async def call_llm(
         record_latency: Whether to record per-attempt latency spans. Defaults to
             the value of ``record_usage`` so lightweight/test calls can disable
             all persistence with one flag.
+        cache_scope: Optional dual-lane cache partition. ``decision`` and
+            ``execution`` produce independent stable provider cache routes;
+            the empty default preserves the historical transport payload.
+        cache_epoch: Optional lane-local cache generation reserved for
+            coordinator-driven context compaction. The empty default is the
+            initial epoch.
 
     Returns:
         Message ``dict`` with keys ``role``, ``content``, ``usage``, ``model``
@@ -2173,7 +2655,13 @@ async def call_llm(
     call_id = f"llm_{uuid.uuid4().hex}"
     latency_enabled = record_usage if record_latency is None else bool(record_latency)
 
+    expected_family = getattr(candidate_lease, "provider_family", None)
     resolved = candidates if candidates is not None else _resolve_candidates(model_type)
+    if not resolved and expected_family is not None:
+        family = ProviderFamily(str(expected_family))
+        raise ProviderFamilyError(
+            f"{model_type} model route has no {family.value} candidates"
+        )
     if not resolved:
         resolved = _resolve_llm_candidates()
     if not resolved:
@@ -2190,6 +2678,11 @@ async def call_llm(
         resolved = _prioritize_last_success(resolved, model_type, session_id)
     else:
         resolved = _rank_explicit_candidates(resolved)
+    active_family = require_single_provider_family(
+        resolved,
+        expected=expected_family,
+        context=f"{model_type} model route",
+    )
 
     # Context capacity belongs to the candidate that will receive the request,
     # not only to the configured primary.  Reject undersized candidates locally
@@ -2232,6 +2725,11 @@ async def call_llm(
             total_tokens = sum(_message_token_estimate(m) for m in messages)
             if total_tokens > ctx_limit:
                 resolved = resolved[1:] if len(resolved) > 1 else _resolve_llm_candidates()
+                require_single_provider_family(
+                    resolved,
+                    expected=active_family,
+                    context=f"{model_type} model fallback route",
+                )
 
     # Always evaluate candidates in the saved primary-route order.  Cooldown
     # state remains useful for diagnostics, but skipping a configured entry on
@@ -2262,7 +2760,12 @@ async def call_llm(
     attempt_number = 0
     retry_backoff_ms = 0.0
 
-    client, connection_pool_key, client_pool_reused = _get_http_client(timeout)
+    # Debug events historically normalized and traced the complete history for
+    # every endpoint start and again on success.  Both projections are stable
+    # for the lifetime of this logical call, so prepare them once.
+    event_messages = sanitize_messages_for_llm(messages) if publish_events else None
+    event_context_trace = summarize_context_trace(messages) if publish_events else None
+
     try:
         last_error: Exception | None = None
 
@@ -2271,6 +2774,20 @@ async def call_llm(
             max_conc = int(candidate.get("max_concurrency") or 0)
             provider = str(candidate.get("provider") or "openai_compatible")
             adapter = str(candidate.get("adapter") or provider).strip().lower()
+            from cyrene.runtime.network_proxy import configured_proxy_url
+
+            candidate_proxy_url = configured_proxy_url(
+                opt_in=candidate.get("use_proxy") is True
+            )
+            if candidate_proxy_url:
+                client, connection_pool_key, client_pool_reused = _get_http_client(
+                    timeout,
+                    candidate_proxy_url,
+                )
+            else:
+                # Preserve the one-argument call for direct connections and
+                # test doubles written against the original client factory.
+                client, connection_pool_key, client_pool_reused = _get_http_client(timeout)
 
             # Concurrency guard for secondary model
             if is_secondary and max_conc > 0 and _secondary_in_flight >= max_conc:
@@ -2330,7 +2847,31 @@ async def call_llm(
                         thinking,
                         response_format,
                         reasoning_effort=str(candidate.get("reasoning_effort") or ""),
+                        provider_preset=_candidate_provider_preset(candidate),
                     )
+
+                provider_message_units = (
+                    native_messages
+                    if native_request is not None
+                    else payload.get("messages") or []
+                )
+                provider_tools_material = payload.get("tools") or []
+                provider_cache_route_key = _provider_prompt_cache_route_key(
+                    candidate,
+                    model=model,
+                    cache_scope=cache_scope,
+                    message_units=provider_message_units,
+                    tool_schema=provider_tools_material,
+                    cache_epoch=cache_epoch,
+                )
+                if (
+                    provider_cache_route_key
+                    and _candidate_accepts_prompt_cache_key(candidate)
+                ):
+                    # Chat Completions and Responses use the same OpenAI field.
+                    # ``PreparedRequest`` is frozen, but intentionally owns a
+                    # mutable payload dict that is still local to this call.
+                    payload["prompt_cache_key"] = provider_cache_route_key
                 codex_request_material: dict[str, Any] | None = None
                 if provider == "codex_oauth":
                     from cyrene.model_runtime.codex_provider import (
@@ -2346,6 +2887,39 @@ async def call_llm(
                             candidate.get("reasoning_effort") or ""
                         ),
                     )
+
+                request_material = (
+                    {
+                        "thread_params": codex_request_material["thread_params"],
+                        "turn_params": codex_request_material["turn_params"],
+                    }
+                    if codex_request_material is not None
+                    else payload
+                )
+                request_message_units = (
+                    codex_request_material["message_units"]
+                    if codex_request_material is not None
+                    else provider_message_units
+                )
+                request_tools_material = (
+                    codex_request_material["action_tools"]
+                    if codex_request_material is not None
+                    else provider_tools_material
+                )
+                request_fingerprint_material = (
+                    {
+                        "provider_request": request_material,
+                        "cache_route_key": provider_cache_route_key,
+                    }
+                    if provider_cache_route_key
+                    else request_material
+                )
+                request_fingerprints = _prepare_request_fingerprints(
+                    candidate_lease,
+                    message_units=request_message_units,
+                    tools_material=request_tools_material,
+                    payload_material=request_fingerprint_material,
+                )
 
                 if native_request is not None:
                     headers = dict(native_request.headers)
@@ -2364,6 +2938,8 @@ async def call_llm(
                             caller, phase, messages, tools, {}, model, 0,
                             provider=provider, session_id=session_id,
                             round_id=round_id, status="started",
+                            prepared_messages=event_messages,
+                            prepared_context_trace=event_context_trace,
                         )
                     try:
                         network_retries = 0
@@ -2382,38 +2958,14 @@ async def call_llm(
                                 "reasoningEffort": str(
                                     candidate.get("reasoning_effort") or ""
                                 ).strip().lower(),
+                                "cacheRouteKey": provider_cache_route_key,
                             }
-                            request_material = (
-                                {
-                                    "thread_params": codex_request_material[
-                                        "thread_params"
-                                    ],
-                                    "turn_params": codex_request_material[
-                                        "turn_params"
-                                    ],
-                                }
-                                if codex_request_material is not None
-                                else payload
-                            )
                             request_diagnostics = _request_cache_diagnostics(
                                 candidate_lease,
                                 model_type=model_type,
                                 identity=request_identity,
-                                message_units=(
-                                    list(codex_request_material["message_units"])
-                                    if codex_request_material is not None
-                                    else (
-                                        list(native_messages)
-                                        if native_request is not None
-                                        else list(payload.get("messages") or [])
-                                    )
-                                ),
-                                tools_material=(
-                                    codex_request_material["action_tools"]
-                                    if codex_request_material is not None
-                                    else payload.get("tools") or []
-                                ),
-                                payload_material=request_material,
+                                fingerprints=request_fingerprints,
+                                cache_scope=cache_scope,
                             )
 
                             async def _tracked_stream_callback(event: dict[str, Any]) -> None:
@@ -2604,6 +3156,9 @@ async def call_llm(
                                 await asyncio.sleep(delay)
                             except httpx.HTTPStatusError as exc:
                                 request_ms = (_time.monotonic() - attempt_started) * 1000
+                                error_body, error_body_truncated = (
+                                    httpx_error_body_for_persistence(exc)
+                                )
                                 if latency_enabled:
                                     _record_latency_faf({
                                     "call_id": call_id, "session_id": session_id,
@@ -2616,6 +3171,8 @@ async def call_llm(
                                     "attempt": attempt_number, "outcome": "http_error",
                                     "status_code": exc.response.status_code,
                                     "error_type": exc.__class__.__name__,
+                                    "error_body": error_body,
+                                    "error_body_truncated": error_body_truncated,
                                     "queue_wait_ms": (attempt_started - _t0) * 1000,
                                     "pre_attempt_wait_ms": (attempt_started - _t0) * 1000,
                                     "request_ms": request_ms,
@@ -2757,6 +3314,8 @@ async def call_llm(
                                 caller, phase, messages, tools, msg, model, duration_ms,
                                 provider=provider, session_id=session_id,
                                 round_id=round_id, status="completed",
+                                prepared_messages=event_messages,
+                                prepared_context_trace=event_context_trace,
                             )
 
                         if record_usage or success_latency_event is not None:

@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from route.workbench.chat_routes.agent_config_routes import register_agent_config_routes
 from route.workbench.chat_routes.collection_routes import register_collection_routes
+from route.workbench.chat_routes.context_catalog_routes import register_context_catalog_routes
 from route.workbench.chat_routes.context import ChatRouteContext
 from route.workbench.chat_routes.delete_routes import register_delete_routes
 from route.workbench.chat_routes.detail_routes import register_detail_routes
@@ -24,6 +25,7 @@ def register_chat_routes(
     send_chat_detached,
 ) -> dict[str, Any]:
     register_pinned_routes(router, context)
+    register_context_catalog_routes(router)
     handlers: dict[str, Any] = {}
     handlers.update(register_collection_routes(router, context) or {})
     register_voice_routes(

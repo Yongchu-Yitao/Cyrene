@@ -932,25 +932,38 @@ class ChatRunManager:
                 run.termination_reason = "cancelled"
             raise
         except Exception as exc:
-            logger.exception("Chat run driver crashed for %s", run.chat_id)
-            run.status = "error"
-            run.termination_reason = "driver_error"
-            run.outcome = {"kind": "error", "exc": exc}
-            try:
-                await run.publish({
-                    "type": "error",
-                    "error": "chat_run_driver_failed",
-                    "message": "The agent run stopped unexpectedly. Please retry.",
-                })
-            except Exception:
-                logger.exception("Failed to publish chat driver error for %s", run.chat_id)
-            try:
-                await asyncio.to_thread(
-                    chat_service()._settle_chat_running_status,
+            outcome_kind = str((run.outcome or {}).get("kind") or "")
+            if outcome_kind in {"reply", "awaiting"}:
+                # Once the runner has persisted and published a terminal
+                # outcome, later projection/telemetry failures cannot revoke
+                # it.  In particular, a delayed SQLite status repair used to
+                # emit an error after ``saved`` and poison the following run.
+                logger.exception(
+                    "Chat run post-terminal cleanup failed for %s",
                     run.chat_id,
                 )
-            except Exception:
-                logger.exception("Failed to settle crashed chat %s", run.chat_id)
+            else:
+                logger.exception("Chat run driver crashed for %s", run.chat_id)
+                run.status = "error"
+                run.termination_reason = "driver_error"
+                run.outcome = {"kind": "error", "exc": exc}
+                try:
+                    await run.publish({
+                        "type": "error",
+                        "error": "chat_run_driver_failed",
+                        "code": "chat_run_driver_failed",
+                        "detail_key": "workbenchChat.error.driverFailed",
+                        "message": "The agent run stopped unexpectedly. Please retry.",
+                    })
+                except Exception:
+                    logger.exception("Failed to publish chat driver error for %s", run.chat_id)
+                try:
+                    await asyncio.to_thread(
+                        chat_service()._settle_chat_running_status,
+                        run.chat_id,
+                    )
+                except Exception:
+                    logger.exception("Failed to settle crashed chat %s", run.chat_id)
         finally:
             run.ready.set()
             outcome_kind = str((run.outcome or {}).get("kind") or "")

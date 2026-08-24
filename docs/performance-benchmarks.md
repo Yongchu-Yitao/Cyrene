@@ -25,6 +25,12 @@ ANSI compilation logs, and TUI repaint traffic with and without a loopback
 WebSocket subscriber, and reports event-loop delay, RSS, process disk writes,
 segmented-scrollback write amplification, and WebSocket delivery latency.
 
+PowerPoint has a separate live-host benchmark because Office.js timings require
+a real connected presentation. It bypasses the model completely, reuses one
+Office session across ordered rounds, validates stable shape references and
+revision continuity, and compares staged Office.js batching with explicitly
+visible element-by-element editing through the connected PowerPoint add-in.
+
 ## Run
 
 ```bash
@@ -49,8 +55,32 @@ uv run python -m cyrene.observability.terminal_performance_benchmark \
   --json output/performance/terminal-real.json
 ```
 
+Run the live PowerPoint matrix after opening the Cyrene task pane in
+PowerPoint:
+
+```bash
+uv run python -m cyrene.observability.powerpoint_performance_benchmark \
+  --rounds 5 \
+  --strategies stage,element \
+  --json output/performance/powerpoint-live.json
+```
+
 The JSON records `ptyBackend` as `posix_pty` or `conpty`, so macOS/Linux and
 Windows results can be compared without maintaining different benchmark code.
+Windows x64 and ARM64 release jobs run the matrix with more than 16 MiB per
+case and upload the JSON reports. Correctness, sequence continuity, resyncs,
+source-frame continuity, minimum PTY byte count, and scrollback write
+amplification are release gates. Each child emits monotonically numbered
+markers, so the gate detects source-side loss and duplication instead of only
+checking that Cyrene's internal copies agree. Latency becomes a gate
+only when `--baseline` supplies a matching historical platform report; no
+machine-dependent absolute latency threshold is used.
+
+The report also includes a `fairness` case: one terminal emits an ANSI output
+flood while a second terminal receives input through a loopback WebSocket. It
+records interactive echo latency, worker/query queue wait, queue bytes, sequence
+errors, and unnecessary resyncs. Its echo latency follows the same matching
+historical-platform baseline rule as the workload latency metrics.
 
 The command writes `cyrene-performance-suite.json` for automation and
 `cyrene-performance-suite.md` for review. Report schema version 2 records the

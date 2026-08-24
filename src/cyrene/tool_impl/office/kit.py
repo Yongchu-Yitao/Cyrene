@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 from typing import Any, Awaitable, Callable
 
+from cyrene.office.slide_layout import SEMANTIC_LAYOUTS
 from cyrene.tool_impl.office._shared import (
     CONTEXT_PROPERTIES,
     MUTATION_PROPERTIES,
@@ -46,17 +47,88 @@ ELEMENT = {
     "required": ["ref", "type", "box"],
     "additionalProperties": False,
 }
+THEME = {
+    "type": "object",
+    "properties": {
+        "background": {"type": "string"},
+        "foreground": {"type": "string"},
+        "accent": {"type": "string"},
+        "muted": {"type": "string"},
+        "fontFamily": {"type": "string"},
+    },
+    "additionalProperties": False,
+}
+SECTION = {
+    "type": "object",
+    "properties": {
+        "heading": {"type": "string"},
+        "title": {"type": "string"},
+        "body": {"type": "string"},
+        "bullets": {"type": "array", "items": {"type": "string"}, "maxItems": 12},
+    },
+    "additionalProperties": False,
+}
+SEMANTIC_IMAGE = {
+    "type": "object",
+    "properties": {
+        "ref": {"type": "string"},
+        "imagePath": {"type": "string"},
+        "imageBase64": {"type": "string"},
+        "assetRef": {"type": "string"},
+        "caption": {"type": "string"},
+    },
+    "additionalProperties": False,
+}
+TEMPLATE_BINDING = {
+    "type": "object",
+    "properties": {
+        "shapeRef": {
+            "type": "string",
+            "description": "Stable shape ref, PowerPoint shape ID, or shape name returned by inspection of the source slide.",
+        },
+        "text": {
+            "type": "string",
+            "description": "Replacement text. An empty string intentionally clears the inherited shape.",
+        },
+        "delete": {
+            "type": "boolean",
+            "description": "Delete this inherited shape from the duplicated slide.",
+        },
+    },
+    "required": ["shapeRef"],
+    "additionalProperties": False,
+}
 SLIDE_SPEC = {
     "type": "object",
     "properties": {
-        "layout": {"type": "string", "description": "Deterministic layout name such as blank or title-content."},
+        "layout": {"type": "string", "enum": list(SEMANTIC_LAYOUTS), "description": "Semantic deterministic layout. Prefer title-body, title-bullets, two-column, section-grid, image-left, image-right, or quote. If image is supplied with a non-media layout, Cyrene preserves it by resolving to image-right and records the fallback in metadata."},
+        "title": {"type": "string", "description": "Slide title. Cyrene chooses its coordinates and title typography."},
+        "subtitle": {"type": "string"},
+        "body": {"type": "string"},
+        "bullets": {"type": "array", "items": {"type": "string"}, "maxItems": 16},
+        "sections": {"type": "array", "items": SECTION, "maxItems": 6},
+        "columns": {"type": "array", "items": SECTION, "minItems": 2, "maxItems": 2},
+        "image": SEMANTIC_IMAGE,
+        "quote": {"type": "string"},
+        "attribution": {"type": "string"},
+        "footer": {"type": "string"},
+        "theme": THEME,
         "slideMasterId": {"type": "string"},
         "layoutId": {"type": "string"},
-        "elements": {"type": "array", "items": ELEMENT, "maxItems": 200},
+        "templateSlideId": {
+            "type": "string",
+            "description": "For multi-slide creation in an existing deck, duplicate this source slide instead of drawing a generic page.",
+        },
+        "templateBindings": {
+            "type": "array",
+            "items": TEMPLATE_BINDING,
+            "maxItems": 100,
+            "description": "Replace or delete inherited template shapes by stable ref/name/ID without supplying coordinates.",
+        },
+        "elements": {"type": "array", "items": ELEMENT, "maxItems": 200, "description": "Legacy escape hatch for exact positioned shapes. Omit for normal slide generation; use semantic content fields instead."},
         "background": {"type": "string"},
         "metadata": {"type": "object"},
     },
-    "required": ["elements"],
     "additionalProperties": False,
 }
 SHAPE_PART_OPERATION_SCHEMA = deepcopy(OPERATION_SCHEMA)
@@ -95,12 +167,12 @@ EDIT_OPS: tuple[tuple[str, str, str], ...] = (
 )
 
 COMPOSE: tuple[tuple[str, str, str], ...] = (
-    ("PowerPointCreateSlide", "ppt.create_slide", "Create a blank slide and optionally build it from a declarative SlideSpec."),
-    ("PowerPointCreateSlides", "ppt.create_slides", "Create multiple slides one page at a time from SlideSpecs, publishing progressive stages so the user sees the deck appear."),
+    ("PowerPointCreateSlide", "ppt.create_slide", "Create a slide from compact semantic content. Prefer layout/title/body/bullets/sections/theme; Cyrene computes coordinates."),
+    ("PowerPointCreateSlides", "ppt.create_slides", "Create multiple slides from compact SlideSpecs; existing decks can duplicate a source slide per page and replace its named shapes without coordinates."),
     ("PowerPointDuplicateSlide", "ppt.duplicate_slide", "Duplicate one slide inside the active presentation."),
     ("PowerPointApplySlideSpec", "ppt.apply_slide_spec", "Apply a deterministic declarative SlideSpec to one slide."),
     ("PowerPointRelayoutSlide", "ppt.relayout_slide", "Rebuild or relayout a slide from a declarative SlideSpec."),
-    ("PowerPointCreateFromTemplate", "ppt.create_from_template", "Create a slide from a template slide and a SlideSpec."),
+    ("PowerPointCreateFromTemplate", "ppt.create_from_template", "Duplicate a source slide and replace or delete inherited shapes through templateBindings; use generic elements only when the template needs additions."),
     ("PowerPointReplaceSlide", "ppt.replace_slide", "Replace a slide's contents from a SlideSpec with snapshot-backed undo."),
     ("PowerPointMoveSlide", "ppt.move_slide", "Move a slide to a zero-based target index."),
     ("PowerPointDeleteSlide", "ppt.delete_slide", "Delete a slide with revision locking and undo snapshot."),
@@ -183,7 +255,7 @@ async def _method_handler(method: str, args: dict[str, Any], *_rest: Any) -> str
             request["commitMode"] = "atomic"
         else:
             request["commitMode"] = "progressive"
-            request["progressiveGranularity"] = "element"
+            request["progressiveGranularity"] = request.get("progressiveGranularity") or "stage"
     if method in {"ppt.relayout_slide", "ppt.replace_slide"}:
         request["replaceExisting"] = True
     return await execute_powerpoint_request(request, method, method, timeout=300)
@@ -283,20 +355,27 @@ async def _create_slides_handler(args: dict[str, Any]) -> str:
     key = str(args.get("idempotencyKey") or "")
     file_mode = str(args.get("mode") or "") == "file" or bool(args.get("filePath"))
     commit_mode = "atomic" if file_mode else "progressive"
+    if file_mode:
+        args["commitMode"] = "atomic"
+        return await execute_powerpoint_request(args, "ppt.create_slides", "ppt.create_slides", timeout=300)
     completed: list[dict[str, Any]] = []
     warnings: list[Any] = []
     mode = str(args.get("mode") or "")
     await publish_tool_progress(current=0, total=len(specs), label="Preparing PowerPoint slides")
     for index, spec in enumerate(specs):
         request = {key_name: value for key_name, value in args.items() if key_name != "slideSpecs"}
+        template_slide_id = str(spec.get("templateSlideId") or "") if isinstance(spec, dict) else ""
         request.update({
             "slideSpec": spec,
             "expectedRevision": revision,
             "idempotencyKey": f"{key}:slide:{index + 1}",
             "commitMode": commit_mode,
-            "progressiveGranularity": "element" if not file_mode else request.get("progressiveGranularity") or "element",
+            "progressiveGranularity": request.get("progressiveGranularity") or "stage",
         })
-        raw = await execute_powerpoint_request(request, "ppt.create_slide", "ppt.create_slide", timeout=300)
+        method = "ppt.create_from_template" if template_slide_id else "ppt.create_slide"
+        if template_slide_id:
+            request["templateSlideId"] = template_slide_id
+        raw = await execute_powerpoint_request(request, method, method, timeout=300)
         payload = _decode_tool_result(raw)
         if payload.get("status") == "error":
             payload["operation"] = "ppt.create_slides"
@@ -344,7 +423,7 @@ async def _create_slides_handler(args: dict[str, Any]) -> str:
         "undoToken": None,
         "undoTokens": [item["undoToken"] for item in completed if item.get("undoToken")],
         "renderId": None,
-        "audit": {"action": "create_slides", "slideCount": len(completed), "commitMode": commit_mode},
+        "audit": {"action": "create_slides", "slideCount": len(completed), "commitMode": commit_mode, "progressiveGranularity": args.get("progressiveGranularity") or "stage"},
     }, ensure_ascii=False)
 
 
@@ -406,7 +485,7 @@ def register_all(tool_defs: list[dict[str, Any]], tool_handlers: dict[str, Any],
         tool_handlers[name] = _bind(_edit_handler, op)
         tool_metadata[name] = office_tool_metadata(read_only=False)
     for name, method, description in COMPOSE:
-        props = {**_mutation_props(), "slideSpec": SLIDE_SPEC, "templateSlideId": {"type": "string"}, "replaceExisting": {"type": "boolean"}, "targetIndex": {"type": "integer", "minimum": 0}, "commitMode": {"type": "string", "enum": ["atomic", "progressive"], "description": "File mode may use atomic writes; live PowerPoint always switches to the target page and publishes each component progressively."}, "progressiveGranularity": {"type": "string", "enum": ["stage", "element"], "description": "Live PowerPoint uses element granularity so every component appears in order; stage remains accepted for compatibility."}}
+        props = {**_mutation_props(), "slideSpec": SLIDE_SPEC, "templateSlideId": {"type": "string"}, "replaceExisting": {"type": "boolean"}, "targetIndex": {"type": "integer", "minimum": 0}, "commitMode": {"type": "string", "enum": ["atomic", "progressive"], "description": "File mode writes atomically. Live composition uses the connected PowerPoint add-in and normally publishes a few logical stages."}, "progressiveGranularity": {"type": "string", "enum": ["stage", "element"], "description": "stage batches compatible Office.js operations to reduce round trips; element is reserved for an explicitly visible step-by-step build."}}
         if method == "ppt.create_slides":
             props.pop("slideSpec", None)
             props["slideSpecs"] = {"type": "array", "items": SLIDE_SPEC, "minItems": 1, "maxItems": 100}

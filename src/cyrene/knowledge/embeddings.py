@@ -124,6 +124,7 @@ async def embed_texts(texts: list[str], *, input_type: str = "document") -> list
         "api_key": _api_key(),
         "model": _model(),
         "dimensions": int(os.environ.get("EMBEDDING_DIMENSIONS") or persisted.get("dimensions") or 0),
+        "use_proxy": persisted.get("use_proxy") is True,
         "input_type": input_type,
     }
     return await embed_texts_with_config(texts, config)

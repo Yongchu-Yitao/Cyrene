@@ -23,13 +23,13 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 379
+OPENAPI_OPERATION_COUNT = 388
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "4ee2ab6af00427c50768731e41e2e772b1374655e50b906e0f3b26b64d74f33e"
-TOOL_REGISTRY_SHA256 = "4f8624361c7be1a6367e9336ad31730bfc157899b7ef2b4a9a0786861933285a"
-MAIN_WIRE_SHA256 = "6a50a404102eb9093a8c8e6591af4862a78da8171f979b291698d560b95d5a0c"
-SUBAGENT_WIRE_SHA256 = "78c1a2a7d7afcf057d453abb314c551e6a92952335ec3e7b497ae3e2404fa24d"
+OPENAPI_SHA256 = "18d17809fa6ab6b56fef6bafeb7d828134b4bbc4862b34a180ee31befe6e3b6a"
+TOOL_REGISTRY_SHA256 = "f89051bdebdc54bb76288dbfbaf526765ab64fc7289e2bebd25f03510a6f7c45"
+MAIN_WIRE_SHA256 = "75564ec90f8c17437cfe6feb1b4d46ab78061bf04b03f6c4e2b08a42942b0649"
+SUBAGENT_WIRE_SHA256 = "1d28ab5db6096330a6a9c33877b04e1ff5e2f45c79df4b208e7f1a5a1516cd86"
 
 BROWSER_AND_VENDOR_GLOBALS = {
     "AudioContext",
@@ -168,7 +168,7 @@ def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged(monkeypatch
     # Office definition to retain its handler and canonical object schema.
     legacy_defs = [tool_def for tool_def in catalog.TOOL_DEFS if not str(tool_def["function"]["name"]).startswith(("Office", "PowerPoint"))]
     office_defs = [tool_def for tool_def in catalog.TOOL_DEFS if tool_def not in legacy_defs]
-    assert len(legacy_defs) == 150
+    assert len(legacy_defs) == 151
     assert _sha256_json(legacy_defs) == TOOL_REGISTRY_SHA256
     expected_office_names = {importlib.import_module(module_name).TOOL_DEF["function"]["name"] for module_name in NATIVE_TOOL_MODULES if ".office." in module_name}
     for family in (
@@ -186,9 +186,9 @@ def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged(monkeypatch
         assert function["description"]
         assert function["parameters"]["type"] == "object"
         assert function["name"] in catalog.TOOL_HANDLERS
-    assert len(catalog._MAIN_ONLY_TOOLS) == 84
+    assert len(catalog._MAIN_ONLY_TOOLS) == 85
 
-    assert len(wire.get_main_wire_tool_defs()) == 18
+    assert len(wire.get_main_wire_tool_defs()) == 23
     assert wire.get_wire_bundle_hash("main") == MAIN_WIRE_SHA256
     assert len(wire.get_subagent_wire_tool_defs()) == 12
     assert wire.get_wire_bundle_hash("subagent") == SUBAGENT_WIRE_SHA256
@@ -242,16 +242,16 @@ def test_workbench_uses_one_module_entry_after_ordered_vendor_scripts():
         "highlight.min.js",
         "echarts.min.js",
         "leaflet.js",
-        "pdfjs/pdf.min.js?v=0.8.0-beta1",
-        "pdfjs/pdf_viewer.js?v=0.8.0-beta1",
-        "compiled/app.js?v=0.8.0-beta1",
+        "pdfjs/pdf.min.js?v=0.8.0-beta2",
+        "pdfjs/pdf_viewer.js?v=0.8.0-beta2",
+        "compiled/app.js?v=0.8.0-beta2",
     ]
 
     positions = [scripts.index(script) for script in required_in_order]
     assert positions == sorted(positions)
     compiled_scripts = [script for script in scripts if script.startswith("compiled/")]
-    assert compiled_scripts == ["compiled/app.js?v=0.8.0-beta1"]
-    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta1"></script>' in index
+    assert compiled_scripts == ["compiled/app.js?v=0.8.0-beta2"]
+    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta2"></script>' in index
 
 
 def test_single_webui_source_build_and_entrypoint_shape():

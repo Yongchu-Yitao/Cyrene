@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.8.0-beta1-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.8.0-beta2-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Status">
 </p>
@@ -103,7 +103,7 @@ uv run cyrene stop
 - [架构说明](docs/architecture.zh-CN.md)
 - [开发指南](docs/development.zh-CN.md)
 - [当前限制](docs/limitations.zh-CN.md)
-- [当前开发进度](project-notes/CONTEXT_DEV_PROGRESS.zh-CN.md)
+- [开发记录](project-notes/README.md)
 - [更新日志](CHANGELOG.md)
 
 ## License

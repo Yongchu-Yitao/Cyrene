@@ -79,3 +79,12 @@ def test_visible_chat_only_removes_unread_notification(tmp_path, monkeypatch) ->
     assert [item["title"] for item in payload["items"]] == ["当前对话回复"]
     assert payload["items"][0]["read"] is True
     assert payload["unreadCount"] == 0
+
+
+def test_notification_routes_keep_sqlite_work_off_the_event_loop() -> None:
+    source = (
+        ROOT / "src/route/workbench/project_routes/notifications.py"
+    ).read_text(encoding="utf-8")
+
+    assert "return await asyncio.to_thread(\n            projects.notifications," in source
+    assert "return await asyncio.to_thread(\n            projects.mark_notifications_read," in source

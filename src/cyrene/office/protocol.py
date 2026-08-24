@@ -7,9 +7,9 @@ from pathlib import Path
 
 
 PROTOCOL_VERSION = 4
-KIT_VERSION = "1.3.0"
+KIT_VERSION = "1.4.0"
 SCHEMA_HASH = hashlib.sha256(
-    b"cyrene-ppt-kit:v4:camelcase:live-revision-selection:typed-batch:slide-spec:progressive"
+    b"cyrene-ppt-kit:v4:semantic-slide-spec:staged-batch:offline-whole-slide"
 ).hexdigest()[:16]
 
 READ_ONLY_METHODS = frozenset({
@@ -24,6 +24,7 @@ READ_ONLY_METHODS = frozenset({
     "ppt.get_master",
     "ppt.get_theme",
     "ppt.render_slide",
+    "ppt.export_slide",
     "ppt.verify_slide",
     "ppt.check_overflow",
     "ppt.check_overlap",

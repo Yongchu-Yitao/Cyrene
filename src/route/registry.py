@@ -109,6 +109,7 @@ from route.errors import install_api_exception_handlers
 from route.learning import register_learning_routes
 from route.maps.amap import register_amap_routes
 from route.maps.map import register_map_routes
+from route.media import register_media_routes
 from route.memory import register_memory_routes
 from route.notifications import register_notification_routes
 from route.pdf import register_pdf_routes
@@ -117,6 +118,7 @@ from route.remote import register_remote_routes
 from route.search import register_search_routes
 from route.settings.general import register_settings_routes
 from route.settings.model_configuration import register_model_configuration_routes
+from route.settings.media import register_media_settings_routes
 from route.settings.office import register_office_integration_routes
 from route.system.events import register_event_routes
 from route.system.instance import register_instance_routes
@@ -456,10 +458,12 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
     register_pdf_routes(router)
     register_agent_model_gateway_routes(router)
     register_model_configuration_routes(router)
+    register_media_settings_routes(router)
     register_office_integration_routes(router)
     register_custom_tool_routes(router, bot, db_path)
     register_voice_routes(router)
     register_terminal_routes(router)
+    register_media_routes(router)
     register_code_routes(
         router,
         code_file_service,
@@ -473,7 +477,11 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
     app.include_router(router)
 
     from cyrene.runtime.shell_wake import get_shell_wake_service
+    from cyrene.media.daemon import get_media_daemon
+    from cyrene.media.wake import get_media_wake_bridge
 
     app.state.terminal_wake_bridge = get_shell_wake_service()
+    app.state.media_daemon = get_media_daemon()
+    app.state.media_wake_bridge = get_media_wake_bridge()
 
 __all__ = ["register_routes"]

@@ -1336,9 +1336,10 @@ class PptxFileEngine:
         result = {"status": "applied", "mode": "file", "revision": state["revision"], "filePath": str(path), "changed": [], "created": [{"slideId": created_slide["id"]}], "deleted": [], "warnings": [], "undoToken": undo, "renderId": None}
         state["idempotency"][key] = deepcopy(result)
         spec = params.get("slideSpec")
-        if spec and (spec.get("elements") or spec.get("background")):
+        operations = slide_spec_operations(spec) if isinstance(spec, dict) else []
+        if operations:
             batch = dict(params)
-            batch.update({"slideId": created_slide["id"], "expectedRevision": state["revision"], "idempotencyKey": key + ":spec", "operations": slide_spec_operations(spec)})
+            batch.update({"slideId": created_slide["id"], "expectedRevision": state["revision"], "idempotencyKey": key + ":spec", "operations": operations})
             result = self.apply_batch(batch)
             result["created"].insert(0, {"slideId": created_slide["id"]})
             batch_undo = result.get("undoToken")
@@ -1349,6 +1350,68 @@ class PptxFileEngine:
             self._undo[undo]["revisionAfter"] = state["revision"]
             result["undoToken"] = undo
             state["idempotency"][key] = deepcopy(result)
+        return result
+
+    def create_slides(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Create and compose multiple slides in one package read/write transaction."""
+        specs = list(params.get("slideSpecs") or [])
+        if not specs:
+            raise PptxFileError("slide_specs_required", "slideSpecs must contain at least one SlideSpec.")
+        path = self._path(params)
+        state, key, replay = self._mutation(path, params)
+        if replay:
+            return {**deepcopy(replay), "replayed": True}
+        package = self._package(path)
+        source = self._select_slide(package, params)
+        undo = self._snapshot(path, state)
+        completed: list[dict[str, Any]] = []
+        for index, spec in enumerate(specs):
+            template_slide_id = str(spec.get("templateSlideId") or "") if isinstance(spec, dict) else ""
+            template_source = self._select_slide(package, {"slideId": template_slide_id}) if template_slide_id else source
+            slide = self._add_slide_part(package, template_source, blank=not bool(template_slide_id))
+            root = _xml(package[slide["part"]])
+            tree = root.find("./p:cSld/p:spTree", NS)
+            if tree is None:
+                raise PptxFileError("invalid_slide", "Slide shape tree is missing.")
+            shape_map = self._shape_map(root)
+            created: list[str] = []
+            changed: list[str] = []
+            deleted: list[str] = []
+            operations = slide_spec_operations(spec if isinstance(spec, dict) else {})
+            for operation in operations:
+                self._apply_batch_operation(
+                    package, slide, root, tree, shape_map, operation,
+                    created, changed, deleted,
+                )
+            package[slide["part"]] = _bytes(root)
+            completed.append({
+                "index": index,
+                "slideId": slide["id"],
+                "created": created,
+                "changed": changed,
+            })
+        self._write(path, package)
+        state["revision"] += 1
+        self._record_state_file(state, path)
+        result = {
+            "status": "applied",
+            "mode": "file",
+            "revision": state["revision"],
+            "filePath": str(path),
+            "changed": [],
+            "created": completed,
+            "deleted": [],
+            "warnings": [],
+            "undoToken": undo,
+            "renderId": None,
+            "audit": {
+                "action": "create_slides",
+                "slideCount": len(completed),
+                "commitMode": "atomic",
+                "packageWrites": 1,
+            },
+        }
+        state["idempotency"][key] = deepcopy(result)
         return result
 
     def move_or_delete_slide(self, params: dict[str, Any], *, delete: bool) -> dict[str, Any]:
@@ -1899,6 +1962,8 @@ class PptxFileEngine:
                 return self.apply_batch(params)
             if method == "ppt.create_slide":
                 return self.create_slide(params)
+            if method == "ppt.create_slides":
+                return self.create_slides(params)
             if method == "ppt.create_from_template":
                 template_slide_id = str(params.get("templateSlideId") or "")
                 if not template_slide_id:
@@ -1973,7 +2038,19 @@ class PptxFileEngine:
 
 
 def slide_spec_operations(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    from cyrene.office.slide_layout import compile_slide_spec
+
+    spec = compile_slide_spec(spec)
     operations: list[dict[str, Any]] = []
+    for binding in spec.get("templateBindings") or []:
+        if not isinstance(binding, dict) or not binding.get("shapeRef"):
+            raise PptxFileError("shape_ref_required", "Every template binding requires shapeRef.")
+        if binding.get("delete") is True:
+            operations.append({"op": "delete_shape", "shapeRef": binding["shapeRef"]})
+        elif "text" in binding:
+            operations.append({"op": "update_text", "shapeRef": binding["shapeRef"], "text": binding["text"]})
+        else:
+            raise PptxFileError("empty_template_binding", "Every template binding must provide text or delete=true.")
     if spec.get("background"):
         operations.append({"op": "set_background", "color": spec["background"]})
     for element in spec.get("elements") or []:

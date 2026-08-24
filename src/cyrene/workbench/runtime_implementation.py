@@ -1725,6 +1725,12 @@ def _public_pending_question(q: dict[str, Any] | None) -> dict[str, Any] | None:
         "options": [lbl for o in (q.get("options") or []) if (lbl := _option_label(o))],
         "roundId": str(q.get("round_id") or ""),
         "clientRequestId": str(q.get("client_request_id") or ""),
+        "ownerLane": (
+            str(q.get("owner_lane") or "decision").strip().lower()
+            if str(q.get("owner_lane") or "decision").strip().lower()
+            in {"decision", "execution"}
+            else "decision"
+        ),
         "allowCustom": bool(q.get("allow_custom", True)),
         "kind": str(meta.get("kind") or ""),
     }

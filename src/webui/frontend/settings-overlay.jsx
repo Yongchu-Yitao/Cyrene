@@ -9,7 +9,7 @@ import {
 import {
   RemotePanel, GeneralPanel, SearchPanel, EmbeddingSettingsSection, ChannelsPanel, AgentsPanel,
   AppearancePanel, CustomToolsPanel, CapabilitiesPanel, DataPanel, requestDataPanelStorage, AboutPanel,
-  ExtensionsPanel, CustomPluginsPanel, ShortcutsPanel, BudgetPanel,
+  ExtensionsPanel, CustomPluginsPanel, ShortcutsPanel, BudgetPanel, MediaPanel,
 } from "./features/settings/index.jsx"
 
 // ── Tab definitions ──
@@ -21,6 +21,7 @@ var TABS = [
   { id: "shortcuts", labelKey: "settings.shortcuts", icon: "keyboard" },
   { id: "model-usage", labelKey: "settings.modelUsage", icon: "route" },
   { id: "models", labelKey: "settings.modelServices", icon: "box" },
+  { id: "media", labelKey: "settings.mediaGeneration", icon: "photo-video" },
   { id: "agents", labelKey: "settings.agents", icon: "robot" },
   { id: "voice", labelKey: "settings.voiceTab", icon: "microphone" },
   { id: "tools", labelKey: "settings.toolsTab", icon: "tools" },
@@ -38,7 +39,7 @@ var TABS = [
 
 var SETTINGS_TAB_GROUPS = [
   { labelKey: "settings.group.general", ids: ["profile", "general", "search", "appearance", "shortcuts"] },
-  { labelKey: "settings.group.intelligence", ids: ["model-usage", "models", "agents", "voice", "tools"] },
+  { labelKey: "settings.group.intelligence", ids: ["model-usage", "models", "media", "agents", "voice", "tools"] },
   { labelKey: "settings.group.connections", ids: ["channels", "remote"] },
   { labelKey: "settings.group.extensionsSystem", ids: ["extensions", "custom-plugins", "custom-tools", "integrations"] },
   { labelKey: "settings.group.data", ids: ["budget", "usage", "data"] },
@@ -833,9 +834,6 @@ function SettingsPage({
   function formatBytes(n) { n = Number(n || 0); if (n < 1024) return n + " B"; if (n < 1048576) return (n / 1024).toFixed(1) + " KB"; if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB"; return (n / 1073741824).toFixed(2) + " GB"; }
   function formatDate(iso) { if (!iso) return "—"; try { return new Date(iso).toLocaleString(); } catch (e) { return iso; } }
 
-  // ── Render helpers ──
-  function onChange(key, stateFn) { return function (e) { stateFn(e.target.value); }; }
-
   useEffectSt(function () {
     if (!window.CyreneUI.has("uiSurface")) return undefined;
     var uiSurface = workbenchServices.uiSurface();
@@ -915,6 +913,7 @@ function SettingsPage({
           tab === "search" && React.createElement(SearchPanel, { t: t }),
           tab === "models" && React.createElement(workbenchServices.modelSettings().ServicesPage, { t: t, project: project }),
           tab === "model-usage" && React.createElement(workbenchServices.modelSettings().UsagePage, { t: t, project: project }),
+          tab === "media" && React.createElement(MediaPanel, { t: t }),
           tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
           tab === "remote" && React.createElement(RemotePanel, { t }),
           tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents }),

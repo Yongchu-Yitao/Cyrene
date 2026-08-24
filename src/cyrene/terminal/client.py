@@ -15,7 +15,7 @@ from typing import Any
 
 from cyrene.runtime.paths import user_data_dir
 
-PROTOCOL_VERSION = 7
+PROTOCOL_VERSION = 8
 LIFECYCLE_VERSION = 1
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
@@ -348,7 +348,8 @@ class TerminalDaemonClient:
 
     async def create(
         self, project_id: str, *, title: str = "", cwd: str = "",
-        cols: int = 100, rows: int = 30,
+        cols: int = 100, rows: int = 30, ssh_target: str = "",
+        remote_cwd: str = "", tmux_session: str = "",
     ) -> dict[str, Any]:
         from .manager import TerminalManager
 
@@ -364,11 +365,20 @@ class TerminalDaemonClient:
         shell, argv = import_module(
             "cyrene.tooling.backends.shell_runtime"
         ).interactive_argv()
-        return await self._request(
-            "create", projectId=project_id, title=title, cwd=resolved_cwd,
+        payload: dict[str, Any] = dict(
+            projectId=project_id, title=title, cwd=resolved_cwd,
             defaultCwd=project_cwd,
             shell=shell, argv=list(argv), cols=cols, rows=rows,
             createdBy="user", launchMode="interactive", activate=True,
+        )
+        if str(ssh_target or "").strip():
+            payload.update({
+                "sshTarget": str(ssh_target).strip(),
+                "remoteCwd": str(remote_cwd or ""),
+                "tmuxSession": str(tmux_session or ""),
+            })
+        return await self._request(
+            "create", **payload,
         )
 
     async def create_agent_terminal(
@@ -384,11 +394,17 @@ class TerminalDaemonClient:
         owner_tool_call_id: str = "",
         cols: int = 100,
         rows: int = 30,
+        ssh_target: str = "",
+        remote_cwd: str = "",
+        tmux_session: str = "",
     ) -> dict[str, Any]:
         from .manager import TerminalManager
 
         resolved = TerminalManager._resolve_cwd(project_id, cwd)
-        one_shot = bool(wake_on_exit and str(command or "").strip())
+        managed_ssh = bool(str(ssh_target or "").strip())
+        one_shot = bool(
+            not managed_ssh and wake_on_exit and str(command or "").strip()
+        )
         from importlib import import_module
 
         shell_runtime = import_module("cyrene.tooling.backends.shell_runtime")
@@ -399,8 +415,7 @@ class TerminalDaemonClient:
         else:
             shell, argv = shell_runtime.interactive_argv()
             launch_mode = "interactive"
-        result = await self._request(
-            "create",
+        payload: dict[str, Any] = dict(
             projectId=project_id,
             title=title,
             cwd=str(resolved),
@@ -416,9 +431,34 @@ class TerminalDaemonClient:
             wakeNote=wake_note,
             activate=False,
         )
+        if managed_ssh:
+            payload.update({
+                "sshTarget": str(ssh_target).strip(),
+                "remoteCwd": str(remote_cwd or ""),
+                "tmuxSession": str(tmux_session or ""),
+            })
+        result = await self._request(
+            "create",
+            **payload,
+        )
         terminal = dict(result.get("terminal") or {})
         if str(command or "").strip() and not one_shot:
-            await self.input(str(terminal.get("id") or ""), str(command).rstrip("\n") + "\n")
+            if managed_ssh:
+                terminal_id = str(terminal.get("id") or "")
+                try:
+                    await self.wait_until_connected(terminal_id)
+                except TerminalRequestError as exc:
+                    raise TerminalRequestError(
+                        f"Managed SSH terminal {terminal_id} remains open, but its initial "
+                        f"command was not sent: {exc}",
+                        code=exc.code,
+                    ) from exc
+            written = await self.input(
+                str(terminal.get("id") or ""),
+                str(command).rstrip("\n") + "\n",
+            )
+            if written.get("terminal"):
+                result["terminal"] = written["terminal"]
         return result
 
     async def screen(self, terminal_id: str) -> dict[str, Any]:
@@ -480,6 +520,17 @@ class TerminalDaemonClient:
     ) -> dict[str, Any]:
         return await self._request(
             "input", terminalId=terminal_id, data=data, actor=actor,
+        )
+
+    async def wait_until_connected(
+        self, terminal_id: str, *, timeout: float = 300.0,
+    ) -> dict[str, Any]:
+        bounded = max(0.1, min(float(timeout), 900.0))
+        return await self._request(
+            "waitConnected",
+            terminalId=terminal_id,
+            timeoutSeconds=bounded,
+            request_timeout=bounded + 5.0,
         )
 
     async def interrupt(self, terminal_id: str) -> dict[str, Any]:

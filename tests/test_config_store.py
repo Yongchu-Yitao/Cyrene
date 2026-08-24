@@ -173,6 +173,24 @@ def test_removed_tool_round_setting_is_purged_and_rejected(
         isolated_config_store.set_env_many({"MAX_TOOL_ROUNDS": "15"})
 
 
+def test_removed_economy_mode_setting_is_purged_and_rejected(
+    isolated_config_store,
+):
+    config = {
+        "env": {},
+        "settings": {"budget_mode": "economy", "budget_enabled": True},
+    }
+    _write_encrypted(isolated_config_store, config)
+
+    loaded = isolated_config_store._ensure_loaded()
+
+    assert "budget_mode" not in loaded["settings"]
+    assert isolated_config_store.get_setting("budget_mode") is None
+    assert isolated_config_store.get_setting("budget_enabled") is True
+    with pytest.raises(ValueError, match="have been removed"):
+        isolated_config_store.set_setting("budget_mode", "economy")
+
+
 def test_migration_removes_legacy_global_tool_output_cap(isolated_config_store):
     config = {
         "env": {
@@ -195,10 +213,11 @@ def test_restore_drops_removed_tool_round_setting(isolated_config_store):
             "OPENAI_MODEL": "example-model",
             "MAX_TOOL_ROUNDS": "15",
         },
-        "settings": {},
+        "settings": {"budget_mode": "economy", "budget_enabled": True},
     })
 
     assert normalized["env"] == {"OPENAI_MODEL": "example-model"}
+    assert normalized["settings"] == {"budget_enabled": True}
 
 
 def test_activate_workspace_updates_active_state_and_history_in_one_write(
@@ -259,6 +278,81 @@ def test_portable_snapshot_redacts_extension_credentials(isolated_config_store):
     assert "github-secret" not in encoded
     assert "Bearer secret" not in encoded
     assert "local-secret" not in encoded
+
+
+def test_portable_snapshot_recursively_redacts_media_provider_credentials(
+    isolated_config_store,
+):
+    media = {
+        "max_parallel_jobs": 4,
+        "default_providers": {"image": "openai", "video": "google"},
+        "providers": {
+            "openai": {
+                "enabled": True,
+                "api_key": "openai-secret",
+                "base_url": "https://api.openai.com/v1",
+                "image_model": "gpt-image-2",
+                "transport": {
+                    "headers": {
+                        "Authorization": "Bearer header-secret",
+                        "X-Trace-Id": "safe-trace-id",
+                    },
+                    "clientSecret": "oauth-client-secret",
+                },
+            },
+            "custom": {
+                "enabled": False,
+                "nested": [
+                    {
+                        "access_token": "access-secret",
+                        "refresh-token": "refresh-secret",
+                        "region": "cn-beijing",
+                    },
+                    {"signingKey": "signing-secret", "timeout_seconds": 45},
+                ],
+                "api_key_configured": True,
+                "api_key_requires_reentry": False,
+            },
+        },
+    }
+    isolated_config_store.set_setting("media", media)
+
+    snapshot = isolated_config_store.export_snapshot()
+    exported_media = snapshot["settings"]["media"]
+    encoded = json.dumps(exported_media)
+
+    for secret in (
+        "openai-secret",
+        "Bearer header-secret",
+        "oauth-client-secret",
+        "access-secret",
+        "refresh-secret",
+        "signing-secret",
+    ):
+        assert secret not in encoded
+    assert exported_media["max_parallel_jobs"] == 4
+    assert exported_media["default_providers"] == {
+        "image": "openai",
+        "video": "google",
+    }
+    assert exported_media["providers"]["openai"]["base_url"] == (
+        "https://api.openai.com/v1"
+    )
+    assert exported_media["providers"]["openai"]["image_model"] == "gpt-image-2"
+    assert (
+        exported_media["providers"]["openai"]["transport"]["headers"]["X-Trace-Id"]
+        == "safe-trace-id"
+    )
+    assert exported_media["providers"]["custom"]["nested"][0]["region"] == (
+        "cn-beijing"
+    )
+    assert (
+        exported_media["providers"]["custom"]["nested"][1]["timeout_seconds"]
+        == 45
+    )
+    assert exported_media["providers"]["custom"]["api_key_configured"] is True
+    assert exported_media["providers"]["custom"]["api_key_requires_reentry"] is False
+    assert isolated_config_store.get_setting("media") == media
 
 
 def test_unknown_model_context_uses_smallest_known_candidate_window(monkeypatch):

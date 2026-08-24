@@ -23,6 +23,9 @@ class TerminalCreateRequest(BaseModel):
     cwd: str = ""
     cols: int = Field(default=100, ge=20, le=400)
     rows: int = Field(default=30, ge=5, le=200)
+    sshTarget: str = Field(default="", max_length=255)
+    remoteCwd: str = Field(default="", max_length=4096)
+    tmuxSession: str = Field(default="", max_length=128)
 
 
 class TerminalRenameRequest(BaseModel):
@@ -149,6 +152,9 @@ def register_terminal_routes(router: APIRouter) -> None:
             result = await client.create(
                 payload.projectId, title=payload.title, cwd=payload.cwd,
                 cols=payload.cols, rows=payload.rows,
+                ssh_target=payload.sshTarget,
+                remote_cwd=payload.remoteCwd,
+                tmux_session=payload.tmuxSession,
             )
         except Exception as exc:
             raise _http_error(exc) from exc

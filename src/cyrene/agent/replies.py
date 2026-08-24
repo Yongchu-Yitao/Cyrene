@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from typing import Any
 
 from cyrene.agent.message import _is_placeholder_reply
@@ -15,10 +14,6 @@ from cyrene.agent.model_service import (
     streaming_reply_requested as _streaming_reply_requested,
 )
 from cyrene.model_runtime.messages import assistant_text
-
-_default_call_llm = _call_llm
-_default_call_llm_stream = _call_llm_stream
-_default_streaming_reply_requested = _streaming_reply_requested
 
 _VISIBLE_DSML_TOOL_BLOCK_RE = re.compile(
     r"(?:"
@@ -38,83 +33,27 @@ _VISIBLE_DSML_TOOL_MARKUP_RE = re.compile(
 )
 
 
-def _legacy_guidance_dependency(
-    name: str,
-    original_value: Any,
-    current_value: Any,
-) -> Any:
-    """Honor old guidance monkeypatches without importing it or adding a cycle."""
-    guidance = sys.modules.get("cyrene.agent.guidance")
-    legacy_value = getattr(guidance, name, original_value)
-    return (
-        legacy_value
-        if legacy_value is not original_value
-        else current_value
-    )
-
-
 async def _final_user_reply_from_history(
     messages: list[dict],
     max_tokens: int | None = None,
 ) -> str:
-    last_user_text = next(
-        (
-            str(message.get("content") or "").strip()
-            for message in reversed(messages)
-            if isinstance(message, dict)
-            and str(message.get("role") or "") == "user"
-            and str(message.get("content") or "").strip()
-        ),
-        "",
-    )
-    prompt_messages = [
-        *messages,
-        {
-            "role": "user",
-            "content": (
-                (
-                    "Now answer the user's request directly using the gathered tool results.\n"
-                    if last_user_text
-                    else "The user uploaded one or more attachments without extra text. "
-                    "Summarize the attachment contents directly using the gathered tool results.\n"
-                )
-                + "Do not call tools.\n"
-                + "Do not reply with only 'Done'.\n"
-                + "If a tool was unavailable or failed, state that explicitly "
-                + "and do not promise a future retry.\n"
-                + "If the tools extracted file or attachment contents, quote or "
-                "summarize those contents in your answer."
-            ),
-        },
-    ]
-    return await _validated_final_no_tool_reply(
-        prompt_messages,
-        max_tokens=max_tokens,
-    )
+    return await _recover_final_reply(messages, max_tokens=max_tokens)
 
 
 async def _final_plain_reply_from_history(
     messages: list[dict],
     max_tokens: int | None = None,
 ) -> str:
-    prompt_messages = [
-        *messages,
-        {
-            "role": "user",
-            "content": (
-                "Answer the latest user message directly.\n"
-                "Do not call tools.\n"
-                "Do not reply with only 'Done'."
-            ),
-        },
-    ]
-    return await _validated_final_no_tool_reply(
-        prompt_messages,
-        max_tokens=max_tokens,
-    )
+    return await _recover_final_reply(messages, max_tokens=max_tokens)
 
 
 def _tool_result_fallback_text(messages: list[dict]) -> str:
+    chinese = any(
+        isinstance(message, dict)
+        and str(message.get("role") or "") == "user"
+        and _looks_chinese(str(message.get("content") or ""))
+        for message in messages
+    )
     for message in reversed(messages):
         if (
             not isinstance(message, dict)
@@ -131,15 +70,39 @@ def _tool_result_fallback_text(messages: list[dict]) -> str:
         if isinstance(payload, dict):
             text_preview = str(payload.get("text_preview") or "").strip()
             if text_preview:
-                return f"我从附件中提取到的内容是：\n\n{text_preview}"
+                safe_text = _safe_fallback_detail(text_preview, limit=4000)
+                if safe_text:
+                    return (
+                        f"工具返回的内容是：\n\n{safe_text}"
+                        if chinese
+                        else f"The tool returned:\n\n{safe_text}"
+                    )
             stdout = str(payload.get("stdout") or "").strip()
             if stdout:
-                return f"我从附件中提取到的内容是：\n\n{stdout[:4000]}"
+                safe_text = _safe_fallback_detail(stdout, limit=4000)
+                if safe_text:
+                    return (
+                        f"工具返回的内容是：\n\n{safe_text}"
+                        if chinese
+                        else f"The tool returned:\n\n{safe_text}"
+                    )
             preview = str(payload.get("preview") or "").strip()
             if preview and "no built-in parser" not in preview.lower():
-                return f"我从附件中提取到的内容是：\n\n{preview}"
+                safe_text = _safe_fallback_detail(preview, limit=4000)
+                if safe_text:
+                    return (
+                        f"工具返回的内容是：\n\n{safe_text}"
+                        if chinese
+                        else f"The tool returned:\n\n{safe_text}"
+                    )
         elif raw and not raw.lower().startswith("tool failed:"):
-            return f"我从附件中提取到的内容是：\n\n{raw[:4000]}"
+            safe_text = _safe_fallback_detail(raw, limit=4000)
+            if safe_text:
+                return (
+                    f"工具返回的内容是：\n\n{safe_text}"
+                    if chinese
+                    else f"The tool returned:\n\n{safe_text}"
+                )
     return ""
 
 
@@ -223,16 +186,168 @@ def _delivery_fallback_text(messages: list[dict]) -> str:
     return "I sent the file."
 
 
+def _safe_fallback_detail(value: Any, *, limit: int = 1000) -> str:
+    detail = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not detail:
+        return ""
+    detail = _strip_visible_dsml_tool_blocks(detail)
+    if _contains_visible_dsml_tool_markup(detail):
+        return ""
+    return detail[:limit]
+
+
+def _tool_failure_fallback_text(messages: list[dict]) -> str:
+    """Surface the latest explicit tool failure without exposing diagnostics."""
+    chinese = any(
+        isinstance(message, dict)
+        and str(message.get("role") or "") == "user"
+        and _looks_chinese(str(message.get("content") or ""))
+        for message in messages
+    )
+    for message in reversed(messages):
+        if (
+            not isinstance(message, dict)
+            or str(message.get("role") or "") != "tool"
+        ):
+            continue
+        raw = str(message.get("content") or "").strip()
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = None
+        failed = raw.lower().startswith("tool failed:")
+        detail = ""
+        if isinstance(payload, dict):
+            status = str(payload.get("status") or "").strip().lower()
+            failed = failed or status in {
+                "error", "failed", "failure", "denied", "cancelled", "canceled",
+            } or payload.get("success") is False
+            if failed:
+                for key in ("error", "message", "detail"):
+                    detail = _safe_fallback_detail(payload.get(key))
+                    if detail:
+                        break
+        elif failed:
+            detail = _safe_fallback_detail(raw.partition(":")[2])
+        if not failed:
+            continue
+        if chinese:
+            return f"工具执行失败：{detail}" if detail else "工具执行失败，未能完成请求。"
+        return (
+            f"A tool failed: {detail}"
+            if detail
+            else "A tool failed, so the request could not be completed."
+        )
+    return ""
+
+
+def _deterministic_final_fallback(messages: list[dict]) -> str:
+    """Return a safe terminal reply without another model request."""
+    for fallback_factory in (
+        _tool_failure_fallback_text,
+        _delivery_fallback_text,
+        _tool_result_fallback_text,
+    ):
+        fallback = fallback_factory(messages)
+        if fallback:
+            return fallback
+    chinese = any(
+        isinstance(message, dict)
+        and str(message.get("role") or "") == "user"
+        and _looks_chinese(str(message.get("content") or ""))
+        for message in messages
+    )
+    has_tool_result = any(
+        isinstance(message, dict) and str(message.get("role") or "") == "tool"
+        for message in messages
+    )
+    if chinese:
+        return (
+            "工具执行已结束，但未能生成安全的最终答复。"
+            if has_tool_result
+            else "抱歉，我未能生成安全的答复。"
+        )
+    return (
+        "The tools finished, but I could not generate a safe final response."
+        if has_tool_result
+        else "Sorry, I could not generate a safe response."
+    )
+
+
+async def _recover_final_reply(
+    messages: list[dict],
+    max_tokens: int | None = None,
+    *,
+    completion_packet: dict[str, Any] | None = None,
+    call_llm: Any = None,
+    call_llm_stream: Any = None,
+    streaming_reply_requested: Any = None,
+) -> str:
+    """Run one synthesis; only textual tool markup gets one correction call.
+
+    Empty-body Execution ``quit`` calls append a coordinator-built completion
+    packet.  The existing Execution transcript stays byte-stable, while the
+    packet explicitly states that no prior public answer exists and supplies
+    the structured completion facts needed for a self-contained reply.
+    """
+    if completion_packet is not None:
+        return await _validated_final_no_tool_reply(
+            [
+                *messages,
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        completion_packet,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                },
+            ],
+            max_tokens=max_tokens,
+            call_llm=call_llm,
+            call_llm_stream=call_llm_stream,
+            streaming_reply_requested=streaming_reply_requested,
+        )
+    has_tool_results = any(
+        isinstance(message, dict)
+        and (
+            str(message.get("role") or "") == "tool"
+            or (
+                str(message.get("role") or "") == "assistant"
+                and bool(message.get("tool_calls"))
+            )
+        )
+        for message in messages
+    )
+    instruction = (
+        "Now answer the user's request directly using the gathered tool results.\n"
+        "Do not call tools.\n"
+        "Do not reply with only 'Done'.\n"
+        "If a tool was unavailable or failed, state that explicitly and do not "
+        "promise a future retry.\n"
+        "If tools extracted file or attachment contents, quote or summarize them."
+        if has_tool_results
+        else
+        "Answer the latest user message directly.\n"
+        "Do not call tools.\n"
+        "Do not reply with only 'Done'."
+    )
+    return await _validated_final_no_tool_reply(
+        [*messages, {"role": "user", "content": instruction}],
+        max_tokens=max_tokens,
+        call_llm=call_llm,
+        call_llm_stream=call_llm_stream,
+        streaming_reply_requested=streaming_reply_requested,
+    )
+
+
 async def _final_reply_from_history(
     messages: list[dict],
     max_tokens: int | None = None,
 ) -> str:
-    return (
-        await _validated_final_no_tool_reply(
-            messages,
-            max_tokens=max_tokens,
-        )
-    ) or "Done."
+    return await _recover_final_reply(messages, max_tokens=max_tokens)
 
 
 async def _final_reply_with_tools(
@@ -255,12 +370,7 @@ async def _final_reply_with_tools(
             ),
         },
     ]
-    stream_call = _legacy_guidance_dependency(
-        "_call_llm_stream",
-        _default_call_llm_stream,
-        _call_llm_stream,
-    )
-    response = await stream_call(
+    response = await _call_llm_stream(
         prompt_messages,
         max_tokens=max_tokens,
         tools=tools,
@@ -303,24 +413,15 @@ async def _validated_final_no_tool_reply(
     call_llm_stream: Any = None,
     streaming_reply_requested: Any = None,
 ) -> str:
-    """Generate final text without leaking textual tool-call markup."""
-    call_llm = call_llm or _legacy_guidance_dependency(
-        "_call_llm",
-        _default_call_llm,
-        _call_llm,
-    )
-    call_llm_stream = call_llm_stream or _legacy_guidance_dependency(
-        "_call_llm_stream",
-        _default_call_llm_stream,
-        _call_llm_stream,
+    """Generate safe text with one bounded provider-markup correction."""
+    call_llm = _call_llm if call_llm is None else call_llm
+    call_llm_stream = (
+        _call_llm_stream if call_llm_stream is None else call_llm_stream
     )
     streaming_reply_requested = (
-        streaming_reply_requested
-        or _legacy_guidance_dependency(
-            "_streaming_reply_requested",
-            _default_streaming_reply_requested,
-            _streaming_reply_requested,
-        )
+        _streaming_reply_requested
+        if streaming_reply_requested is None
+        else streaming_reply_requested
     )
     if streaming_reply_requested():
         response = await call_llm_stream(messages, max_tokens=max_tokens)
@@ -332,32 +433,37 @@ async def _validated_final_no_tool_reply(
         )
     _record_final_reply_usage(response)
     text = assistant_text(response).strip()
-    if not _contains_visible_dsml_tool_markup(text):
+    if (
+        text
+        and not _is_placeholder_reply(text)
+        and not _contains_visible_dsml_tool_markup(text)
+    ):
         return text
-
-    retry_messages = [
-        *messages,
-        {"role": "assistant", "content": text},
-        {
-            "role": "user",
-            "content": (
-                "Your previous message was textual tool-call markup, but tools are "
-                "not available in this final-answer step. Write the final answer "
-                "to the user in plain text only, using the already gathered "
-                "context. Do not output XML, DSML, JSON tool calls, or any "
-                "tool-call markup."
-            ),
-        },
-    ]
-    retry_response = await call_llm(
-        retry_messages,
-        tools=None,
-        max_tokens=max_tokens,
-    )
-    _record_final_reply_usage(response, retry_response)
-    retry_text = assistant_text(retry_response).strip()
-    if _contains_visible_dsml_tool_markup(retry_text):
-        retry_text = _strip_visible_dsml_tool_blocks(retry_text)
-        if _contains_visible_dsml_tool_markup(retry_text):
-            return ""
-    return retry_text
+    if _contains_visible_dsml_tool_markup(text):
+        correction_messages = [
+            *messages,
+            {"role": "assistant", "content": text},
+            {
+                "role": "user",
+                "content": (
+                    "Your previous message was textual tool-call markup, but tools "
+                    "are unavailable in this final-answer step. Write the final "
+                    "answer in plain text only from the gathered context. Do not "
+                    "output XML, DSML, JSON tool calls, or tool-call markup."
+                ),
+            },
+        ]
+        corrected_response = await call_llm(
+            correction_messages,
+            tools=None,
+            max_tokens=max_tokens,
+        )
+        _record_final_reply_usage(response, corrected_response)
+        corrected = assistant_text(corrected_response).strip()
+        if (
+            corrected
+            and not _is_placeholder_reply(corrected)
+            and not _contains_visible_dsml_tool_markup(corrected)
+        ):
+            return corrected
+    return _deterministic_final_fallback(messages)

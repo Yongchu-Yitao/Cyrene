@@ -49,6 +49,12 @@ The following variables are read at startup. Most can also be edited at runtime 
 | `OPENAI_BASE_URL` | API endpoint URL | `https://api.deepseek.com/v1` |
 | `OPENAI_MODEL` | Model name | `deepseek-v4-flash` |
 
+Settings → Models includes ready-to-configure connections for MiniMax,
+DeepSeek, Kimi, GLM, OpenCode Go, Gemini, OpenRouter, AMD GPU Cloud, Codex
+OAuth, and Local ONNX. Model catalogs are fetched from each provider instead
+of being frozen in the app. OpenCode Go profiles automatically select Chat
+Completions, Responses, or Anthropic Messages according to the selected model.
+
 ### Agent
 
 | Variable | Description | Default |

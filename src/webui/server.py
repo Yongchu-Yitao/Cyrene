@@ -117,6 +117,12 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         terminal_wake_bridge = getattr(_app.state, "terminal_wake_bridge", None)
         if terminal_wake_bridge is not None:
             await terminal_wake_bridge.start_daemon_bridge()
+        media_daemon = getattr(_app.state, "media_daemon", None)
+        media_wake_bridge = getattr(_app.state, "media_wake_bridge", None)
+        if media_daemon is not None:
+            await media_daemon.start()
+        if media_wake_bridge is not None:
+            await media_wake_bridge.start()
         await _start_remote_control()
         await _start_office_gateway(instance_id)
         await _start_wechat()
@@ -126,6 +132,10 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         try:
             yield
         finally:
+            if media_wake_bridge is not None:
+                await media_wake_bridge.stop()
+            if media_daemon is not None:
+                await media_daemon.stop()
             if terminal_wake_bridge is not None:
                 await terminal_wake_bridge.stop_daemon_bridge()
             plugin_manager = getattr(_app.state, "plugin_manager", None)

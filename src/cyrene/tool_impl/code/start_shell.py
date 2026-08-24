@@ -47,6 +47,7 @@ async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
     cwd = str(cwd_path)
     from cyrene.agent.context import has_temporary_full_access
     command = str(args.get("command", "") or "")
+    ssh_target = str(args.get("ssh_target", "") or "").strip()
     _full_access = has_temporary_full_access()
     if command:
         if not _full_access and is_dangerous_subshell(command):
@@ -94,18 +95,30 @@ async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
         wake_on_exit=wake_on_exit,
         wake_note=wake_note,
         owner_tool_call_id=str(context.client_request_id or context.round_id or ""),
+        ssh_target=ssh_target,
+        remote_cwd=str(args.get("remote_cwd", "") or ""),
+        tmux_session=str(args.get("tmux_session", "") or ""),
     )
     snap = dict(created.get("terminal") or {})
     result = {
         "shell_id": snap.get("id", ""),
         "terminal_id": snap.get("id", ""),
         "status": snap.get("status", ""),
-        "cwd": snap.get("cwd", "."),
+        "cwd": (
+            snap.get("remoteCwd", "") or snap.get("cwd", ".")
+            if snap.get("connectionKind") == "ssh"
+            else snap.get("cwd", ".")
+        ),
         "title": snap.get("title", "Terminal"),
         "owner_chat_id": snap.get("ownerChatId", ""),
         "wake_on_exit": bool(snap.get("wakeId")),
         "wake_id": snap.get("wakeId", ""),
         "execution_mode": snap.get("launchMode", "interactive"),
+        "connection_kind": snap.get("connectionKind", "local"),
+        "connection_status": snap.get("connectionStatus", "local"),
+        "ssh_target": snap.get("sshTarget", ""),
+        "remote_cwd": snap.get("remoteCwd", ""),
+        "tmux_session": snap.get("tmuxSession", ""),
         "shown": False,
     }
     if result["wake_on_exit"]:

@@ -40,6 +40,12 @@ def build_pending_question(raw_pending: Any) -> dict[str, Any] | None:
         "roundId": str(raw_pending.get("round_id", "")).strip(),
         "roundTitle": str(raw_pending.get("round_title", "")).strip(),
         "clientRequestId": str(raw_pending.get("client_request_id", "")).strip(),
+        "ownerLane": (
+            str(raw_pending.get("owner_lane") or "decision").strip().lower()
+            if str(raw_pending.get("owner_lane") or "decision").strip().lower()
+            in {"decision", "execution"}
+            else "decision"
+        ),
         "allowCustom": bool(raw_pending.get("allow_custom", True)),
         "hideAnswerInChat": bool(raw_pending.get("hide_answer_in_chat")),
         "kind": str(meta.get("kind", "")).strip(),

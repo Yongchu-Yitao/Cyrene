@@ -334,6 +334,116 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                                                                               'cached sidecar output.'}},
                               'required': ['path']}}},
  {'type': 'function',
+  'function': {'name': 'StartMediaGeneration',
+               'description': 'Main agent only. Submit 1-8 image, video, or music generation jobs to the independent '
+                              'media daemon and return immediately. Successful outputs are attached directly to the '
+                              'current chat, then one internal wake resumes the Agent after every job in the batch is '
+                              'terminal. After submission, end the turn immediately and never poll, wait, or start a '
+                              'terminal watcher.',
+               'parameters': {'type': 'object',
+                              'properties': {'requests': {'type': 'array',
+                                                          'minItems': 1,
+                                                          'maxItems': 8,
+                                                          'description': 'Independent media jobs. Jobs in one batch '
+                                                                         'may run in parallel.',
+                                                          'items': {'type': 'object',
+                                                                    'properties': {'kind': {'type': 'string',
+                                                                                            'enum': ['image',
+                                                                                                     'video',
+                                                                                                     'music']},
+                                                                                   'prompt': {'type': 'string',
+                                                                                              'description': 'Generation '
+                                                                                                             'prompt. '
+                                                                                                             'May be '
+                                                                                                             'empty only '
+                                                                                                             'for music '
+                                                                                                             'with lyrics.'},
+                                                                                   'provider': {'type': 'string',
+                                                                                                'enum': ['auto',
+                                                                                                         'comfyui',
+                                                                                                         'openai',
+                                                                                                         'seedream',
+                                                                                                         'seedance',
+                                                                                                         'minimax',
+                                                                                                         'google'],
+                                                                                                'description': 'Provider '
+                                                                                                               'override. '
+                                                                                                               'Defaults '
+                                                                                                               'to auto.'},
+                                                                                   'model': {'type': 'string',
+                                                                                             'description': 'Optional '
+                                                                                                            'provider '
+                                                                                                            'model '
+                                                                                                            'override.'},
+                                                                                   'name': {'type': 'string',
+                                                                                            'description': 'Optional '
+                                                                                                           'output '
+                                                                                                           'filename.'},
+                                                                                   'reference_paths': {'type': 'array',
+                                                                                                       'maxItems': 30,
+                                                                                                       'items': {'type': 'string'},
+                                                                                                       'description': 'Workspace or already managed files to use as generation references.'},
+                                                                                   'reference_attachment_ids': {'type': 'array',
+                                                                                                                'maxItems': 30,
+                                                                                                                'items': {'type': 'string'},
+                                                                                                                'description': 'Attachment ids explicitly present in the current chat.'},
+                                                                                   'reference_urls': {'type': 'array',
+                                                                                                      'maxItems': 30,
+                                                                                                      'items': {'type': 'string'},
+                                                                                                      'description': 'Public HTTPS reference URLs. Use this for provider-supported remote video references; prefer chat attachment ids for local images.'},
+                                                                                   'reference_roles': {'type': 'array',
+                                                                                                       'maxItems': 30,
+                                                                                                       'items': {'type': 'string',
+                                                                                                                 'enum': ['first_frame',
+                                                                                                                          'last_frame',
+                                                                                                                          'reference',
+                                                                                                                          'subject',
+                                                                                                                          'audio',
+                                                                                                                          'reference_image',
+                                                                                                                          'reference_video',
+                                                                                                                          'reference_audio']},
+                                                                                                       'description': 'Optional role for each resolved reference, ordered as reference_paths, reference_attachment_ids, then reference_urls.'},
+                                                                                   'mask_path': {'type': 'string',
+                                                                                                 'description': 'Workspace or managed mask image for providers that support masked image edits.'},
+                                                                                   'mask_attachment_id': {'type': 'string',
+                                                                                                          'description': 'Mask image attachment id explicitly present in the current chat.'},
+                                                                                   'negative_prompt': {'type': 'string'},
+                                                                                   'size': {'type': 'string',
+                                                                                            'description': 'Provider-supported output dimensions, such as 1024x1024.'},
+                                                                                   'aspect_ratio': {'type': 'string',
+                                                                                                    'description': 'Provider-supported aspect ratio, such as 16:9.'},
+                                                                                   'resolution': {'type': 'string',
+                                                                                                  'description': 'Provider-supported resolution, such as 720p, 1080p, 2K, or 4K.'},
+                                                                                   'duration': {'anyOf': [{'type': 'number',
+                                                                                                           'enum': [-1]},
+                                                                                                          {'type': 'number',
+                                                                                                           'minimum': 1,
+                                                                                                           'maximum': 600}],
+                                                                                                'description': 'Requested audio or video duration in seconds. -1 asks a provider that supports it to choose automatically.'},
+                                                                                   'quality': {'type': 'string'},
+                                                                                   'output_format': {'type': 'string'},
+                                                                                   'number_of_outputs': {'type': 'integer',
+                                                                                                         'minimum': 1,
+                                                                                                         'maximum': 8},
+                                                                                   'lyrics': {'type': 'string',
+                                                                                              'description': 'Lyrics for music generation.'},
+                                                                                   'is_instrumental': {'type': 'boolean'},
+                                                                                   'generate_audio': {'type': 'boolean',
+                                                                                                      'description': 'Whether a video provider should generate native audio.'},
+                                                                                   'seed': {'type': 'integer',
+                                                                                            'minimum': 0},
+                                                                                   'parameters': {'type': 'object',
+                                                                                                  'description': 'Advanced provider-specific parameters.',
+                                                                                                  'additionalProperties': True}},
+                                                                    'required': ['kind'],
+                                                                    'additionalProperties': False}},
+                                             'idempotency_key': {'type': 'string',
+                                                                 'minLength': 8,
+                                                                 'maxLength': 160,
+                                                                 'description': 'Stable key to reuse only when retrying this exact batch submission.'}},
+                              'required': ['requests'],
+                              'additionalProperties': False}}},
+ {'type': 'function',
   'function': {'name': 'GenerateImage',
                'description': 'Main agent only. Generate one image through the active OpenAI OAuth account and '
                               'deliver it '
@@ -540,7 +650,7 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                               'required': ['query']}}},
  {'type': 'function',
   'function': {'name': 'StartShell',
-               'description': 'Create a conversation-bound terminal in the Cyrene Terminal Daemon. It appears in the terminal list but does not replace the user\'s current view. With wake_on_exit and an initial command, the command runs as a durable one-shot job and wakes this conversation after exit.',
+               'description': 'Create a conversation-bound terminal in the Cyrene Terminal Daemon. It appears in the terminal list but does not replace the user\'s current view. A managed SSH initial command is sent only after the injected remote launcher confirms that the connection is ready. With wake_on_exit and a local initial command, the command runs as a durable one-shot job and wakes this conversation after exit.',
                'parameters': {'type': 'object',
                               'properties': {'cwd': {'type': 'string'},
                                              'title': {
@@ -552,8 +662,29 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                                                  ),
                                              },
                                              'command': {'type': 'string',
-                                                         'description': 'Optional initial command to run immediately '
-                                                                        'after the shell starts'},
+                                                         'description': (
+                                                             'Optional initial command. Local shells run it after '
+                                                             'startup; managed SSH sends it only after the remote '
+                                                             'connection reports ready.'
+                                                         )},
+                                             'ssh_target': {
+                                                 'type': 'string',
+                                                 'description': (
+                                                     'Optional OpenSSH Host alias or user@host. Creates a managed '
+                                                     'remote terminal without storing credentials.'
+                                                 ),
+                                             },
+                                             'remote_cwd': {
+                                                 'type': 'string',
+                                                 'description': 'Initial absolute directory on the remote host.',
+                                             },
+                                             'tmux_session': {
+                                                 'type': 'string',
+                                                 'description': (
+                                                     'Optional remote tmux session name. Cyrene attaches or creates '
+                                                     'it and can restore it after transport loss.'
+                                                 ),
+                                             },
                                              'wake_on_exit': {
                                                  'type': 'boolean',
                                                  'description': (
@@ -608,13 +739,17 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                'parameters': {'type': 'object', 'properties': {}}}},
  {'type': 'function',
   'function': {'name': 'ReadShell',
-               'description': 'Read an authorized terminal. Without shell_id or name, automatically use the single terminal currently visible in the active split; this works even when it is not bound to the conversation. view=screen returns the rendered VT viewport and view=scrollback returns durable PTY history. If multiple terminal panes are visible, ask the user which terminal to use.',
+               'description': 'Read an authorized terminal. Without shell_id or name, automatically use the single terminal currently visible in the active split; this works even when it is not bound to the conversation. view=screen returns the rendered VT viewport, view=scrollback returns durable PTY history, view=commands returns indexed local or remote commands, and view=command_output returns one command output. If multiple terminal panes are visible, ask the user which terminal to use.',
                'parameters': {'type': 'object',
                               'properties': {'shell_id': {'type': 'string'},
                                              'name': {'type': 'string'},
                                              'view': {'type': 'string',
-                                                      'enum': ['screen', 'scrollback'],
+                                                      'enum': ['screen', 'scrollback', 'commands', 'command_output'],
                                                       'default': 'screen'},
+                                             'command_id': {
+                                                 'type': 'string',
+                                                 'description': 'Command identifier required by view=command_output.',
+                                             },
                                              'cursor': {'type': 'integer',
                                                         'minimum': 0,
                                                         'description': 'Scrollback byte sequence to read forward from. Omit to read the latest retained range.'},

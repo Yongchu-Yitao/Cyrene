@@ -1737,7 +1737,7 @@ async def test_main_agent_keeps_wrap_reply_and_continues_with_late_guidance(monk
             }],
         }
 
-    async def fake_final_reply(_messages, max_tokens=None):
+    async def fake_final_reply(_messages, max_tokens=None, **_kwargs):
         nonlocal wrap_calls
         wrap_calls += 1
         if wrap_calls == 1:
@@ -1753,7 +1753,7 @@ async def test_main_agent_keeps_wrap_reply_and_continues_with_late_guidance(monk
         return None
 
     monkeypatch.setattr(agent_mod, "_call_llm", fake_llm)
-    monkeypatch.setattr(agent_mod, "_final_user_reply_from_history", fake_final_reply)
+    monkeypatch.setattr(agent_mod, "_recover_final_reply", fake_final_reply)
     monkeypatch.setattr(agent_mod, "_append_session_message", noop)
     monkeypatch.setattr(agent_mod, "_save_session_messages", fake_save)
     monkeypatch.setattr(agent_mod, "_publish_runtime_event", noop)

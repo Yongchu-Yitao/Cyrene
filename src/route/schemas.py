@@ -221,6 +221,13 @@ class ModelAccessBody(APIBody):
     model: str | None = Field(default=None, max_length=500)
 
 
+class ComposerContextActivationsBody(APIBody):
+    mcpServers: list[str] = Field(default_factory=list, max_length=50)
+    skills: list[str] = Field(default_factory=list, max_length=50)
+    toolPackages: list[str] = Field(default_factory=list, max_length=50)
+    customTools: list[str] = Field(default_factory=list, max_length=50)
+
+
 class ChatCreateBody(APIBody):
     project: str | None = Field(default=None, max_length=200)
     projectId: str | None = Field(default=None, max_length=200)
@@ -230,6 +237,7 @@ class ChatCreateBody(APIBody):
     soulActive: bool | None = None
     workspaceActive: bool | None = None
     reasoningEffort: Literal["", "low", "medium", "high", "xhigh", "max", "ultra"] = ""
+    contextActivations: ComposerContextActivationsBody | None = None
 
 
 class AgentRequestResponseBody(APIBody):
@@ -251,6 +259,7 @@ class ChatUpdateBody(APIBody):
     soulActive: bool | None = None
     workspaceActive: bool | None = None
     workspaceOverride: str | None = Field(default=None, max_length=4096)
+    contextActivations: ComposerContextActivationsBody | None = None
 
 
 class ChatGroupMetadataBody(APIBody):
@@ -285,6 +294,7 @@ class ChatMessageBody(APIBody):
     workspaceOverride: str | None = Field(default=None, max_length=4096)
     soulActive: bool | None = None
     workspaceActive: bool | None = None
+    contextActivations: ComposerContextActivationsBody | None = None
     uiInstanceId: str | None = Field(default=None, max_length=200)
     agent: AgentBindingBody | None = None
     modelAccess: ModelAccessBody | None = None

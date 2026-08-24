@@ -122,8 +122,8 @@ class ChatRunLifecycleApplicationService:
             logger.exception("Workbench chat run failed for %s", request.chat_id)
             await self._finalize_workspace(request, run, before, "error")
             await asyncio.to_thread(request.restore_retry_state)
-            await asyncio.to_thread(request.settle_status)
             run.outcome = {"kind": "error", "exc": exc}
+            await self._settle_status_projection(request)
             return
         run.status = "finishing"
         if reply == request.awaiting_user_sentinel:
@@ -268,7 +268,6 @@ class ChatRunLifecycleApplicationService:
         logger.exception("Workbench chat streaming run failed for %s", request.chat_id)
         await self._finalize_workspace(request, run, before, "error")
         await asyncio.to_thread(request.restore_retry_state)
-        await asyncio.to_thread(request.settle_status)
         run.outcome = {"kind": "error", "exc": exc}
         await run.publish(
             {
@@ -357,8 +356,28 @@ class ChatRunLifecycleApplicationService:
                     request.chat_id,
                     exc_info=True,
                 )
-        await asyncio.to_thread(request.settle_status)
+        outcome = run.outcome if isinstance(run.outcome, dict) else {}
+        # A persisted reply/awaiting state already wrote ``status=idle``.  A
+        # second point mutation here is both redundant and dangerous: if this
+        # compatibility repair is delayed by SQLite contention, it can raise
+        # after ``saved`` and incorrectly reverse a completed run into a driver
+        # failure.  Error/cancel paths still need the repair, but it is a
+        # projection update and must never replace the run's real outcome.
+        if str(outcome.get("kind") or "") not in {"reply", "awaiting"}:
+            await self._settle_status_projection(request)
         await self._publish_settled(request, run)
+
+    async def _settle_status_projection(
+        self,
+        request: ChatRunLifecycleRequest,
+    ) -> None:
+        try:
+            await asyncio.to_thread(request.settle_status)
+        except Exception:
+            logger.exception(
+                "Failed to repair terminal chat status for %s",
+                request.chat_id,
+            )
 
     async def _publish_settled(
         self,

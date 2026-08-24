@@ -372,3 +372,44 @@ async def test_read_shell_explicitly_distinguishes_screen_and_scrollback(
     assert scrollback["truncated"] is True
     assert scrollback["truncated_before"] is True
     assert scrollback["truncated_after"] is True
+
+
+@pytest.mark.asyncio
+async def test_read_shell_exposes_indexed_commands_and_selected_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cyrene.tool_impl.code import read_shell
+
+    async def fake_resolve_terminal(**_kwargs):
+        return {"id": "term_remote", "title": "Remote"}
+
+    class FakeClient:
+        async def commands(self, terminal_id):
+            assert terminal_id == "term_remote"
+            return {"commands": [{
+                "id": "cmd_1", "command": "uname -a", "exitCode": 0,
+            }]}
+
+        async def command_output(self, terminal_id, command_id):
+            assert (terminal_id, command_id) == ("term_remote", "cmd_1")
+            return {
+                "command": {"id": "cmd_1", "command": "uname -a"},
+                "text": "Linux remote\n",
+            }
+
+    monkeypatch.setattr(
+        "cyrene.tooling.backends.terminals.resolve_terminal", fake_resolve_terminal
+    )
+    monkeypatch.setattr(
+        "cyrene.terminal.client.get_terminal_daemon_client", lambda: FakeClient()
+    )
+
+    commands = json.loads(await read_shell._tool_read_shell(
+        {"view": "commands"}, None, 0, "", None,
+    ))
+    output = json.loads(await read_shell._tool_read_shell(
+        {"view": "command_output", "command_id": "cmd_1"}, None, 0, "", None,
+    ))
+
+    assert commands["commands"][0]["command"] == "uname -a"
+    assert output["text"] == "Linux remote\n"

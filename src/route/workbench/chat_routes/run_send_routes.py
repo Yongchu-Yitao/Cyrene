@@ -176,12 +176,18 @@ class _SendOperation:
     async def _parse_request(self):
         body = self.body
         self.message = str(body.get("message") or "").strip()
+        self.public_message = self.message
         self.client_request_id = str(body.get("clientRequestId") or "").strip()
         self.ui_instance_id = str(body.get("uiInstanceId") or "").strip()
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         if attachments:
             attachments = [await self.context.resolve_library_file_payload(item) if isinstance(item, dict) else item for item in attachments]
         self.command = str(body.get("command") or "").strip()
+        self.requested_context_activations = (
+            body.get("contextActivations")
+            if "contextActivations" in body
+            else None
+        )
         self.wants_stream = bool(body.get("stream"))
         self.retry = bool(body.get("retry"))
         self.fork_replay = bool(body.get("forkReplay"))
@@ -194,7 +200,7 @@ class _SendOperation:
         self.routes = self.context.runtime()
         self.normalized = self.routes.normalize_attachments(attachments)
         self.public_attachments = [self.routes.build_public_attachment_payload(item) for item in self.normalized]
-        if not self.retry and not self.message and not self.normalized:
+        if not self.retry and not self.message and not self.normalized and not self.command:
             return JSONResponse({"error": "message is required"}, status_code=400)
         budget_error = await self.context.workbench_runtime.check_budget_gate(self.chat_id)
         if budget_error:
@@ -210,6 +216,95 @@ class _SendOperation:
 
         binding = normalize_agent_binding(self.chat.get("agent") if isinstance(self.chat.get("agent"), dict) else None)
         self.is_external_agent = not binding.is_builtin
+        from cyrene.agent.commands import parse_slash_command, parse_slash_invocation
+
+        self.dynamic_command = None
+        self.dynamic_command_prompt = ""
+
+        if self.is_external_agent:
+            declared_commands = [
+                str(item.get("id") or item.get("name") or item.get("command") or "")
+                if isinstance(item, dict) else str(item or "")
+                for item in (self.chat.get("agentCommands") or [])
+            ]
+            if not self.command and declared_commands:
+                parsed = parse_slash_command(
+                    self.message,
+                    allowed_commands=declared_commands,
+                )
+                if parsed.get("matched"):
+                    self.command = str(parsed.get("command") or "")
+                    self.message = str(parsed.get("arguments") or "")
+            if self.command and declared_commands and self.command not in declared_commands:
+                return JSONResponse({"error": "Agent command is not available"}, status_code=400)
+        else:
+            from cyrene.workbench.slash_commands import (
+                prepare_plugin_command_prompt,
+                resolve_slash_command,
+            )
+
+            parsed = parse_slash_invocation(self.message) if not self.command else None
+            candidate = self.command or str((parsed or {}).get("command") or "")
+            descriptor = await resolve_slash_command(
+                candidate,
+                str(self.chat.get("projectId") or ""),
+            ) if candidate else None
+            if descriptor is not None:
+                self.command = str(descriptor.get("id") or "")
+                self.dynamic_command = (
+                    descriptor if descriptor.get("source") != "builtin" else None
+                )
+                if parsed and parsed.get("matched"):
+                    self.message = str(parsed.get("arguments") or "")
+                if descriptor.get("source") == "plugin":
+                    try:
+                        self.dynamic_command_prompt = await prepare_plugin_command_prompt(
+                            descriptor,
+                            arguments=self.message,
+                            chat_id=self.chat_id,
+                            project_id=str(self.chat.get("projectId") or ""),
+                        )
+                    except Exception as exc:
+                        return JSONResponse(
+                            {"error": f"Plugin command could not be prepared: {exc}"},
+                            status_code=400,
+                        )
+            elif self.command:
+                return JSONResponse({"error": "unknown Cyrene command"}, status_code=400)
+        if self.command and not self.public_message:
+            self.public_message = "/" + self.command
+
+        from cyrene.workbench.composer_context import resolve_context_activations
+
+        requested_activations = (
+            self.requested_context_activations
+            if self.requested_context_activations is not None
+            else self.chat.get("contextActivations")
+        )
+        if self.dynamic_command and isinstance(
+            self.dynamic_command.get("activation"), dict
+        ):
+            from cyrene.workbench.composer_context import normalize_context_activations
+
+            requested_activations = normalize_context_activations(requested_activations)
+            activation = self.dynamic_command["activation"]
+            activation_kind = str(activation.get("kind") or "")
+            activation_id = str(activation.get("id") or "")
+            if (
+                activation_kind in requested_activations
+                and activation_id
+                and activation_id not in requested_activations[activation_kind]
+            ):
+                requested_activations[activation_kind].append(activation_id)
+        self.context_activations = resolve_context_activations(
+            requested_activations
+        )
+        if self.is_external_agent and any(self.context_activations.values()):
+            return JSONResponse(
+                {"error": "Composer context capabilities require the built-in Cyrene Agent"},
+                status_code=400,
+            )
+        self.chat["contextActivations"] = self.context_activations
         requested_agent = self.body.get("agent") if isinstance(self.body.get("agent"), dict) else None
         installation_id = str((requested_agent or {}).get("installationId") or "").strip()
         if installation_id and installation_id != binding.installation_id:
@@ -358,7 +453,44 @@ class _SendOperation:
             self.truncate_after_id = str(self.user_entry.get("id") or "")
             self.retry_replaced_message_ids = {str(item.get("id") or "") for item in messages[last_user_index + 1 :] if isinstance(item, dict) and str(item.get("id") or "")}
             self.message = str(self.user_entry.get("content") or "").strip()
-            self.command = ""
+            self.public_message = self.message
+            self.command = str(self.user_entry.get("command") or "").strip()
+            from cyrene.agent.commands import parse_slash_invocation
+
+            parsed_retry_command = parse_slash_invocation(self.message)
+            if parsed_retry_command.get("matched") and (
+                not self.command
+                or self.command == str(parsed_retry_command.get("command") or "")
+            ):
+                self.command = str(parsed_retry_command.get("command") or "")
+                self.message = str(parsed_retry_command.get("arguments") or "")
+            if not self.is_external_agent and self.command:
+                from cyrene.workbench.slash_commands import (
+                    prepare_plugin_command_prompt,
+                    resolve_slash_command,
+                )
+
+                descriptor = await resolve_slash_command(
+                    self.command,
+                    str(self.chat.get("projectId") or ""),
+                )
+                if descriptor is None:
+                    self.command = ""
+                elif descriptor.get("source") != "builtin":
+                    self.dynamic_command = descriptor
+                    if descriptor.get("source") == "plugin":
+                        try:
+                            self.dynamic_command_prompt = await prepare_plugin_command_prompt(
+                                descriptor,
+                                arguments=self.message,
+                                chat_id=self.chat_id,
+                                project_id=str(self.chat.get("projectId") or ""),
+                            )
+                        except Exception as exc:
+                            return JSONResponse(
+                                {"error": f"Plugin command could not be prepared: {exc}"},
+                                status_code=400,
+                            )
             self.normalized = self.routes.normalize_attachments(self.user_entry.get("agentAttachments") or [])
             self.public_attachments = self.user_entry.get("attachments") if isinstance(self.user_entry.get("attachments"), list) else []
             if not self.fork_replay:
@@ -377,9 +509,11 @@ class _SendOperation:
         self.user_entry = {
             "id": self.service.short_id("msg"),
             "role": "user",
-            "content": self.message,
+            "content": self.public_message,
             "createdAt": self.now,
         }
+        if self.command:
+            self.user_entry["command"] = self.command
         if self.client_request_id:
             self.user_entry["clientRequestId"] = self.client_request_id
         if self.public_attachments:
@@ -391,9 +525,9 @@ class _SendOperation:
             locked_agent = dict(self.chat.get("agent") or {})
             locked_agent["bindingLocked"] = True
             self.chat["agent"] = locked_agent
-        if is_first_message and self.chat.get("title") in ("", "新对话", None) and self.message:
-            self.chat["title"] = self.message.replace("\n", " ")[:24]
-        if is_first_message and bool(self.message) and not bool(self.chat.get("titleLocked")) and not self.chat.get("titleNamingStatus"):
+        if is_first_message and self.chat.get("title") in ("", "新对话", None) and self.public_message:
+            self.chat["title"] = self.public_message.replace("\n", " ")[:24]
+        if is_first_message and bool(self.public_message) and not bool(self.chat.get("titleLocked")) and not self.chat.get("titleNamingStatus"):
             self.should_generate_title = True
             self.chat["titleNamingStatus"] = "pending"
             self.chat["titleNamingStartedAt"] = self.now
@@ -427,7 +561,7 @@ class _SendOperation:
             task = self.controller.session_naming.generate_and_persist(
                 chat_id=self.chat_id,
                 project_id=self.project_id,
-                message=self.message,
+                message=self.public_message,
             )
             track_session_title_task(asyncio.create_task(task))
         return None
@@ -507,6 +641,17 @@ class _SendOperation:
         from cyrene.runtime.host_bridge import resolve_conversation_source
         from cyrene.workbench.project_memory_prompt import build_main_agent_suffix
 
+        from cyrene.workbench.composer_context import build_context_activation_prompt
+
+        system_extras = [
+            build_main_agent_suffix(
+                self.chat.get("projectMemorySnapshot") if isinstance(self.chat.get("projectMemorySnapshot"), dict) else None,
+                include_trigger=not self.is_side_agent,
+            ),
+            build_context_activation_prompt(self.context_activations),
+            self.dynamic_command_prompt,
+        ]
+
         source = "side_agent" if self.is_side_agent else await resolve_conversation_source(self.ui_instance_id)
         return await self.run_agent(
             user_message=self.agent_message,
@@ -516,15 +661,12 @@ class _SendOperation:
             session_id=self.chat_id,
             permission_mode=self.mode,
             command=self.command,
-            public_user_message=self.message or None,
+            public_user_message=self.public_message or None,
             public_attachments=self.public_attachments or None,
             workspace_dir=self.workspace_dir,
             soul_enabled=self.service.chat_soul_active(self.chat),
             workspace_enabled=self.service.chat_workspace_active(self.chat),
-            final_system_extra=build_main_agent_suffix(
-                self.chat.get("projectMemorySnapshot") if isinstance(self.chat.get("projectMemorySnapshot"), dict) else None,
-                include_trigger=not self.is_side_agent,
-            ),
+            final_system_extra="\n\n".join(part for part in system_extras if part),
             response_capabilities=("interactive_blocks",),
             ui_instance_id=self.ui_instance_id,
             conversation_source=source,
@@ -535,7 +677,7 @@ class _SendOperation:
             chat_id=self.chat_id,
             project_id=self.project_id,
             workspace_dir=self.workspace_dir,
-            message=self.message,
+            message=self.public_message,
             command=self.command,
             retry=self.retry,
             is_side_agent=self.is_side_agent,

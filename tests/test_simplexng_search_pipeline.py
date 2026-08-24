@@ -253,6 +253,23 @@ class _FakeProviderSession:
         return _FakeSearchResponse(self.payload)
 
 
+def test_proxied_session_does_not_allow_system_proxy_override(monkeypatch):
+    from cyrene.tooling.backends import search
+    from cyrene.tooling.backends import searxng_manager
+
+    configured = "http://proxy.example.test:8080"
+    monkeypatch.setattr(
+        searxng_manager,
+        "get_effective_search_proxy",
+        lambda: configured,
+    )
+
+    session = search._proxied_session()
+
+    assert session.trust_env is False
+    assert session.proxies == {"http": configured, "https": configured}
+
+
 async def test_tavily_uses_bearer_auth_and_normalizes_results(monkeypatch):
     from cyrene.tooling.backends import search
 

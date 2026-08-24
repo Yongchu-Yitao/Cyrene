@@ -149,7 +149,9 @@ class TelemetryRepository:
                 endpoint TEXT NOT NULL DEFAULT '', candidate_rank INTEGER NOT NULL DEFAULT 0,
                 endpoint_rank INTEGER NOT NULL DEFAULT 0, attempt INTEGER NOT NULL DEFAULT 1,
                 outcome TEXT NOT NULL, status_code INTEGER NOT NULL DEFAULT 0,
-                error_type TEXT NOT NULL DEFAULT '', queue_wait_ms REAL NOT NULL DEFAULT 0,
+                error_type TEXT NOT NULL DEFAULT '', error_body TEXT NOT NULL DEFAULT '',
+                error_body_truncated INTEGER NOT NULL DEFAULT 0,
+                queue_wait_ms REAL NOT NULL DEFAULT 0,
                 pre_attempt_wait_ms REAL NOT NULL DEFAULT 0,
                 request_ms REAL NOT NULL DEFAULT 0, response_headers_ms REAL,
                 ttft_ms REAL, first_token_after_headers_ms REAL, generation_ms REAL,
@@ -191,6 +193,8 @@ class TelemetryRepository:
             "cache_prefix_status": "TEXT NOT NULL DEFAULT ''",
             "cache_invalidation_reason": "TEXT NOT NULL DEFAULT ''",
             "cache_prefix_message_count": "INTEGER NOT NULL DEFAULT 0",
+            "error_body": "TEXT NOT NULL DEFAULT ''",
+            "error_body_truncated": "INTEGER NOT NULL DEFAULT 0",
         }
         for name, definition in migrations.items():
             if name not in columns:
@@ -245,6 +249,8 @@ class TelemetryRepository:
             str(event.get("outcome") or "unknown"),
             int(event.get("status_code") or 0),
             str(event.get("error_type") or ""),
+            str(event.get("error_body") or ""),
+            1 if event.get("error_body_truncated") else 0,
             float(event.get("queue_wait_ms") or 0),
             float(event.get("pre_attempt_wait_ms") or event.get("queue_wait_ms") or 0),
             float(event.get("request_ms") or 0),
@@ -301,6 +307,10 @@ class TelemetryRepository:
                     "attempt": int(event.get("attempt") or 1),
                     "model": str(event.get("model") or ""),
                     "outcome": str(event.get("outcome") or "unknown"),
+                    "status_code": int(event.get("status_code") or 0),
+                    "error_type": str(event.get("error_type") or ""),
+                    "error_body": str(event.get("error_body") or ""),
+                    "error_body_truncated": bool(event.get("error_body_truncated")),
                     "prompt_tokens": int(event.get("prompt_tokens") or 0),
                     "completion_tokens": int(event.get("completion_tokens") or 0),
                     "prompt_cache_hit_tokens": int(event.get("prompt_cache_hit_tokens") or 0),
@@ -397,7 +407,8 @@ class TelemetryRepository:
                     INSERT INTO llm_latency_events
                     (call_id, created_at, session_id, round_id, caller, phase, model_type,
                      candidate_id, model, endpoint, candidate_rank, endpoint_rank, attempt,
-                     outcome, status_code, error_type, queue_wait_ms, pre_attempt_wait_ms,
+                     outcome, status_code, error_type, error_body,
+                     error_body_truncated, queue_wait_ms, pre_attempt_wait_ms,
                      request_ms, response_headers_ms, ttft_ms, first_token_after_headers_ms,
                      generation_ms, retry_backoff_ms, total_call_ms, prompt_tokens,
                      completion_tokens, prompt_cache_hit_tokens,
@@ -408,7 +419,7 @@ class TelemetryRepository:
                      request_payload_fingerprint, previous_payload_fingerprint,
                      cache_prefix_status, cache_invalidation_reason,
                      cache_prefix_message_count)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [self._latency_row(event, now) for event in latency_events],
                 )

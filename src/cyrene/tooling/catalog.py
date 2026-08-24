@@ -7,6 +7,7 @@ import logging
 import re
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,7 @@ _MAIN_ONLY_TOOLS = {
     "browser_scroll",
     "browser_user_events",
     "browser_request_takeover",
+    "StartMediaGeneration",
     "GenerateImage",
     "LoadRendererContract",
     "RemoteCyreneAction",
@@ -456,16 +458,6 @@ def get_active_tool_defs_for_actor(actor: str = "main") -> list[dict[str, Any]]:
             pass
     from cyrene.agent.state import has_response_capability
 
-    try:
-        from cyrene.runtime.settings_store import get_models
-
-        primary_models = get_models() or []
-        oauth_image_generation = bool(
-            primary_models
-            and str(primary_models[0].get("provider") or "") == "codex_oauth"
-        )
-    except Exception:
-        oauth_image_generation = False
     defs = [
         td for td in TOOL_DEFS
         if td["function"]["name"] not in blocked
@@ -475,10 +467,6 @@ def get_active_tool_defs_for_actor(actor: str = "main") -> list[dict[str, Any]]:
                 actor == "main"
                 and has_response_capability("interactive_blocks")
             )
-        )
-        and (
-            td["function"]["name"] != "GenerateImage"
-            or oauth_image_generation
         )
         and (
             td["function"]["name"] not in WIRE_NAME_BY_CONCRETE_TOOL
@@ -604,25 +592,30 @@ def module_wire_names() -> tuple[str, ...]:
     return MODULE_TOOL_NAMES
 
 
-def _model_reference_map() -> dict[str, str]:
-    return {
-        concrete_name: capability_id
+_MODEL_REFERENCE_REPLACEMENTS = tuple(sorted(
+    (
+        (concrete_name, capability_id)
         for bindings in CAPABILITY_BINDINGS.values()
         for capability_id, concrete_name in bindings
-    }
+    ),
+    key=lambda item: len(item[0]),
+    reverse=True,
+))
+
+
+@lru_cache(maxsize=4096)
+def _model_facing_text(value: str) -> str:
+    """Translate one immutable schema string once per distinct value."""
+    rendered = value
+    for concrete_name, capability_id in _MODEL_REFERENCE_REPLACEMENTS:
+        rendered = rendered.replace(concrete_name, capability_id)
+    return rendered
 
 
 def _model_facing_value(value: Any) -> Any:
     """Replace hidden implementation names in deferred schemas/descriptions."""
     if isinstance(value, str):
-        rendered = value
-        for concrete_name, capability_id in sorted(
-            _model_reference_map().items(),
-            key=lambda item: len(item[0]),
-            reverse=True,
-        ):
-            rendered = rendered.replace(concrete_name, capability_id)
-        return rendered
+        return _model_facing_text(value)
     if isinstance(value, dict):
         return {key: _model_facing_value(item) for key, item in value.items()}
     if isinstance(value, list):

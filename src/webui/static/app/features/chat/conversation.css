@@ -1660,6 +1660,98 @@ button.wbc-attach-file:focus-visible {
   cursor: grabbing;
 }
 
+.wbc-inline-media {
+  width: min(520px, 100%);
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--wb-blue) 20%, var(--wb-line));
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--wb-card-bg);
+}
+
+.wbc-inline-media.audio {
+  width: min(420px, 100%);
+  padding-top: 8px;
+}
+
+.wbc-inline-media > video {
+  display: block;
+  width: 100%;
+  max-height: min(58vh, 520px);
+  background: #000;
+  object-fit: contain;
+}
+
+.wbc-inline-media > audio {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 0 8px;
+}
+
+.wbc-inline-media-footer {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px 4px 10px;
+}
+
+.wbc-inline-media-footer > button {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--wb-text);
+  font: inherit;
+  font-weight: 650;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.wbc-inline-media-footer > button:focus-visible {
+  outline: 2px solid var(--wb-active-border);
+  outline-offset: 2px;
+}
+
+.wbc-media-references {
+  margin: 10px 0 4px;
+  padding: 9px 10px 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-card-bg) 92%, transparent);
+}
+
+.wbc-media-references-label {
+  margin-bottom: 7px;
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 700;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+
+.wbc-media-references-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wbc-media-references-list .wbc-inline-image {
+  width: min(148px, 100%);
+}
+
+.wbc-media-references-list .wbc-inline-media.video {
+  width: min(280px, 100%);
+}
+
+.wbc-media-references-list .wbc-inline-media.audio {
+  width: min(340px, 100%);
+}
+
 .wbc-inline-image-preview {
   appearance: none;
   width: 100%;
@@ -3371,15 +3463,41 @@ button.wbc-attach-file:focus-visible {
 }
 
 .wbc-command-chip {
+  --wbc-composer-glass-border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);
+  --wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);
+  --wbc-composer-glass-drop-shadow: var(--wbc-control-shadow);
+  --wbc-composer-glass-top-highlight: color-mix(in srgb, #fff 10%, transparent);
+  --wbc-composer-glass-inner-edge: color-mix(in srgb, var(--wb-line) 14%, transparent);
+  --wbc-composer-glass-shadow:
+    var(--wbc-composer-glass-drop-shadow),
+    inset 0 1px 0 var(--wbc-composer-glass-top-highlight),
+    inset 0 0 0 1px var(--wbc-composer-glass-inner-edge);
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: calc(12px * var(--wb-ui-font-scale, 1));
   color: var(--wb-accent);
-  background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
+  background: var(--wbc-composer-glass-background);
   border: 1px solid color-mix(in srgb, var(--wb-accent) 28%, transparent);
   border-radius: 999px;
   padding: 3px 10px;
+  box-shadow: var(--wbc-composer-glass-shadow);
+  -webkit-backdrop-filter: var(--wbc-composer-glass-filter);
+  backdrop-filter: var(--wbc-composer-glass-filter);
+}
+
+html[data-theme="light"] .wbc-command-chip {
+  --wbc-composer-glass-background: color-mix(in srgb, #fff 76%, transparent);
+  --wbc-composer-glass-drop-shadow: 0 10px 28px rgba(15, 23, 42, .12);
+  --wbc-composer-glass-top-highlight: color-mix(in srgb, #fff 90%, transparent);
+  --wbc-composer-glass-inner-edge: color-mix(in srgb, #0f172a 3%, transparent);
+}
+
+html[data-theme="dark"] .wbc-command-chip {
+  --wbc-composer-glass-background: var(--wb-conversation-surface);
+  --wbc-composer-glass-drop-shadow: 0 10px 28px rgba(0, 0, 0, .42);
+  --wbc-composer-glass-top-highlight: color-mix(in srgb, #fff 14%, transparent);
+  --wbc-composer-glass-inner-edge: color-mix(in srgb, #fff 4%, transparent);
 }
 
 .wbc-command-chip button {
@@ -4266,8 +4384,8 @@ html[data-theme="dark"] .wbc-model-button.active {
 }
 
 .wbc-tools-menu {
-  width: min(260px, calc(100cqw - 58px));
-  min-width: min(260px, calc(100cqw - 58px));
+  width: min(320px, calc(100cqw - 58px));
+  min-width: min(320px, calc(100cqw - 58px));
   max-height: min(390px, calc(100vh - 190px));
   padding: 8px;
   gap: 12px;
@@ -4287,12 +4405,67 @@ html[data-theme="dark"] .wbc-model-button.active {
   margin-top: 2px;
 }
 
+.wbc-tools-context-capabilities {
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wb-line);
+}
+
+.wbc-tools-context-categories,
+.wbc-tools-context-options {
+  display: grid;
+  gap: 3px;
+}
+
+.wbc-tools-context-options {
+  margin: 3px 0 5px 14px;
+  padding-left: 7px;
+  border-left: 1px solid color-mix(in srgb, var(--wb-accent) 25%, var(--wb-line));
+}
+
+.wbc-tools-context-category-button {
+  min-height: 40px;
+}
+
+.wbc-tools-context-option {
+  min-height: 40px;
+}
+
+.wbc-tools-context-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-muted);
+}
+
+.wbc-tools-context-chevron svg {
+  width: 13px;
+  height: 13px;
+}
+
+.wbc-tools-context-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+  color: var(--wb-muted);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+}
+
 .wbc-tools-section-title {
   padding: 0 4px;
   color: var(--wb-faint);
   font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
   font-weight: 650;
   letter-spacing: .02em;
+}
+
+.wbc-tools-command-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 16px;
 }
 
 .wbc-tools-content-list {
@@ -4438,6 +4611,12 @@ html[data-theme="dark"] .wbc-model-button.active {
   background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
 }
 
+.wbc-tools-command.keyboard-active {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 56%, transparent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--wb-accent) 10%, var(--wb-row-hover-bg));
+}
+
 .wbc-tools-command-check {
   display: inline-flex;
   justify-self: end;
@@ -4460,7 +4639,7 @@ html[data-theme="dark"] .wbc-model-button.active {
 
 @container wbc-composer (max-width: 640px) {
   .wbc-tools-menu {
-    width: min(260px, calc(100cqw - 58px));
-    min-width: min(260px, calc(100cqw - 58px));
+    width: min(320px, calc(100cqw - 58px));
+    min-width: min(320px, calc(100cqw - 58px));
   }
 }

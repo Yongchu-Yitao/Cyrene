@@ -589,6 +589,7 @@ const MENU_TRANSLATIONS = Object.freeze({
 const BROWSER_PARTITION = 'persist:cyrene-browser';
 const DEFAULT_BROWSER_VERSION = '147.0.0.0';
 const guardedBrowserPartitions = new Set();
+let browserProxySignature = '';
 const pendingPointerLockPrompts = new Map();
 const allowedPointerLockOrigins = new Set();
 const BROWSER_CHAT_OVERLAY_HTML = `<!doctype html>
@@ -1099,6 +1100,83 @@ function installBrowserSessionGuards(partition = BROWSER_PARTITION) {
     };
     callback({ requestHeaders: details.requestHeaders });
   });
+}
+
+function readBackendJson(pathname, port = backendPort) {
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: '127.0.0.1',
+      port: Number(port),
+      path: String(pathname || '/'),
+      method: 'GET',
+      headers: { 'X-Cyrene-Token': AUTH_TOKEN, Accept: 'application/json' },
+    }, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => {
+        if (Number(response.statusCode || 0) < 200 || Number(response.statusCode || 0) >= 300) {
+          reject(new Error(`Backend settings request failed with HTTP ${response.statusCode}`));
+          return;
+        }
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+        catch (error) { reject(error); }
+      });
+    });
+    request.setTimeout(3000, () => request.destroy(new Error('Backend settings request timed out')));
+    request.on('error', reject);
+    request.end();
+  });
+}
+
+function normalizeBrowserProxyUrl(value, legacyPort = 7897) {
+  const raw = String(value || '').trim() || `http://127.0.0.1:${legacyPort}`;
+  const candidate = raw.includes('://') ? raw : `http://${raw}`;
+  try {
+    const parsed = new URL(candidate);
+    if (!['http:', 'https:'].includes(parsed.protocol)
+        || !parsed.hostname || parsed.username || parsed.password
+        || (parsed.pathname && parsed.pathname !== '/')
+        || parsed.search || parsed.hash) return '';
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch (_error) {
+    return '';
+  }
+}
+
+async function applyBrowserProxySettings(settings = {}) {
+  const legacyPort = Number(settings.external_agent_proxy_port || 7897);
+  const proxyUrl = normalizeBrowserProxyUrl(
+    settings.external_agent_proxy_url,
+    Number.isInteger(legacyPort) && legacyPort >= 1 && legacyPort <= 65535
+      ? legacyPort
+      : 7897,
+  );
+  const enabled = settings.external_agent_proxy_enabled === true
+    && settings.proxy_browser_enabled === true
+    && !!proxyUrl;
+  const signature = enabled ? `fixed:${proxyUrl}` : 'system';
+  if (signature === browserProxySignature) return { ok: true, enabled, unchanged: true };
+  const browserSession = session.fromPartition(BROWSER_PARTITION);
+  if (enabled) {
+    await browserSession.setProxy({
+      mode: 'fixed_servers',
+      proxyRules: proxyUrl,
+      proxyBypassRules: '<local>;localhost;127.0.0.1;[::1]',
+    });
+  } else {
+    await browserSession.setProxy({ mode: 'system' });
+  }
+  if (typeof browserSession.closeAllConnections === 'function') {
+    await browserSession.closeAllConnections();
+  }
+  browserProxySignature = signature;
+  return { ok: true, enabled, proxyUrl: enabled ? proxyUrl : '' };
+}
+
+async function syncBrowserProxyFromBackend(port = backendPort) {
+  if (!port) return { ok: false, error: 'backend_unavailable' };
+  const settings = await readBackendJson('/api/settings/config', port);
+  return applyBrowserProxySettings(settings);
 }
 
 function pointerLockRequestOrigin(webContents, details = {}) {
@@ -7015,6 +7093,12 @@ async function createMainWindow() {
     return;
   }
 
+  try {
+    await syncBrowserProxyFromBackend(port);
+  } catch (error) {
+    appendErrorLog(`[electron:browser] Failed to apply browser proxy settings: ${String(error && error.stack || error)}\n`);
+  }
+
   // Workbench draws its own top bar and reserves room for the traffic lights.
   // The inset title bar and traffic-light positioning remain macOS-specific.
   // Windows and Linux keep their native frame so close/minimize/maximize
@@ -7472,6 +7556,7 @@ if (!gotSingleInstanceLock) {
     });
     ipcMain.handle('browser:get-state', (_event, info) => handleBrowserRpc('state', {}, info || {}));
     ipcMain.handle('browser:get-manager-state', () => browserManagerState());
+    ipcMain.handle('browser:sync-proxy', () => syncBrowserProxyFromBackend());
     ipcMain.handle('browser:control-download', (_event, info) => controlBrowserDownload(info && info.downloadId, info && info.action));
     ipcMain.handle('browser:set-bounds', (_event, info) => handleBrowserRpc('setBounds', info || {}, info || {}));
     ipcMain.handle('browser:set-chat-overlay', (_event, info) => handleBrowserRpc('setChatOverlay', info || {}, info || {}));

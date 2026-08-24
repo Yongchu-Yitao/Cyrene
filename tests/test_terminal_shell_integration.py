@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from cyrene.terminal.manager import TerminalManager, TerminalSession, _now_iso
-from cyrene.terminal.history import plain_terminal_text
+from cyrene.terminal.history import IncrementalPlainTextParser, plain_terminal_text
 from cyrene.terminal.shell_integration import (
     OscMetadataParser,
     prepare_shell_integration,
@@ -21,6 +21,28 @@ def test_shell_kind_prefers_actual_executable() -> None:
 
 def test_plain_terminal_text_applies_line_editor_backspaces() -> None:
     assert plain_terminal_text(b"c\bcd nested; false") == "cd nested; false"
+
+
+def test_incremental_plain_text_matches_complete_parser_at_every_boundary() -> None:
+    payload = (
+        b"alpha \xe4\xb8\xad \x1b]2;ignored title\x1b\\cross"
+        b"\x1b[31m boundary\x1b[0m\r\neditx\b\n"
+    )
+    expected = plain_terminal_text(payload)
+
+    for chunk_size in range(1, len(payload) + 1):
+        parser = IncrementalPlainTextParser({"nextSeq": 0, "lineStartSeq": 0})
+        complete: list[str] = []
+        for start in range(0, len(payload), chunk_size):
+            complete.extend(
+                line["text"]
+                for line in parser.feed(
+                    payload[start:start + chunk_size], start_seq=start
+                )
+            )
+            parser = IncrementalPlainTextParser(parser.state())
+        actual = "\n".join([*complete, parser.current_line()["text"]])
+        assert actual == expected
 
 
 def test_prepare_bash_integration_preserves_inputs_and_generates_wrapper(tmp_path) -> None:
@@ -43,9 +65,9 @@ def test_prepare_bash_integration_preserves_inputs_and_generates_wrapper(tmp_pat
     integration = launch.env["CYRENE_SHELL_INTEGRATION_SCRIPT"]
     integration_source = open(integration, encoding="utf-8").read()
     assert "BASH_VERSINFO" in integration_source
-    assert "Integration=%s" in integration_source
-    assert "]133;A" in integration_source
-    assert "]133;D;%s" in integration_source
+    assert "Integration=${__cyrene_integration_level}" in integration_source
+    assert '__cyrene_emit_osc "133;A"' in integration_source
+    assert '__cyrene_emit_osc "133;D;${__cyrene_status}"' in integration_source
     assert "export PROMPT_COMMAND PS0 PS1" in integration_source
     assert launch.env["BASH_ENV"] == integration
     assert "BASH_SOURCE[0]" in wrapper

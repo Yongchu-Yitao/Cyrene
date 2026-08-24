@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import re
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any
@@ -37,6 +38,14 @@ from cyrene.tooling.wire import (
 )
 
 WireToolError = ToolProtocolError
+
+# Hidden migration shims keep persisted conversations usable while a capability
+# moves between deferred discovery and the direct model-visible surface. They
+# are never advertised and do not alter the current catalog contract.
+_DEFERRED_TO_DIRECT_MIGRATION_ALIASES = {
+    "ppt.create_slides": ("PowerPointCreateSlides", "office_tools"),
+}
+
 _active_catalog_snapshot: ContextVar[ToolCatalogSnapshot | None] = ContextVar(
     "_active_catalog_snapshot",
     default=None,
@@ -357,14 +366,31 @@ def _toolbox_invoke_resolution(
         if selected is not None
         else get_capability(capability_id, actor=actor, include_disabled=True)
     )
-    wire_name = _wire_name_for_pack_id(capability.pack_id) if capability else ""
+    migrated_capability_id = ""
+    migration_wire_name = ""
+    if capability is None and selected is not None:
+        migration = _DEFERRED_TO_DIRECT_MIGRATION_ALIASES.get(capability_id)
+        if migration is not None:
+            migrated_capability_id, migration_wire_name = migration
+            capability = _snapshot_spec(
+                migrated_capability_id,
+                actor=actor,
+                snapshot=selected,
+                include_disabled=True,
+            )
+    wire_name = (
+        migration_wire_name
+        if migrated_capability_id and capability is not None
+        else (_wire_name_for_pack_id(capability.pack_id) if capability else "")
+    )
     if capability is None or not wire_name:
         raise WireToolError(
             "unknown_capability",
             f"Capability `{capability_id}` is not available through `{TOOLBOX_TOOL_NAME}`.",
         )
+    enabled_id = migrated_capability_id or capability_id
     enabled = (
-        capability_id in selected.enabled_capability_ids
+        enabled_id in selected.enabled_capability_ids
         if selected is not None
         else is_tool_pack_enabled(wire_name)
     )
@@ -378,9 +404,10 @@ def _toolbox_invoke_resolution(
     return WireCallResolution(
         wire_name=TOOLBOX_TOOL_NAME,
         operation="invoke",
-        capability_id=capability.capability_id,
+        capability_id=capability_id,
         concrete_name=capability.concrete_name,
         concrete_arguments=concrete_arguments,
+        concrete_compat=bool(migrated_capability_id),
     )
 
 
@@ -472,17 +499,23 @@ def resolve_wire_call(
                     f"Tool `{name}` is disabled in settings.",
                 )
             if spec is not None:
+                args = _coerce_unambiguous_schema_scalars(
+                    args,
+                    spec.input_schema,
+                )
                 validate_schema(args, spec.input_schema)
                 concrete_name = spec.concrete_name
             else:
                 definition = get_effective_function_definitions().get(name)
                 if definition is not None:
+                    schema = dict(
+                        (definition.get("function") or {}).get("parameters")
+                        or {"type": "object"}
+                    )
+                    args = _coerce_unambiguous_schema_scalars(args, schema)
                     validate_schema(
                         args,
-                        dict(
-                            (definition.get("function") or {}).get("parameters")
-                            or {"type": "object"}
-                        ),
+                        schema,
                     )
         return WireCallResolution(
             wire_name=name,
@@ -535,6 +568,10 @@ def resolve_wire_call(
                 "permission_denied",
                 f"Capability `{capability_alias.capability_id}` is disabled in settings.",
             )
+        args = _coerce_unambiguous_schema_scalars(
+            args,
+            capability_alias.input_schema,
+        )
         validate_schema(args, capability_alias.input_schema)
         return WireCallResolution(
             wire_name=alias_wire_name,
@@ -575,6 +612,10 @@ def resolve_wire_call(
                     "permission_denied",
                     f"Capability `{capability.capability_id}` is disabled in settings.",
                 )
+            args = _coerce_unambiguous_schema_scalars(
+                args,
+                capability.input_schema,
+            )
             validate_schema(args, capability.input_schema)
             return WireCallResolution(
                 wire_name=name,
@@ -617,6 +658,43 @@ def _schema_accepts(value: Any, schema: dict[str, Any]) -> bool:
     except WireToolError:
         return False
     return True
+
+
+def _coerce_unambiguous_schema_scalars(
+    value: Any,
+    schema: dict[str, Any],
+) -> Any:
+    """Normalize lossless scalar spellings before strict tool validation.
+
+    OpenAI-compatible models occasionally serialize integral JSON fields as
+    strings.  Converting only canonical base-10 integer spellings is
+    deterministic and preserves strict rejection for ambiguous values such as
+    decimals, booleans, whitespace-padded strings, or unknown fields.
+    """
+    expected = schema.get("type")
+    if (
+        expected == "integer"
+        and isinstance(value, str)
+        and re.fullmatch(r"-?(?:0|[1-9][0-9]*)", value)
+    ):
+        return int(value)
+    if isinstance(value, dict) and expected == "object":
+        properties = schema.get("properties") or {}
+        return {
+            key: _coerce_unambiguous_schema_scalars(
+                item,
+                properties.get(key) if isinstance(properties.get(key), dict) else {},
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list) and expected == "array":
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            return [
+                _coerce_unambiguous_schema_scalars(item, item_schema)
+                for item in value
+            ]
+    return value
 
 
 def _unique_nested_value(
@@ -681,11 +759,14 @@ def _repair_concrete_arguments(
     """
     candidates = _nested_argument_objects(arguments)
     for candidate in reversed(candidates):
-        if _schema_accepts(candidate, schema):
-            return candidate
+        coerced = _coerce_unambiguous_schema_scalars(candidate, schema)
+        if _schema_accepts(coerced, schema):
+            return coerced
         flattened = _flatten_call_envelope(candidate, schema)
-        if flattened is not None and _schema_accepts(flattened, schema):
-            return flattened
+        if flattened is not None:
+            flattened = _coerce_unambiguous_schema_scalars(flattened, schema)
+            if _schema_accepts(flattened, schema):
+                return flattened
 
     properties = schema.get("properties")
     if not isinstance(properties, dict) or not properties:
@@ -695,9 +776,10 @@ def _repair_concrete_arguments(
         found, value = _unique_nested_value(candidates, str(field))
         if found:
             projected[str(field)] = value
+    projected = _coerce_unambiguous_schema_scalars(projected, schema)
     if _schema_accepts(projected, schema):
         return projected
-    return arguments
+    return _coerce_unambiguous_schema_scalars(arguments, schema)
 
 
 def _capability_for_normalization(
@@ -986,6 +1068,7 @@ def _office_integration_error(
         "PowerPointGetContext",
         "PowerPointInspect",
         "PowerPointApplyBatch",
+        "PowerPointCreateSlides",
         "PowerPointRenderSlide",
         "PowerPointToolSearch",
     }

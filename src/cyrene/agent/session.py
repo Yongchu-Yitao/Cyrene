@@ -25,6 +25,16 @@ from cyrene.agent.message_utils import (
     is_replaceable_live_message as _is_replaceable_live_message,
     message_suffix_after_persisted_prefix as _message_suffix_after_persisted_prefix,
 )
+from cyrene.agent.lane_protocol import (
+    Lane,
+    OUTCOME_KIND,
+    advance_lane_epoch_in_state,
+    current_agent_lane,
+    lane_cache_epoch_id,
+    lane_epochs_from_state,
+    project_lane_history,
+    tag_lane_record,
+)
 from cyrene.agent.state import (
     ASSISTANT_NAME,
     _call_llm,
@@ -47,7 +57,9 @@ from cyrene.model_runtime.compaction import (
     COMPACT_TRIGGER_RATIO as _COMPACT_TRIGGER_RATIO,
     compact_messages_for_storage as _compact_messages_for_storage,
 )
+from cyrene.model_runtime.transcript_policy import TranscriptPolicy
 from cyrene.runtime.task_lifecycle import cancel_and_wait, drain_or_cancel, track_task
+from cyrene.tooling.result_store import compact_powerpoint_tool_episodes_for_epoch
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +217,17 @@ def _merge_live_block(existing_block: list[dict[str, Any]], incoming_block: list
             merged.append(dict(incoming))
     return _dedupe_live_tool_messages(merged)
 
+
+def _sync_lane_epoch_context(session_id: str, state: dict[str, Any]) -> None:
+    """Mirror canonical epoch metadata for the hot model cache-scope lookup."""
+    ctx = _ensure_session(session_id)
+    try:
+        ctx.cache_session_epoch = max(0, int(state.get("_session_epoch") or 0))
+    except (TypeError, ValueError):
+        ctx.cache_session_epoch = 0
+    ctx.lane_epochs = dict(lane_epochs_from_state(state))
+
+
 def _load_session_state(session_id: str | None = None) -> dict[str, Any]:
     if session_id is None:
         session_id = _current_session_id.get()
@@ -216,7 +239,9 @@ def _load_session_state(session_id: str | None = None) -> dict[str, Any]:
             cached = _SESSION_STATE_CACHE.get(key)
             if cached is not None and cached[0] == signature:
                 _SESSION_STATE_CACHE.move_to_end(key)
-                return copy.deepcopy(cached[1])
+                state = copy.deepcopy(cached[1])
+                _sync_lane_epoch_context(session_id, state)
+                return state
     else:
         with _SESSION_STATE_CACHE_LOCK:
             _SESSION_STATE_CACHE.pop(key, None)
@@ -232,7 +257,9 @@ def _load_session_state(session_id: str | None = None) -> dict[str, Any]:
     signature = _session_state_signature(state_file)
     if signature is not None:
         _cache_session_state(state_file, signature, data)
-    return copy.deepcopy(data)
+    state = copy.deepcopy(data)
+    _sync_lane_epoch_context(session_id, state)
+    return state
 
 
 def _write_session_state(state: dict[str, Any], session_id: str | None = None) -> None:
@@ -243,6 +270,7 @@ def _write_session_state(state: dict[str, Any], session_id: str | None = None) -
     signature = _session_state_signature(state_file)
     if signature is not None:
         _cache_session_state(state_file, signature, copy.deepcopy(state))
+    _sync_lane_epoch_context(session_id, state)
 
 
 def _ensure_archive_session_id(state: dict[str, Any]) -> str:
@@ -348,8 +376,17 @@ def _exceeds_compact_threshold(
         ctx_limit = get_current_ctx_limit()
     if ctx_limit <= 0:
         return False
-    total = sum(message_token_estimate(m) for m in messages)
-    return total > int(ctx_limit * _COMPACT_TRIGGER_RATIO)
+    histories = [messages]
+    if any(message.get("lane_refs") for message in messages):
+        histories = [
+            project_lane_history(messages, "decision"),
+            project_lane_history(messages, "execution"),
+        ]
+    threshold = int(ctx_limit * _COMPACT_TRIGGER_RATIO)
+    return any(
+        sum(message_token_estimate(message) for message in history) > threshold
+        for history in histories
+    )
 
 
 async def compact_session_if_needed(
@@ -405,10 +442,12 @@ async def compact_session_if_needed(
                         "triggerRatio": _COMPACT_TRIGGER_RATIO,
                     }
 
-                trimmed = _compact_messages_for_storage(
+                compacted_lanes: set[Lane] = set()
+                trimmed = _compact_preserving_lane_records(
                     messages,
                     ctx_limit=effective_limit,
                     force=force,
+                    compacted_lanes=compacted_lanes,
                 )
                 if trimmed == messages:
                     distill_scheduled = (
@@ -435,6 +474,7 @@ async def compact_session_if_needed(
                     }
 
                 state["messages"] = trimmed
+                _advance_lane_epochs(state, compacted_lanes)
                 _write_session_state(state)
                 after_tokens = sum(message_token_estimate(m) for m in trimmed)
                 await debug.publish_event({
@@ -572,6 +612,13 @@ async def _distill_pending_compacted_blocks(session_id: str = "") -> None:
                             m["content"] = _COMPACT_BLOCK_PREFIX + "\n" + distilled
                             m["llm_compacted"] = True
                             m.pop("distill_attempts", None)
+                            lanes = _record_lanes(m)
+                            if not lanes and any(
+                                isinstance(message, dict) and message.get("lane_refs")
+                                for message in messages
+                            ):
+                                lanes = ("decision", "execution")
+                            _advance_lane_epochs(state, lanes)
                         else:
                             attempts = int(m.get("distill_attempts") or 0) + 1
                             m["distill_attempts"] = attempts
@@ -646,9 +693,14 @@ def _report_reference_stub(
     return entry
 
 
-def _compress_report_messages_for_storage(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    state = _load_session_state()
-    archive_session_id = _ensure_archive_session_id(state)
+def _compress_report_messages_for_storage(
+    messages: list[dict[str, Any]],
+    *,
+    archive_session_id: str | None = None,
+) -> list[dict[str, Any]]:
+    if archive_session_id is None:
+        state = _load_session_state()
+        archive_session_id = _ensure_archive_session_id(state)
     result: list[dict[str, Any]] = []
     for message in messages:
         if not isinstance(message, dict) or not bool(message.get("deep_research_report")):
@@ -759,6 +811,365 @@ def _expand_report_reference_history(history: list[dict[str, Any]], user_message
 # Session message write helpers
 # ---------------------------------------------------------------------------
 
+def _prepare_messages_for_storage(
+    state: dict[str, Any],
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Apply the canonical, pre-compaction storage transforms once.
+
+    Callers that need message ids while merging live state may prepare their
+    input before the merge and pass ``prepared=True`` to the locked writer.
+    All other writes enter through the same pipeline in the writer.
+    """
+    prepared = strip_context_metadata(messages)
+    archive_session_id = _ensure_archive_session_id(state)
+    prepared = _compress_report_messages_for_storage(
+        prepared,
+        archive_session_id=archive_session_id,
+    )
+    return _ensure_message_identity(prepared)
+
+
+def _lane_record_key(message: dict[str, Any]) -> tuple[str, str] | None:
+    if not isinstance(message, dict) or not bool(message.get("persist_model_record")):
+        return None
+    if not message.get("lane_refs"):
+        return None
+    event_id = str(message.get("event_id") or "").strip()
+    if event_id:
+        return ("event", event_id)
+    message_id = str(message.get("message_id") or "").strip()
+    return ("message", message_id) if message_id else None
+
+
+def _dedupe_lane_records(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    positions: dict[tuple[str, str], int] = {}
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        key = _lane_record_key(message)
+        if key is not None and key in positions:
+            deduped[positions[key]] = message
+            continue
+        if key is not None:
+            positions[key] = len(deduped)
+        deduped.append(message)
+    return deduped
+
+
+def _preserve_canonical_lane_records(
+    current: list[dict[str, Any]],
+    incoming: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge omitted lane records back at their canonical positions in O(n).
+
+    A lane projection can legitimately omit the other lane, while also
+    appending records produced by the current run.  Missing canonical records
+    therefore belong before the first genuinely new incoming record, not at the
+    end of the list.
+    """
+    result = _dedupe_lane_records(list(incoming))
+    known = {
+        key for message in result if (key := _lane_record_key(message)) is not None
+    }
+
+    def anchor_key(message: dict[str, Any]) -> tuple[str, str] | None:
+        lane_key = _lane_record_key(message)
+        if lane_key is not None:
+            return lane_key
+        message_id = str(message.get("message_id") or "").strip()
+        return ("message", message_id) if message_id else None
+
+    positions = {
+        key: index
+        for index, message in enumerate(result)
+        if (key := anchor_key(message)) is not None
+    }
+    current_keys = {
+        key for message in current if (key := anchor_key(message)) is not None
+    }
+    first_new_index = next(
+        (
+            index
+            for index, message in enumerate(result)
+            if (key := anchor_key(message)) is not None and key not in current_keys
+        ),
+        len(result),
+    )
+
+    # Reverse traversal assigns each omitted record to its next surviving
+    # anchor.  Buckets are reversed once, preserving the current chronological
+    # order without repeatedly inserting into the result list.
+    buckets: list[list[dict[str, Any]]] = [[] for _ in range(len(result) + 1)]
+    next_anchor = first_new_index
+    for message in reversed(current):
+        anchor = anchor_key(message)
+        if anchor is not None and anchor in positions:
+            next_anchor = positions[anchor]
+            continue
+        lane_key = _lane_record_key(message)
+        if lane_key is None or lane_key in known:
+            continue
+        buckets[next_anchor].append(dict(message))
+        known.add(lane_key)
+
+    merged: list[dict[str, Any]] = []
+    for index, message in enumerate(result):
+        merged.extend(reversed(buckets[index]))
+        merged.append(message)
+    merged.extend(reversed(buckets[len(result)]))
+    return merged
+
+
+def _lane_partition(message: dict[str, Any]) -> str:
+    refs = message.get("lane_refs")
+    raw_refs = [refs] if isinstance(refs, str) else list(refs or [])
+    normalized = {str(ref or "").strip().lower() for ref in raw_refs}
+    if normalized == {"decision"}:
+        return "decision"
+    if normalized == {"execution"}:
+        return "execution"
+    return "shared"
+
+
+def _record_lanes(message: dict[str, Any]) -> tuple[Lane, ...]:
+    refs = message.get("lane_refs")
+    raw_refs = [refs] if isinstance(refs, str) else list(refs or [])
+    normalized = {
+        str(ref or "").strip().lower()
+        for ref in raw_refs
+    }
+    return tuple(
+        lane for lane in ("decision", "execution") if lane in normalized
+    )
+
+
+def _compaction_input(message: dict[str, Any]) -> dict[str, Any]:
+    """Render outcome tool results into the lane summary before folding."""
+    if str(message.get("record_kind") or "").strip() != OUTCOME_KIND:
+        return message
+    rendered = dict(message)
+    rendered["role"] = "assistant"
+    rendered["content"] = "[Execution outcome]\n" + str(
+        message.get("content") or ""
+    )
+    rendered.pop("tool_call_id", None)
+    return rendered
+
+
+def _lane_tail_start(messages: list[dict[str, Any]]) -> int:
+    """Return the smallest exact tail that keeps the latest tool episode valid."""
+    if not messages:
+        return 0
+    start = len(messages) - 1
+    while start > 0 and str(messages[start].get("role") or "") == "tool":
+        start -= 1
+    if (
+        start < len(messages) - 1
+        and str(messages[start].get("role") or "") == "assistant"
+        and messages[start].get("tool_calls")
+    ):
+        return start
+    return len(messages) - 1
+
+
+def _compact_lane_partition(
+    messages: list[dict[str, Any]],
+    *,
+    ctx_limit: int | None,
+    force: bool,
+) -> list[dict[str, Any]]:
+    """Compact one lane while retaining its latest protocol-safe tail.
+
+    The provider-neutral compactor may fold the entire live suffix when its
+    newest message alone exceeds the recent-message budget.  Reserve the
+    minimum valid tail up front in that case, instead of retrying compaction or
+    pinning the lane's full history.
+    """
+    if not messages:
+        return messages
+    prepared = [_compaction_input(dict(message)) for message in messages]
+    from cyrene.model_runtime.client import message_token_estimate
+    from cyrene.runtime.config_store import get_current_ctx_limit
+
+    effective_limit = ctx_limit if ctx_limit is not None else get_current_ctx_limit()
+    if not force:
+        if effective_limit <= 0:
+            return prepared
+        total = sum(message_token_estimate(message) for message in prepared)
+        if total <= int(effective_limit * _COMPACT_TRIGGER_RATIO):
+            return prepared
+
+    # PowerPoint receipts change the historical prefix, so create them only at
+    # the same explicit boundary that advances this lane's cache epoch.
+    prepared = compact_powerpoint_tool_episodes_for_epoch(prepared)
+    tail_start = _lane_tail_start(prepared)
+    if force:
+        compacted_prefix = _compact_messages_for_storage(
+            prepared[:tail_start],
+            ctx_limit=ctx_limit,
+            force=True,
+        )
+        return [*compacted_prefix, *prepared[tail_start:]]
+
+    exact_tail = prepared[tail_start:]
+    tail_tokens = sum(message_token_estimate(message) for message in exact_tail)
+    if tail_tokens <= int(effective_limit * _COMPACT_RECENT_RATIO):
+        return _compact_messages_for_storage(
+            prepared,
+            ctx_limit=effective_limit,
+        )
+
+    compacted_prefix = _compact_messages_for_storage(
+        prepared[:tail_start],
+        ctx_limit=effective_limit,
+        force=True,
+    )
+    return [*compacted_prefix, *exact_tail]
+
+
+def _compact_preserving_lane_records(
+    messages: list[dict[str, Any]],
+    *,
+    ctx_limit: int | None = None,
+    force: bool = False,
+    compacted_lanes: set[Lane] | None = None,
+) -> list[dict[str, Any]]:
+    """Compact each model lane independently, then rebuild canonical order.
+
+    Running the legacy compactor over the combined store would leak one lane's
+    summary into the other.  Pinning every lane record avoids that leak but
+    disables compaction forever.  Partitioning reuses the existing bounded
+    compactor while tagging each new compacted block for exactly one lane.
+    """
+    if not any(message.get("lane_refs") for message in messages):
+        return _compact_messages_for_storage(
+            messages,
+            ctx_limit=ctx_limit,
+            force=force,
+        )
+
+    partitions: dict[str, list[dict[str, Any]]] = {
+        "shared": [],
+        "decision": [],
+        "execution": [],
+    }
+    indexes: dict[str, list[int]] = {key: [] for key in partitions}
+    for index, message in enumerate(messages):
+        if message.get("persist_model_record") is False:
+            continue
+        partition = _lane_partition(message)
+        partitions[partition].append(message)
+        indexes[partition].append(index)
+
+    # Shared legacy context is projected into both lanes.  Give it and each
+    # lane half the window so either projected transcript remains within the
+    # same bound.  With no shared context, the independent lanes can each use
+    # the full provider window.
+    partition_ctx_limit = ctx_limit
+    if (
+        not force
+        and partitions["shared"]
+        and (partitions["decision"] or partitions["execution"])
+    ):
+        if partition_ctx_limit is None:
+            from cyrene.runtime.config_store import get_current_ctx_limit
+
+            partition_ctx_limit = get_current_ctx_limit()
+        if partition_ctx_limit > 0:
+            partition_ctx_limit = max(1, partition_ctx_limit // 2)
+
+    removed_ids: set[str] = set()
+    insertions: dict[int, list[dict[str, Any]]] = {}
+    for partition, partition_messages in partitions.items():
+        if not partition_messages:
+            continue
+        original_by_id = {
+            str(message.get("message_id") or "").strip(): message
+            for message in partition_messages
+            if str(message.get("message_id") or "").strip()
+        }
+        if partition in {"decision", "execution"}:
+            compacted = _compact_lane_partition(
+                partition_messages,
+                ctx_limit=partition_ctx_limit,
+                force=force,
+            )
+        else:
+            compacted = _compact_messages_for_storage(
+                partition_messages,
+                ctx_limit=partition_ctx_limit,
+                force=force,
+            )
+        retained_ids = {
+            str(message.get("message_id") or "").strip()
+            for message in compacted
+            if str(message.get("message_id") or "").strip() in original_by_id
+        }
+        partition_removed = set(original_by_id) - retained_ids
+        if not partition_removed:
+            continue
+        if compacted_lanes is not None:
+            if partition == "shared":
+                compacted_lanes.update(("decision", "execution"))
+            elif partition == "decision":
+                compacted_lanes.add("decision")
+            else:
+                compacted_lanes.add("execution")
+        removed_ids.update(partition_removed)
+        first_removed_index = next(
+            index
+            for index, message in zip(indexes[partition], partition_messages)
+            if str(message.get("message_id") or "").strip() in partition_removed
+        )
+        new_blocks = [
+            dict(message)
+            for message in compacted
+            if str(message.get("message_id") or "").strip() not in original_by_id
+        ]
+        if partition in {"decision", "execution"}:
+            new_blocks = [
+                tag_lane_record(
+                    block,
+                    partition,
+                    record_kind="lane_compacted",
+                    persist_model_record=True,
+                )
+                for block in new_blocks
+            ]
+        elif new_blocks:
+            new_blocks = [
+                tag_lane_record(
+                    block,
+                    ("decision", "execution"),
+                    record_kind="lane_compacted",
+                    persist_model_record=True,
+                )
+                for block in new_blocks
+            ]
+        if new_blocks:
+            insertions.setdefault(first_removed_index, []).extend(new_blocks)
+
+    rebuilt: list[dict[str, Any]] = []
+    for index, message in enumerate(messages):
+        rebuilt.extend(insertions.get(index, ()))
+        message_id = str(message.get("message_id") or "").strip()
+        if message_id and message_id in removed_ids:
+            continue
+        rebuilt.append(message)
+    return rebuilt
+
+
+def _advance_lane_epochs(
+    state: dict[str, Any],
+    lanes: set[Lane] | tuple[Lane, ...],
+) -> None:
+    for lane in ("decision", "execution"):
+        if lane in lanes:
+            advance_lane_epoch_in_state(state, lane)
+
+
 def _schedule_memory_compression(messages: list[dict[str, Any]], session_id: str = "") -> None:
     task = asyncio.create_task(_compress_old_messages(list(messages), session_id=session_id))
     ctx = _ensure_session(session_id)
@@ -775,14 +1186,19 @@ async def _write_session_messages_locked(
     messages: list[dict[str, Any]],
     *,
     session_id: str | None = None,
+    prepared: bool = False,
 ) -> None:
-    messages = strip_context_metadata(messages)
-    _ensure_archive_session_id(state)
-    messages = _compress_report_messages_for_storage(messages)
-    messages = _ensure_message_identity(messages)
+    if not prepared:
+        messages = _prepare_messages_for_storage(state, messages)
+    messages = _dedupe_lane_records(messages)
     messages = _dedupe_live_tool_messages(messages)
-    trimmed = _compact_messages_for_storage(messages)
+    compacted_lanes: set[Lane] = set()
+    trimmed = _compact_preserving_lane_records(
+        messages,
+        compacted_lanes=compacted_lanes,
+    )
     state["messages"] = trimmed
+    _advance_lane_epochs(state, compacted_lanes)
     if not str(state.get("session_title", "")).strip():
         state.pop("session_title", None)
     target_session_id = _current_session_id.get() if session_id is None else session_id
@@ -814,9 +1230,6 @@ async def _save_session_messages(
     ephemeral_context: str | None = None,
 ) -> None:
     message_trace = summarize_context_trace(messages)
-    messages = strip_context_metadata(messages)
-    messages = _compress_report_messages_for_storage(messages)
-    messages = _ensure_message_identity(list(messages))
     session_id = _current_session_id.get()
     ctx = _ensure_session(session_id)
     async with ctx.session_state_lock:
@@ -825,6 +1238,13 @@ async def _save_session_messages(
         if saved_epoch is not None and saved_epoch != ctx.session_epoch:
             logger.warning("Stale _save_session_messages skipped (session was reset)")
             return
+        current_state_messages = state.get("messages", [])
+        current_state_messages = (
+            list(current_state_messages)
+            if isinstance(current_state_messages, list)
+            else []
+        )
+        messages = _prepare_messages_for_storage(state, list(messages))
         effective_messages = messages
         base_messages = _persist_base_messages.get()
         if base_messages is None and _persist_merge_live_state.get():
@@ -871,7 +1291,15 @@ async def _save_session_messages(
         if ephemeral_context is not None:
             state["ephemeral_context"] = str(ephemeral_context)
         state["message_context_trace"] = message_trace
-        await _write_session_messages_locked(state, effective_messages)
+        effective_messages = _preserve_canonical_lane_records(
+            current_state_messages,
+            effective_messages,
+        )
+        await _write_session_messages_locked(
+            state,
+            effective_messages,
+            prepared=True,
+        )
 
 
 async def _remove_messages_by_request_id(request_id: str) -> None:
@@ -926,8 +1354,6 @@ async def append_message_to_session(
     stable ``message_id`` makes outbox retries idempotent.
     """
     target = str(session_id or "").strip()
-    if not target:
-        raise ValueError("session_id is required")
     ctx = _ensure_session(target)
     async with ctx.session_state_lock:
         state = _load_session_state(target)
@@ -954,6 +1380,53 @@ async def append_message_to_session(
             full_messages,
             session_id=target,
         )
+
+
+async def append_or_upsert_lane_record(
+    entry: dict[str, Any],
+    *,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Atomically append or replace one canonical lane record by stable id."""
+    record = dict(entry)
+    if not record.get("lane_refs") or not str(record.get("record_kind") or "").strip():
+        raise ValueError("lane record requires lane_refs and record_kind")
+    record["persist_model_record"] = bool(record.get("persist_model_record", True))
+    event_id = str(record.get("event_id") or "").strip()
+    if event_id and not str(record.get("message_id") or "").strip():
+        record["message_id"] = f"msg_{event_id}"
+    if _lane_record_key(record) is None:
+        raise ValueError("lane record requires a stable event_id or message_id")
+
+    target = _current_session_id.get() if session_id is None else str(session_id or "").strip()
+    ctx = _ensure_session(target)
+    async with ctx.session_state_lock:
+        state = _load_session_state(target)
+        saved_epoch = state.get("_session_epoch")
+        if saved_epoch is not None and saved_epoch != ctx.session_epoch:
+            logger.warning("Stale lane record skipped (session was reset)")
+            return record
+        current = state.get("messages", [])
+        messages = list(current) if isinstance(current, list) else []
+        record_key = _lane_record_key(record)
+        replacement_index = next(
+            (
+                index
+                for index, message in enumerate(messages)
+                if _lane_record_key(message) == record_key
+            ),
+            -1,
+        )
+        if replacement_index >= 0:
+            messages[replacement_index] = record
+        else:
+            messages.append(record)
+        await _write_session_messages_locked(
+            state,
+            messages,
+            session_id=None if session_id is None else target,
+        )
+    return record
 
 
 async def append_system_message(
@@ -1019,6 +1492,12 @@ def _normalize_pending_question(payload: dict[str, Any]) -> dict[str, Any]:
         "options": options[:6],
         "allow_custom": allow_custom,
         "asked_at": asked_at,
+        "owner_lane": (
+            str(payload.get("owner_lane") or "decision").strip().lower()
+            if str(payload.get("owner_lane") or "decision").strip().lower()
+            in {"decision", "execution"}
+            else "decision"
+        ),
     }
     round_title = str(payload.get("round_title", "") or "").strip()
     if round_title:
@@ -1091,6 +1570,18 @@ async def _upsert_pending_question(payload: dict[str, Any]) -> dict[str, Any]:
         assistant_entry["round_title"] = question["round_title"]
     if question["options"]:
         assistant_entry["question_options"] = list(question["options"])
+    dual_lane = (
+        _state.current_run_transcript_policy() is TranscriptPolicy.DUAL_LANE
+    )
+    assistant_entry = tag_lane_record(
+        assistant_entry,
+        question["owner_lane"],
+        record_kind="pending_question",
+        # The dual-lane loop persists the real ask_user assistant/tool pair;
+        # this normalized card is then UI-only.  Codex/legacy keeps its
+        # historical normalized-question transcript unchanged.
+        persist_model_record=not dual_lane,
+    )
     _ensure_message_identity([assistant_entry])
     question["message_id"] = assistant_entry["message_id"]
 
@@ -1321,7 +1812,9 @@ async def _compress_old_messages(
 
     eligible = [
         m for m in all_messages
-        if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+        if isinstance(m, dict)
+        and m.get("role") in ("user", "assistant")
+        and not bool(m.get("hidden_from_ui"))
     ]
     to_compress = eligible[-_MEMORY_COMPRESSION_WINDOW_MESSAGES:]
     if not to_compress:
@@ -1530,8 +2023,35 @@ def write_session_state(
     _write_session_state(state, session_id)
 
 
+def get_lane_cache_epoch(
+    lane: Lane,
+    *,
+    session_id: str | None = None,
+) -> str:
+    """Return the current stable cache epoch without creating model history."""
+    target = _current_session_id.get() if session_id is None else str(session_id or "").strip()
+    return lane_cache_epoch_id(_load_session_state(target), lane)
+
+
+async def advance_lane_cache_epoch(
+    lane: Lane,
+    *,
+    session_id: str | None = None,
+) -> str:
+    """Open a new epoch for one lane after context-limit or recovery events."""
+    target = _current_session_id.get() if session_id is None else str(session_id or "").strip()
+    ctx = _ensure_session(target)
+    async with ctx.session_state_lock:
+        state = _load_session_state(target)
+        advance_lane_epoch_in_state(state, lane)
+        _write_session_state(state, target)
+        return lane_cache_epoch_id(state, lane)
+
+
 async def upsert_pending_question(payload: dict[str, Any]) -> dict[str, Any]:
-    return await _upsert_pending_question(payload)
+    trusted_payload = dict(payload)
+    trusted_payload.setdefault("owner_lane", current_agent_lane())
+    return await _upsert_pending_question(trusted_payload)
 
 
 async def clear_pending_question(question_id: str) -> dict[str, Any]:
@@ -1547,10 +2067,13 @@ async def remove_messages_by_request_id(request_id: str) -> None:
 
 
 __all__ = [
+    "advance_lane_cache_epoch",
     "append_message_to_session",
+    "append_or_upsert_lane_record",
     "append_session_message",
     "clear_pending_question",
     "clear_session_id",
+    "get_lane_cache_epoch",
     "load_session_messages",
     "load_session_state",
     "remove_messages_by_request_id",

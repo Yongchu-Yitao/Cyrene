@@ -53,7 +53,22 @@ class ConfigIntegrationApplicationService:
         self.publish_settings_changed = publish_settings_changed
 
     def config(self) -> dict[str, Any]:
-        return self.queries.config()
+        payload = dict(self.queries.config())
+        payload.update({
+            "external_agent_proxy_url": str(config_store.get_setting(
+                "external_agent_proxy_url", ""
+            ) or ""),
+            "proxy_search_enabled": config_store.get_setting(
+                "proxy_search_enabled", False
+            ) is True,
+            "proxy_browser_enabled": config_store.get_setting(
+                "proxy_browser_enabled", False
+            ) is True,
+            "proxy_extensions_enabled": config_store.get_setting(
+                "proxy_extensions_enabled", False
+            ) is True,
+        })
+        return payload
 
     async def storage(self) -> dict[str, Any]:
         return {"ok": True, **(await asyncio.to_thread(scan_storage))}

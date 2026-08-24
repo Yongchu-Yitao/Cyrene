@@ -25,6 +25,7 @@ var WORKBENCH_TOOL_NAME_ALIASES = {
   "code.search_symbol": "SearchSymbol",
   "code.find_references": "FindReferences",
   "code.file_symbols": "GetFileSymbols",
+  "media.generate": "StartMediaGeneration",
   "browser.navigate": "browser_navigate",
   "browser.snapshot": "browser_snapshot",
   "browser.screenshot": "browser_screenshot",

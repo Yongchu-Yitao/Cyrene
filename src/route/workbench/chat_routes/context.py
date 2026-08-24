@@ -64,6 +64,7 @@ class ChatRouteContext:
             ),
         )
         context._configure_shell_wake()
+        context._configure_media_wake()
         return context
 
     def runtime(self):
@@ -160,6 +161,26 @@ class ChatRouteContext:
             )
 
         get_shell_wake_service().configure(
+            dispatcher=dispatch,
+            is_busy=lambda chat_id: (
+                self.service.run_manager.get(str(chat_id)) is not None
+                or is_session_running(str(chat_id))
+            ),
+        )
+
+    def _configure_media_wake(self) -> None:
+        from cyrene.agent import is_session_running
+        from cyrene.media.wake import get_media_wake_bridge
+        from cyrene.workbench.chat import dispatch_media_wake_run
+
+        async def dispatch(wake: dict[str, Any]) -> str:
+            return await dispatch_media_wake_run(
+                wake,
+                bot=self.bot,
+                db_path=self.db_path,
+            )
+
+        get_media_wake_bridge().configure(
             dispatcher=dispatch,
             is_busy=lambda chat_id: (
                 self.service.run_manager.get(str(chat_id)) is not None

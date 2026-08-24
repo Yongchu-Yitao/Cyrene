@@ -278,8 +278,10 @@ def _build_simplexng_env(settings_path: Path) -> dict[str, str]:
     if proxy_url:
         env["HTTP_PROXY"] = proxy_url
         env["HTTPS_PROXY"] = proxy_url
+        env["ALL_PROXY"] = proxy_url
         env["http_proxy"] = proxy_url
         env["https_proxy"] = proxy_url
+        env["all_proxy"] = proxy_url
     env["NO_PROXY"] = _merge_no_proxy(env.get("NO_PROXY") or env.get("no_proxy") or "")
     env["no_proxy"] = env["NO_PROXY"]
     return env
@@ -287,6 +289,14 @@ def _build_simplexng_env(settings_path: Path) -> dict[str, str]:
 
 def _get_effective_search_proxy() -> str:
     """Return the configured or system proxy if it is reachable."""
+    from cyrene.runtime.network_proxy import scoped_proxy_url
+
+    scoped_proxy = scoped_proxy_url("search")
+    if scoped_proxy:
+        # The user explicitly selected this proxy for search. Fail closed when
+        # it is unavailable instead of silently leaking the request to a
+        # direct/system route.
+        return scoped_proxy
     proxy_url = (SEARCH_PROXY or "").strip()
     if not proxy_url:
         proxies = getproxies()

@@ -170,6 +170,7 @@ _WORKBENCH_SETTINGS_SOURCE_FILES = (
     "features/settings/extensions.jsx",
     "features/settings/shortcuts.jsx",
     "features/settings/budget.jsx",
+    "features/settings/media.jsx",
     "features/settings/index.jsx",
     "settings-overlay.jsx",
 )

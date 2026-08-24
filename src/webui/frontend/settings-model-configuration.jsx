@@ -90,7 +90,17 @@ function renderModelDetailPane(v) {
         h(v.Field, { label: v.label(v.props, "settings.adapter", "协议") }, h("select", { className: "wb-select", value: selected.adapter, "aria-label": "模型服务协议", disabled: !v.selectableAdapters.length, onChange: function (event) { v.updateConnection("adapter", event.target.value); } }, v.editorAdapters.map(function (adapter) {
           return h("option", { key: adapter.id, value: adapter.id, disabled: !v.isUserSelectableAdapter(adapter) }, v.adapterOptionName(adapter));
         }))),
-        !v.isCodexConnection(selected) && !v.isLocalConnection(selected) ? h(v.Field, { label: "API 地址", wide: true }, h("input", { className: "wb-input", type: "url", value: selected.base_url, "aria-label": "模型服务 API 地址", onChange: function (event) { v.updateConnection("base_url", event.target.value); }, placeholder: "https://api.example.com/v1", autoComplete: "url" })) : null,
+        !v.isCodexConnection(selected) && !v.isLocalConnection(selected) ? h(v.Field, {
+          label: "API 地址",
+          wide: true,
+          hint: selected.use_proxy && !v.proxyMasterEnabled ? "已为此模型服务选择代理；开启通用设置中的代理总开关后生效。" : "",
+        }, h("div", { className: "wb-mcfg-api-proxy-row" },
+          h("input", { className: "wb-input", type: "url", value: selected.base_url, "aria-label": "模型服务 API 地址", onChange: function (event) { v.updateConnection("base_url", event.target.value); }, placeholder: "https://api.example.com/v1", autoComplete: "url" }),
+          h("div", { className: "wb-mcfg-model-proxy-control" },
+            h("span", null, "使用代理"),
+            h(v.Toggle, { checked: selected.use_proxy === true, label: (selected.use_proxy ? "关闭" : "开启") + selected.name + "的代理", onChange: function (value) { v.updateConnection("use_proxy", value); } })
+          )
+        )) : null,
         !v.isCodexConnection(selected) && !v.isLocalConnection(selected) ? h(v.Field, { label: "API 密钥", wide: true, hint: selected.secret_configured && !selected.secret ? "已保存密钥；留空不会覆盖。" : "密钥只发送给本机配置 API。" }, h("input", {
           className: "wb-input", type: "password", value: selected.secret,
           onChange: function (event) { v.updateConnection("secret", event.target.value); },
@@ -409,6 +419,7 @@ function renderModelDetailPane(v) {
       secret: String(raw.secret || raw.api_key || ""),
       secret_configured: raw.secret_configured === true || raw.api_key_configured === true || raw.has_secret === true,
       enabled: raw.enabled !== false,
+      use_proxy: raw.use_proxy === true,
     });
   }
 
@@ -706,6 +717,11 @@ function renderModelDetailPane(v) {
       gemini: "gemini",
       deepseek: "deepseek",
       minimax: "minimax",
+      kimi: "kimi",
+      glm: "glm",
+      opencode_go: "opencode",
+      openrouter: "openrouter",
+      amd_gpu_cloud: "amd",
       ollama: "ollama",
       local_onnx: "onnx",
       onnx: "onnx",
@@ -713,7 +729,9 @@ function renderModelDetailPane(v) {
     // The adapter is only a wire protocol. A user-created endpoint speaking
     // OpenAI/Anthropic/Gemini must not inherit that vendor's brand. Brand marks
     // are reserved for connections explicitly created as provider presets.
-    return presetIcons[preset] || "";
+    // Local ONNX predates provider presets, so retain its established icon for
+    // persisted connections whose options object is still empty.
+    return presetIcons[preset] || (isLocalConnection(connection) ? "onnx" : "");
   }
 
   function connectionProviderMark(connection) {
@@ -1014,6 +1032,7 @@ function renderModelDetailPane(v) {
     var [localRuntime, setLocalRuntime] = useState(null);
     var [localError, setLocalError] = useState("");
     var [localBusy, setLocalBusy] = useState("");
+    var [proxyMasterEnabled, setProxyMasterEnabled] = useState(false);
 
     var selected = config && (config.connections || []).find(function (item) { return item.id === selectedId; });
     useEffect(function () {
@@ -1562,6 +1581,14 @@ function renderModelDetailPane(v) {
     useEffect(function () { refreshLocalModels(); }, []);
 
     useEffect(function () {
+      var active = true;
+      requestJson("/api/settings/config").then(function (payload) {
+        if (active) setProxyMasterEnabled(payload.external_agent_proxy_enabled === true);
+      }).catch(function () {});
+      return function () { active = false; };
+    }, []);
+
+    useEffect(function () {
       if (!selected || !isLocalConnection(selected) || !localModels.some(function (model) { return model.downloading; })) return;
       var timer = setInterval(refreshLocalModels, 1500);
       return function () { clearInterval(timer); };
@@ -1627,6 +1654,7 @@ function renderModelDetailPane(v) {
       importOauthModels: importOauthModels, importOauthModel: importOauthModel,
       LocalModelsSection: LocalModelsSection, localRuntime: localRuntime, localError: localError,
       localBusy: localBusy, manageLocalModel: manageLocalModel, profiles: profiles,
+      proxyMasterEnabled: proxyMasterEnabled,
       addProfile: addProfile, ProfileEditor: ProfileEditor, updateProfile: updateProfile,
       removeProfile: removeProfile, testProfile: testProfile, busy: busy,
     };

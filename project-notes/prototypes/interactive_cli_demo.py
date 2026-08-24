@@ -233,7 +233,7 @@ class Demo:
             "需要授权",
             [
                 "操作   写入项目文件",
-                "目标   project-notes/interactive-cli-handoff.zh-CN.md",
+                "目标   project-notes/README.md",
                 "原因   保存已经确认的 CLI 产品边界",
             ],
             tone=self.ui.theme.warning,

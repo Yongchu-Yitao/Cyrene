@@ -197,6 +197,8 @@ CREATE TABLE IF NOT EXISTS llm_latency_events (
     outcome TEXT NOT NULL,
     status_code INTEGER NOT NULL DEFAULT 0,
     error_type TEXT NOT NULL DEFAULT '',
+    error_body TEXT NOT NULL DEFAULT '',
+    error_body_truncated INTEGER NOT NULL DEFAULT 0,
     queue_wait_ms REAL NOT NULL DEFAULT 0,
     pre_attempt_wait_ms REAL NOT NULL DEFAULT 0,
     request_ms REAL NOT NULL DEFAULT 0,

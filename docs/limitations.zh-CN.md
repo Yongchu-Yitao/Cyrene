@@ -55,4 +55,4 @@
   Release/Manual Gate。
 
 精确验证基线见[开发指南](development.zh-CN.md)，已知工程风险见
-[当前开发进度](../project-notes/CONTEXT_DEV_PROGRESS.zh-CN.md)。
+[开发记录](../project-notes/README.md)。

@@ -15,7 +15,7 @@ from typing import Any, Awaitable, Callable
 
 import cyrene.agent.state as _state
 
-from cyrene.agent.commands import DEEP_REFLECT_COMMAND_ID, parse_deep_reflect_command
+from cyrene.agent.commands import DEEP_REFLECT_COMMAND_ID, parse_slash_command
 from cyrene.agent.deep_reflection import create_deep_reflection_record
 from cyrene.agent.message import (
     _apply_assistant_meta,
@@ -59,7 +59,6 @@ from cyrene.agent.state import (
     _conversation_source,
     _deep_research_first_round,
     _deep_research_mode,
-    _economy_mode,
     _ensure_session,
     _pending_intermediate_user_replies,
     _persist_base_messages,
@@ -88,7 +87,6 @@ from cyrene.memory import get_memory_context
 from cyrene.runtime.memory.short_term import get_context
 from cyrene.learning.skills import build_skill_prompt_block
 from cyrene.runtime.settings_store import (
-    get as _get_setting,
     get_spawn_policy,
     is_tool_pack_enabled,
 )
@@ -498,16 +496,21 @@ async def _run_chat_agent(
     command: str = "",
     permission_mode: str = "default",
     plan_modification: str = "",
+    resume_lane: str = "",
 ) -> str:
     """Run one main Agent slice with complete global Hook lifecycle events."""
     import time as _time
 
     from cyrene.hooks import run_lifecycle_hooks
 
-    round_id = str(forced_round_id or "").strip() or f"round_{int(_time.time() * 1000)}"
+    requested_round_id = str(forced_round_id or "").strip()
+    round_id = requested_round_id or f"round_{int(_time.time() * 1000)}"
     round_token = _current_round_id.set(round_id)
     caller_token = _caller_type.set("main_agent")
+    model_lease_token = None
     try:
+        if not _state.has_active_run_model_lease():
+            model_lease_token = _state.activate_run_model_lease()
         injected = await run_lifecycle_hooks("SessionStart")
         effective_fixed = "\n\n".join(
             part for part in (
@@ -545,6 +548,8 @@ async def _run_chat_agent(
                 command=command,
                 permission_mode=permission_mode,
                 plan_modification=plan_modification,
+                resume_lane=resume_lane,
+                resumed_round=bool(requested_round_id),
             )
         except asyncio.CancelledError:
             await asyncio.shield(run_lifecycle_hooks(
@@ -568,6 +573,8 @@ async def _run_chat_agent(
         )
         return result
     finally:
+        if model_lease_token is not None:
+            _state.reset_run_model_lease(model_lease_token)
         _caller_type.reset(caller_token)
         _current_round_id.reset(round_token)
 
@@ -601,14 +608,16 @@ async def _run_chat_agent_impl(
     command: str = "",
     permission_mode: str = "default",
     plan_modification: str = "",
+    resume_lane: str = "",
+    resumed_round: bool | None = None,
 ) -> str:
     import time as _time
 
     original_user_message = str(user_message or "")
-    deep_reflect_parse = parse_deep_reflect_command(original_user_message)
-    if deep_reflect_parse.get("matched"):
-        command = DEEP_REFLECT_COMMAND_ID
-        user_message = str(deep_reflect_parse.get("focus") or "")
+    slash_parse = parse_slash_command(original_user_message)
+    if slash_parse.get("matched"):
+        command = str(slash_parse.get("command") or "")
+        user_message = str(slash_parse.get("arguments") or "")
         if public_user_message is None:
             public_user_message = original_user_message
         if public_prompt is None:
@@ -680,7 +689,6 @@ async def _run_chat_agent_impl(
     dr_token = None
     dr_first_token = None
     cmd_token = None
-    economy_token = None
     final_output = ""
     try:
         # 全局 short_term 只属于默认会话（旧 UI 单线程对话的跨重启恢复）。
@@ -877,11 +885,15 @@ async def _run_chat_agent_impl(
 
         is_deep_research = command == "deep-research"
         dr_token = _deep_research_mode.set(is_deep_research)
-        dr_first_token = _deep_research_first_round.set(is_deep_research and not bool(forced_round_id))
-        cmd_token = _current_command.set(command)
-        economy_token = _economy_mode.set(
-            str(_get_setting("budget_mode", "normal") or "normal").strip().lower() == "economy"
+        is_resumed_round = (
+            bool(forced_round_id)
+            if resumed_round is None
+            else bool(resumed_round)
         )
+        dr_first_token = _deep_research_first_round.set(
+            is_deep_research and not is_resumed_round
+        )
+        cmd_token = _current_command.set(command)
 
         if command == DEEP_REFLECT_COMMAND_ID:
             visible_command_text = str(public_user_message if public_user_message is not None else original_user_message or "/deep-reflect").strip() or "/deep-reflect"
@@ -1225,6 +1237,7 @@ async def _run_chat_agent_impl(
             system_context=main_system_context,
             fixed_ephemeral_system=effective_fixed_ephemeral,
             ephemeral_system=effective_volatile_ephemeral,
+            resume_lane=resume_lane,
         )
 
         if main_text == _AWAITING_USER_SENTINEL:
@@ -1279,8 +1292,6 @@ async def _run_chat_agent_impl(
             _deep_research_mode.reset(dr_token)
         if dr_first_token is not None:
             _deep_research_first_round.reset(dr_first_token)
-        if economy_token is not None:
-            _economy_mode.reset(economy_token)
         _ui_round_assistant_meta.reset(assistant_meta_token)
         _ui_round_hide_initial_detail.reset(hide_initial_detail_token)
         _pending_intermediate_user_replies.reset(intermediate_reply_token)

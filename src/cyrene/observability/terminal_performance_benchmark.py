@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import math
 import os
+import re
 import statistics
 import sys
 import tempfile
@@ -34,28 +36,89 @@ import sys
 import time
 
 kind, raw_total, gate = sys.argv[1:4]
+release = sys.argv[4] if len(sys.argv) > 4 else ""
 total = int(raw_total)
 while not os.path.exists(gate):
     time.sleep(0.001)
-if kind == "plain":
-    block = b"compile unit=terminal_benchmark status=ok value=0123456789\n"
-elif kind == "ansi":
-    block = b"\x1b[36m[compile]\x1b[0m \x1b[1mterminal_benchmark\x1b[0m status=ok\n"
-else:
-    block = b"\x1b[2J\x1b[H\x1b[32mterminal_benchmark\x1b[0m\n\x1b[2;1Hprogress 100%\x1b[K"
 stream = sys.stdout.buffer
-remaining = total
-while remaining:
-    chunk = block[:remaining]
+written = 0
+frame = 0
+while written < total:
+    marker = f"__CYRENE_FRAME_{frame:08x}__".encode("ascii")
+    if kind == "plain":
+        chunk = marker + b" compile unit=terminal_benchmark status=ok\n"
+    elif kind == "ansi":
+        chunk = b"\x1b[36m[compile]\x1b[0m \x1b[1m" + marker + b"\x1b[0m status=ok\n"
+    else:
+        chunk = b"\x1b[2J\x1b[H\x1b[32m" + marker + b"\x1b[0m\n\x1b[2;1Hprogress 100%\x1b[K"
     stream.write(chunk)
-    remaining -= len(chunk)
+    written += len(chunk)
+    frame += 1
+stream.write(f"__CYRENE_FRAME_COUNT_{frame:08x}__".encode("ascii"))
 stream.write(
     b"\x1b]133;A\x1b\\\x1b]133;B\x1b\\benchmark command\r\n"
     b"\x1b]133;C\x1b\\CYRENE_BENCHMARK_COMMAND_OUTPUT\r\n"
     b"\x1b]133;D;0\x1b\\"
 )
 stream.flush()
+while release and not os.path.exists(release):
+    time.sleep(0.001)
 """
+
+_INTERACTIVE_CHILD_PROGRAM = r"""
+import sys
+
+stream = sys.stdout.buffer
+stream.write(b"INTERACTIVE_READY\r\n")
+stream.flush()
+for line in sys.stdin.buffer:
+    stream.write(b"INTERACTIVE_ECHO:" + line)
+    stream.flush()
+    if line.strip().lower() == b"quit":
+        break
+"""
+
+_SOURCE_FRAME_RE = re.compile(
+    rb"__CYRENE_(FRAME_COUNT|FRAME)_([0-9a-f]{8})__"
+)
+
+
+class _SourceFrameValidator:
+    """Validate monotonic source markers without retaining the output stream."""
+
+    def __init__(self) -> None:
+        self._buffer = bytearray()
+        self.bytes_seen = 0
+        self.frames_seen = 0
+        self.sequence_errors = 0
+        self.expected_frames: int | None = None
+
+    def feed(self, data: bytes) -> None:
+        self.bytes_seen += len(data)
+        self._buffer.extend(data)
+        consumed = 0
+        for match in _SOURCE_FRAME_RE.finditer(self._buffer):
+            kind = bytes(match.group(1))
+            value = int(match.group(2), 16)
+            if kind == b"FRAME":
+                if value != self.frames_seen:
+                    self.sequence_errors += 1
+                self.frames_seen += 1
+            else:
+                self.expected_frames = value
+            consumed = match.end()
+        if consumed:
+            del self._buffer[:consumed]
+        if len(self._buffer) > 128:
+            del self._buffer[:-128]
+
+    @property
+    def valid(self) -> bool:
+        return bool(
+            self.frames_seen > 0
+            and self.expected_frames == self.frames_seen
+            and self.sequence_errors == 0
+        )
 
 
 def _percentile(values: list[float], percentile: float) -> float:
@@ -159,13 +222,15 @@ async def _heartbeat(
 
 async def _websocket_relay(
     manager: Any, terminal_id: str, gate: Path,
-) -> tuple[list[float], int, int]:
+) -> tuple[list[float], int, int, int]:
     from websockets.asyncio.client import connect
     from websockets.asyncio.server import serve
 
     connected = asyncio.Event()
     received_bytes = 0
     resyncs = 0
+    sequence_errors = 0
+    expected_seq = 0
     latencies_ms: list[float] = []
 
     async def handler(websocket: Any) -> None:
@@ -184,7 +249,7 @@ async def _websocket_relay(
             manager.unsubscribe(terminal_id, queue)
 
     async def client(uri: str) -> None:
-        nonlocal received_bytes, resyncs
+        nonlocal received_bytes, resyncs, sequence_errors, expected_seq
         async with connect(uri, max_size=None, proxy=None) as websocket:
             await connected.wait()
             gate.touch()
@@ -192,6 +257,9 @@ async def _websocket_relay(
                 received_at = time.time()
                 event = json.loads(raw)
                 if event.get("type") == "output":
+                    if int(event["seq"]) != expected_seq:
+                        sequence_errors += 1
+                    expected_seq = int(event["nextSeq"])
                     received_bytes += int(event["nextSeq"]) - int(event["seq"])
                     created_at = datetime.fromisoformat(str(event["createdAt"]))
                     latencies_ms.append(
@@ -208,7 +276,7 @@ async def _websocket_relay(
     async with serve(handler, "127.0.0.1", 0) as server:
         port = int(server.sockets[0].getsockname()[1])
         await client(f"ws://127.0.0.1:{port}")
-    return latencies_ms, received_bytes, resyncs
+    return latencies_ms, received_bytes, resyncs, sequence_errors
 
 
 async def _run_case(
@@ -221,6 +289,14 @@ async def _run_case(
     case_root.mkdir(parents=True)
     gate = case_root / "start.gate"
     manager = TerminalManager(output_limit=output_limit, state_dir=case_root / "state")
+    source_frames = _SourceFrameValidator()
+    append_output = manager._append_output
+
+    def validate_source(session: Any, data: bytes) -> None:
+        source_frames.feed(data)
+        append_output(session, data)
+
+    manager._append_output = validate_source  # type: ignore[method-assign]
     terminal = await manager.create_resolved(
         "benchmark",
         cwd=str(case_root),
@@ -245,11 +321,13 @@ async def _run_case(
     websocket_latencies: list[float] = []
     websocket_bytes = 0
     resyncs = 0
+    websocket_sequence_errors = 0
     try:
         if subscribed:
-            websocket_latencies, websocket_bytes, resyncs = await _websocket_relay(
-                manager, terminal_id, gate
-            )
+            (
+                websocket_latencies, websocket_bytes, resyncs,
+                websocket_sequence_errors,
+            ) = await _websocket_relay(manager, terminal_id, gate)
         else:
             gate.touch()
         await _wait_for_exit(manager, terminal_id)
@@ -259,6 +337,7 @@ async def _run_case(
             "benchmark", "cyrene_benchmark_command_output", terminal_id=terminal_id
         )
         commands = await manager.commands_async(terminal_id)
+        replay = await manager.replay_async(terminal_id, 0)
         elapsed_ms = (time.perf_counter() - started) * 1000
         worker_metrics = writer.metrics()
         session = manager.get(terminal_id)
@@ -274,12 +353,40 @@ async def _run_case(
         worker_writes = worker_metrics["bytesWritten"] - initial_worker["bytesWritten"]
         parsed_bytes = worker_metrics["screenBytesParsed"] - initial_worker["screenBytesParsed"]
         actual_bytes = session.next_seq
+        write_amplification = worker_writes / max(actual_bytes, 1)
+        replay_expected = int(replay[0]["seq"]) if replay else actual_bytes
+        replay_sequence_errors = 0
+        replay_bytes = 0
+        replay_data = bytearray()
+        for event in replay:
+            start = int(event["seq"])
+            end = int(event["nextSeq"])
+            decoded = base64.b64decode(event["data"])
+            if start != replay_expected or len(decoded) != end - start:
+                replay_sequence_errors += 1
+            replay_expected = end
+            replay_bytes += len(decoded)
+            replay_data.extend(decoded)
+        if replay_expected != actual_bytes:
+            replay_sequence_errors += 1
+        replay_start = int(replay[0]["seq"]) if replay else actual_bytes
+        expected_replay = b"".join(
+            chunk.data[max(0, replay_start - chunk.start):]
+            for chunk in session.output
+            if chunk.end > replay_start
+        )
+        replay_data_matches = bytes(replay_data) == expected_replay
         return {
             "workload": workload,
             "subscribed": subscribed,
             "ptyBackend": "conpty" if sys.platform == "win32" else "posix_pty",
             "requestedBytes": total_bytes,
             "actualPtyBytes": actual_bytes,
+            "sourceBytesObserved": source_frames.bytes_seen,
+            "sourceFramesObserved": source_frames.frames_seen,
+            "sourceFramesExpected": source_frames.expected_frames,
+            "sourceFrameSequenceErrors": source_frames.sequence_errors,
+            "sourceFramesValid": source_frames.valid,
             "elapsedMs": round(elapsed_ms, 3),
             "throughputMiBPerSecond": round(
                 actual_bytes / (1024 * 1024) / max(elapsed_ms / 1000, 0.000001), 3
@@ -290,7 +397,7 @@ async def _run_case(
             "processDiskWriteBytes": process_writes,
             "scrollbackBytesWritten": worker_writes,
             "scrollbackWriteAmplification": round(
-                worker_writes / max(actual_bytes, 1), 4
+                write_amplification, 4
             ),
             "retainedSegmentBytes": segment_bytes,
             "segmentsDeleted": worker_metrics["segmentsDeleted"] - initial_worker["segmentsDeleted"],
@@ -300,12 +407,36 @@ async def _run_case(
             "webSocketLatencyMaxMs": round(max(websocket_latencies, default=0.0), 3),
             "webSocketBytes": websocket_bytes,
             "webSocketResyncs": resyncs,
+            "webSocketSequenceErrors": websocket_sequence_errors,
+            "replayBytes": replay_bytes,
+            "replaySequenceErrors": replay_sequence_errors,
+            "replayDataMatches": replay_data_matches,
+            "workerQueueWaitMaxMs": round(
+                worker_metrics["workerQueueWaitMaxUs"] / 1000, 3
+            ),
+            "queryQueueWaitMaxMs": round(
+                worker_metrics["queryQueueWaitMaxUs"] / 1000, 3
+            ),
+            "terminalWorkPeakBytes": worker_metrics["terminalWorkPeakBytes"],
             "qualityPreserved": bool(
                 matches
                 and commands
                 and "CYRENE_BENCHMARK_COMMAND_OUTPUT" in screen["screenText"]
+                and actual_bytes >= total_bytes
+                and source_frames.bytes_seen == actual_bytes
+                and source_frames.valid
                 and parsed_bytes == actual_bytes
-                and (not subscribed or (websocket_bytes == actual_bytes and resyncs == 0))
+                and replay_sequence_errors == 0
+                and replay_data_matches
+                and write_amplification < 1.1
+                and (
+                    not subscribed
+                    or (
+                        websocket_bytes == actual_bytes
+                        and resyncs == 0
+                        and websocket_sequence_errors == 0
+                    )
+                )
             ),
         }
     finally:
@@ -313,6 +444,161 @@ async def _run_case(
         await heartbeat_task
         if terminal_id in manager._sessions:
             await manager.close(terminal_id, remove=True)
+        manager.close_store()
+
+
+async def _run_fairness_case(
+    root: Path, total_bytes: int, output_limit: int,
+) -> dict[str, Any]:
+    """Measure an interactive terminal while a second terminal floods output."""
+    from websockets.asyncio.client import connect
+    from websockets.asyncio.server import serve
+
+    from cyrene.terminal.manager import TerminalManager
+
+    case_root = root / "multi-terminal-fairness"
+    case_root.mkdir(parents=True)
+    noisy_gate = case_root / "noisy.gate"
+    noisy_release = case_root / "noisy.release"
+    manager = TerminalManager(output_limit=output_limit, state_dir=case_root / "state")
+    noisy = await manager.create_resolved(
+        "benchmark",
+        cwd=str(case_root),
+        shell="python",
+        argv=[
+            sys.executable, "-u", "-c", _CHILD_PROGRAM,
+            "ansi", str(total_bytes), str(noisy_gate), str(noisy_release),
+        ],
+        title="fairness-noisy",
+        launch_mode="one_shot",
+    )
+    interactive = await manager.create_resolved(
+        "benchmark",
+        cwd=str(case_root),
+        shell="python",
+        argv=[sys.executable, "-u", "-c", _INTERACTIVE_CHILD_PROGRAM],
+        title="fairness-interactive",
+        launch_mode="one_shot",
+    )
+    noisy_id = str(noisy["id"])
+    interactive_id = str(interactive["id"])
+    connected = asyncio.Event()
+    resyncs = 0
+    sequence_errors = 0
+    expected_seq: int | None = None
+    interactive_output = bytearray()
+    echo_latency_ms = 0.0
+    noisy_running_at_echo = False
+
+    async def handler(websocket: Any) -> None:
+        queue = manager.subscribe(interactive_id)
+        connected.set()
+
+        async def send_events() -> None:
+            while True:
+                event = await queue.get()
+                await websocket.send(json.dumps(event, separators=(",", ":")))
+                if (
+                    event.get("type") == "state"
+                    and event.get("terminal", {}).get("status") in {"exited", "closed"}
+                ):
+                    return
+
+        async def receive_input() -> None:
+            async for raw in websocket:
+                message = json.loads(raw)
+                if message.get("type") != "input":
+                    continue
+                await manager.write_bytes(
+                    interactive_id,
+                    base64.b64decode(str(message.get("data") or "")),
+                    actor="user",
+                )
+
+        try:
+            sender = asyncio.create_task(send_events())
+            receiver = asyncio.create_task(receive_input())
+            done, pending = await asyncio.wait(
+                {sender, receiver}, return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*done, *pending, return_exceptions=True)
+        finally:
+            manager.unsubscribe(interactive_id, queue)
+
+    try:
+        async with serve(handler, "127.0.0.1", 0) as server:
+            port = int(server.sockets[0].getsockname()[1])
+            async with connect(
+                f"ws://127.0.0.1:{port}", max_size=None, proxy=None
+            ) as websocket:
+                await connected.wait()
+                noisy_gate.touch()
+                sent_at = time.perf_counter()
+                await websocket.send(json.dumps({
+                    "type": "input",
+                    "data": base64.b64encode(b"latency-probe\n").decode("ascii"),
+                }))
+                async with asyncio.timeout(30):
+                    async for raw in websocket:
+                        event = json.loads(raw)
+                        if event.get("type") == "resync_required":
+                            resyncs += 1
+                            continue
+                        if event.get("type") != "output":
+                            continue
+                        start = int(event["seq"])
+                        end = int(event["nextSeq"])
+                        if expected_seq is not None and start != expected_seq:
+                            sequence_errors += 1
+                        expected_seq = end
+                        data = base64.b64decode(event["data"])
+                        interactive_output.extend(data)
+                        if b"INTERACTIVE_ECHO:latency-probe" in interactive_output:
+                            echo_latency_ms = (time.perf_counter() - sent_at) * 1000
+                            noisy_running_at_echo = (
+                                manager.get(noisy_id).status == "running"
+                            )
+                            noisy_release.touch()
+                            await websocket.send(json.dumps({
+                                "type": "input",
+                                "data": base64.b64encode(b"quit\n").decode("ascii"),
+                            }))
+                            break
+        await _wait_for_exit(manager, noisy_id)
+        await _wait_for_exit(manager, interactive_id)
+        manager.flush()
+        writer = manager._persistence_writer
+        assert writer is not None
+        metrics = writer.metrics()
+        screen = await manager.screen_snapshot_async(interactive_id)
+        return {
+            "ptyBackend": "conpty" if sys.platform == "win32" else "posix_pty",
+            "noisyBytes": manager.get(noisy_id).next_seq,
+            "interactiveEchoLatencyMs": round(echo_latency_ms, 3),
+            "noisyRunningAtEcho": noisy_running_at_echo,
+            "webSocketResyncs": resyncs,
+            "webSocketSequenceErrors": sequence_errors,
+            "workerQueueWaitMaxMs": round(
+                metrics["workerQueueWaitMaxUs"] / 1000, 3
+            ),
+            "queryQueueWaitMaxMs": round(
+                metrics["queryQueueWaitMaxUs"] / 1000, 3
+            ),
+            "terminalWorkPeakBytes": metrics["terminalWorkPeakBytes"],
+            "qualityPreserved": bool(
+                echo_latency_ms > 0
+                and noisy_running_at_echo
+                and resyncs == 0
+                and sequence_errors == 0
+                and "INTERACTIVE_ECHO:latency-probe" in screen["screenText"]
+            ),
+        }
+    finally:
+        for terminal_id in (interactive_id, noisy_id):
+            if terminal_id in manager._sessions:
+                await manager.close(terminal_id, remove=True)
         manager.close_store()
 
 
@@ -330,14 +616,79 @@ async def run_benchmark(
             for workload in WORKLOADS
             for subscribed in (False, True)
         ]
+        fairness = await _run_fairness_case(root, total_bytes, output_limit)
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "platform": sys.platform,
         "python": sys.version.split()[0],
         "totalBytesPerCase": total_bytes,
         "outputLimit": output_limit,
         "cases": cases,
-        "qualityPreserved": all(case["qualityPreserved"] for case in cases),
+        "fairness": fairness,
+        "qualityPreserved": (
+            all(case["qualityPreserved"] for case in cases)
+            and fairness["qualityPreserved"]
+        ),
+    }
+
+
+def compare_with_baseline(
+    report: dict[str, Any], baseline: dict[str, Any],
+    *, regression_threshold_percent: float = 20.0,
+) -> dict[str, Any]:
+    """Compare latency only when a matching historical platform case exists."""
+    threshold = max(0.0, float(regression_threshold_percent))
+    previous = {
+        (str(case["workload"]), bool(case["subscribed"])): case
+        for case in baseline.get("cases", [])
+        if case.get("ptyBackend")
+    }
+    regressions: list[dict[str, Any]] = []
+    matched = 0
+    for case in report.get("cases", []):
+        prior = previous.get((str(case["workload"]), bool(case["subscribed"])))
+        if prior is None or prior.get("ptyBackend") != case.get("ptyBackend"):
+            continue
+        matched += 1
+        for metric in ("eventLoopDelayP95Ms", "webSocketLatencyP95Ms"):
+            old = float(prior.get(metric) or 0)
+            current = float(case.get(metric) or 0)
+            if old <= 0:
+                continue
+            delta = ((current - old) / old) * 100
+            if delta > threshold:
+                regressions.append({
+                    "workload": case["workload"],
+                    "subscribed": case["subscribed"],
+                    "metric": metric,
+                    "baseline": round(old, 3),
+                    "current": round(current, 3),
+                    "deltaPercent": round(delta, 2),
+                })
+    current_fairness = report.get("fairness", {})
+    prior_fairness = baseline.get("fairness", {})
+    if (
+        current_fairness.get("ptyBackend")
+        and current_fairness.get("ptyBackend") == prior_fairness.get("ptyBackend")
+    ):
+        old = float(prior_fairness.get("interactiveEchoLatencyMs") or 0)
+        current = float(current_fairness.get("interactiveEchoLatencyMs") or 0)
+        if old > 0:
+            delta = ((current - old) / old) * 100
+            if delta > threshold:
+                regressions.append({
+                    "workload": "multi-terminal-fairness",
+                    "subscribed": True,
+                    "metric": "interactiveEchoLatencyMs",
+                    "baseline": round(old, 3),
+                    "current": round(current, 3),
+                    "deltaPercent": round(delta, 2),
+                })
+    return {
+        "matchedCases": matched,
+        "thresholdPercent": threshold,
+        "regressions": regressions,
+        "passed": not regressions,
     }
 
 
@@ -362,6 +713,18 @@ def render_markdown(report: dict[str, Any]) -> str:
                 quality="pass" if case["qualityPreserved"] else "FAIL",
             )
         )
+    fairness = report.get("fairness", {})
+    if fairness:
+        lines.extend([
+            "",
+            "## Multi-terminal fairness",
+            "",
+            "Interactive echo during a noisy terminal: "
+            f"`{float(fairness['interactiveEchoLatencyMs']):.3f} ms`; "
+            f"worker queue max wait: `{float(fairness['workerQueueWaitMaxMs']):.3f} ms`; "
+            f"resyncs: `{int(fairness['webSocketResyncs'])}`; "
+            f"quality: `{'pass' if fairness['qualityPreserved'] else 'FAIL'}`.",
+        ])
     return "\n".join(lines) + "\n"
 
 
@@ -370,18 +733,34 @@ async def _main() -> None:
     parser.add_argument("--bytes", type=int, default=24 * 1024 * 1024)
     parser.add_argument("--output-limit", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--json", type=Path)
+    parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--regression-threshold-percent", type=float, default=20.0)
+    parser.add_argument("--fail-on-quality", action="store_true")
     arguments = parser.parse_args()
     report = await run_benchmark(
         total_bytes=arguments.bytes, output_limit=arguments.output_limit
     )
+    if arguments.baseline:
+        baseline = json.loads(arguments.baseline.read_text(encoding="utf-8"))
+        report["baselineComparison"] = compare_with_baseline(
+            report, baseline,
+            regression_threshold_percent=arguments.regression_threshold_percent,
+        )
     if arguments.json:
         arguments.json.parent.mkdir(parents=True, exist_ok=True)
         arguments.json.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(render_markdown(report))
+    if arguments.fail_on_quality and (
+        not report["qualityPreserved"]
+        or not report.get("baselineComparison", {"passed": True})["passed"]
+    ):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
     asyncio.run(_main())
 
 
-__all__ = ["WORKLOADS", "render_markdown", "run_benchmark"]
+__all__ = [
+    "WORKLOADS", "compare_with_baseline", "render_markdown", "run_benchmark",
+]

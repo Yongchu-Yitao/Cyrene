@@ -24,16 +24,53 @@ NATIVE_PROTOCOL_ADAPTERS = frozenset({"anthropic", "openai_responses", "gemini"}
 OPENAI_CHAT_ADAPTERS = frozenset({"openai", "openai_compatible", "ollama"})
 _OFFICIAL_VERSIONED_OPENAI_CHAT_HOSTS = frozenset({
     "api.deepseek.com",
+    "api.moonshot.cn",
     "api.minimax.com",
     "api.minimax.io",
     "api.minimaxi.com",
 })
+
+_OPENCODE_GO_ANTHROPIC_MODEL_PREFIXES = (
+    "minimax-",
+    "qwen3.",
+)
+_OPENCODE_GO_RESPONSES_MODEL_PREFIXES = (
+    "gpt-",
+    "grok-",
+    "muse-",
+)
 
 
 @dataclass(frozen=True, slots=True)
 class PreparedRequest:
     payload: dict[str, Any]
     headers: dict[str, str]
+
+
+def runtime_adapter_for_provider(
+    adapter_id: str,
+    model: str,
+    *,
+    provider_preset: str = "",
+) -> str:
+    """Resolve provider presets whose models use more than one wire protocol.
+
+    OpenCode Go publishes one model catalog backed by Chat Completions,
+    Responses, and Anthropic Messages endpoints. The durable connection stays
+    a single service while each selected profile is routed over the protocol
+    documented for its model family.
+    """
+
+    adapter = str(adapter_id or "openai_compatible").strip().lower()
+    preset = str(provider_preset or "").strip().lower()
+    if preset != "opencode_go":
+        return adapter
+    model_id = str(model or "").strip().lower().rsplit("/", 1)[-1]
+    if model_id.startswith(_OPENCODE_GO_ANTHROPIC_MODEL_PREFIXES):
+        return "anthropic"
+    if model_id.startswith(_OPENCODE_GO_RESPONSES_MODEL_PREFIXES):
+        return "openai_responses"
+    return "openai"
 
 
 def official_versioned_chat_endpoint(base_url: str) -> str | None:
@@ -128,14 +165,44 @@ def parse_discovery_response(adapter_id: str, payload: Any) -> list[dict[str, An
             capabilities = ["embedding"]
         elif adapter in {"anthropic", "gemini"}:
             capabilities.extend(["vision", "tools", "reasoning"])
-        elif any(token in lowered for token in ("vision", "gpt-4o", "gpt-5")):
-            capabilities.extend(["vision", "tools"])
-        result.append({
+        else:
+            architecture = (
+                item.get("architecture")
+                if isinstance(item.get("architecture"), dict)
+                else {}
+            )
+            input_modalities = architecture.get("input_modalities") or []
+            if not isinstance(input_modalities, list):
+                input_modalities = []
+            supported_parameters = item.get("supported_parameters") or []
+            if not isinstance(supported_parameters, list):
+                supported_parameters = []
+            if "image" in input_modalities or any(
+                token in lowered for token in ("vision", "gpt-4o", "gpt-5")
+            ):
+                capabilities.append("vision")
+            if "tools" in supported_parameters or "tool_choice" in supported_parameters:
+                capabilities.append("tools")
+            if "reasoning" in supported_parameters or "include_reasoning" in supported_parameters:
+                capabilities.append("reasoning")
+        discovered = {
             "id": model_id,
             "model": model_id,
-            "name": str(item.get("displayName") or item.get("display_name") or model_id),
+            "name": str(
+                item.get("displayName")
+                or item.get("display_name")
+                or item.get("name")
+                or model_id
+            ),
             "capabilities": list(dict.fromkeys(capabilities)),
-        })
+        }
+        try:
+            context_limit = int(item.get("context_length") or 0)
+        except (TypeError, ValueError):
+            context_limit = 0
+        if context_limit > 0:
+            discovered["context_limit"] = context_limit
+        result.append(discovered)
     return result
 
 
@@ -694,4 +761,5 @@ __all__ = [
     "parse_response",
     "prepare_request",
     "protocol_endpoints",
+    "runtime_adapter_for_provider",
 ]

@@ -62,6 +62,24 @@ def test_build_env_records_parent_pid(monkeypatch, tmp_path):
     assert env["CYRENE_SIMPLEXNG_PARENT_PID"] == str(os.getpid())
 
 
+def test_build_env_applies_proxy_to_every_standard_variable(monkeypatch, tmp_path):
+    from cyrene.tooling.backends import searxng_manager as manager_module
+
+    proxy_url = "http://proxy.example.test:8080"
+    monkeypatch.setattr(
+        manager_module,
+        "_get_effective_search_proxy",
+        lambda: proxy_url,
+    )
+    env = manager_module._build_simplexng_env(tmp_path / "settings.yml")
+
+    for key in (
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "all_proxy",
+    ):
+        assert env[key] == proxy_url
+
+
 def test_source_launch_uses_parent_watching_wrapper(monkeypatch, tmp_path):
     from cyrene.tooling.backends import searxng_manager as manager_module
 

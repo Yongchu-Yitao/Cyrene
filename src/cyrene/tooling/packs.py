@@ -6,6 +6,7 @@ from cyrene.tooling.types import PackSpec
 
 PACKS = (
     PackSpec("code", "code_tools", "Code analysis, Git, and shared persistent terminals.", ("code.",), 100),
+    PackSpec("media", "media_tools", "Submit durable image, video, and music generation jobs that attach results and wake the Agent.", ("media.",), 150),
     PackSpec("browser", "browser_tools", "Persistent browser navigation, inspection, interaction, uploads, and takeover.", ("browser.",), 200),
     PackSpec("desktop", "desktop_tools", "Desktop application discovery and interaction through App Use.", ("desktop.",), 300),
     PackSpec("memory", "memory_tools", "Conversation, short-term, and project memory retrieval and maintenance.", ("memory.",), 400),
@@ -46,6 +47,9 @@ CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
         ("code.search_symbol", "SearchSymbol"),
         ("code.find_references", "FindReferences"),
         ("code.file_symbols", "GetFileSymbols"),
+    ),
+    "media_tools": (
+        ("media.generate", "StartMediaGeneration"),
     ),
     "browser_tools": (
         ("browser.navigate", "browser_navigate"),
@@ -236,8 +240,14 @@ CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
 
 PACK_BY_WIRE_NAME = {pack.wire_name: pack for pack in PACKS}
 MODULE_TOOL_NAMES = tuple(pack.wire_name for pack in PACKS)
-MAIN_ONLY_MODULE_TOOL_NAMES = frozenset({"cyrene_tools", "office_tools", "plugin_tools"})
+MAIN_ONLY_MODULE_TOOL_NAMES = frozenset({
+    "cyrene_tools",
+    "media_tools",
+    "office_tools",
+    "plugin_tools",
+})
 INTERNAL_ONLY_CONCRETE_TOOL_NAMES = frozenset({
+    "GenerateImage",
     "CyreneSessionMessage",
     "CyreneProjectControl",
     "CyreneChatControl",

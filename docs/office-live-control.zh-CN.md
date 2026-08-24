@@ -1,6 +1,6 @@
 # Cyrene 实时控制 PowerPoint
 
-Cyrene 的 Office 工具包可以控制 PowerPoint 当前打开的演示文稿，也可以在没有实时会话时直接处理 `.pptx` 文件。加载项在 PowerPoint 的 Office.js 运行时中执行对象模型操作；Cyrene 通过仅监听回环地址的 HTTPS/WSS Gateway 发送类型化指令。实时写操作在单一顺序队列中执行：目标页面会先自动切换到前台，然后背景和每个组件逐个同步，让用户看到完整、严格有序的编辑过程。指定 `slideId` 仍可编辑原本不在前台的页面。
+Cyrene 的 Office 工具包可以控制 PowerPoint 当前打开的演示文稿，也可以在没有实时会话时直接处理 `.pptx` 文件。加载项在 PowerPoint 的 Office.js 运行时中执行对象模型操作；Cyrene 通过仅监听回环地址的 HTTPS/WSS Gateway 发送类型化指令。实时写操作在单一顺序队列中执行：目标页面只在需要时切换到前台，普通编辑按依赖安全的逻辑阶段批量同步。指定 `slideId` 仍可编辑原本不在前台的页面。
 
 ## 首次安装
 
@@ -24,13 +24,26 @@ Cyrene 的 Office 工具包可以控制 PowerPoint 当前打开的演示文稿�
 | 层级 | 按需能力 |
 | --- | --- |
 | L1 Inspect | `list_slides`、`get_slide`、`list_shapes`、`get_shape`、`read_text`、`get_master`、`get_theme`、`get_selection` |
-| L2 Edit | 新增、移动、缩放、文字、样式、删除、分组、图层，以及宿主支持时的图片；可组成一次 `apply_batch`，在 PowerPoint 中仍按操作顺序逐个同步 |
+| L2 Edit | 新增、移动、缩放、文字、样式、删除、分组、图层，以及宿主支持时的图片；可组成一次 `apply_batch`，默认按依赖安全阶段同步 |
 | L3 Compose | 创建、复制、替换、重排、移动、删除页面，以及声明式 `SlideSpec` |
 | L4 Review | 渲染、溢出、重叠、对比度、前后对比和撤销 |
 | L5 Advanced | 表格、图表、母版、布局、备注、持久绑定、OOXML、导入页面 |
 | L6 Escape | 受开发模式和确认保护的 Office.js 命令白名单与 OOXML 页面替换 |
 
-完整工作流固定为：读取上下文 → 一次读取所需结构 → 最小修改计划 → 一页一个批次 → PowerPoint 渲染并验证 → 只局部修正 → 返回实际修改摘要。实时多页任务逐页提交，每页开始编辑时自动切换到前台。实时模式下 `ppt.create_slide` 与 `ppt.apply_slide_spec` 始终使用 `commitMode=progressive` 和 `progressiveGranularity=element`；即使调用方传入阶段显示或原子写入，实时执行也会强制为按组件顺序同步。`ppt.apply_batch` 同样按操作顺序逐个同步和展示。文件模式固定按原子方式写入，不伪造实时搭建阶段。
+完整工作流固定为：读取上下文 → 一次读取所需结构 → 最小修改计划 → 一页一个批次 → PowerPoint 渲染并验证 → 只局部修正 → 返回实际修改摘要。声明式建页优先传 `layout`、`title`、`body`、`bullets`、`sections`、`columns`、`image`、`theme` 等语义字段；坐标由确定性布局编译器生成，`elements` 只作为精确手工排版的兼容入口。实时模式默认 `progressiveGranularity=stage`，由当前 PowerPoint 加载项按依赖安全阶段创建和编辑页面；只有明确需要观看每个组件出现时才使用 `progressiveGranularity=element`。文件模式固定按原子方式写入。
+
+## 无模型连续性能基准
+
+打开 PowerPoint 并连接 Cyrene 加载项后，可以直接运行类型化工具基准；它不会发起模型或搜索请求，并在同一 Office 会话和连续 revision 链上反复执行“读取上下文 → 语义建页 → 检查稳定引用 → 修改标题 → 回读验证 → 删除清理”：
+
+```bash
+uv run python -m cyrene.observability.powerpoint_performance_benchmark \
+  --rounds 5 \
+  --strategies stage,element \
+  --json output/performance/powerpoint-live.json
+```
+
+输出同时包含 JSON 和 Markdown，分别记录每轮与各阶段的 min/P50/P95/max、请求载荷、最终 revision 和质量失败。可传 `--session-id` 锁定具体演示文稿，或增加 `element` 策略量化逐组件预览的额外成本。
 
 写操作接受 `expectedRevision` 和 `idempotencyKey`（兼容旧的 snake_case 字段）。返回值统一包含 `revision`、`changed`、`created`、`deleted`、`warnings`、`undoToken`、`renderId` 和审计摘要。所有写操作按会话串行，修订锁会拒绝基于旧 Cyrene 修订继续写入。加载项在 Cyrene 写入期间不会把自己引发的选择和内容变化误判为外部修订；写入结束后会重新对齐页面特征，后续真正的外部修改仍会正常推进修订。同一幂等键只会重放同一结果。
 

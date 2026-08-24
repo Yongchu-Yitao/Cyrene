@@ -7,6 +7,33 @@ import { useWbcComposerAgentFlow } from "./composer-flow.jsx"
 import { useWbcComposerAgentCatalog, useWbcComposerAgentConfig, useWbcComposerConfiguredModels } from "./composer-model-state.jsx"
 import { useWbcComposerVoice } from "./composer-voice.jsx"
 
+var WBC_CONTEXT_ACTIVATION_KEYS = ["mcpServers", "skills", "toolPackages", "customTools"];
+
+function wbcNormalizeContextActivations(value) {
+  var source = value && typeof value === "object" ? value : {};
+  var result = {};
+  WBC_CONTEXT_ACTIVATION_KEYS.forEach(function (key) {
+    result[key] = Array.from(new Set((Array.isArray(source[key]) ? source[key] : []).map(function (item) {
+      return String(item || "").trim();
+    }).filter(Boolean)));
+  });
+  return result;
+}
+
+function wbcParseSlashCommandText(text, commands) {
+  var source = String(text || "").trim();
+  if (source.indexOf("/") !== 0) return null;
+  var match = source.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
+  if (!match) return null;
+  var id = match[1];
+  var command = (commands || []).find(function (item) { return item.id === id; });
+  return command ? { command: command, message: String(match[2] || "").trim() } : null;
+}
+
+function wbcCommandOptionId(commandId) {
+  return "wbc-command-option-" + String(commandId || "").replace(/[^a-zA-Z0-9_-]/g, "-");
+}
+
 // Workbench chat feature module with explicit ESM dependencies.
 function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind, compact, placeholder, runningPlaceholder, topOverlay, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
   var model = WorkbenchChatModel;
@@ -26,6 +53,11 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     return wbcNormalizePermissionMode(chat && chat.permissionMode, "auto");
   });
   var [command, setCommand] = useWbcState("");
+  var [slashCommandCatalog, setSlashCommandCatalog] = useWbcState([]);
+  var [slashCommandCatalogLoaded, setSlashCommandCatalogLoaded] = useWbcState(false);
+  var [slashCommandCatalogLoading, setSlashCommandCatalogLoading] = useWbcState(false);
+  var [slashActiveIndex, setSlashActiveIndex] = useWbcState(0);
+  var [slashDismissedDraft, setSlashDismissedDraft] = useWbcState("");
   var [toolsOpen, setToolsOpen] = useWbcState(false);
   var [modelOpen, setModelOpen] = useWbcState(false);
   var [modelPanel, setModelPanel] = useWbcState("root");
@@ -47,6 +79,13 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var [remoteDeviceIds, setRemoteDeviceIds] = useWbcState(function () {
     return chat && Array.isArray(chat.remoteDeviceIds) ? chat.remoteDeviceIds.slice() : [];
   });
+  var [contextActivations, setContextActivations] = useWbcState(function () {
+    return wbcNormalizeContextActivations(chat && chat.contextActivations);
+  });
+  var [contextCatalog, setContextCatalog] = useWbcState({ mcpServers: [], skills: [], toolPackages: [], customTools: [] });
+  var [contextCatalogLoading, setContextCatalogLoading] = useWbcState(false);
+  var [contextCatalogLoaded, setContextCatalogLoaded] = useWbcState(false);
+  var [contextCatalogPanel, setContextCatalogPanel] = useWbcState("");
   var taRef = useWbcRef(null);
   var composerBoxRef = useWbcRef(null);
   var sendButtonRef = useWbcRef(null);
@@ -56,6 +95,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var prevChatIdRef = useWbcRef(chatId);
   var workspaceOverrideRef = useWbcRef(workspaceOverride);
   var remoteDeviceIdsRef = useWbcRef(remoteDeviceIds);
+  var contextActivationsRef = useWbcRef(contextActivations);
   var pendingRemoteContextRef = useWbcRef({});
   var prevWorkspaceContextKeyRef = useWbcRef(workspaceContextKey);
   var draftSaveTimerRef = useWbcRef(0);
@@ -77,6 +117,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     return String(agent && agent.installationId || "") === String(effectiveAgent.installationId || "");
   }) || null;
   var effectiveAgentName = wbcAgentDisplayName(effectiveCatalogAgent || effectiveAgent);
+  var builtinContextCapabilities = wbcIsBuiltinAgent(effectiveAgent);
   // Probe/auth/settings changes refresh the installed catalog. Overlay that
   // current snapshot so an open composer is never gated by stale capabilities
   // captured when the chat was first created.
@@ -156,6 +197,66 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   useWbcEffect(function () { draftRef.current = draft; });
   useWbcEffect(function () { workspaceOverrideRef.current = workspaceOverride; });
   useWbcEffect(function () { remoteDeviceIdsRef.current = remoteDeviceIds; });
+  useWbcEffect(function () { contextActivationsRef.current = contextActivations; });
+
+  useWbcEffect(function () {
+    if (builtinContextCapabilities) return;
+    var empty = wbcNormalizeContextActivations(null);
+    contextActivationsRef.current = empty;
+    setContextActivations(empty);
+    setContextCatalogPanel("");
+  }, [builtinContextCapabilities]);
+
+  useWbcEffect(function () {
+    if (!toolsOpen || !builtinContextCapabilities || contextCatalogLoaded || contextCatalogLoading) return undefined;
+    var cancelled = false;
+    setContextCatalogLoading(true);
+    workbenchServices.api().json("/api/workbench/context-capabilities", { toast: false }).then(function (payload) {
+      if (cancelled) return;
+      setContextCatalog({
+        mcpServers: Array.isArray(payload && payload.mcpServers) ? payload.mcpServers : [],
+        skills: Array.isArray(payload && payload.skills) ? payload.skills : [],
+        toolPackages: Array.isArray(payload && payload.toolPackages) ? payload.toolPackages : [],
+        customTools: Array.isArray(payload && payload.customTools) ? payload.customTools : [],
+      });
+      setContextCatalogLoaded(true);
+    }).catch(function (err) {
+      if (!cancelled) workbenchServices.api().toastError(err, wbcT("workbenchChat.contextCapabilitiesLoadFailed", "Failed to load context capabilities: "));
+    }).finally(function () {
+      if (!cancelled) setContextCatalogLoading(false);
+    });
+    return function () { cancelled = true; };
+  }, [toolsOpen, builtinContextCapabilities, contextCatalogLoaded]);
+
+  useWbcEffect(function () {
+    if (!builtinContextCapabilities || (draft.indexOf("/") !== 0 && !toolsOpen) || slashCommandCatalogLoaded || slashCommandCatalogLoading) return undefined;
+    var cancelled = false;
+    setSlashCommandCatalogLoading(true);
+    workbenchServices.api().json(
+      "/api/workbench/slash-commands?project_id=" + encodeURIComponent(projectId || ""),
+      { toast: false }
+    ).then(function (payload) {
+      if (cancelled) return;
+      setSlashCommandCatalog(Array.isArray(payload && payload.commands) ? payload.commands : []);
+      setSlashCommandCatalogLoaded(true);
+    }).catch(function (err) {
+      if (!cancelled) workbenchServices.api().toastError(err, wbcT("workbenchChat.slashCommandsLoadFailed", "Failed to load commands: "));
+    }).finally(function () {
+      if (!cancelled) setSlashCommandCatalogLoading(false);
+    });
+    return function () { cancelled = true; };
+  }, [builtinContextCapabilities, draft.indexOf("/") === 0, toolsOpen, slashCommandCatalogLoaded, projectId]);
+
+  useWbcEffect(function () {
+    setSlashCommandCatalog([]);
+    setSlashCommandCatalogLoaded(false);
+  }, [projectId]);
+
+  useWbcEffect(function () {
+    if (draft.indexOf("/") !== 0 && !toolsOpen && !command && slashCommandCatalogLoaded) {
+      setSlashCommandCatalogLoaded(false);
+    }
+  }, [draft.indexOf("/") === 0, toolsOpen, command]);
 
   useWbcEffect(function () {
     if (!modelOpen) return undefined;
@@ -242,6 +343,10 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       setWorkspaceActive(chat && typeof chat.workspaceActive === "boolean" ? chat.workspaceActive : true);
       setReasoningEffort(String(chat && chat.reasoningEffort || "").trim().toLowerCase());
       setRemoteDeviceIds(chat && Array.isArray(chat.remoteDeviceIds) ? chat.remoteDeviceIds.slice() : []);
+      var nextContextActivations = wbcNormalizeContextActivations(chat && chat.contextActivations);
+      setContextActivations(nextContextActivations);
+      contextActivationsRef.current = nextContextActivations;
+      setContextCatalogPanel("");
       setFailedImagePreviews({});
       prevChatIdRef.current = chatId;
     }
@@ -383,17 +488,34 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       });
       return;
     }
-    if (!text && attachments.length === 0) return;
+    var parsedSlash = !command ? wbcParseSlashCommandText(text, slashPool) : null;
+    var submittedCommand = command || (parsedSlash && parsedSlash.command.id) || "";
+    var submittedDescriptor = command
+      ? slashPool.find(function (item) { return item.id === command; })
+      : parsedSlash && parsedSlash.command;
+    if (parsedSlash) text = parsedSlash.message;
+    if (!text && attachments.length === 0 && !submittedCommand) return;
+    var submittedContextActivations = wbcNormalizeContextActivations(contextActivationsRef.current);
+    if (submittedDescriptor && submittedDescriptor.activation) {
+      var activationKind = String(submittedDescriptor.activation.kind || "");
+      var activationId = String(submittedDescriptor.activation.id || "");
+      if (submittedContextActivations[activationKind] && activationId && submittedContextActivations[activationKind].indexOf(activationId) < 0) {
+        submittedContextActivations[activationKind] = submittedContextActivations[activationKind].concat([activationId]);
+        contextActivationsRef.current = submittedContextActivations;
+        setContextActivations(submittedContextActivations);
+      }
+    }
     var payload = {
       message: text,
       attachments: attachments,
       mode: mode,
-      command: command,
+      command: submittedCommand,
       model: agentManagedModels ? "" : selectedModelId,
       reasoningEffort: agentManagedModels ? "" : reasoningEffort,
       workspaceOverride: workspaceOverride,
       soulActive: personaOn,
       workspaceActive: workspaceOn,
+      contextActivations: submittedContextActivations,
     };
     // Optimistically clear on send; restored in the running-transition effect
     // if the send fails (error). The quick-chat surface passes clearOnSend=false
@@ -425,6 +547,27 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var toggleVoiceInput = composerVoice.toggleVoiceInput;
 
   function onKeyDown(event) {
+    if (slashDraftOpen && slashItems.length && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        var direction = event.key === "ArrowDown" ? 1 : -1;
+        setSlashActiveIndex(function (current) {
+          return (current + direction + slashItems.length) % slashItems.length;
+        });
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        if (event.nativeEvent && event.nativeEvent.isComposing) return;
+        event.preventDefault();
+        chooseSlashCommand(slashItems[Math.min(slashActiveIndex, slashItems.length - 1)]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSlashDismissedDraft(draft);
+        return;
+      }
+    }
     var sc = workbenchServices.shortcuts();
     if (sc && sc.matches(event, "composer-send")) {
       if (event.nativeEvent && event.nativeEvent.isComposing) return; // IME guard
@@ -451,8 +594,28 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     }
   }
 
+  function chooseSlashCommand(item) {
+    if (!item) return;
+    setCommand(item.id);
+    setToolsOpen(false);
+    draftRef.current = "";
+    setDraft("");
+    setSlashDismissedDraft("");
+    if (taRef.current) taRef.current.focus();
+  }
+
   var slashQuery = draft.indexOf("/") === 0 ? draft.slice(1).toLowerCase() : "";
-  var translatedCommands = WBC_COMMANDS.map(function (c) { return wbcCommandMeta(c.id); }).filter(Boolean);
+  var translatedCommands = (slashCommandCatalog.length ? slashCommandCatalog : WBC_COMMANDS).map(function (declared) {
+    var builtin = wbcCommandMeta(declared.id);
+    if (builtin) return { ...builtin, ...declared, label: builtin.label, desc: builtin.desc, group: declared.group || "workflow" };
+    var label = String(declared.label || declared.id || "");
+    var desc = String(declared.description || "");
+    if (declared.group === "toolPackage" && declared.activation) {
+      label = wbcT("toolName." + declared.activation.id, label);
+      desc = wbcT("toolPackageDesc." + declared.activation.id, desc);
+    }
+    return { ...declared, label: label, desc: desc };
+  }).filter(function (item) { return !!item.id; });
   var translatedModes = WBC_MODES.map(function (m) { return wbcModeMeta(m.id); });
   // Slash commands come from the Agent's declared command list when a
   // capability snapshot exists; the built-in command set stays legacy-only.
@@ -465,13 +628,42 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var slashItems = slashPool.filter(function (c) {
     return !slashQuery || c.id.indexOf(slashQuery) !== -1 || c.label.toLowerCase().indexOf(slashQuery) !== -1;
   });
-  var slashDraftOpen = draft.indexOf("/") === 0 && draft.indexOf(" ") === -1 && slashItems.length > 0 && !running;
+  function slashCommandIcon(item) {
+    if (WBC_COMMAND_ICONS[item.id]) return WBC_COMMAND_ICONS[item.id];
+    if (item.group === "skill") return WBC_ICONS.book;
+    if (item.group === "mcp") return WBC_ICONS.layers;
+    if (item.group === "toolPackage") return WBC_ICONS.tool;
+    if (item.group === "customTool") return WBC_ICONS.code;
+    if (item.group === "plugin") return WBC_ICONS.phase;
+    return WBC_ICONS.slash;
+  }
+  var slashDraftOpen = draft.indexOf("/") === 0 && !/\s/.test(draft) && slashItems.length > 0 && !running && slashDismissedDraft !== draft;
   var showToolsMenu = (toolsOpen || slashDraftOpen) && !running && !awaitingAnswer;
   var activeCommand = command ? (slashPool.find(function (item) { return item.id === command; }) || wbcCommandMeta(command) || { id: command, label: command, desc: "" }) : null;
   var currentMode = wbcModeMeta(mode);
   var personaOn = soulActive !== false;
   var workspaceOn = workspaceActive !== false;
-  var enabledContentCount = (personaOn ? 1 : 0) + (workspaceOn ? 1 : 0) + remoteDeviceIds.length;
+  var activeContextCapabilityCount = WBC_CONTEXT_ACTIVATION_KEYS.reduce(function (count, key) {
+    return count + contextActivations[key].length;
+  }, 0);
+  var enabledContentCount = (personaOn ? 1 : 0) + (workspaceOn ? 1 : 0) + remoteDeviceIds.length + activeContextCapabilityCount;
+  var contextCapabilityCategories = [
+    { key: "mcpServers", label: wbcT("workbenchChat.contextMcp", "MCP servers"), icon: WBC_ICONS.layers, items: contextCatalog.mcpServers },
+    { key: "skills", label: wbcT("workbenchChat.contextSkills", "Skills"), icon: WBC_ICONS.book, items: contextCatalog.skills },
+    { key: "toolPackages", label: wbcT("workbenchChat.contextToolPackages", "Tool packages"), icon: WBC_ICONS.tool, items: contextCatalog.toolPackages },
+    { key: "customTools", label: wbcT("workbenchChat.contextCustomTools", "Custom tools"), icon: WBC_ICONS.code, items: contextCatalog.customTools },
+  ];
+
+  useWbcEffect(function () {
+    setSlashActiveIndex(function (current) {
+      return slashItems.length ? Math.min(current, slashItems.length - 1) : 0;
+    });
+  }, [slashQuery, slashItems.length]);
+
+  useWbcEffect(function () {
+    if (!slashCommandsCapabilityDriven || !command) return;
+    if (!slashPool.some(function (item) { return item.id === command; })) setCommand("");
+  }, [slashCommandsCapabilityDriven, slashPool.map(function (item) { return item.id; }).join("|"), command]);
   // Follow the active project's workspace by default. A directory explicitly
   // chosen from the composer remains selected when the user switches projects.
   var wsDir = workspaceOverride || projectWorkspacePath || (contextState && contextState.workspace_dir) || "";
@@ -642,6 +834,26 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       setRemoteDeviceIds(previousIds);
     });
   }
+
+  function wbcToggleContextActivation(kind, identity) {
+    if (WBC_CONTEXT_ACTIVATION_KEYS.indexOf(kind) < 0 || !identity) return;
+    var previous = wbcNormalizeContextActivations(contextActivationsRef.current);
+    var next = wbcNormalizeContextActivations(previous);
+    var active = next[kind].indexOf(identity) >= 0;
+    next[kind] = active
+      ? next[kind].filter(function (item) { return item !== identity; })
+      : next[kind].concat([identity]);
+    contextActivationsRef.current = next;
+    setContextActivations(next);
+    if (!chatId || String(chatId).indexOf("legacy:") === 0) return;
+    model.updateChatPreferences(chatId, { contextActivations: next }).then(function (nextChat) {
+      if (chat && nextChat) Object.assign(chat, nextChat);
+    }, function (err) {
+      contextActivationsRef.current = previous;
+      setContextActivations(previous);
+      workbenchServices.api().toastError(err, wbcT("workbenchChat.contextCapabilitiesSaveFailed", "Failed to update context capabilities: "));
+    }).catch(function () {});
+  }
   // Steer is capability-driven: an Agent that cannot steer mid-run only offers
   // stop, so the running composer never fabricates a guidance send path.
   var canSteerWhileRunning = !running || capSteer;
@@ -654,7 +866,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var showStopButton = running && !hasRuntimeGuidance && capCancel;
   var sendDisabled = awaitingAnswer || (running
     ? waitingForAgent
-    : (!draft.trim() && attachments.length === 0) || (!!draft.trim() && !capText));
+    : (!draft.trim() && attachments.length === 0 && !command) || (!!draft.trim() && !capText));
   var isLegacy = !!(chat && chat.legacy);
 
   // Self-management may prepare text in the current visible composer. Submit
@@ -840,10 +1052,17 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
             : wbcT("workbenchChat.capability.noText", "This Agent does not support text input")}
           value={draft}
           rows={compact ? 1 : 2}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={slashDraftOpen}
+          aria-controls={slashDraftOpen ? "wbc-command-listbox" : undefined}
+          aria-activedescendant={slashDraftOpen && slashItems[slashActiveIndex] ? wbcCommandOptionId(slashItems[slashActiveIndex].id) : undefined}
           disabled={awaitingAnswer || !capText || (running && !capSteer) || cancelUnsupported}
           onChange={function (e) {
             draftRef.current = e.target.value;
             setDraft(e.target.value);
+            setSlashDismissedDraft("");
+            setSlashActiveIndex(0);
           }}
           onBlur={persistCurrentDraft}
           onKeyDown={onKeyDown}
@@ -883,7 +1102,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                 {enabledContentCount > 0 ? <span className="wbc-tools-trigger-count" aria-hidden="true">{enabledContentCount}</span> : null}
               </button>
               {showToolsMenu && (
-                <div className="wbc-popmenu wbc-tools-menu" role="menu">
+                <div className="wbc-popmenu wbc-tools-menu" role={toolsOpen ? "menu" : "presentation"}>
+                  {toolsOpen && <>
                   <section
                     className="wbc-tools-section"
                     aria-label={wbcT("workbenchChat.contentItems", "Content")}
@@ -941,25 +1161,78 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                       })}
                     </div>
                   </section>
+                  <section className="wbc-tools-section wbc-tools-context-capabilities" aria-label={wbcT("workbenchChat.contextCapabilities", "Context capabilities")}>
+                    <div className="wbc-tools-section-title">
+                      {wbcT("workbenchChat.contextCapabilities", "Context capabilities")}
+                    </div>
+                    {!builtinContextCapabilities ? (
+                      <div className="wbc-tools-empty">{wbcT("workbenchChat.contextCapabilitiesBuiltinOnly", "Context capabilities are available with the built-in Cyrene Agent.")}</div>
+                    ) : contextCatalogLoading && !contextCatalogLoaded ? (
+                      <div className="wbc-tools-context-loading" role="status"><span className="wb-spinner small" />{wbcT("workbenchChat.contextCapabilitiesLoading", "Loading capabilities…")}</div>
+                    ) : (
+                      <div className="wbc-tools-context-categories">
+                        {contextCapabilityCategories.map(function (category) {
+                          var activeCount = contextActivations[category.key].length;
+                          var expanded = contextCatalogPanel === category.key;
+                          return (
+                            <div className="wbc-tools-context-category" key={category.key}>
+                              <button type="button" className={"wbc-tools-enabled-row wbc-tools-context-category-button" + (activeCount ? " active" : "")} aria-expanded={expanded} aria-controls={"wbc-context-category-" + category.key} onClick={function () { setContextCatalogPanel(expanded ? "" : category.key); }}>
+                                <span className="wbc-tools-row-icon">{category.icon}</span>
+                                <span className="wbc-tools-row-copy">
+                                  <span>{category.label}</span>
+                                  <small>{activeCount
+                                    ? wbcT("workbenchChat.contextCapabilitiesActive", "{count} active", { count: activeCount })
+                                    : wbcT("workbenchChat.contextCapabilitiesAvailable", "{count} available", { count: category.items.length })}</small>
+                                </span>
+                                <span className="wbc-tools-context-chevron" aria-hidden="true">{expanded ? WBC_ICONS.chevronDown : WBC_ICONS.chevronRight}</span>
+                              </button>
+                              {expanded && (
+                                <div className="wbc-tools-context-options" id={"wbc-context-category-" + category.key} role="group" aria-label={category.label}>
+                                  {category.items.length ? category.items.map(function (item) {
+                                    var identity = String(item.id || "");
+                                    var selected = contextActivations[category.key].indexOf(identity) >= 0;
+                                    var itemLabel = category.key === "toolPackages"
+                                      ? wbcT("toolName." + identity, item.name || identity)
+                                      : String(item.name || identity);
+                                    var itemDescription = category.key === "toolPackages"
+                                      ? wbcT("toolPackageDesc." + identity, item.description || "")
+                                      : String(item.description || item.status || "");
+                                    return (
+                                      <button key={identity} type="button" disabled={!item.enabled && !selected} className={"wbc-tools-enabled-row wbc-tools-context-option" + (selected ? " active" : "")} role="menuitemcheckbox" aria-checked={selected} title={itemDescription} onClick={function () { wbcToggleContextActivation(category.key, identity); }}>
+                                        <span className="wbc-tools-row-icon">{category.icon}</span>
+                                        <span className="wbc-tools-row-copy"><span>{itemLabel}</span><small>{itemDescription || (!item.enabled ? wbcT("workbenchChat.contextCapabilityDisabled", "Disabled in settings") : identity)}</small></span>
+                                        {selected ? <span className="wbc-tools-row-check">{WBC_ICONS.check}</span> : null}
+                                      </button>
+                                    );
+                                  }) : <div className="wbc-tools-empty">{wbcT("workbenchChat.contextCapabilitiesEmpty", "Nothing available in this category.")}</div>}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+                  </>}
                   <section
                     className="wbc-tools-section wbc-tools-commands"
                     aria-label={wbcT("workbenchChat.composer.commandMenu", "Commands")}
                   >
-                    <div className="wbc-tools-section-title">
-                      {wbcT("workbenchChat.commands", "Commands")}
+                    <div className="wbc-tools-section-title wbc-tools-command-title">
+                      <span>{wbcT("workbenchChat.commands", "Commands")}</span>
+                      {slashCommandCatalogLoading ? <span className="wb-spinner small" role="status" aria-label={wbcT("workbenchChat.contextCapabilitiesLoading", "Loading capabilities…")} /> : null}
                     </div>
-                    <div className="wbc-tools-command-grid">
+                    <div className="wbc-tools-command-grid" id="wbc-command-listbox" role="listbox" aria-label={wbcT("workbenchChat.composer.commandMenu", "Commands")}>
                       {slashItems.map(function (c) {
                         var on = command === c.id;
+                        var keyboardActive = slashDraftOpen && slashItems[slashActiveIndex] && slashItems[slashActiveIndex].id === c.id;
                         return (
-                          <button key={c.id} type="button" title={c.desc} aria-label={c.label + ": " + c.desc} className={"wbc-tools-command" + (on ? " active" : "")} role="menuitemcheckbox" aria-checked={on} onClick={function () {
-                            setCommand(on ? "" : c.id);
-                            setToolsOpen(false);
-                            if (draft.indexOf("/") === 0) setDraft("");
-                            if (taRef.current) taRef.current.focus();
+                          <button id={wbcCommandOptionId(c.id)} key={c.id} type="button" title={c.desc} aria-label={c.label + ": " + c.desc} className={"wbc-tools-command" + (on ? " active" : "") + (keyboardActive ? " keyboard-active" : "")} role="option" aria-selected={on || keyboardActive} onMouseEnter={function () { setSlashActiveIndex(slashItems.indexOf(c)); }} onClick={function () {
+                            if (on) setCommand("");
+                            else chooseSlashCommand(c);
                           }}>
-                            <span className="wbc-tools-command-icon">{WBC_COMMAND_ICONS[c.id] || WBC_ICONS.slash}</span>
-                            <span className="wbc-tools-command-copy"><span>{c.label}</span></span>
+                            <span className="wbc-tools-command-icon">{slashCommandIcon(c)}</span>
+                            <span className="wbc-tools-command-copy"><span>{c.label}</span>{c.group && c.group !== "workflow" ? <small>/{c.id}</small> : null}</span>
                             {on ? <span className="wbc-tools-command-check">{WBC_ICONS.check}</span> : null}
                           </button>
                         );
@@ -1418,4 +1691,4 @@ function wbcBrowserStateForChat(chatId) {
 // Right-panel tab rendering the fork lineage as a node-and-line tree. Clicking
 // a node switches to that branch; the active chat's nodes stay highlighted.
 
-export { WbcComposer, wbcBranchConnectors, wbcBranchKindLabel, wbcBranchLineage, wbcBranchRows, wbcBrowserStateForChat, wbcClearComposerDraft }
+export { WbcComposer, wbcBranchConnectors, wbcBranchKindLabel, wbcBranchLineage, wbcBranchRows, wbcBrowserStateForChat, wbcClearComposerDraft, wbcNormalizeContextActivations, wbcParseSlashCommandText }

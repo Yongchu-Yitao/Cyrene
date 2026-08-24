@@ -12,11 +12,20 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Sequence
 
 from contextvars import ContextVar
 
 from cyrene.observability import debug
+from cyrene.model_runtime.transcript_policy import (
+    ProviderFamily,
+    TranscriptLane,
+    TranscriptPolicy,
+    cache_scope_for_lane,
+    candidates_in_family,
+    provider_family_for_candidate,
+    transcript_policy_for_family,
+)
 from cyrene.config import (
     ASSISTANT_NAME as ASSISTANT_NAME,
     DATA_DIR as _DATA_DIR,
@@ -48,6 +57,11 @@ class SessionContext:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     session_state_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     session_epoch: int = 0
+    cache_session_epoch: int = 0
+    lane_epochs: dict[str, int] = field(default_factory=lambda: {
+        "decision": 0,
+        "execution": 0,
+    })
     interrupt_event: asyncio.Event = field(default_factory=asyncio.Event)
     active_main_round_id: str = ""
     active_main_round_prompt: str = ""
@@ -113,6 +127,8 @@ class RunModelLease:
 
     lease_id: str
     candidates_by_type: dict[str, tuple[dict[str, Any], ...]] = field(repr=False)
+    provider_family: ProviderFamily | None = None
+    transcript_policy: TranscriptPolicy = TranscriptPolicy.LEGACY_SHARED
     last_requests_by_type: dict[str, dict[str, Any]] = field(
         default_factory=dict,
         repr=False,
@@ -147,22 +163,38 @@ class RunModelLease:
         model_type: str,
         *,
         identity: dict[str, Any],
-        message_fingerprints: list[str],
+        message_fingerprints: Sequence[str],
+        messages_fingerprint: str = "",
         tools_fingerprint: str,
         payload_fingerprint: str,
+        cache_scope: str = "",
     ) -> dict[str, Any]:
         """Describe whether one final provider request can reuse its predecessor."""
+        normalized_message_fingerprints = tuple(message_fingerprints)
+        normalized_messages_fingerprint = str(messages_fingerprint or "")
+        if not normalized_messages_fingerprint:
+            normalized_messages_fingerprint = hashlib.sha256(
+                "\n".join(normalized_message_fingerprints).encode("utf-8")
+            ).hexdigest()[:24]
         current = {
             "candidate_id": str(identity.get("candidateId") or ""),
             "provider": str(identity.get("provider") or ""),
             "model": str(identity.get("model") or ""),
             "endpoint": str(identity.get("endpoint") or ""),
             "reasoning_effort": str(identity.get("reasoningEffort") or ""),
-            "message_fingerprints": tuple(message_fingerprints),
+            "cache_route_key": str(identity.get("cacheRouteKey") or ""),
+            "message_fingerprints": normalized_message_fingerprints,
+            "messages_fingerprint": normalized_messages_fingerprint,
             "tools_fingerprint": str(tools_fingerprint),
             "payload_fingerprint": str(payload_fingerprint),
         }
-        previous = self.last_requests_by_type.get(model_type)
+        normalized_scope = str(cache_scope or "").strip()
+        scope_key = (
+            f"{model_type}:{normalized_scope}"
+            if normalized_scope
+            else model_type
+        )
+        previous = self.last_requests_by_type.get(scope_key)
         status = "first_request"
         reasons: list[str] = []
         prefix_count = 0
@@ -173,29 +205,41 @@ class RunModelLease:
                 ("model", "model_changed"),
                 ("endpoint", "endpoint_changed"),
                 ("reasoning_effort", "reasoning_effort_changed"),
+                ("cache_route_key", "cache_epoch_changed"),
                 ("tools_fingerprint", "tools_changed"),
             ):
                 if current[key] != previous.get(key):
                     reasons.append(reason)
             previous_messages = tuple(previous.get("message_fingerprints") or ())
             current_messages = current["message_fingerprints"]
-            if current_messages[:len(previous_messages)] == previous_messages:
+            previous_messages_fingerprint = str(
+                previous.get("messages_fingerprint") or ""
+            )
+            if (
+                not reasons
+                and previous_messages_fingerprint
+                and current["messages_fingerprint"] == previous_messages_fingerprint
+                and current["payload_fingerprint"] == previous.get("payload_fingerprint")
+            ):
                 prefix_count = len(previous_messages)
-            else:
-                reasons.append("message_prefix_changed")
-            if reasons:
-                status = "invalidated"
-            elif current["payload_fingerprint"] == previous.get("payload_fingerprint"):
                 status = "identical_retry"
                 reasons.append("retry_same_request")
             else:
-                status = "strict_prefix_reuse"
-        self.last_requests_by_type[model_type] = current
+                if current_messages[:len(previous_messages)] == previous_messages:
+                    prefix_count = len(previous_messages)
+                else:
+                    reasons.append("message_prefix_changed")
+                if reasons:
+                    status = "invalidated"
+                elif current["payload_fingerprint"] == previous.get("payload_fingerprint"):
+                    status = "identical_retry"
+                    reasons.append("retry_same_request")
+                else:
+                    status = "strict_prefix_reuse"
+        self.last_requests_by_type[scope_key] = current
         return {
             "model_lease_id": self.lease_id,
-            "request_messages_fingerprint": hashlib.sha256(
-                "\n".join(message_fingerprints).encode("utf-8")
-            ).hexdigest()[:24],
+            "request_messages_fingerprint": normalized_messages_fingerprint,
             "request_tools_fingerprint": tools_fingerprint,
             "request_payload_fingerprint": payload_fingerprint,
             "previous_payload_fingerprint": str(
@@ -213,20 +257,113 @@ _run_model_lease: ContextVar[RunModelLease | None] = ContextVar(
 )
 
 
-def activate_run_model_lease():
-    """Pin the current model configuration until the token is reset."""
+def has_active_run_model_lease() -> bool:
+    """Return whether a coordinator already froze this run's model policy."""
+    return _run_model_lease.get() is not None
+
+
+def current_run_provider_family() -> ProviderFamily | None:
+    """Return the frozen provider family, or ``None`` outside a leased run."""
+    lease = _run_model_lease.get()
+    return lease.provider_family if lease is not None else None
+
+
+def current_run_transcript_policy() -> TranscriptPolicy:
+    """Return the frozen policy while preserving direct legacy loop callers."""
+    lease = _run_model_lease.get()
+    return (
+        lease.transcript_policy
+        if lease is not None
+        else TranscriptPolicy.LEGACY_SHARED
+    )
+
+
+def current_run_cache_scope(lane: TranscriptLane | str) -> str:
+    """Return one lane's cache scope without changing Codex's shared channel."""
+    lease = _run_model_lease.get()
+    if (
+        lease is None
+        or lease.provider_family is None
+        or lease.transcript_policy is TranscriptPolicy.LEGACY_SHARED
+    ):
+        return ""
+    return cache_scope_for_lane(lease.provider_family, lane)
+
+
+def current_run_cache_epoch(lane: TranscriptLane | str) -> str:
+    """Return one lane's stable epoch for the provider cache-key material."""
+    base_scope = current_run_cache_scope(lane)
+    if not base_scope:
+        return ""
+    stable_lane = TranscriptLane(str(lane))
+    ctx = _get_session()
+    # Import lazily to preserve this module's leaf initialization boundary.
+    from cyrene.agent.lane_protocol import lane_cache_epoch_id
+
+    return lane_cache_epoch_id(
+        {
+            "_session_epoch": ctx.cache_session_epoch,
+            "lane_epochs": dict(ctx.lane_epochs),
+        },
+        stable_lane.value,
+    )
+
+
+def _current_agent_cache_lane() -> str:
+    # Import lazily to preserve state.py's leaf-module initialization boundary.
+    from cyrene.agent.lane_protocol import current_agent_lane
+
+    return current_agent_lane()
+
+
+def activate_run_model_lease(
+    *,
+    transcript_policy_override: TranscriptPolicy | None = None,
+):
+    """Pin the current model configuration until the token is reset.
+
+    ``transcript_policy_override`` changes only transcript/cache projection for
+    the historical direct-loop seam. Candidate family filtering remains strict.
+    """
     from cyrene.model_runtime import client as model_client
 
     session_id = _current_session_id.get()
+    primary_candidates = model_client._prioritize_last_success(
+        model_client._resolve_candidates("primary"),
+        "primary",
+        session_id,
+    )
+    provider_family = (
+        provider_family_for_candidate(primary_candidates[0])
+        if primary_candidates
+        else None
+    )
+    transcript_policy = transcript_policy_override or (
+        transcript_policy_for_family(provider_family)
+        if provider_family is not None
+        else TranscriptPolicy.LEGACY_SHARED
+    )
     snapshots: dict[str, tuple[dict[str, Any], ...]] = {}
-    identity_parts: list[str] = []
+    identity_parts: list[str] = [
+        provider_family.value if provider_family is not None else "unconfigured",
+        transcript_policy.value,
+    ]
     for model_type in ("primary", "secondary", "vision"):
-        candidates = model_client._prioritize_last_success(
-            model_client._resolve_candidates(model_type),
-            model_type,
-            session_id,
+        candidates = (
+            primary_candidates
+            if model_type == "primary"
+            else model_client._prioritize_last_success(
+                model_client._resolve_candidates(model_type),
+                model_type,
+                session_id,
+            )
         )
-        frozen_candidates = tuple(copy.deepcopy(candidates))
+        family_candidates = (
+            candidates_in_family(candidates, provider_family)
+            if provider_family is not None
+            else candidates
+        )
+        frozen_candidates = tuple(copy.deepcopy(family_candidates))
         snapshots[model_type] = frozen_candidates
         identity_parts.extend(
             "|".join((
@@ -240,7 +377,12 @@ def activate_run_model_lease():
             for candidate in frozen_candidates
         )
     lease_id = hashlib.sha256("\n".join(identity_parts).encode("utf-8")).hexdigest()[:16]
-    return _run_model_lease.set(RunModelLease(lease_id, snapshots))
+    return _run_model_lease.set(RunModelLease(
+        lease_id,
+        snapshots,
+        provider_family=provider_family,
+        transcript_policy=transcript_policy,
+    ))
 
 
 def reset_run_model_lease(token) -> None:
@@ -342,7 +484,6 @@ _ui_round_hide_initial_detail: ContextVar[bool] = ContextVar("_ui_round_hide_ini
 _ui_round_assistant_meta: ContextVar[dict[str, Any] | None] = ContextVar("_ui_round_assistant_meta", default=None)
 _deep_research_mode: ContextVar[bool] = ContextVar("_deep_research_mode", default=False)
 _deep_research_first_round: ContextVar[bool] = ContextVar("_deep_research_first_round", default=False)
-_economy_mode: ContextVar[bool] = ContextVar("_economy_mode", default=False)
 _current_command: ContextVar[str] = ContextVar("_current_command", default="")
 _conversation_source: ContextVar[str] = ContextVar("_conversation_source", default="")
 # Exact public text supplied by the real caller for this run.  This is kept
@@ -582,7 +723,7 @@ def _record_last_main_model_context(
     )
 
     normalized = sanitize_messages_for_llm(
-        copy.deepcopy(messages),
+        messages,
         materialize_internal_media=False,
     )
     assistant: dict[str, Any] = {
@@ -591,6 +732,9 @@ def _record_last_main_model_context(
     }
     for key in ("reasoning_content", "tool_calls"):
         if response.get(key):
+            # The response object remains caller-owned after this snapshot is
+            # recorded; isolate its small mutable tool structure without
+            # restoring the former full-history deepcopy.
             assistant[key] = copy.deepcopy(response[key])
     normalized.extend(sanitize_messages_for_llm([assistant]))
     session_id = _current_session_id.get()
@@ -628,6 +772,7 @@ async def _call_llm(
     secondary: bool = False,
     thinking: str = "auto",
     response_format: dict | None = None,
+    cache_lane: TranscriptLane | str = "",
 ) -> dict:
     from cyrene.call_llm import call_llm as _unified_call_llm
 
@@ -647,12 +792,15 @@ async def _call_llm(
         effective_candidates = lease.candidates_for(
             "secondary" if secondary else "primary"
         )
+    effective_lane = cache_lane or _current_agent_cache_lane()
+    cache_scope = current_run_cache_scope(effective_lane)
+    cache_epoch = current_run_cache_epoch(effective_lane)
     response = await _unified_call_llm(
         messages,
         tools=tools,
         max_tokens=max_tokens,
         candidates=effective_candidates,
-        candidate_lease=lease if candidates is None else None,
+        candidate_lease=lease,
         model_type="secondary" if secondary else "primary",
         thinking=thinking,
         response_format=response_format,
@@ -662,6 +810,8 @@ async def _call_llm(
         phase=_llm_phase_name(tools),
         round_id=_current_round_id.get(),
         session_id=_current_session_id.get(),
+        cache_scope=cache_scope,
+        cache_epoch=cache_epoch,
     )
     if lease is not None and candidates is None and isinstance(response, dict):
         identity = response.get("_candidate_identity")
@@ -678,6 +828,7 @@ async def _call_llm_stream(
     *,
     secondary: bool = False,
     tools: list | None = None,
+    cache_lane: TranscriptLane | str = "",
 ) -> dict[str, Any]:
     from cyrene.call_llm import call_llm as _unified_call_llm
 
@@ -687,6 +838,9 @@ async def _call_llm_stream(
         if lease is not None
         else None
     )
+    effective_lane = cache_lane or _current_agent_cache_lane()
+    cache_scope = current_run_cache_scope(effective_lane)
+    cache_epoch = current_run_cache_epoch(effective_lane)
     response = await _unified_call_llm(
         messages,
         max_tokens=max_tokens,
@@ -700,6 +854,8 @@ async def _call_llm_stream(
         phase=_llm_phase_name(tools),
         round_id=_current_round_id.get(),
         session_id=_current_session_id.get(),
+        cache_scope=cache_scope,
+        cache_epoch=cache_epoch,
     )
     if lease is not None and isinstance(response, dict):
         identity = response.get("_candidate_identity")

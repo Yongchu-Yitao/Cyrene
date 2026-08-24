@@ -28,7 +28,6 @@ _EXPORT_GROUPS: dict[str, tuple[str, ...]] = {
         "_current_command",
         "_current_round_id",
         "_deep_research_mode",
-        "_economy_mode",
         "_emit_reply_stream_event",
         "_init_session_epoch",
         "_interrupt_event",

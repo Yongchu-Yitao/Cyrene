@@ -490,8 +490,8 @@ function wbcFileViewKind(file) {
   var fileLabel = String(file.name || file.filename || file.path || file.url || "").split(/[?#]/, 1)[0];
   var ext = fileLabel.indexOf(".") >= 0 ? fileLabel.split(".").pop().toLowerCase() : "";
   if (ct.indexOf("image/") === 0 || file.kind === "image" || ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif"].indexOf(ext) !== -1) return "image";
-  if (ct.indexOf("audio/") === 0 || file.kind === "audio") return "audio";
-  if (ct.indexOf("video/") === 0 || file.kind === "video") return "video";
+  if (ct.indexOf("audio/") === 0 || file.kind === "audio" || ["mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"].indexOf(ext) !== -1) return "audio";
+  if (ct.indexOf("video/") === 0 || file.kind === "video" || ["mp4", "mov", "webm", "mkv", "avi", "m4v"].indexOf(ext) !== -1) return "video";
   if (ct === "application/pdf" || ext === "pdf" || file.kind === "pdf") return "pdf";
   if (ext === "docx" || ct === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "docx";
   if (ext === "pptx" || ct === "application/vnd.openxmlformats-officedocument.presentationml.presentation") return "pptx";

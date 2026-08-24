@@ -59,6 +59,7 @@ def _run_smoke_test() -> None:
         "pypdf": None,
         "reportlab": None,
         "mcp": None,
+        "google.genai": None,
         "uvicorn": None,
         "fastapi": None,
         "pydantic_core": None,

@@ -13,3 +13,4 @@ sherpa-onnx==1.13.5
 sherpa-onnx-core==1.13.5
 soundfile>=0.13.1
 tokenizers>=0.21.0
+google-genai>=2.10.0

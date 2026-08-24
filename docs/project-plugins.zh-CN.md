@@ -106,6 +106,26 @@ def activate(context):
 
 其他开放扩展点可以直接注册，例如 `cyrene.command`、`cyrene.embeddingProvider`、`cyrene.ocrProvider`、`cyrene.asrProvider`、`cyrene.ttsProvider` 和 `cyrene.agentAction`。Cyrene 不解释这些插件的内部 runtime；需要被核心功能消费的扩展点由对应功能通过通用贡献查询和 RPC 调用。
 
+## 斜杠命令
+
+`cyrene.command` 会加入内置 Cyrene Agent 的动态斜杠命令目录。命令可以声明静态 Agent 提示，也可以用 `prepare` 在用户提交时动态生成提示：
+
+```python
+async def prepare_review(args):
+    return {"prompt": "审查当前改动，优先报告正确性与回归风险。"}
+
+def activate(context):
+    context.register("cyrene.command", {
+        "id": "review",
+        "command": "review",
+        "title": "审查改动",
+        "description": "运行项目约定的代码审查流程",
+        "prepare": prepare_review,
+    })
+```
+
+`prepare` 收到 `commandId`、`arguments`、`chatId` 和 `projectId`，返回字符串或 `{prompt: "..."}`。也可省略 `prepare`，直接声明 `prompt`。命令名与内置命令冲突时，Cyrene 会自动使用带插件命名空间的稳定名称。插件命令只生成本轮 Agent 指令；工具调用仍服从正常权限与审核。
+
 ## 管理 API
 
 设置 → 自定义插件提供安装、按当前项目启停、重载与删除；它与扩展中心、自定义工具完全独立。启停状态按项目保存：同一插件可以在项目 A 显示于“工具”，同时在项目 B 保持关闭。普通删除保留插件数据和日志，明确选择“删除插件及数据”才会清理它们。

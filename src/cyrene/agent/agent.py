@@ -16,13 +16,31 @@ from uuid import uuid4
 
 from cyrene.agent.replies import (
     _contains_visible_dsml_tool_markup,
-    _final_plain_reply_from_history,
-    _final_reply_from_history,
-    _final_user_reply_from_history,
     _is_placeholder_reply,
-    _tool_result_fallback_text,
+    _recover_final_reply,
 )
 from cyrene.agent.deep_reflection import create_deep_reflection_record, project_history_for_llm
+from cyrene.agent.loop_protocol import (
+    Phase1Decision,
+    decision_conversation_delta,
+    deferred_decision_protocol_entries,
+    execution_conversation_delta,
+    execution_finalization_packet,
+    execution_outcome_arguments,
+    execution_outcome_tool_defs,
+    normalize_phase1_decision,
+    public_assistant_artifact_refs,
+    side_conversation_delta,
+)
+from cyrene.agent.lane_protocol import (
+    ExecutionHandoff,
+    ExecutionOutcome,
+    bind_agent_lane,
+    build_execution_handoff_message,
+    build_execution_outcome_message,
+    project_lane_history,
+    tag_lane_record,
+)
 from cyrene.agent.message import (
     _apply_assistant_meta,
     _assistant_entry_from_response,
@@ -32,12 +50,19 @@ from cyrene.agent.message import (
 )
 from cyrene.agent.prompts import (
     _DEEP_RESEARCH_PHASE1_DECISION,
+    _DUAL_LANE_DECISION_SYSTEM_PROMPT,
+    _DUAL_LANE_EXECUTION_SYSTEM_PROMPT,
     _MAIN_AGENT_PROMPT_TEMPLATE,
     _PHASE1_DECISION_PROMPT,
     prompt_for_enabled_tool_packs,
 )
 from cyrene.agent.model_service import take_final_reply_usage
-from cyrene.agent.session import _append_session_message, _save_session_messages
+from cyrene.agent.session import (
+    _append_session_message,
+    _pending_question_resume_context,
+    _save_session_messages,
+    append_or_upsert_lane_record,
+)
 from cyrene.agent.state import (
     _AWAITING_USER_SENTINEL,
     _call_llm,
@@ -48,7 +73,6 @@ from cyrene.agent.state import (
     _DEEP_RESEARCH_LIGHT_TOOL_DEFS,
     _deep_research_first_round,
     _deep_research_mode,
-    _economy_mode,
     _emit_reply_stream_event,
     _ensure_session,
     _LIGHT_TOOL_DEFS,
@@ -58,8 +82,11 @@ from cyrene.agent.state import (
     _ui_round_assistant_meta,
     _ui_round_hide_initial_detail,
     activate_run_model_lease,
+    current_run_transcript_policy,
+    has_active_run_model_lease,
     reset_run_model_lease,
 )
+from cyrene.agent.transcript_policy import TranscriptPolicy
 from cyrene.model_runtime.messages import (
     assistant_text,
     parse_tool_arguments,
@@ -339,10 +366,6 @@ def _tool_def_name(tool_def: dict[str, Any]) -> str:
     return str(tool_def.get("function", {}).get("name") or "").strip()
 
 
-def _without_tool(tool_defs: list[dict[str, Any]], tool_name: str) -> list[dict[str, Any]]:
-    return [tool_def for tool_def in tool_defs if _tool_def_name(tool_def) != tool_name]
-
-
 def _enabled_wire_names(tool_defs: list[dict[str, Any]]) -> set[str]:
     names_in_bundle = {_tool_def_name(tool_def) for tool_def in tool_defs}
     if "toolbox" in names_in_bundle:
@@ -360,39 +383,64 @@ def _enabled_wire_names(tool_defs: list[dict[str, Any]]) -> set[str]:
     return names
 
 
-def _missing_completion_signal_entry(round_id: str) -> dict[str, Any]:
+def _missing_completion_signal_entry(
+    round_id: str,
+    *,
+    structured_execution_finalize: bool = False,
+) -> dict[str, Any]:
     """Return the protocol correction for a response without a tool signal."""
+    next_action = (
+        "If work remains, call the next required real tool now. If the task is "
+        "complete, call `quit` with a complete `state_summary`, `artifacts`, and "
+        "`unresolved` record; the coordinator will construct the public reply "
+        "from that accepted state. Do not repeat or refer to the rejected text."
+        if structured_execution_finalize
+        else
+        "If work remains, call the next required real tool now. If the task is "
+        "complete, restate the entire self-contained user-facing answer in this "
+        "response and call `quit` as the terminal signal."
+    )
     return {
         "role": "user",
         "content": (
-            "Your previous response did not call a tool, so the run is still "
-            "active. Continue the task now by calling the next required tool. "
-            "If the task is complete, write the complete user-facing answer in "
-            "normal assistant content and call `quit` as the terminal signal. "
-            "A progress update or plain assistant text does not end the run."
+            "[Control protocol error] Your previous response did not call a "
+            "control or execution tool. That response was rejected as a "
+            "terminal result and was not published to the user, so it cannot be "
+            "referenced as an earlier answer. The run is still active. "
+            + next_action
+            + " Do not say that the result appeared in a previous message. Plain assistant "
+            "text without an explicit control signal never ends the run."
         ),
         "hidden_from_ui": True,
         **({"round_id": round_id} if round_id else {}),
     }
 
 
-def _implicit_completion_text(response_obj: dict[str, Any]) -> str:
-    """Return a usable plain-text answer for bounded protocol fallback."""
-    text = assistant_text(response_obj).strip()
-    if (
-        not text
-        or _is_placeholder_reply(text)
-        or _contains_visible_dsml_tool_markup(text)
-    ):
-        return ""
-    return text
+def _merge_usage_records(*records: Any) -> dict[str, Any]:
+    """Merge token-usage records without dropping hidden protocol calls."""
+    merged: dict[str, Any] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        for key, value in record.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                previous = merged.get(key)
+                merged[key] = (
+                    previous + value
+                    if isinstance(previous, (int, float))
+                    and not isinstance(previous, bool)
+                    else value
+                )
+            else:
+                merged.setdefault(key, value)
+    return merged
 
 
 def _attach_final_usage(entry: dict[str, Any]) -> dict[str, Any]:
     """Carry the final-reply call's token usage onto the persisted entry."""
     usage = take_final_reply_usage()
     if usage:
-        entry["usage"] = dict(usage)
+        entry["usage"] = _merge_usage_records(entry.get("usage"), usage)
     return entry
 
 
@@ -428,35 +476,6 @@ def _safe_terminal_reply_from_response(
     if has_tool_results and _is_placeholder_reply(text):
         return ""
     return text
-
-
-def _economy_compact_messages(messages: list[dict], current_round_id: str) -> list[dict]:
-    """经济模式：清除已完成轮次的工具结果，只保留对话流。
-
-    - 保留当前轮（tool loop 进行中）的全部消息（LLM 协议需要 role:tool 配对）
-    - 清除前一轮及更早的 role:tool 消息，以及 asst 消息中的 tool_calls
-    - 只保存对话主干：user ↔ asst(纯文本回复)
-    """
-    if not messages:
-        return messages
-    result: list[dict] = []
-    for m in messages:
-        role = m.get("role")
-        msg_round = str(m.get("round_id") or "").strip()
-        # 当前轮的消息：全部保留（包括 tool 结果，LLM 协议要求）
-        if msg_round == current_round_id:
-            result.append(m)
-            continue
-        # 旧的 tool 结果：丢弃
-        if role == "tool":
-            continue
-        # 旧的 assistant 消息：去掉 tool_calls，只留文本回复
-        if role == "assistant" and m.get("tool_calls"):
-            m = {k: v for k, v in m.items() if k != "tool_calls"}
-            if not str(m.get("content") or "").strip():
-                continue  # 去掉 tool_calls 后无内容则跳过
-        result.append(m)
-    return result
 
 
 def _annotate_history_context(history: list) -> list[dict[str, Any]]:
@@ -567,6 +586,7 @@ async def _run_main_agent_impl(
     system_context: list[dict[str, Any]] | None = None,
     ephemeral_system: str = "",
     fixed_ephemeral_system: str = "",
+    resume_lane: str = "",
 ) -> str:
     _caller_type.set("main_agent")
     suppress_initial_detail = _ui_round_hide_initial_detail.get()
@@ -584,6 +604,16 @@ async def _run_main_agent_impl(
     runtime_inbox = current_workbench_inbox()
     if runtime_inbox is not None:
         runtime_inbox.round_id = round_id
+    transcript_policy = current_run_transcript_policy()
+    dual_lane = transcript_policy is TranscriptPolicy.DUAL_LANE
+    normalized_resume_lane = str(resume_lane or "").strip().lower()
+    resume_execution = dual_lane and normalized_resume_lane == "execution"
+    if dual_lane and normalized_resume_lane and not resume_execution:
+        raise ValueError(
+            f"unsupported resume lane for {transcript_policy.value}: {resume_lane}"
+        )
+    execution_lane_binding = None
+    storage_lane = "execution" if resume_execution else "decision"
 
     async def _inject_runtime_guidance(
         msgs: list[dict[str, Any]],
@@ -689,12 +719,16 @@ async def _run_main_agent_impl(
     _last_batch_save_ts = time.monotonic()
     _pending_saved_batches = 0
 
-    # Phase 1 and Phase 2 use the same deterministic bundle for the current
-    # package settings. Disabling a package intentionally changes the cache key:
-    # its gateway schema and package-specific prompt lines are both omitted.
-    # Deep Research's length handshake keeps its dedicated tiny bundle.
+    # Codex keeps the historical shared tool-sensitive prefix.  The
+    # OpenAI-compatible policy uses a light Decision bundle and a separate full
+    # Execution bundle without changing the execution machinery below.
     wire_tool_defs = get_main_wire_tool_defs()
     enabled_wire_names = _enabled_wire_names(wire_tool_defs)
+    execution_wire_tool_defs = (
+        execution_outcome_tool_defs(wire_tool_defs)
+        if dual_lane
+        else wire_tool_defs
+    )
 
     visible_user_message = user_message if public_user_message is None else str(public_user_message)
     user_message_id = f"user_{uuid4().hex}"
@@ -705,9 +739,14 @@ async def _run_main_agent_impl(
         user_entry["round_id"] = round_id
     if client_request_id:
         user_entry["client_request_id"] = client_request_id
+    if dual_lane:
+        user_entry = tag_lane_record(
+            user_entry,
+            "execution" if resume_execution else "decision",
+        )
     if persist_user_message:
         await _append_session_message(user_entry)
-    effective_system = (
+    legacy_system = (
         str(system_prompt)
         if str(system_prompt or "").strip()
         else prompt_for_enabled_tool_packs(
@@ -715,19 +754,47 @@ async def _run_main_agent_impl(
             enabled_wire_names,
         )
     )
+    dual_execution_system = (
+        legacy_system + "\n\n" + _DUAL_LANE_EXECUTION_SYSTEM_PROMPT
+    )
+    effective_system = (
+        dual_execution_system
+        if resume_execution
+        else _DUAL_LANE_DECISION_SYSTEM_PROMPT
+        if dual_lane
+        else legacy_system
+    )
     llm_user_entry = dict(user_entry)
     llm_user_entry["content"] = (
         llm_user_content if llm_user_content is not None else user_message
     )
-    system_blocks = list(system_context or [
-        context_block(
-            "main.system.effective",
+    if dual_lane and resume_execution:
+        system_blocks = list(system_context or [])
+        system_blocks.append(context_block(
+            "execution.system.lane_boundary",
             "system",
-            source="cyrene.agent.agent._run_main_agent",
-            reason="effective system prompt",
+            source="cyrene.agent.prompts._DUAL_LANE_EXECUTION_SYSTEM_PROMPT",
+            reason="independent OpenAI-compatible execution lane boundary",
+            content=_DUAL_LANE_EXECUTION_SYSTEM_PROMPT,
+        ))
+    elif dual_lane:
+        system_blocks = [context_block(
+            "decision.system.effective",
+            "system",
+            source="cyrene.agent.prompts._DUAL_LANE_DECISION_SYSTEM_PROMPT",
+            reason="independent OpenAI-compatible decision lane",
             content=effective_system,
-        )
-    ])
+        )]
+    else:
+        system_blocks = list(system_context or [
+            context_block(
+                "main.system.effective",
+                "system",
+                source="cyrene.agent.agent._run_main_agent",
+                reason="effective system prompt",
+                content=effective_system,
+            )
+        ])
     system_entry = attach_context({"role": "system", "content": effective_system}, system_blocks)
     fixed_ephemeral_entry = None
     if fixed_ephemeral_system:
@@ -749,7 +816,30 @@ async def _run_main_agent_impl(
         content=user_message,
         metadata={"visible_differs": public_user_message is not None and public_user_message != user_message},
     ))
+    canonical_history = [
+        dict(message) for message in history if isinstance(message, dict)
+    ]
+    legacy_shared_history_message_ids = {
+        str(message.get("message_id") or "").strip()
+        for message in canonical_history
+        if dual_lane
+        and message.get("lane_refs") is None
+        and str(message.get("message_id") or "").strip()
+    }
+    if dual_lane:
+        history = project_lane_history(
+            canonical_history,
+            "execution" if resume_execution else "decision",
+        )
     history = _annotate_history_context(history)
+    legacy_shared_history_object_ids = {
+        id(history_message)
+        for history_message in history
+        if dual_lane and history_message.get("lane_refs") is None
+    }
+    # Keep the append-only lane transcript immediately after its system prompt.
+    # Run-scoped context is a stable tail for this run; putting it before the
+    # growing history would invalidate the whole historical cache prefix.
     run_prefix = [system_entry, *history]
     if fixed_ephemeral_entry is not None:
         run_prefix.append(fixed_ephemeral_entry)
@@ -781,7 +871,6 @@ async def _run_main_agent_impl(
             "\n- This is a proactive system-initiated round. Do not call `ask_user`; "
             "either complete the check-in autonomously or finish silently."
         )
-        phase1_tools = _without_tool(phase1_tools, "ask_user")
     phase1_decision_entry = attach_context({"role": "user", "content": phase1_decision}, context_block(
         "phase1.decision_rules",
         "phase_rules",
@@ -790,7 +879,9 @@ async def _run_main_agent_impl(
         content=phase1_decision,
     ))
     phase1_decision_entry["hidden_from_ui"] = True
-    phase1_messages = [*run_prefix, llm_user_entry, phase1_decision_entry]
+    phase1_messages = [*run_prefix, llm_user_entry]
+    if not resume_execution:
+        phase1_messages.append(phase1_decision_entry)
     if ephemeral_system:
         # Once observed, volatile context is immutable. Later in-run changes
         # append a new version instead of moving or rewriting this prompt tail.
@@ -811,33 +902,42 @@ async def _run_main_agent_impl(
             ),
         ))
 
+    hidden_phase1_usage: dict[str, Any] = {}
+
+    def _rollup_replaced_phase1_usage(response_obj: dict[str, Any]) -> None:
+        """Account for a Decision response replaced by a bounded re-decision."""
+        nonlocal hidden_phase1_usage
+        hidden_phase1_usage = _merge_usage_records(
+            hidden_phase1_usage,
+            response_obj.get("usage"),
+        )
+
     async def _require_phase1_control_signal(
         response_obj: dict[str, Any],
         context_messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> dict[str, Any]:
+        nonlocal hidden_phase1_usage
+        # Deep Research's first turn has a stricter, user-visible length
+        # handshake below.  Let that dedicated correction run before the
+        # generic bounded missing-control repair.
+        if _deep_research_first_round.get() and not (
+            response_obj.get("tool_calls") or []
+        ):
+            return response_obj
         repairs = 0
         while not (response_obj.get("tool_calls") or []):
             if repairs >= _MAX_MISSING_CONTROL_REPAIRS:
-                if _implicit_completion_text(response_obj):
-                    logger.warning(
-                        "Phase 1 accepted a plain-text reply after %s missing-control repair(s)",
-                        repairs,
-                    )
-                    return {
-                        **response_obj,
-                        "tool_calls": [{
-                            "id": f"implicit_quit_{uuid4().hex}",
-                            "function": {"name": "quit", "arguments": "{}"},
-                        }],
-                        "implicit_completion": True,
-                    }
                 raise AgentControlProtocolError(
-                    "Model repeatedly returned neither a control signal nor a usable answer."
+                    "Model repeatedly returned no explicit control signal."
                 )
             incomplete_entry = _assistant_entry_from_response(
                 response_obj,
                 round_id,
+            )
+            hidden_phase1_usage = _merge_usage_records(
+                hidden_phase1_usage,
+                incomplete_entry.pop("usage", None),
             )
             incomplete_entry["hidden_from_ui"] = True
             context_messages.extend([
@@ -858,11 +958,17 @@ async def _run_main_agent_impl(
         response_obj: dict[str, Any],
         base_messages: list[dict[str, Any]],
         fallback: str = "Done.",
+        execution_completion: bool = False,
+        force_completion_packet: bool = False,
     ) -> str:
         # A valid terminal answer has already paid for the main model call.
         # Deliver it directly instead of rebuilding the full history. Tool-markup
         # or placeholder replies deliberately fall through to no-tool recovery.
-        text = _safe_terminal_reply_from_response(response_obj, base_messages)
+        text = (
+            ""
+            if execution_completion and force_completion_packet
+            else _safe_terminal_reply_from_response(response_obj, base_messages)
+        )
         if text:
             if _streaming_reply_requested():
                 await _emit_reply_stream_event({"type": "reply_start"})
@@ -877,71 +983,111 @@ async def _run_main_agent_impl(
         meta = _ui_round_assistant_meta.get()
         if isinstance(meta, dict) and meta.get("system_initiated"):
             return ""
-        llm_base_messages = project_history_for_llm(base_messages)
-        if _history_has_tool_results(base_messages):
-            final_user_text = (await _final_user_reply_from_history(llm_base_messages, max_tokens=None)).strip()
-            if final_user_text and not _is_placeholder_reply(final_user_text):
-                return final_user_text
-            fallback_from_tools = _tool_result_fallback_text(base_messages).strip()
-            if fallback_from_tools:
-                return fallback_from_tools
-        else:
-            final_plain_text = (await _final_plain_reply_from_history(llm_base_messages, max_tokens=None)).strip()
-            if final_plain_text and not _is_placeholder_reply(final_plain_text):
-                return final_plain_text
-        final_text = (await _final_reply_from_history(llm_base_messages, max_tokens=None)).strip()
-        if final_text and not _is_placeholder_reply(final_text):
-            return final_text
-        return fallback
+        completion_packet = (
+            execution_finalization_packet(base_messages, response_obj)
+            if execution_completion
+            else None
+        )
+        recovered = (
+            await _recover_final_reply(
+                project_history_for_llm(base_messages),
+                max_tokens=None,
+                completion_packet=completion_packet,
+                call_llm=_call_llm,
+                streaming_reply_requested=_streaming_reply_requested,
+            )
+        ).strip()
+        return recovered or fallback
 
     def _session_messages_to_save(current_messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         _flush_intermediate_user_replies(current_messages)
+        # Storage merges run repeatedly while a tool loop is live.  Assign ids
+        # to the in-memory transcript once so later saves update the same
+        # canonical records instead of manufacturing a fresh set of lane keys
+        # and re-inserting earlier tool episodes ahead of the new suffix.
+        _ensure_message_identity(current_messages)
         saved: list[dict[str, Any]] = []
         for message in current_messages[1:]:
             if message["role"] == "system":
                 continue
-            if bool(message.get("hidden_from_ui")):
+            if bool(message.get("hidden_from_ui")) and not bool(
+                message.get("persist_model_record")
+            ):
                 continue
             if not persist_user_message and message.get("message_id") == user_message_id:
                 continue
             if message.get("role") == "user" and message.get("message_id") == user_message_id:
                 saved.append(dict(user_entry))
                 continue
-            saved.append(_redact_sensitive_tool_calls_for_storage(message))
-        if _economy_mode.get():
-            saved = _economy_compact_messages(saved, round_id)
+            preserve_legacy_shared = (
+                id(message) in legacy_shared_history_object_ids
+                or str(message.get("message_id") or "").strip()
+                in legacy_shared_history_message_ids
+            )
+            stored_message = _redact_sensitive_tool_calls_for_storage(message)
+            if (
+                dual_lane
+                and not stored_message.get("lane_refs")
+                and not preserve_legacy_shared
+            ):
+                stored_message = tag_lane_record(stored_message, storage_lane)
+            saved.append(stored_message)
         return saved
 
-    # Phase 1: lightweight decision. Wire the SAME full array as Phase 2 so the
-    # two phases share DeepSeek's tool-sensitive prefix cache even on the first
-    # ordinary round. Deep-research's first round keeps its tiny ask_user-only set
-    # because it has a separate length-preference handshake.
+    # Codex keeps the historical full shared tool array in both phases.  The
+    # dual-lane policy gives Decision only its light controls; Deep Research's
+    # first turn also keeps its dedicated length-handshake bundle.
     phase1_wire_tools = (
-        phase1_tools if _deep_research_first_round.get() else wire_tool_defs
+        phase1_tools
+        if dual_lane or _deep_research_first_round.get()
+        else wire_tool_defs
     )
-    phase1_runtime_guidance_entries: list[dict[str, Any]] = []
-    response = await _call_with_runtime_guidance(
-        phase1_messages,
-        lambda: _call_phase1_llm(
-            project_history_for_llm(phase1_messages),
-            tools=phase1_wire_tools,
-        ),
-    )
-    if runtime_inbox is not None:
+    if resume_execution:
+        resumed_handoff = next(
+            (
+                message
+                for message in reversed(history)
+                if str(message.get("record_kind") or "") == "execution_handoff"
+                and str(message.get("turn_id") or "") == str(round_id or "")
+            ),
+            None,
+        )
+        resumed_use_tools_id = str(
+            (resumed_handoff or {}).get("decision_tool_call_id") or ""
+        ).strip() or f"use_tools_{round_id}"
+        response = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": resumed_use_tools_id,
+                "function": {
+                    "name": "use_tools",
+                    "arguments": json.dumps(
+                        {"execution_brief": "Resume execution with the user's answer."},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                },
+            }],
+        }
+    else:
+        response = await _call_with_runtime_guidance(
+            phase1_messages,
+            lambda: _call_phase1_llm(
+                project_history_for_llm(phase1_messages),
+                tools=phase1_wire_tools,
+            ),
+        )
+    if runtime_inbox is not None and not resume_execution:
         phase1_guidance = runtime_inbox.collect_guidance_nowait()
         if phase1_guidance:
-            phase1_messages.append(_assistant_entry_from_response(response, round_id))
-            for tc in (response.get("tool_calls") or []):
-                phase1_messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": "Decision deferred because new user guidance arrived.",
-                    **({"round_id": round_id} if round_id else {}),
-                })
+            _rollup_replaced_phase1_usage(response)
+            phase1_messages.extend(deferred_decision_protocol_entries(
+                response,
+                round_id=round_id,
+                assistant_entry_factory=_assistant_entry_from_response,
+            ))
             await _inject_runtime_guidance(phase1_messages, phase1_guidance)
-            phase1_runtime_guidance_entries = [
-                message for message in phase1_messages if message.get("runtime_guidance")
-            ]
             response = await _call_with_runtime_guidance(
                 phase1_messages,
                 lambda: _call_phase1_llm(
@@ -949,48 +1095,56 @@ async def _run_main_agent_impl(
                     tools=phase1_wire_tools,
                 ),
             )
-    response = await _require_phase1_control_signal(
-        response,
-        phase1_messages,
-        phase1_wire_tools,
-    )
-    tool_calls = response.get("tool_calls") or []
     phase1_allowed = {_tool_def_name(tool_def) for tool_def in phase1_tools}
     phase1_wire_names = {
         _tool_def_name(tool_def) for tool_def in phase1_wire_tools
     }
     phase1_can_promote_tools = (
-        not _deep_research_first_round.get()
+        not dual_lane
+        and not _deep_research_first_round.get()
         and _current_command.get() != "quick-answer"
     )
-    promotable_phase1_tool_names = {
-        str(tc.get("function", {}).get("name") or "").strip()
-        for tc in tool_calls
-        if phase1_can_promote_tools
-        and str(tc.get("function", {}).get("name") or "").strip()
-        in phase1_wire_names
-        and str(tc.get("function", {}).get("name") or "").strip()
-        not in phase1_allowed
-    }
-    invalid_phase1_tools = [
-        str(tc.get("function", {}).get("name") or "").strip()
-        for tc in tool_calls
-        if str(tc.get("function", {}).get("name") or "").strip() not in phase1_allowed
-        and str(tc.get("function", {}).get("name") or "").strip()
-        not in promotable_phase1_tool_names
-    ]
-    phase1_context_messages = phase1_messages
-    if invalid_phase1_tools:
+
+    async def _prepare_phase1_decision(
+        response_obj: dict[str, Any],
+        context_messages: list[dict[str, Any]],
+    ) -> tuple[Phase1Decision, list[dict[str, Any]]]:
+        """Validate and normalize one Decision-Phase response.
+
+        Invalid tool selection receives one model correction.  Missing or
+        malformed terminal output is handled separately by the bounded control
+        repair helper, so this function never grows into another agent loop.
+        """
+        response_obj = await _require_phase1_control_signal(
+            response_obj,
+            context_messages,
+            phase1_wire_tools,
+        )
+        decision = normalize_phase1_decision(
+            response_obj,
+            allowed_tool_names=phase1_allowed,
+            wire_tool_names=phase1_wire_names,
+            can_promote_tools=phase1_can_promote_tools,
+            system_initiated=system_initiated,
+        )
+        if not decision.invalid_tool_names:
+            return decision, context_messages
+
+        _rollup_replaced_phase1_usage(response_obj)
+        invalid_names = ", ".join(decision.invalid_tool_names)
         retry_messages = [
-            *phase1_messages,
+            *context_messages,
             {
-                **_assistant_entry_from_response(response, round_id="", include_tool_calls=False),
-                "content": assistant_text(response) or (response.get("content") or ""),
+                **_assistant_entry_from_response(
+                    response_obj, round_id="", include_tool_calls=False
+                ),
+                "content": assistant_text(response_obj)
+                or (response_obj.get("content") or ""),
             },
             {
                 "role": "user",
                 "content": (
-                    f"[Decision-phase correction] You attempted unavailable tool(s): {', '.join(invalid_phase1_tools)}. "
+                    f"[Decision-phase correction] You attempted unavailable tool(s): {invalid_names}. "
                     + ("This is a proactive system-initiated round. `ask_user` is forbidden; use an available tool or finish without pausing for user input."
                        if system_initiated
                        else "Quick Answer mode does not allow execution tools. Answer directly with `quit`, or use `ask_user` only when the request is genuinely unclear."
@@ -1002,150 +1156,265 @@ async def _run_main_agent_impl(
                             "with an `execution_brief` under 300 characters "
                             "containing only the intent, first useful action, and hard user constraints. "
                             "If clarification is needed before acting, call `ask_user`. "
-                            "Otherwise say there is no suitable tool in this phase.")
+                            "Otherwise answer directly and call `quit`.")
                 ),
             },
         ]
-        response = await _call_with_runtime_guidance(
+        corrected_response = await _call_with_runtime_guidance(
             retry_messages,
             lambda: _call_phase1_llm(
                 project_history_for_llm(retry_messages),
                 tools=phase1_wire_tools,
             ),
         )
-        response = await _require_phase1_control_signal(
-            response,
+        corrected_response = await _require_phase1_control_signal(
+            corrected_response,
             retry_messages,
             phase1_wire_tools,
         )
-        phase1_context_messages = retry_messages
-    tool_calls = response.get("tool_calls") or []
-    normalized_phase1_calls: list[dict[str, Any]] = []
-    for tool_call in tool_calls:
-        if str(tool_call.get("function", {}).get("name") or "") != "use_tools":
-            normalized_phase1_calls.append(tool_call)
-            continue
-        try:
-            raw_use_tools_args = parse_tool_arguments(
-                tool_call.get("function", {}).get("arguments")
-            )
-        except Exception:
-            raw_use_tools_args = {}
-        execution_brief = str(
-            raw_use_tools_args.get("execution_brief") or ""
-        ).strip()[:300]
-        normalized_call = {
-            **tool_call,
-            "function": {
-                **tool_call.get("function", {}),
-                "name": "use_tools",
-                "arguments": json.dumps(
-                    {"execution_brief": execution_brief},
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-            },
-        }
-        normalized_phase1_calls.append(normalized_call)
-    tool_calls = normalized_phase1_calls
-    if response.get("tool_calls") is not None:
-        response = {**response, "tool_calls": tool_calls}
-    phase1_concrete_calls = [
-        tool_call
-        for tool_call in tool_calls
-        if phase1_can_promote_tools
-        and str(tool_call.get("function", {}).get("name") or "")
-        in phase1_wire_names
-        and str(tool_call.get("function", {}).get("name") or "")
-        not in {"use_tools", "ask_user", "quit"}
-    ]
-    phase1_ask_calls = [
-        tool_call
-        for tool_call in tool_calls
-        if not system_initiated
-        and str(tool_call.get("function", {}).get("name") or "") == "ask_user"
-    ]
-    if phase1_concrete_calls and phase1_ask_calls:
-        # Clarification wins over execution. Drop sibling actions so the saved
-        # assistant/tool protocol cannot contain unresolved concrete calls.
-        tool_calls = phase1_ask_calls
-        phase1_concrete_calls = []
-        response = {**response, "tool_calls": tool_calls}
-    elif phase1_concrete_calls:
-        # A concrete action is stronger evidence of execution intent than a
-        # contradictory quit emitted in the same decision response. Keep
-        # use_tools as a harmless gateway result, but let Phase 2 execute the
-        # concrete calls before asking the model whether the run is complete.
-        tool_calls = [
-            tool_call
-            for tool_call in tool_calls
-            if str(tool_call.get("function", {}).get("name") or "") != "quit"
-        ]
-        response = {**response, "tool_calls": tool_calls}
+        return normalize_phase1_decision(
+            corrected_response,
+            allowed_tool_names=phase1_allowed,
+            wire_tool_names=phase1_wire_names,
+            can_promote_tools=phase1_can_promote_tools,
+            system_initiated=system_initiated,
+        ), retry_messages
+
+    phase1_context_messages = phase1_messages
+    while True:
+        decision, phase1_context_messages = await _prepare_phase1_decision(
+            response,
+            phase1_context_messages,
+        )
+        response = decision.response
+        if not decision.terminal_in_phase1 or runtime_inbox is None:
+            break
+        boundary_guidance = await runtime_inbox.collect_guidance_or_seal()
+        if not boundary_guidance:
+            break
+        _rollup_replaced_phase1_usage(response)
+        phase1_context_messages.extend(deferred_decision_protocol_entries(
+            response,
+            round_id=round_id,
+            assistant_entry_factory=_assistant_entry_from_response,
+        ))
+        await _inject_runtime_guidance(
+            phase1_context_messages,
+            boundary_guidance,
+        )
+        # Guidance at the terminal boundary belongs to the Decision Phase.  Let
+        # the model decide again instead of fabricating ``use_tools`` and
+        # forcing a harmless chat refinement through the execution loop.
+        response = await _call_with_runtime_guidance(
+            phase1_context_messages,
+            lambda: _call_phase1_llm(
+                project_history_for_llm(phase1_context_messages),
+                tools=phase1_wire_tools,
+            ),
+        )
+
+    tool_calls = list(decision.tool_calls)
+    phase1_concrete_calls = list(decision.concrete_calls)
+    use_tools_call = decision.use_tools_call
+    ask_user_call = decision.ask_user_call
+    quit_call = decision.quit_call
     phase1_runtime_guidance_entries = [
         message
         for message in phase1_context_messages
         if message.get("runtime_guidance")
     ]
     messages = [*run_prefix, llm_user_entry, *phase1_runtime_guidance_entries]
-    # The wait state's durable form is written by _upsert_pending_question
-    # (clean user + question_prompt pair, no raw tool trace), so the finally
-    # below must skip the save when exiting via the pause path.
+    # Awaiting-user exits persist both the UI-only question projection and the
+    # hidden assistant/tool protocol pair needed for an exact model resume.
     paused = False
     final_saved = False
+    execution_turn_id = str(round_id or user_message_id)
+    execution_decision_tool_call_id = str(
+        (use_tools_call or {}).get("id") or ""
+    ).strip()
+    execution_outcome_synced = False
+    execution_started = False
+
+    async def _sync_execution_outcome(
+        final_text: str,
+        response_obj: dict[str, Any] | None = None,
+        *,
+        status: str = "completed",
+        state_summary_override: str | None = None,
+        unresolved_override: list[str] | None = None,
+    ) -> None:
+        """Close the Decision-lane ``use_tools`` call without copying evidence."""
+        nonlocal execution_outcome_synced
+        if not dual_lane or execution_outcome_synced:
+            return
+        outcome_args = execution_outcome_arguments(response_obj)
+        raw_artifacts = outcome_args.get("artifacts")
+        artifacts = list(raw_artifacts) if isinstance(raw_artifacts, list) else []
+        artifact_identities = {
+            str(
+                artifact.get("id")
+                or artifact.get("url")
+                or artifact.get("path")
+                or artifact.get("name")
+                or ""
+            )
+            for artifact in artifacts
+            if isinstance(artifact, dict)
+        }
+        for artifact in public_assistant_artifact_refs(messages):
+            identity = str(
+                artifact.get("id")
+                or artifact.get("url")
+                or artifact.get("path")
+                or artifact.get("name")
+                or ""
+            )
+            if identity and identity in artifact_identities:
+                continue
+            artifacts.append(artifact)
+            if identity:
+                artifact_identities.add(identity)
+        raw_unresolved = outcome_args.get("unresolved")
+        unresolved = (
+            list(unresolved_override)
+            if unresolved_override is not None
+            else raw_unresolved
+            if isinstance(raw_unresolved, list)
+            else []
+        )
+        outcome = ExecutionOutcome.create(
+            execution_turn_id,
+            status,
+            public_reply=final_text,
+            state_summary=(
+                str(state_summary_override)
+                if state_summary_override is not None
+                else str(outcome_args.get("state_summary") or "")
+            ),
+            artifacts=artifacts,
+            unresolved=unresolved,
+            conversation_delta=execution_conversation_delta(messages),
+        )
+        outcome_message = build_execution_outcome_message(
+            outcome,
+            tool_call_id=(
+                execution_decision_tool_call_id
+                or f"use_tools_{execution_turn_id}"
+            ),
+        )
+        if round_id:
+            outcome_message["round_id"] = round_id
+        await append_or_upsert_lane_record(outcome_message)
+        execution_outcome_synced = True
+
+    async def _persist_awaiting_user_protocol(
+        assistant_protocol_entry: dict[str, Any],
+        tool_protocol_entry: dict[str, Any],
+        *,
+        tool_call_id: str,
+    ) -> None:
+        """Persist the real ask_user protocol plus one UI-only question card."""
+        nonlocal final_saved
+        question_usage = assistant_protocol_entry.pop("usage", None)
+        for suffix, protocol_entry in (
+            ("assistant", assistant_protocol_entry),
+            ("result", tool_protocol_entry),
+        ):
+            protocol_entry.setdefault(
+                "message_id",
+                f"msg_ask_user_{tool_call_id}_{suffix}",
+            )
+            protocol_entry["hidden_from_ui"] = True
+            protocol_entry["persist_model_record"] = True
+            if dual_lane:
+                tagged = tag_lane_record(
+                    protocol_entry,
+                    storage_lane,
+                    record_kind="control_protocol",
+                    persist_model_record=True,
+                    hidden_from_ui=True,
+                )
+                protocol_entry.clear()
+                protocol_entry.update(tagged)
+
+        pending_context = _pending_question_resume_context("")
+        pending = pending_context.get("pending_question") or {}
+        pending_message_id = str(pending.get("message_id") or "").strip()
+        visible_question = next(
+            (
+                dict(message)
+                for message in pending_context.get("full_messages") or []
+                if pending_message_id
+                and str(message.get("message_id") or "").strip()
+                == pending_message_id
+            ),
+            None,
+        )
+        if visible_question is not None:
+            # The normalized card is a UI projection, never a second model
+            # transcript record. Usage belongs here while the raw control pair
+            # remains hidden and usage-free, avoiding double accounting.
+            visible_question["persist_model_record"] = False
+            visible_question["hidden_from_llm"] = True
+            if question_usage:
+                visible_question["usage"] = dict(question_usage)
+            messages.append(visible_question)
+
+        await _save(_session_messages_to_save(messages))
+        final_saved = True
+
+    async def _rollup_legacy_pending_question_usage(
+        usage: dict[str, Any] | None,
+    ) -> None:
+        """Update the legacy UI/model question without persisting raw controls."""
+        if not usage:
+            return
+        pending_context = _pending_question_resume_context("")
+        pending = pending_context.get("pending_question") or {}
+        pending_message_id = str(pending.get("message_id") or "").strip()
+        visible_question = next(
+            (
+                dict(message)
+                for message in pending_context.get("full_messages") or []
+                if pending_message_id
+                and str(message.get("message_id") or "").strip()
+                == pending_message_id
+            ),
+            None,
+        )
+        if visible_question is None:
+            return
+        visible_question["persist_model_record"] = True
+        visible_question.pop("hidden_from_llm", None)
+        visible_question["usage"] = dict(usage)
+        await append_or_upsert_lane_record(visible_question)
+
+    async def _commit_phase1_terminal_reply(
+        response_obj: dict[str, Any],
+        current_messages: list[dict[str, Any]],
+    ) -> str:
+        """Resolve and persist the single public reply for a Phase-1 terminal."""
+        nonlocal final_saved
+        final_text = await _ensure_text_reply(response_obj, current_messages)
+        terminal_entry = current_messages[-1]
+        terminal_entry["content"] = final_text
+        terminal_entry.pop("tool_calls", None)
+        if client_request_id:
+            terminal_entry["client_request_id"] = client_request_id
+        _attach_final_usage(terminal_entry)
+        await _save(_session_messages_to_save(current_messages))
+        final_saved = True
+        return final_text
+
     try:
         assistant_entry = _assistant_entry_from_response(response, round_id)
+        phase1_usage = _merge_usage_records(
+            hidden_phase1_usage,
+            assistant_entry.get("usage"),
+        )
+        if phase1_usage:
+            assistant_entry["usage"] = phase1_usage
         messages.append(assistant_entry)
-
-        use_tools_call = None
-        ask_user_call = None
-        quit_call = None
-        for tc in tool_calls:
-            name = tc.get("function", {}).get("name")
-            if name == "use_tools":
-                use_tools_call = tc
-            elif name == "ask_user" and not system_initiated:
-                ask_user_call = tc
-            elif name == "quit":
-                quit_call = tc
-
-        # Phase 1 has several direct-return branches. Atomically close guidance
-        # admission before taking one; if a durable command won the race, promote
-        # this turn into Phase 2 so the command is applied instead of cancelled.
-        if (
-            use_tools_call is None
-            and not phase1_concrete_calls
-            and runtime_inbox is not None
-        ):
-            boundary_guidance = await runtime_inbox.collect_guidance_or_seal()
-            if boundary_guidance:
-                phase1_messages.append(_assistant_entry_from_response(response, round_id))
-                for tc in tool_calls:
-                    phase1_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": "Decision deferred because new user guidance arrived.",
-                        **({"round_id": round_id} if round_id else {}),
-                    })
-                await _inject_runtime_guidance(phase1_messages, boundary_guidance)
-                phase1_runtime_guidance_entries = [
-                    message
-                    for message in phase1_messages
-                    if message.get("runtime_guidance")
-                ]
-                use_tools_call = {
-                    "id": f"guidance_use_tools_{uuid4().hex}",
-                    "function": {
-                        "name": "use_tools",
-                        "arguments": json.dumps({
-                            "execution_brief": "Apply the newly delivered runtime guidance.",
-                        }),
-                    },
-                }
-                phase1_context_messages = phase1_messages
-                phase1_concrete_calls = []
-                ask_user_call = None
-                quit_call = None
 
         if quit_call is not None:
             if runtime_inbox is not None:
@@ -1157,14 +1426,7 @@ async def _run_main_agent_impl(
                 "detail": "Agent called quit",
                 "detail_key": "phase.agentQuit",
             })
-            final_text = await _ensure_text_reply(response, messages)
-            messages[-1]["content"] = final_text
-            messages[-1].pop("tool_calls", None)
-            if client_request_id:
-                messages[-1]["client_request_id"] = client_request_id
-            await _save(_session_messages_to_save(messages))
-            final_saved = True
-            return final_text
+            return await _commit_phase1_terminal_reply(response, messages)
 
         if ask_user_call:
             try:
@@ -1202,10 +1464,17 @@ async def _run_main_agent_impl(
                 tool_entry["round_id"] = round_id
             messages.append(tool_entry)
             if _tool_result_requests_user_input(result):
-                # Pause path: _upsert_pending_question already wrote the durable
-                # wait state (clean user + question_prompt pair); saving the raw
-                # in-memory trace here would overwrite it. Just exit.
-                paused = True
+                if dual_lane:
+                    await _persist_awaiting_user_protocol(
+                        assistant_entry,
+                        tool_entry,
+                        tool_call_id=str(ask_user_call["id"]),
+                    )
+                else:
+                    await _rollup_legacy_pending_question_usage(
+                        assistant_entry.get("usage")
+                    )
+                    paused = True
                 return _AWAITING_USER_SENTINEL
             await _save(_session_messages_to_save(messages))
             final_saved = True
@@ -1230,12 +1499,146 @@ async def _run_main_agent_impl(
                 ]
             await _publish_runtime_event(event)
             promoted_phase1_response: dict[str, Any] | None = None
-            if phase1_concrete_calls:
+            if dual_lane:
+                execution_started = True
+                storage_lane = "execution"
+                execution_lane_binding = bind_agent_lane("execution")
+                execution_lane_binding.__enter__()
+                phase2_assistant: dict[str, Any] = {}
+                if resume_execution:
+                    # ``phase1_messages`` is already the execution projection
+                    # plus the user's clarification answer.  The synthetic
+                    # use_tools above only selects this existing loop; it is not
+                    # part of either model transcript.
+                    messages = list(phase1_messages)
+                else:
+                    for guidance_entry in phase1_runtime_guidance_entries:
+                        await append_or_upsert_lane_record(tag_lane_record(
+                            guidance_entry,
+                            "decision",
+                            persist_model_record=True,
+                        ))
+                    decision_assistant = tag_lane_record(
+                        {
+                            **_assistant_entry_from_response(response, round_id),
+                            "message_id": f"msg_decision_{execution_turn_id}",
+                        },
+                        "decision",
+                        persist_model_record=True,
+                        hidden_from_ui=True,
+                    )
+                    # Usage rolls forward to the eventual public Execution
+                    # reply; the hidden routing record must not count it twice.
+                    decision_assistant.pop("usage", None)
+                    await append_or_upsert_lane_record(decision_assistant)
+                    try:
+                        handoff_args = parse_tool_arguments(
+                            use_tools_call.get("function", {}).get("arguments")
+                        )
+                    except Exception:
+                        handoff_args = {}
+                    attachment_refs = [
+                        {
+                            key: item[key]
+                            for key in (
+                                "id",
+                                "name",
+                                "content_type",
+                                "size",
+                                "kind",
+                                "url",
+                            )
+                            if item.get(key) not in (None, "")
+                        }
+                        for item in (public_attachments or [])
+                        if isinstance(item, dict)
+                    ]
+                    missed_decision_conversation = decision_conversation_delta(
+                        phase1_context_messages,
+                        current_user_message_id=user_message_id,
+                        runtime_guidance_message_ids=[
+                            str(message.get("message_id") or "")
+                            for message in phase1_runtime_guidance_entries
+                        ],
+                    )
+                    side_delta = side_conversation_delta(user_message)
+                    if not side_delta:
+                        side_delta = side_conversation_delta(llm_user_content)
+                    missed_decision_conversation.extend(side_delta)
+                    handoff = ExecutionHandoff.create(
+                        execution_turn_id,
+                        visible_user_message,
+                        execution_brief=str(
+                            handoff_args.get("execution_brief") or ""
+                        ),
+                        # Hard constraints require direct user-message evidence.
+                        # The Decision model's interpretation is intentionally
+                        # not promoted to authoritative constraints.
+                        hard_constraints=(),
+                        attachment_refs=attachment_refs,
+                        conversation_delta=missed_decision_conversation,
+                    )
+                    handoff_message = build_execution_handoff_message(handoff)
+                    handoff_message["decision_tool_call_id"] = (
+                        execution_decision_tool_call_id
+                    )
+                    if round_id:
+                        handoff_message["round_id"] = round_id
+                    await append_or_upsert_lane_record(handoff_message)
+
+                    # Preserve the complete coordinator-built execution policy
+                    # (command modes, tool packs, plan/deep-research rules,
+                    # static extensions) and append only the lane boundary.
+                    execution_system = dual_execution_system
+                    execution_system_blocks = list(system_context or [])
+                    execution_system_blocks.append(context_block(
+                            "execution.system.effective",
+                            "system",
+                            source="cyrene.agent.prompts._DUAL_LANE_EXECUTION_SYSTEM_PROMPT",
+                            reason="independent OpenAI-compatible execution lane",
+                            content=_DUAL_LANE_EXECUTION_SYSTEM_PROMPT,
+                    ))
+                    execution_system_entry = attach_context(
+                        {"role": "system", "content": execution_system},
+                        execution_system_blocks,
+                    )
+                    execution_history = _annotate_history_context(
+                        project_lane_history(canonical_history, "execution")
+                    )
+                    legacy_shared_history_object_ids.update(
+                        id(history_message)
+                        for history_message in execution_history
+                        if history_message.get("lane_refs") is None
+                    )
+                    messages = [execution_system_entry, *execution_history]
+                    if fixed_ephemeral_entry is not None:
+                        messages.append(fixed_ephemeral_entry)
+                    messages.append(handoff_message)
+                    if ephemeral_system:
+                        messages.append(attach_context(
+                            {
+                                "role": "system",
+                                "content": ephemeral_system,
+                                "hidden_from_ui": True,
+                                "volatile_context_version": 1,
+                            },
+                            context_block(
+                                "execution.volatile_ephemeral.v1",
+                                "system",
+                                source="run_agent(volatile_ephemeral_system)",
+                                reason="execution-lane volatile context observed by this run",
+                                content=ephemeral_system,
+                                metadata={"version": 1},
+                            ),
+                        ))
+            elif phase1_concrete_calls:
+                execution_started = True
                 phase2_assistant = _assistant_entry_from_response(response, round_id)
                 phase2_assistant["hidden_from_ui"] = True
                 messages = [*phase1_context_messages, phase2_assistant]
                 promoted_phase1_response = response
             else:
+                execution_started = True
                 normal_use_tools = any(
                     str(tc.get("id") or "") == str(use_tools_call.get("id") or "")
                     for tc in tool_calls
@@ -1287,21 +1690,32 @@ async def _run_main_agent_impl(
                         phase2_tool_entry["round_id"] = round_id
                     messages.append(phase2_tool_entry)
 
+            phase1_execution_usage = dict(assistant_entry.get("usage") or {})
+            phase2_assistant.pop("usage", None)
             missing_control_repairs = 0
+            execution_finalization_required = False
+            hidden_phase2_usage: dict[str, Any] = phase1_execution_usage
             while True:
                 if promoted_phase1_response is not None:
                     response = promoted_phase1_response
                     promoted_phase1_response = None
                     entry = phase2_assistant
                 else:
-                    await _inject_runtime_guidance(messages)
+                    if await _inject_runtime_guidance(messages):
+                        missing_control_repairs = 0
+                    guidance_boundary = len(messages)
                     response = await _call_with_runtime_guidance(
                         messages,
                         lambda: _call_llm(
                             project_history_for_llm(messages),
-                            tools=wire_tool_defs,
+                            tools=execution_wire_tool_defs,
                         ),
                     )
+                    if any(
+                        bool(message.get("runtime_guidance"))
+                        for message in messages[guidance_boundary:]
+                    ):
+                        missing_control_repairs = 0
                     entry = {"role": "assistant", "content": response.get("content") or ""}
                     if (
                         "reasoning_content" in response
@@ -1322,60 +1736,37 @@ async def _run_main_agent_impl(
                 # it with sibling calls, none of those siblings may execute.
                 done_via_quit = "quit" in tool_names
                 if not tcs:
+                    # Unlike Decision Phase, plain text during execution can be
+                    # an in-progress narration (for example, "opening the
+                    # browser now"). Keep one bounded control repair. The text
+                    # is rejected, not staged as a public answer; only a later
+                    # self-contained response paired with ``quit`` can finish.
                     if missing_control_repairs < _MAX_MISSING_CONTROL_REPAIRS:
                         missing_control_repairs += 1
-                        entry["hidden_from_ui"] = True
-                        messages.append(_missing_completion_signal_entry(round_id))
-                        continue
-
-                    final_text = _implicit_completion_text(response)
-                    if not final_text:
-                        raise AgentControlProtocolError(
-                            "Model repeatedly returned neither a control signal nor a usable answer."
+                        execution_finalization_required = (
+                            dual_lane and not system_initiated
                         )
-                    logger.warning(
-                        "Phase 2 accepted a plain-text reply after %s missing-control repair(s)",
-                        missing_control_repairs,
-                    )
-                    if runtime_inbox is not None:
-                        await runtime_inbox.wait_for_active_tools()
-                    entry["content"] = final_text
-                    if client_request_id:
-                        entry["client_request_id"] = client_request_id
-                    await _publish_runtime_event({
-                        "type": "phase_transition",
-                        "from": "execution",
-                        "to": "done",
-                        "detail": "Agent completed after bounded protocol repair",
-                    })
-                    if _streaming_reply_requested():
-                        await _emit_reply_stream_event({"type": "reply_start"})
-                        await _emit_reply_stream_event({
-                            "type": "reply_delta",
-                            "delta": final_text,
-                        })
-                        await _emit_reply_stream_event({
-                            "type": "reply_done",
-                            "response": final_text,
-                        })
-
-                    # Preserve the same atomic guidance boundary as an explicit
-                    # quit: guidance that arrived during the repair starts a
-                    # continuation instead of being lost behind this fallback.
-                    late_guidance = (
-                        await runtime_inbox.collect_guidance_or_seal()
-                        if runtime_inbox is not None
-                        else []
-                    )
-                    if late_guidance:
-                        entry["intermediate_reply"] = True
-                        await _inject_runtime_guidance(messages, late_guidance)
-                        await _save(_session_messages_to_save(messages))
-                        missing_control_repairs = 0
+                        hidden_phase2_usage = _merge_usage_records(
+                            hidden_phase2_usage,
+                            entry.pop("usage", None),
+                        )
+                        entry["hidden_from_ui"] = True
+                        messages.append(_missing_completion_signal_entry(
+                            round_id,
+                            structured_execution_finalize=(
+                                dual_lane and not system_initiated
+                            ),
+                        ))
                         continue
-                    await _save(_session_messages_to_save(messages))
-                    final_saved = True
-                    return final_text
+
+                    hidden_phase2_usage = _merge_usage_records(
+                        hidden_phase2_usage,
+                        entry.pop("usage", None),
+                    )
+                    entry["hidden_from_ui"] = True
+                    raise AgentControlProtocolError(
+                        "Model repeatedly returned no explicit control signal."
+                    )
                 missing_control_repairs = 0
                 if done_via_quit:
                     if runtime_inbox is not None:
@@ -1419,13 +1810,22 @@ async def _run_main_agent_impl(
                             tool_entry["round_id"] = round_id
                         messages.append(tool_entry)
                     await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
-                    # A missing/invalid terminal answer may be repaired, but only by
-                    # the no-tool final-reply path used inside ``_ensure_text_reply``.
-                    # Once quit is observed, this run can never reopen execution.
-                    final_text = await _ensure_text_reply(response, messages)
+                    # An empty-body terminal response is finalized from the
+                    # structured Execution packet. Rejected progress text is
+                    # never reused as an implicit public answer.
+                    # Normalize the protocol assistant before any continuation
+                    # request sees it; the same empty-content record is then
+                    # persisted, so finalization does not create a changed
+                    # historical prefix on the next Execution epoch.
+                    entry["content"] = ""
+                    final_text = await _ensure_text_reply(
+                        response,
+                        messages,
+                        execution_completion=dual_lane,
+                        force_completion_packet=execution_finalization_required,
+                    )
                     # Preserve a valid assistant(tool_calls) -> tool-results
                     # sequence, then store the user-visible answer after it.
-                    entry["content"] = ""
                     final_entry = _apply_assistant_meta(
                         {
                             "role": "assistant",
@@ -1433,8 +1833,12 @@ async def _run_main_agent_impl(
                             **({"round_id": round_id} if round_id else {}),
                         }
                     )
-                    if entry.get("usage"):
-                        final_entry["usage"] = entry.pop("usage")
+                    merged_usage = _merge_usage_records(
+                        hidden_phase2_usage,
+                        entry.pop("usage", None),
+                    )
+                    if merged_usage:
+                        final_entry["usage"] = merged_usage
                     messages.append(final_entry)
                     _attach_final_usage(final_entry)
                     if client_request_id:
@@ -1451,8 +1855,10 @@ async def _run_main_agent_impl(
                         final_entry["intermediate_reply"] = True
                         await _inject_runtime_guidance(messages, late_guidance)
                         await _save(_session_messages_to_save(messages))
+                        hidden_phase2_usage = {}
                         continue
                     await _save(_session_messages_to_save(messages))
+                    await _sync_execution_outcome(final_text, response)
                     final_saved = True
                     return final_text
 
@@ -1669,7 +2075,12 @@ async def _run_main_agent_impl(
                     return _AWAITING_USER_SENTINEL
                 if quit_requested and not pending_reflection_tool_calls:
                     await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
-                    final_text = await _ensure_text_reply(response, messages)
+                    final_text = await _ensure_text_reply(
+                        response,
+                        messages,
+                        execution_completion=dual_lane,
+                        force_completion_packet=execution_finalization_required,
+                    )
                     boundary_guidance = (
                         await runtime_inbox.collect_guidance_or_seal()
                         if runtime_inbox is not None
@@ -1687,6 +2098,7 @@ async def _run_main_agent_impl(
                         await _save(_session_messages_to_save(messages))
                         continue
                     await _save(_session_messages_to_save(messages))
+                    await _sync_execution_outcome(final_text, response)
                     final_saved = True
                     return final_text
                 _pending_saved_batches += 1
@@ -1921,6 +2333,12 @@ async def _run_main_agent_impl(
                         synthesis_entry["round_id"] = round_id
                     if flow_snapshot:
                         synthesis_entry["subagent_flow_snapshot"] = flow_snapshot
+                    synthesis_usage = _merge_usage_records(
+                        hidden_phase2_usage,
+                        synthesis_entry.get("usage"),
+                    )
+                    if synthesis_usage:
+                        synthesis_entry["usage"] = synthesis_usage
                     boundary_guidance = (
                         await runtime_inbox.collect_guidance_or_seal()
                         if runtime_inbox is not None
@@ -1942,6 +2360,7 @@ async def _run_main_agent_impl(
                                 round_id, guidance_text, bot, chat_id, db_path
                             )
                         await _save(_session_messages_to_save(messages))
+                        hidden_phase2_usage = {}
                         continue
                     # 弹出 Phase 2 的 assistant entry（content="" + tool_calls），避免
                     # 流式输出时与 synthesis_entry 的 clientRequestId 重复导致前端去重异常
@@ -1950,6 +2369,7 @@ async def _run_main_agent_impl(
                     messages.append(_apply_assistant_meta(synthesis_entry))
                     await _sub_clear(round_id=round_id)
                     await _save(_session_messages_to_save(messages))
+                    await _sync_execution_outcome(final_text)
                     final_saved = True
                     return final_text
 
@@ -1982,6 +2402,22 @@ async def _run_main_agent_impl(
                     ask_user_call = tc
                     break
             if ask_user_call:
+                # Replace the rejected plain-text handshake attempt with the
+                # actual assistant control record. Its usage still rolls into
+                # the visible pending question.
+                if messages and messages[-1] is assistant_entry:
+                    messages.pop()
+                retry_assistant_entry = _assistant_entry_from_response(
+                    response,
+                    round_id,
+                )
+                retry_usage = _merge_usage_records(
+                    assistant_entry.get("usage"),
+                    retry_assistant_entry.get("usage"),
+                )
+                if retry_usage:
+                    retry_assistant_entry["usage"] = retry_usage
+                messages.append(retry_assistant_entry)
                 try:
                     args = parse_tool_arguments(
                         ask_user_call["function"].get("arguments")
@@ -2017,9 +2453,17 @@ async def _run_main_agent_impl(
                     tool_entry["round_id"] = round_id
                 messages.append(tool_entry)
                 if _tool_result_requests_user_input(result):
-                    # Pause path: _upsert_pending_question already wrote the
-                    # durable wait state; see the other pause site above.
-                    paused = True
+                    if dual_lane:
+                        await _persist_awaiting_user_protocol(
+                            retry_assistant_entry,
+                            tool_entry,
+                            tool_call_id=str(ask_user_call["id"]),
+                        )
+                    else:
+                        await _rollup_legacy_pending_question_usage(
+                            retry_assistant_entry.get("usage")
+                        )
+                        paused = True
                     return _AWAITING_USER_SENTINEL
                 await _save(_session_messages_to_save(messages))
                 final_saved = True
@@ -2032,20 +2476,46 @@ async def _run_main_agent_impl(
             event["detail"] = "Phase 1 decided chat-only, no tools needed"
             event["detail_key"] = "phase.chatOnly"
         await _publish_runtime_event(event)
-        if _streaming_reply_requested():
-            if client_request_id:
-                messages[-1]["client_request_id"] = client_request_id
-            await _save(_session_messages_to_save(messages))
-            final_saved = True
-            return await _ensure_text_reply(response, messages)
-        if client_request_id:
-            messages[-1]["client_request_id"] = client_request_id
-        await _save(_session_messages_to_save(messages))
-        final_saved = True
-        return await _ensure_text_reply(response, messages)
+        return await _commit_phase1_terminal_reply(response, messages)
+    except asyncio.CancelledError:
+        if dual_lane and execution_started and not execution_outcome_synced:
+            try:
+                await asyncio.shield(_sync_execution_outcome(
+                    "",
+                    status="cancelled",
+                    state_summary_override="Execution was cancelled before completion.",
+                    unresolved_override=["Execution was cancelled before completion."],
+                ))
+            except Exception:
+                logger.warning(
+                    "Failed to persist cancelled ExecutionOutcome",
+                    exc_info=True,
+                )
+        raise
+    except Exception:
+        if dual_lane and execution_started and not execution_outcome_synced:
+            logger.warning(
+                "Execution lane failed before completion",
+                exc_info=True,
+            )
+            try:
+                await _sync_execution_outcome(
+                    "",
+                    status="failed",
+                    state_summary_override="Execution failed before completion.",
+                    unresolved_override=[
+                        "Execution failed before completion."
+                    ],
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to persist failed ExecutionOutcome",
+                    exc_info=True,
+                )
+        raise
     finally:
-        # Persist unconditionally (except the pause exit, whose durable state
-        # was already written by _upsert_pending_question). The interrupt path
+        # Persist unconditionally unless a completion/pause path already wrote
+        # its exact transcript. The interrupt path
         # cancels the run task at its next await point — which may sit inside
         # the throttle's own save — so a plain save here could be torn down
         # too. Shield keeps the write running on its own task even if this
@@ -2060,6 +2530,8 @@ async def _run_main_agent_impl(
                 # save failures; this must not mask a clean return or a
                 # cancellation.
                 logger.warning("Failed to persist final agent state", exc_info=True)
+        if execution_lane_binding is not None:
+            execution_lane_binding.__exit__(None, None, None)
 
 
 async def _run_main_agent(
@@ -2078,6 +2550,7 @@ async def _run_main_agent(
     system_context: list[dict[str, Any]] | None = None,
     ephemeral_system: str = "",
     fixed_ephemeral_system: str = "",
+    resume_lane: str = "",
 ) -> str:
     """Run one main-agent turn against an immutable capability snapshot."""
     from cyrene.tooling.gateway import (
@@ -2087,7 +2560,18 @@ async def _run_main_agent(
 
     snapshot_token = activate_catalog_snapshot("main")
     try:
-        model_lease_token = activate_run_model_lease()
+        lease_was_active = has_active_run_model_lease()
+        # The coordinator freezes the provider policy before entering this
+        # compatibility wrapper. Historical direct callers have no such lease:
+        # pin their candidates, but keep the original shared transcript/cache
+        # contract instead of silently switching their internal call shape.
+        model_lease_token = (
+            None
+            if lease_was_active
+            else activate_run_model_lease(
+                transcript_policy_override=TranscriptPolicy.LEGACY_SHARED
+            )
+        )
         try:
             return await _run_main_agent_impl(
                 user_message,
@@ -2105,8 +2589,10 @@ async def _run_main_agent(
                 system_context=system_context,
                 ephemeral_system=ephemeral_system,
                 fixed_ephemeral_system=fixed_ephemeral_system,
+                resume_lane=resume_lane,
             )
         finally:
-            reset_run_model_lease(model_lease_token)
+            if model_lease_token is not None:
+                reset_run_model_lease(model_lease_token)
     finally:
         reset_catalog_snapshot(snapshot_token)

@@ -33,6 +33,7 @@ from cyrene.agent.context import (
 )
 from cyrene.observability import debug
 from cyrene.agent.message import _ensure_message_identity
+from cyrene.agent.lane_protocol import project_lane_history
 from cyrene.agent.model_service import (
     call_agent_model as _call_llm,
     stream_agent_model as _call_llm_stream,
@@ -55,6 +56,32 @@ from cyrene.model_runtime.errors import format_httpx_error  # noqa: F401
 from cyrene.model_runtime.messages import assistant_text
 
 logger = logging.getLogger(__name__)
+
+
+def _pending_owner_lane(pending: dict[str, Any]) -> str:
+    lane = str(pending.get("owner_lane") or "decision").strip().lower()
+    return "execution" if lane == "execution" else "decision"
+
+
+def _pending_resume_history(
+    context: dict[str, Any],
+    pending: dict[str, Any],
+) -> list[dict[str, Any]]:
+    history = list(context.get("round_history") or [])
+    return (
+        project_lane_history(history, "execution")
+        if _pending_owner_lane(pending) == "execution"
+        else history
+    )
+
+
+def _pending_resume_lane_kwargs(pending: dict[str, Any]) -> dict[str, str]:
+    """Only opt into the new resume argument for Execution-owned waits."""
+    return (
+        {"resume_lane": "execution"}
+        if _pending_owner_lane(pending) == "execution"
+        else {}
+    )
 
 
 def _original_round_user_prompt(context: dict[str, Any]) -> str:
@@ -1010,7 +1037,7 @@ async def answer_pending_question(
             db_path,
             ephemeral_system=answer_system,
             forced_round_id=round_id,
-            history_override=context.get("round_history") or [],
+            history_override=_pending_resume_history(context, cleared),
             persist_base_messages=context.get("persist_base_messages") or [],
             persist_insert_at=context.get("persist_insert_at"),
             client_request_id=client_request_id,
@@ -1018,6 +1045,7 @@ async def answer_pending_question(
             command=str(context.get("command", "") or "").strip(),
             permission_mode=permission_mode,
             public_prompt=_original_round_user_prompt(context),
+            **_pending_resume_lane_kwargs(cleared),
         )
     except Exception:
         await _restore_pending_question(pending)
@@ -1284,7 +1312,7 @@ async def _handle_permission_elevation_answer(
         "",
         ephemeral_system=system,
         forced_round_id=round_id,
-        history_override=context.get("round_history") or [],
+        history_override=_pending_resume_history(context, pending),
         persist_base_messages=context.get("persist_base_messages") or [],
         persist_insert_at=context.get("persist_insert_at"),
         client_request_id=client_request_id,
@@ -1292,6 +1320,7 @@ async def _handle_permission_elevation_answer(
         command=str(context.get("command", "") or "").strip(),
         permission_mode=permission_mode,
         public_prompt=_original_round_user_prompt(context),
+        **_pending_resume_lane_kwargs(pending),
     )
 
 
@@ -1341,13 +1370,14 @@ async def _handle_plan_confirmation_answer(
             None, 0, "",
             ephemeral_system=exec_system,
             forced_round_id=round_id,
-            history_override=context.get("round_history") or [],
+            history_override=_pending_resume_history(context, pending),
             persist_base_messages=context.get("persist_base_messages") or [],
             persist_insert_at=context.get("persist_insert_at"),
             client_request_id=client_request_id,
             persist_user_message=False,
             command=str(context.get("command", "") or "").strip(),
             permission_mode=resume_mode,
+            **_pending_resume_lane_kwargs(pending),
         )
 
     if reject:
@@ -1367,13 +1397,14 @@ async def _handle_plan_confirmation_answer(
             None, 0, "",
             ephemeral_system=reject_system,
             forced_round_id=round_id,
-            history_override=context.get("round_history") or [],
+            history_override=_pending_resume_history(context, pending),
             persist_base_messages=context.get("persist_base_messages") or [],
             persist_insert_at=context.get("persist_insert_at"),
             client_request_id=client_request_id,
             persist_user_message=False,
             command=str(context.get("command", "") or "").strip(),
             permission_mode="default",
+            **_pending_resume_lane_kwargs(pending),
         )
 
     # 其他（含「修改」或任意自定义意见）→ 带着修改意见重新规划
@@ -1381,7 +1412,7 @@ async def _handle_plan_confirmation_answer(
         user_message or raw,
         None, 0, "",
         forced_round_id=round_id,
-        history_override=context.get("round_history") or [],
+        history_override=_pending_resume_history(context, pending),
         persist_base_messages=context.get("persist_base_messages") or [],
         persist_insert_at=context.get("persist_insert_at"),
         client_request_id=client_request_id,
@@ -1389,4 +1420,5 @@ async def _handle_plan_confirmation_answer(
         command=str(context.get("command", "") or "").strip(),
         permission_mode="plan",
         plan_modification=raw,
+        **_pending_resume_lane_kwargs(pending),
     )

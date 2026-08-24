@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import threading
+from types import SimpleNamespace
 
 
 def test_startup_recovers_crashed_running_chat_and_clears_stale_question(monkeypatch):
@@ -62,7 +63,90 @@ async def test_chat_run_driver_error_always_publishes_terminal_event_and_wakes_w
     assert is_new is True
     assert run.status == "error"
     assert run.outcome["kind"] == "error"
-    assert any(event.get("type") == "error" for event in run.events)
+    error_event = next(event for event in run.events if event.get("type") == "error")
+    assert error_event["code"] == "chat_run_driver_failed"
+    assert error_event["detail_key"] == "workbenchChat.error.driverFailed"
+
+
+async def test_post_terminal_cleanup_failure_cannot_revoke_saved_reply(monkeypatch):
+    from cyrene.workbench import chat as chat_mod
+    from cyrene.workbench.chat_runs import ChatRunManager
+
+    monkeypatch.setattr(chat_mod, "_settle_chat_running_status", lambda _chat_id: None)
+    manager = ChatRunManager(retention_seconds=0)
+
+    async def runner(run):
+        run.status = "finishing"
+        run.outcome = {"kind": "reply", "payload": {"assistantMessage": {"content": "done"}}}
+        await run.publish({"type": "saved", "assistantMessage": {"content": "done"}})
+        raise RuntimeError("late projection failure")
+
+    run, _ = manager.start_or_get(
+        "chat_saved_before_cleanup_failure", {"type": "ack"}, runner, stream=True
+    )
+    await asyncio.wait_for(run.done.wait(), timeout=1)
+
+    assert run.status == "done"
+    assert run.termination_reason == "completed"
+    assert run.outcome["kind"] == "reply"
+    assert not any(event.get("type") == "error" for event in run.events)
+
+
+async def test_stream_status_projection_is_skipped_after_reply_and_nonfatal_after_error():
+    from cyrene.workbench.chat_run_lifecycle_service import (
+        ChatRunLifecycleApplicationService,
+        ChatRunLifecycleDependencies,
+    )
+    from cyrene.workbench.chat_runs import ChatRun
+
+    published = []
+
+    async def publish_chat_changed(*args, **kwargs):
+        published.append((args, kwargs))
+
+    service = ChatRunLifecycleApplicationService(
+        ChatRunLifecycleDependencies(
+            run_manager=None,
+            capture_workspace_baseline=None,
+            finalize_workspace_changes=None,
+            schedule_workspace_finalize=None,
+            publish_live_segments=None,
+            publish_chat_changed=publish_chat_changed,
+            load_chat_summary=lambda chat_id: {"id": chat_id},
+            public_message=lambda value: value,
+            error_message=lambda exc, _lang: str(exc),
+            error_metadata=lambda _exc: {},
+        )
+    )
+    settle_calls = []
+
+    def locked_settle():
+        settle_calls.append("called")
+        raise sqlite3.OperationalError("database is locked")
+
+    request = SimpleNamespace(
+        chat_id="chat_projection",
+        project_id="project_projection",
+        settle_status=locked_settle,
+    )
+
+    reply_run = ChatRun("chat_projection", {"type": "ack"})
+    reply_run.outcome = {
+        "kind": "reply",
+        "payload": {"chatSummary": {"id": "chat_projection"}},
+    }
+    stopped = asyncio.Event()
+    stopped.set()
+    live_task = asyncio.create_task(asyncio.sleep(0))
+    await service._settle_stream(request, reply_run, stopped, live_task)
+    assert settle_calls == []
+
+    error_run = ChatRun("chat_projection", {"type": "ack"})
+    error_run.outcome = {"kind": "error", "exc": RuntimeError("failed")}
+    live_task = asyncio.create_task(asyncio.sleep(0))
+    await service._settle_stream(request, error_run, stopped, live_task)
+    assert settle_calls == ["called"]
+    assert len(published) == 2
 
 
 async def test_finished_run_remains_replayable_during_retention_window():

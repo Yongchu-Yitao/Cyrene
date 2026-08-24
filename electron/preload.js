@@ -66,6 +66,7 @@ contextBridge.exposeInMainWorld('cyrene', {
   browser: {
     getState: (sessionId) => ipcRenderer.invoke('browser:get-state', { sessionId: String(sessionId || '') }),
     getManagerState: () => ipcRenderer.invoke('browser:get-manager-state'),
+    syncProxy: () => ipcRenderer.invoke('browser:sync-proxy'),
     controlDownload: (info) => ipcRenderer.invoke('browser:control-download', info || {}),
     setBounds: (info) => ipcRenderer.invoke('browser:set-bounds', info || {}),
     setChatOverlay: (info) => ipcRenderer.invoke('browser:set-chat-overlay', info || {}),

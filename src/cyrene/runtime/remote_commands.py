@@ -343,10 +343,6 @@ _REMOTE_SETTING_FIELDS = (
         options=[_option("warn", "Warn", "警告"), _option("block", "Block", "阻止")],
     ),
     _remote_setting_field(
-        "budget_mode", "budget", "enum", "Budget mode", "预算模式", default="normal",
-        options=[_option("economy", "Economy", "节省"), _option("normal", "Normal", "普通")],
-    ),
-    _remote_setting_field(
         "budget_start_day", "budget", "integer", "Billing cycle start day", "账期起始日",
         default=1, minimum=1, maximum=28,
     ),

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import ipaddress
+import json
 import logging
 import os
 import secrets
@@ -178,6 +179,33 @@ def _register_document_routes(app: FastAPI, material: OfficeGatewayFiles) -> Non
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return {"ok": True, "service": "cyrene-office-gateway", "sessions": len(get_office_bridge().list_sessions()), "agentKit": expected_handshake(_STATIC_DIR)}
+
+    @app.post("/benchmark/invoke")
+    async def benchmark_invoke(request: Request) -> dict[str, Any]:
+        """Run the fixed model-free benchmark workload inside the gateway process."""
+        _require_authorized(request, material)
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="invalid JSON payload") from exc
+        method = str(payload.get("method") or "") if isinstance(payload, dict) else ""
+        allowed = {
+            "ppt.get_context", "ppt.create_slide", "ppt.list_shapes",
+            "ppt.apply_batch", "ppt.read_text", "ppt.delete_slide",
+        }
+        if method not in allowed:
+            raise HTTPException(status_code=400, detail="method is not part of the PowerPoint benchmark workload")
+        args = payload.get("arguments") if isinstance(payload, dict) else None
+        if not isinstance(args, dict):
+            raise HTTPException(status_code=400, detail="arguments must be an object")
+        from cyrene.tool_impl.office import kit
+
+        raw = await kit._method_handler(method, args)
+        try:
+            result = json.loads(raw)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=500, detail="benchmark tool returned invalid JSON") from exc
+        return result
 
     @app.get("/taskpane.html")
     async def taskpane(request: Request) -> Response:

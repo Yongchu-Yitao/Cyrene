@@ -244,7 +244,24 @@ jobs:
 
       - name: Verify build environment imports
         run: |
-          python -c "from typing_extensions import Sentinel; from pydantic_core import core_schema; import anyio, httpx, httpcore, sniffio, aiosqlite, apscheduler, croniter, jinja2, websockets, simplexng, mcp, numpy, numpy._core._multiarray_umath, openai_codex; print('imports-ok')"
+          python -c "from typing_extensions import Sentinel; from pydantic_core import core_schema; import anyio, httpx, httpcore, sniffio, aiosqlite, apscheduler, croniter, jinja2, websockets, simplexng, mcp, google.genai, numpy, numpy._core._multiarray_umath, openai_codex; print('imports-ok')"
+
+      - name: Benchmark sustained Windows ConPTY output
+        shell: powershell
+        run: |
+          $report = "output/performance/terminal-real-windows-x64.json"
+          python -m cyrene.observability.terminal_performance_benchmark `
+            --bytes 17825792 `
+            --output-limit 16777216 `
+            --json $report `
+            --fail-on-quality
+
+      - name: Upload Windows ConPTY benchmark
+        uses: actions/upload-artifact@v7
+        with:
+          name: terminal-performance-windows-x64
+          path: output/performance/terminal-real-windows-x64.json
+          if-no-files-found: error
 
       - name: Full build (PyInstaller + Electron)
         run: python build/build.py --ui-mode ${{ env.UI_MODE }}
@@ -399,7 +416,24 @@ jobs:
 
       - name: Verify build environment imports
         run: |
-          python -c "import platform; from typing_extensions import Sentinel; from pydantic_core import core_schema; import anyio, httpx, httpcore, sniffio, aiosqlite, apscheduler, croniter, jinja2, websockets, mcp, numpy, numpy._core._multiarray_umath, onnxruntime, onnxruntime_qnn, openai_codex; assert platform.machine().lower() in {'arm64','aarch64'}; print('arm64-imports-ok')"
+          python -c "import platform; from typing_extensions import Sentinel; from pydantic_core import core_schema; import anyio, httpx, httpcore, sniffio, aiosqlite, apscheduler, croniter, jinja2, websockets, mcp, google.genai, numpy, numpy._core._multiarray_umath, onnxruntime, onnxruntime_qnn, openai_codex; assert platform.machine().lower() in {'arm64','aarch64'}; print('arm64-imports-ok')"
+
+      - name: Benchmark sustained Windows ConPTY output
+        shell: powershell
+        run: |
+          $report = "output/performance/terminal-real-windows-arm64.json"
+          python -m cyrene.observability.terminal_performance_benchmark `
+            --bytes 17825792 `
+            --output-limit 16777216 `
+            --json $report `
+            --fail-on-quality
+
+      - name: Upload Windows ARM64 ConPTY benchmark
+        uses: actions/upload-artifact@v7
+        with:
+          name: terminal-performance-windows-arm64
+          path: output/performance/terminal-real-windows-arm64.json
+          if-no-files-found: error
 
       - name: Full build (PyInstaller + Electron)
         run: python build/build.py --ui-mode ${{ env.UI_MODE }} --arch arm64
@@ -475,7 +509,7 @@ jobs:
 
       - name: Verify build environment imports
         run: |
-          python -c "from typing_extensions import Sentinel; from pydantic_core import core_schema; import anyio, httpx, httpcore, sniffio, aiosqlite, apscheduler, websockets, simplexng, jinja2, mcp, onnxruntime, openai_codex; assert onnxruntime.__version__.startswith('1.26.'); assert 'CPUExecutionProvider' in onnxruntime.get_available_providers(); print('imports-ok')"
+          python -c "from typing_extensions import Sentinel; from pydantic_core import core_schema; import anyio, httpx, httpcore, sniffio, aiosqlite, apscheduler, websockets, simplexng, jinja2, mcp, google.genai, onnxruntime, openai_codex; assert onnxruntime.__version__.startswith('1.26.'); assert 'CPUExecutionProvider' in onnxruntime.get_available_providers(); print('imports-ok')"
 
       - name: Full build (PyInstaller + Electron)
         run: python build/build.py --ui-mode ${{ env.UI_MODE }}

@@ -322,7 +322,7 @@ def test_codex_candidate_never_inherits_api_credentials() -> None:
     assert candidate["endpoints"] == [CODEX_BASE_URL]
 
 
-def test_codex_candidate_keeps_its_configured_fallback_position(
+def test_legacy_mixed_route_is_preserved_for_runtime_family_guard(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(model_client, "candidates_for_route", lambda _route: [
@@ -347,6 +347,13 @@ def test_codex_candidate_keeps_its_configured_fallback_position(
         "openai_compatible",
         CODEX_PROVIDER,
     ]
+    from cyrene.model_runtime.transcript_policy import (
+        ProviderFamilyError,
+        require_single_provider_family,
+    )
+
+    with pytest.raises(ProviderFamilyError, match="automatic fallback"):
+        require_single_provider_family(candidates)
 
 
 @pytest.mark.asyncio

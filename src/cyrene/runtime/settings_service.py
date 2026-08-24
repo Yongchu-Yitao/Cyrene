@@ -123,7 +123,11 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
     _spec("timezone", "string", "Asia/Shanghai", agent=True, risk="R1", enum=tuple(sorted(SUPPORTED_TIMEZONES))),
     _spec("performance_mode", "boolean", False, tab="appearance"),
     _spec("external_agent_proxy_enabled", "boolean", False, tab="general", apply_mode="next_run"),
+    _spec("external_agent_proxy_url", "string", "", tab="general", apply_mode="next_run"),
     _spec("external_agent_proxy_port", "integer", 7897, tab="general", minimum=1, maximum=65535, apply_mode="next_run"),
+    _spec("proxy_search_enabled", "boolean", False, tab="general", apply_mode="next_run"),
+    _spec("proxy_browser_enabled", "boolean", False, tab="general", apply_mode="immediate"),
+    _spec("proxy_extensions_enabled", "boolean", False, tab="general", apply_mode="next_run"),
     _spec("notify_telegram", "boolean", True, tab="channels", agent=True, risk="R1"),
     _spec("notify_wechat", "boolean", True, tab="channels", agent=True, risk="R1"),
     _spec("redact_secrets", "boolean", True, tab="data", readable=True),
@@ -134,7 +138,6 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
     _spec("budget_monthly", "number", 50.0, tab="budget", minimum=0, maximum=1_000_000),
     _spec("budget_currency", "string", "CNY", tab="budget", enum=("CNY", "USD")),
     _spec("budget_action", "string", "warn", tab="budget", enum=("warn", "block")),
-    _spec("budget_mode", "string", "normal", tab="budget", enum=("economy", "normal")),
     _spec("budget_start_day", "integer", 1, tab="budget", minimum=1, maximum=28),
     _spec("subagent_execution_max_tool_calls", "integer", 200, tab="agents", minimum=1, maximum=5000),
     _spec("subagent_execution_max_wall_seconds", "integer", 1800, tab="agents", minimum=30, maximum=86400),
@@ -245,7 +248,7 @@ def _normalize(spec: SettingSpec, value: Any) -> Any:
         if not isinstance(value, str):
             raise SettingsValidationError(f"{spec.key} must be a string")
         normalized = value.strip()
-        if spec.key in {"app_language", "budget_action", "budget_mode"}:
+        if spec.key in {"app_language", "budget_action"}:
             normalized = normalized.lower()
         elif spec.key == "budget_currency":
             normalized = normalized.upper()
@@ -319,6 +322,15 @@ def _normalize(spec: SettingSpec, value: Any) -> Any:
         raise SettingsValidationError("profile_bio is too long")
     if spec.key == "profile_avatar_emoji" and len(normalized) > 8:
         raise SettingsValidationError("profile_avatar_emoji is too long")
+    if spec.key == "external_agent_proxy_url" and normalized:
+        from cyrene.runtime.network_proxy import normalize_proxy_url
+
+        canonical_proxy_url = normalize_proxy_url(normalized)
+        if not canonical_proxy_url:
+            raise SettingsValidationError(
+                "external_agent_proxy_url must be an HTTP proxy address without credentials or a path"
+            )
+        normalized = canonical_proxy_url
     if spec.key == "quickChatShortcut" and (
         not normalized or len(normalized) > 80
         or any(char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-" for char in normalized)

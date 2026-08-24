@@ -56,6 +56,17 @@ PACK_USAGE_GUIDANCE: dict[str, str] = {
         "command and wake_on_exit=true; do not sleep or poll. Deleting an "
         "agent-created terminal requires explicit confirmation and terminates it."
     ),
+    "media_tools": (
+        "Media generation is a durable background subsystem, not a terminal job. "
+        "Submit up to eight independent image, video, or music requests together "
+        "with media.generate so the daemon can run them in parallel. Use only "
+        "reference paths the Agent may read or attachment IDs already present in "
+        "the current chat. Completion behavior is fixed: outputs are attached "
+        "directly to the chat, then one internal wake resumes the Agent after the "
+        "whole batch is terminal. After a successful submission, end the turn "
+        "immediately; never poll, wait, inspect media_jobs, or start a terminal "
+        "watcher. Reuse idempotency_key only for an exact submission retry."
+    ),
     "memory_tools": (
         "Use current and injected context first. Retrieve memory only when missing "
         "history could materially affect the task or exact prior state is needed. "
@@ -147,6 +158,11 @@ PACK_USAGE_GUIDANCE: dict[str, str] = {
 
 
 CAPABILITY_USAGE_GUIDANCE: dict[str, str] = {
+    "media.generate": (
+        "Prefer one requests array for all independently generatable assets. "
+        "The call only enqueues work; its wake_id is a completion signal, not "
+        "something to poll. Quit the current turn after submission."
+    ),
     "browser.navigate": (
         "Prefer visible page UI over direct URL navigation. Direct navigation is "
         "for the starting page, an exact URL requested by the user, or a destination "

@@ -357,7 +357,7 @@ async def test_exit_forces_scrollback_metadata_and_screen_flush(
 
 
 @pytest.mark.asyncio
-async def test_screen_history_search_and_command_index_share_background_worker(
+async def test_screen_and_incremental_indexes_use_separate_background_workers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import cyrene.terminal.manager as manager_module
@@ -371,35 +371,34 @@ async def test_screen_history_search_and_command_index_share_background_worker(
     assert writer is not None
     parser_threads: list[int] = []
     metadata_threads: list[int] = []
-    command_threads: list[int] = []
-    text_threads: list[int] = []
+    query_threads: list[int] = []
     original_feed = manager_module.pyte.Stream.feed
     original_metadata_feed = manager_module.OscMetadataParser.feed
-    original_commands = manager_module.osc133_commands
-    original_plain_text = manager_module.plain_terminal_text
+    original_commands_query = writer._commands_query
+    original_search_query = writer._search_query
 
     def tracked_feed(stream, data):
         parser_threads.append(threading.get_ident())
         return original_feed(stream, data)
 
-    def tracked_commands(*args, **kwargs):
-        command_threads.append(threading.get_ident())
-        return original_commands(*args, **kwargs)
-
     def tracked_metadata(parser, data, *, start_seq):
         metadata_threads.append(threading.get_ident())
         return original_metadata_feed(parser, data, start_seq=start_seq)
 
-    def tracked_plain_text(*args, **kwargs):
-        text_threads.append(threading.get_ident())
-        return original_plain_text(*args, **kwargs)
+    def tracked_commands_query(*args, **kwargs):
+        query_threads.append(threading.get_ident())
+        return original_commands_query(*args, **kwargs)
+
+    def tracked_search_query(*args, **kwargs):
+        query_threads.append(threading.get_ident())
+        return original_search_query(*args, **kwargs)
 
     monkeypatch.setattr(manager_module.pyte.Stream, "feed", tracked_feed)
     monkeypatch.setattr(
         manager_module.OscMetadataParser, "feed", tracked_metadata
     )
-    monkeypatch.setattr(manager_module, "osc133_commands", tracked_commands)
-    monkeypatch.setattr(manager_module, "plain_terminal_text", tracked_plain_text)
+    monkeypatch.setattr(writer, "_commands_query", tracked_commands_query)
+    monkeypatch.setattr(writer, "_search_query", tracked_search_query)
     payload = (
         b"\x1b]133;A\x1b\\\x1b]133;B\x1b\\echo worker\r\n"
         b"\x1b]133;C\x1b\\BACKGROUND_WORKER_OUTPUT\r\n"
@@ -409,6 +408,12 @@ async def test_screen_history_search_and_command_index_share_background_worker(
     manager._append_output(session, payload)
     manager.flush()
     screen = await manager.screen_snapshot_async(session.id)
+    monkeypatch.setattr(
+        writer, "_rebuild_index",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("current indexes must not rebuild from scrollback")
+        ),
+    )
     commands = await manager.commands_async(session.id)
     matches = await manager.search_history_async(
         session.project_id, "background_worker_output", terminal_id=session.id
@@ -418,11 +423,228 @@ async def test_screen_history_search_and_command_index_share_background_worker(
     assert commands[0]["command"] == "echo worker"
     assert matches
     assert writer.thread_id is not None
+    assert writer.query_thread_id is not None
     assert parser_threads and set(parser_threads) == {writer.thread_id}
     assert metadata_threads and set(metadata_threads) == {writer.thread_id}
-    assert command_threads and set(command_threads) == {writer.thread_id}
-    assert text_threads and set(text_threads) == {writer.thread_id}
+    assert query_threads and set(query_threads) == {writer.query_thread_id}
     assert writer.thread_id != threading.get_ident()
+    assert writer.query_thread_id != writer.thread_id
+    assert manager._db.execute(
+        "SELECT COUNT(*) FROM terminal_text_chunks WHERE terminal_id = ?",
+        (session.id,),
+    ).fetchone()[0] >= 1
+    assert manager._db.execute(
+        "SELECT COUNT(*) FROM terminal_commands WHERE terminal_id = ?",
+        (session.id,),
+    ).fetchone()[0] == 1
+    manager.close_store()
+
+
+def test_incremental_text_index_preserves_normal_cross_flush_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = TerminalManager(state_dir=tmp_path / "state")
+    session = _session(tmp_path, "term_incremental_text")
+    manager._sessions[session.id] = session
+    manager._persist_session(session)
+    for fragment in (
+        b"alpha \xe4",
+        b"\xb8\xad cross \x1b]2;ignored",
+        b" title\x1b\\boun",
+        b"dary \x1b[31",
+        b"momega\x1b[0m\r",
+        b"\n",
+    ):
+        manager._append_output(session, fragment)
+        manager.flush()
+    writer = manager._persistence_writer
+    assert writer is not None
+    monkeypatch.setattr(
+        writer, "_read_history",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("indexed search must not reread segmented scrollback")
+        ),
+    )
+
+    matches = manager.search_history(
+        session.project_id, "中 cross boundary omega", terminal_id=session.id
+    )
+
+    assert len(matches) == 1
+    assert matches[0]["terminalId"] == session.id
+    assert matches[0]["line"] == 1
+    assert matches[0]["text"] == "alpha 中 cross boundary omega"
+    manager.close_store()
+
+
+def test_incremental_command_index_handles_marker_split_between_flushes(
+    tmp_path: Path,
+) -> None:
+    manager = TerminalManager(state_dir=tmp_path / "state")
+    session = _session(tmp_path, "term_split_command_marker")
+    manager._sessions[session.id] = session
+    manager._persist_session(session)
+    manager._append_output(
+        session,
+        b"\x1b]133;A\x1b\\\x1b]133;B\x1b\\echo split\r\n\x1b]133;C\x1b",
+    )
+    manager.flush()
+    manager._append_output(
+        session,
+        b"\\SPLIT_MARKER_OUTPUT\r\n\x1b]133;D;0\x1b\\",
+    )
+    manager.flush()
+
+    commands = manager.commands(session.id)
+
+    assert len(commands) == 1
+    assert commands[0]["command"] == "echo split"
+    assert commands[0]["exitCode"] == 0
+    manager.close_store()
+
+
+@pytest.mark.asyncio
+async def test_segment_eviction_waits_for_active_history_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_limit = 128 * 1024
+    manager = TerminalManager(
+        output_limit=output_limit, state_dir=tmp_path / "state"
+    )
+    session = _session(tmp_path, "term_segment_reader")
+    manager._sessions[session.id] = session
+    manager._persist_session(session)
+    original_payload = b"a" * output_limit
+    manager._append_output(session, original_payload)
+    manager.flush()
+    writer = manager._persistence_writer
+    assert writer is not None
+    oldest_path = min(manager._scroll_segment_dir(session.id).glob("*.bin"))
+    reader_entered = threading.Event()
+    release_reader = threading.Event()
+    original_open = Path.open
+
+    def controlled_open(path: Path, *args, **kwargs):
+        mode = str(args[0] if args else kwargs.get("mode", "r"))
+        if (
+            path == oldest_path
+            and mode == "rb"
+            and threading.get_ident() == writer.query_thread_id
+        ):
+            reader_entered.set()
+            release_reader.wait(timeout=2)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", controlled_open)
+    history_task = asyncio.create_task(manager._worker_call(
+        "history", session.id, 0, session.next_seq, 0
+    ))
+    try:
+        for _ in range(100):
+            if reader_entered.is_set():
+                break
+            await asyncio.sleep(0.001)
+        assert reader_entered.is_set()
+        manager._append_output(session, b"b" * output_limit)
+        flush_task = asyncio.create_task(asyncio.to_thread(manager.flush))
+        await asyncio.sleep(0.02)
+        assert not flush_task.done()
+    finally:
+        release_reader.set()
+    _oldest, _start, history = await history_task
+    await flush_task
+
+    assert history == original_payload
+    assert not oldest_path.exists()
+    manager.close_store()
+
+
+@pytest.mark.asyncio
+async def test_blocked_history_query_does_not_delay_screen_processing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = TerminalManager(state_dir=tmp_path / "state")
+    history = _session(tmp_path, "term_history_query")
+    interactive = _session(tmp_path, "term_interactive")
+    manager._sessions[history.id] = history
+    manager._sessions[interactive.id] = interactive
+    manager._persist_session(history)
+    manager._persist_session(interactive)
+    manager._append_output(history, b"search target\n")
+    manager.flush()
+    writer = manager._persistence_writer
+    assert writer is not None
+    started = threading.Event()
+    release = threading.Event()
+    original = writer._search_query
+
+    def blocked_search(*args, **kwargs):
+        started.set()
+        release.wait(timeout=2)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(writer, "_search_query", blocked_search)
+    search_task = asyncio.create_task(manager.search_history_async(
+        history.project_id, "target", terminal_id=history.id
+    ))
+    try:
+        for _ in range(100):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.001)
+        assert started.is_set()
+        manager._append_output(interactive, b"INTERACTIVE_ECHO\n")
+        screen = await asyncio.wait_for(
+            manager.screen_snapshot_async(interactive.id), timeout=0.5
+        )
+        assert "INTERACTIVE_ECHO" in screen["screenText"]
+    finally:
+        release.set()
+    assert await search_task
+    manager.close_store()
+
+
+@pytest.mark.asyncio
+async def test_screen_work_round_robins_between_noisy_terminals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = TerminalManager(state_dir=tmp_path / "state")
+    noisy = _session(tmp_path, "term_noisy")
+    interactive = _session(tmp_path, "term_quiet")
+    manager._sessions[noisy.id] = noisy
+    manager._sessions[interactive.id] = interactive
+    writer = manager._persistence_writer
+    assert writer is not None
+    entered = threading.Event()
+    release = threading.Event()
+    order: list[str] = []
+    original = writer._feed_worker_screen
+
+    def tracked(update):
+        order.append(update.terminal_id)
+        if len(order) == 1:
+            entered.set()
+            release.wait(timeout=2)
+        return original(update)
+
+    monkeypatch.setattr(writer, "_feed_worker_screen", tracked)
+    manager._append_output(noisy, b"first\n")
+    for _ in range(100):
+        if entered.is_set():
+            break
+        await asyncio.sleep(0.001)
+    assert entered.is_set()
+    for _ in range(20):
+        manager._append_output(noisy, b"noisy\n")
+    manager._append_output(interactive, b"quiet\n")
+    release.set()
+
+    screen = await asyncio.wait_for(
+        manager.screen_snapshot_async(interactive.id), timeout=1
+    )
+    assert "quiet" in screen["screenText"]
+    assert order[:2] == [noisy.id, interactive.id]
+    assert writer.metrics()["terminalWorkPeakBytes"] > 0
     manager.close_store()
 
 

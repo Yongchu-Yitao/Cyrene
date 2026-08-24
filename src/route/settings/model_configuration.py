@@ -86,7 +86,14 @@ async def _discover(connection: dict[str, Any]) -> list[dict[str, Any]]:
     api_key = str(connection.get("api_key") or "")
     endpoint, headers = discovery_request(adapter, base_url, api_key)
     timeout = httpx.Timeout(20.0, connect=5.0)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+    from cyrene.runtime.network_proxy import configured_proxy_url
+
+    proxy_url = configured_proxy_url(opt_in=connection.get("use_proxy") is True)
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        proxy=proxy_url or None,
+    ) as client:
         response = await client.get(endpoint, headers=headers)
         response.raise_for_status()
         return parse_discovery_response(adapter, response.json())
@@ -125,7 +132,24 @@ async def _test_model(connection: dict[str, Any], profile: Any) -> dict[str, Any
         for item in (profile.get("capabilities") or [])
         if str(item or "").strip()
     }
-    adapter = str(connection.get("adapter") or "openai_compatible").strip().lower()
+    configured_adapter = str(
+        connection.get("adapter") or "openai_compatible"
+    ).strip().lower()
+    connection_options = (
+        connection.get("options")
+        if isinstance(connection.get("options"), dict)
+        else {}
+    )
+    from cyrene.model_runtime.protocol_adapters import runtime_adapter_for_provider
+
+    provider_preset = str(
+        connection_options.get("provider_preset") or ""
+    ).strip().lower()
+    adapter = runtime_adapter_for_provider(
+        configured_adapter,
+        model,
+        provider_preset=provider_preset,
+    )
 
     # Embedding-only profiles do not accept a chat probe. Confirm that the
     # exact configured model is currently advertised by the provider instead.
@@ -142,7 +166,9 @@ async def _test_model(connection: dict[str, Any], profile: Any) -> dict[str, Any
 
     runtime_provider = (
         "codex_oauth"
-        if adapter == "codex_oauth"
+        if configured_adapter == "codex_oauth"
+        else "opencode_go"
+        if provider_preset == "opencode_go"
         else adapter
         if adapter in {"anthropic", "openai", "openai_responses", "gemini"}
         else "openai_compatible"
@@ -162,13 +188,16 @@ async def _test_model(connection: dict[str, Any], profile: Any) -> dict[str, Any
         "api_key": str(connection.get("api_key") or ""),
         "capabilities": sorted(capabilities),
         "reasoning_effort": str(profile.get("reasoning_effort") or ""),
+        "use_proxy": connection.get("use_proxy") is True,
     }
+    if connection_options:
+        candidate["options"] = dict(connection_options)
     from cyrene.model_runtime.client import call_llm, _normalized_llm_endpoints
     from cyrene.model_runtime.protocol_adapters import protocol_endpoints
 
     candidate["endpoints"] = (
         _normalized_llm_endpoints(base_url)
-        if adapter in {"openai", "openai_compatible"}
+        if adapter == "openai_compatible"
         else protocol_endpoints(adapter, base_url, model)
     )
 

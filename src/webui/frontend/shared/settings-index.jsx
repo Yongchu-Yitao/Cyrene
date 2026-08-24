@@ -12,6 +12,7 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "appearance", labelKey: "settings.appearance" },
     { id: "shortcuts", labelKey: "settings.shortcuts" },
     { id: "models", labelKey: "settings.modelServices" },
+    { id: "media", labelKey: "settings.mediaGeneration" },
     { id: "model-usage", labelKey: "settings.modelUsage" },
     { id: "agents", labelKey: "settings.agents" },
     { id: "voice", labelKey: "settings.voiceTab" },
@@ -48,6 +49,15 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "setting-model-vision-route", tab: "model-usage", labelKey: "settings.visionModelSlot", keywords: ["识图模型", "视觉模型", "vision", "图像"] },
     { id: "setting-model-secondary-route", tab: "model-usage", labelKey: "settings.secondaryModelSlot", hintKey: "settings.secondaryModelHint", keywords: ["次要模型", "secondary", "后备"] },
     { id: "setting-model-embedding-route", tab: "model-usage", labelKey: "settings.embeddingIntegration", hintKey: "settings.embeddingIntegrationHint", keywords: ["嵌入", "embedding", "向量", "vector", "知识库"] },
+    // ── Media generation ──
+    { id: "setting-media-runtime", tab: "media", labelKey: "settings.mediaRuntime", hintKey: "settings.mediaRuntimeHint", keywords: ["媒体生成", "高级任务", "后台生成", "并发", "重试", "下载上限", "background generation", "parallel", "retry"] },
+    { id: "setting-media-defaults", tab: "media", labelKey: "settings.mediaDefaultProviders", hintKey: "settings.mediaDefaultProvidersHint", keywords: ["图片", "视频", "音频", "音乐", "参考素材", "image", "video", "audio", "music", "reference", "default provider"] },
+    { id: "setting-media-providers", tab: "media", labelKey: "settings.mediaProviders", hintKey: "settings.mediaProvidersHint", keywords: ["provider", "API", "生成服务", "模型服务", "连接", "reference", "image", "video", "audio"] },
+    { id: "setting-media-openai", tab: "media", labelKey: "settings.mediaOpenAi", hintKey: "settings.mediaProviderHint.openai", keywords: ["openai", "gpt-image", "dall-e", "reference", "image", "mask"] },
+    { id: "setting-media-seedream", tab: "media", labelKey: "settings.mediaSeedream", hintKey: "settings.mediaProviderHint.seedream", keywords: ["seedream", "即梦", "豆包", "volcengine", "byteplus", "reference", "image"] },
+    { id: "setting-media-seedance", tab: "media", labelKey: "settings.mediaSeedance", hintKey: "settings.mediaProviderHint.seedance", keywords: ["seedance", "即梦", "豆包", "volcengine", "byteplus", "reference", "image", "video"] },
+    { id: "setting-media-minimax", tab: "media", labelKey: "settings.mediaMiniMax", hintKey: "settings.mediaProviderHint.minimax", keywords: ["minimax", "MiniMax-H3", "H3", "hailuo", "海螺", "music-3.0", "reference", "image", "video", "audio"] },
+    { id: "setting-media-google", tab: "media", labelKey: "settings.mediaGoogle", hintKey: "settings.mediaProviderHint.google", keywords: ["google", "gemini", "omni", "gemini-omni-flash-preview", "veo", "imagen", "reference", "image", "video", "audio"] },
     // ── Channels ──
     { id: "setting-telegram", tab: "channels", labelKey: "settings.telegram", keywords: ["telegram", "电报"] },
     { id: "setting-wechat", tab: "channels", labelKey: "settings.wechat", keywords: ["微信", "wechat", "weixin"] },

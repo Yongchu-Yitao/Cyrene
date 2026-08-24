@@ -201,6 +201,11 @@ class TerminalDaemon:
                 payload = await self.manager.screen_snapshot_async(
                     str(request.get("terminalId") or "")
                 )
+            elif action == "waitConnected":
+                payload = {"terminal": await self.manager.wait_until_connected(
+                    str(request.get("terminalId") or ""),
+                    timeout=float(request.get("timeoutSeconds") or 300),
+                )}
             elif action == "interrupt":
                 terminal_id = str(request.get("terminalId") or "")
                 await self.manager.interrupt(terminal_id)
@@ -280,21 +285,39 @@ class TerminalDaemon:
                 if active_id
                 else str(request.get("defaultCwd") or "")
             )
-        terminal = await self.manager.create_resolved(
-            project_id,
-            cwd=cwd,
-            shell=str(request.get("shell") or "shell"),
-            argv=[str(part) for part in request.get("argv") or []],
-            title=str(request.get("title") or ""),
-            cols=int(request.get("cols") or 100),
-            rows=int(request.get("rows") or 30),
-            owner_chat_id=str(request.get("ownerChatId") or ""),
-            created_by=str(request.get("createdBy") or "user"),
-            owner_tool_call_id=str(request.get("ownerToolCallId") or ""),
-            launch_mode=str(request.get("launchMode") or "interactive"),
-            wake_on_exit=bool(request.get("wakeOnExit")),
-            wake_note=str(request.get("wakeNote") or ""),
-        )
+        ssh_target = str(request.get("sshTarget") or "").strip()
+        if ssh_target:
+            terminal = await self.manager.create_ssh(
+                project_id,
+                ssh_target=ssh_target,
+                remote_cwd=str(request.get("remoteCwd") or ""),
+                tmux_session=str(request.get("tmuxSession") or ""),
+                cwd=cwd,
+                title=str(request.get("title") or ""),
+                cols=int(request.get("cols") or 100),
+                rows=int(request.get("rows") or 30),
+                owner_chat_id=str(request.get("ownerChatId") or ""),
+                created_by=str(request.get("createdBy") or "user"),
+                owner_tool_call_id=str(request.get("ownerToolCallId") or ""),
+                wake_on_exit=bool(request.get("wakeOnExit")),
+                wake_note=str(request.get("wakeNote") or ""),
+            )
+        else:
+            terminal = await self.manager.create_resolved(
+                project_id,
+                cwd=cwd,
+                shell=str(request.get("shell") or "shell"),
+                argv=[str(part) for part in request.get("argv") or []],
+                title=str(request.get("title") or ""),
+                cols=int(request.get("cols") or 100),
+                rows=int(request.get("rows") or 30),
+                owner_chat_id=str(request.get("ownerChatId") or ""),
+                created_by=str(request.get("createdBy") or "user"),
+                owner_tool_call_id=str(request.get("ownerToolCallId") or ""),
+                launch_mode=str(request.get("launchMode") or "interactive"),
+                wake_on_exit=bool(request.get("wakeOnExit")),
+                wake_note=str(request.get("wakeNote") or ""),
+            )
         if bool(request.get("activate", True)):
             self.manager.set_active(terminal["projectId"], terminal["id"])
         return terminal

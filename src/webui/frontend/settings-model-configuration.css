@@ -40,7 +40,10 @@
 }
 
 .wb-mcfg-provider-logo.is-anthropic svg,
+.wb-mcfg-provider-logo.is-amd svg,
+.wb-mcfg-provider-logo.is-kimi svg,
 .wb-mcfg-provider-logo.is-ollama svg,
+.wb-mcfg-provider-logo.is-opencode svg,
 .wb-mcfg-provider-logo.is-onnx svg {
   fill: currentColor;
 }
@@ -532,6 +535,31 @@
   color: var(--wb-faint);
   font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
   line-height: 1.4;
+}
+
+.wb-mcfg-api-proxy-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.wb-mcfg-model-proxy-control {
+  min-width: 132px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.wb-mcfg-model-proxy-control .wb-mcfg-toggle {
+  min-width: 44px;
 }
 
 .wb-model-config-page :where(.wb-input, .wb-select) {
@@ -1385,6 +1413,15 @@ html[data-theme] .settings-overlay .wb-mcfg-services .wb-btn.wb-mcfg-action-main
   .wb-mcfg-services .wb-mcfg-form-section,
   .wb-mcfg-services .wb-mcfg-special {
     padding: 18px 0 20px;
+  }
+
+  .wb-mcfg-api-proxy-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .wb-mcfg-model-proxy-control {
+    justify-content: space-between;
   }
 
   .wb-mcfg-section-head,

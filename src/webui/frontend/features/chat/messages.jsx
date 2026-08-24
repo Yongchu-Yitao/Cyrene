@@ -376,53 +376,91 @@ function WbcHeader({ project, chat, running, finalizing, onRename, onDelete, onT
 
 function WbcMessageAttachment({ file, onOpenFile }) {
   var [imageFailed, setImageFailed] = useWbcState(false);
-  var isImg = file.kind === "image" || String(file.content_type || "").indexOf("image") === 0;
-  var open = function () { if (onOpenFile && file.url) onOpenFile(file); };
-
-  if (isImg && file.url && !imageFailed) {
-    return (
-      <div
-        className="wbc-inline-image"
-        draggable="true"
-        onDragStart={function (event) { wbcStartFileDrag(event, file); }}
-      >
-        <button
-          type="button"
-          className="wbc-inline-image-preview"
-          onClick={open}
-          title={wbcT("workbenchChat.viewInSide", "View on the right")}
-        >
-          <img
-            src={file.url}
-            alt={file.name || wbcT("workbenchChat.attachmentType.image", "Image")}
-            draggable="false"
-            onError={function () { setImageFailed(true); }}
-          />
-        </button>
-        <div className="wbc-inline-image-footer">
-          <b title={file.name}>{file.name || "image"}</b>
-          <span className="wbc-inline-image-actions">
-            {wbcCanOpenExternally(file) ? (
-              <a
-                className="wbc-inline-image-action"
-                href={file.url}
-                target="_blank"
-                rel="noreferrer"
-                draggable="false"
-                title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}
-                aria-label={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}
-              >{WBC_ICONS.openExternal}</a>
-            ) : null}
-            {wbcDownloadLink(file, {
-              className: "wbc-inline-image-action",
-              draggable: "false",
-              "aria-label": wbcT("workbenchChat.download", "Download"),
-            })}
-          </span>
-        </div>
-      </div>
-    );
+  var viewKind = wbcFileViewKind(file);
+  if (viewKind === "image" && file.url && !imageFailed) {
+    return <WbcInlineImageAttachment file={file} onOpenFile={onOpenFile} setImageFailed={setImageFailed} />;
   }
+  if ((viewKind === "video" || viewKind === "audio") && file.url) {
+    return <WbcInlineMediaAttachment file={file} onOpenFile={onOpenFile} viewKind={viewKind} />;
+  }
+  return <WbcGenericAttachment file={file} onOpenFile={onOpenFile} />;
+}
+
+function WbcInlineAttachmentActions({ file }) {
+  return (
+    <span className="wbc-inline-image-actions">
+      {wbcCanOpenExternally(file) ? (
+        <a
+          className="wbc-inline-image-action"
+          href={file.url}
+          target="_blank"
+          rel="noreferrer"
+          draggable="false"
+          title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}
+          aria-label={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}
+        >{WBC_ICONS.openExternal}</a>
+      ) : null}
+      {wbcDownloadLink(file, {
+        className: "wbc-inline-image-action",
+        draggable: "false",
+        "aria-label": wbcT("workbenchChat.download", "Download"),
+      })}
+    </span>
+  );
+}
+
+function WbcInlineImageAttachment({ file, onOpenFile, setImageFailed }) {
+  var open = function () { if (onOpenFile && file.url) onOpenFile(file); };
+  return (
+    <div
+      className="wbc-inline-image"
+      draggable="true"
+      onDragStart={function (event) { wbcStartFileDrag(event, file); }}
+    >
+      <button
+        type="button"
+        className="wbc-inline-image-preview"
+        onClick={open}
+        title={wbcT("workbenchChat.viewInSide", "View on the right")}
+      >
+        <img
+          src={file.url}
+          alt={file.name || wbcT("workbenchChat.attachmentType.image", "Image")}
+          draggable="false"
+          onError={function () { setImageFailed(true); }}
+        />
+      </button>
+      <div className="wbc-inline-image-footer">
+        <b title={file.name}>{file.name || "image"}</b>
+        <WbcInlineAttachmentActions file={file} />
+      </div>
+    </div>
+  );
+}
+
+function WbcInlineMediaAttachment({ file, onOpenFile, viewKind }) {
+  var open = function () { if (onOpenFile && file.url) onOpenFile(file); };
+  return (
+    <div
+      className={"wbc-inline-media " + viewKind}
+      draggable="true"
+      onDragStart={function (event) { wbcStartFileDrag(event, file); }}
+    >
+      {viewKind === "video"
+        ? <video src={file.url} controls preload="metadata" playsInline draggable="false" />
+        : <audio src={file.url} controls preload="metadata" draggable="false" />}
+      <div className="wbc-inline-media-footer">
+        <button type="button" onClick={open} title={wbcT("workbenchChat.viewInSide", "View on the right")}>
+          {file.name || viewKind}
+        </button>
+        <WbcInlineAttachmentActions file={file} />
+      </div>
+    </div>
+  );
+}
+
+function WbcGenericAttachment({ file, onOpenFile }) {
+  var open = function () { if (onOpenFile && file.url) onOpenFile(file); };
   var canOpen = !!(onOpenFile && file.url);
   function startFileDrag(event) {
     wbcStartFileDrag(event, file);
@@ -596,7 +634,7 @@ function WbcAgentFiles({ files, onOpenFile }) {
   return (
     <div className="wbc-agent-files">
       {files.map(function (file, i) {
-        if (wbcFileViewKind(file) === "image" && file.url) {
+        if (["image", "video", "audio"].indexOf(wbcFileViewKind(file)) !== -1 && file.url) {
           return <WbcMessageAttachment key={file.id || file.url || i} file={file} onOpenFile={onOpenFile} />;
         }
         return (
@@ -619,6 +657,23 @@ function WbcAgentFiles({ files, onOpenFile }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function WbcMediaReferences({ files, onOpenFile }) {
+  var list = Array.isArray(files) ? files : [];
+  if (!list.length) return null;
+  return (
+    <div className="wbc-media-references">
+      <div className="wbc-media-references-label">
+        {wbcT("workbenchChat.mediaReferences", "References")}
+      </div>
+      <div className="wbc-media-references-list">
+        {list.map(function (file, index) {
+          return <WbcMessageAttachment key={file.id || file.url || index} file={file} onOpenFile={onOpenFile} />;
+        })}
+      </div>
     </div>
   );
 }
@@ -1064,6 +1119,9 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
   var messageVoiceKey = "message:" + String(msg && msg.id || "");
   var BrowserIcon = workbenchServices.browser().Icon;
   var processingDuration = wbcFormatProcessingDuration(msg.processingDurationMs);
+  var referenceAttachments = Array.isArray(msg.referenceAttachments)
+    ? msg.referenceAttachments
+    : (Array.isArray(msg.reference_attachments) ? msg.reference_attachments : []);
   // Parse each finalized message's markdown once and reuse it: the whole thread
   // re-renders on every streaming frame, so without this every prior message
   // would be re-parsed + re-sanitized per frame.
@@ -1107,6 +1165,7 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
     <div className="wbc-msg assistant">
       {msg.trace && msg.trace.length > 0 && <WbcTraceCard trace={msg.trace} />}
       <div className="wbc-msg-body markdown" ref={bodyRef} dangerouslySetInnerHTML={{ __html: bodyHtml }} />
+      <WbcMediaReferences files={referenceAttachments} onOpenFile={onOpenFile} />
       <WbcAgentFiles files={msg.attachments} onOpenFile={onOpenFile} />
       <div className="wbc-msg-foot">
         {voiceSnapshot.status.tts_ready && (

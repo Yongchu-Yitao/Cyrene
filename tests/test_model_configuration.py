@@ -74,6 +74,51 @@ def _configuration(api_key: str = "sk-private") -> dict:
     }
 
 
+def test_runtime_candidate_merges_connection_and_profile_transport_options():
+    from cyrene.runtime.model_configuration import (
+        candidate_for_profile,
+        normalize_model_configuration,
+    )
+
+    raw = _configuration()
+    raw["connections"][0]["options"] = {
+        "provider_preset": "custom",
+        "prompt_cache_key_supported": False,
+    }
+    raw["profiles"][0]["options"] = {
+        "prompt_cache_key_supported": True,
+    }
+
+    candidate = candidate_for_profile(
+        "qwen-next",
+        normalize_model_configuration(raw),
+    )
+
+    assert candidate is not None
+    assert candidate["options"] == {
+        "provider_preset": "custom",
+        "prompt_cache_key_supported": True,
+    }
+
+
+def test_model_connection_proxy_opt_in_survives_normalization_and_runtime_projection():
+    from cyrene.runtime.model_configuration import (
+        candidate_for_profile,
+        normalize_model_configuration,
+        public_model_configuration,
+    )
+
+    raw = _configuration()
+    raw["connections"][0]["use_proxy"] = True
+    normalized = normalize_model_configuration(raw)
+
+    assert normalized["connections"][0]["use_proxy"] is True
+    assert public_model_configuration(normalized)["connections"][0]["use_proxy"] is True
+    candidate = candidate_for_profile("qwen-next", normalized)
+    assert candidate is not None
+    assert candidate["use_proxy"] is True
+
+
 def test_save_redacts_secrets_and_mirrors_independent_routes(isolated_model_store):
     from cyrene.runtime.model_configuration import (
         public_model_configuration,
@@ -318,6 +363,60 @@ def test_default_provider_connections_include_managed_local_provider(
         "api_key": "",
         "options": {"provider_preset": "local_onnx"},
     }
+    assert providers["kimi"] == {
+        "id": "kimi",
+        "name": "Kimi",
+        "adapter": "openai",
+        "enabled": True,
+        "base_url": "https://api.moonshot.cn/v1",
+        "api_key": "",
+        "options": {"provider_preset": "kimi"},
+    }
+    assert providers["glm"] == {
+        "id": "glm",
+        "name": "GLM",
+        "adapter": "openai",
+        "enabled": True,
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "api_key": "",
+        "options": {"provider_preset": "glm"},
+    }
+    assert providers["opencode_go"] == {
+        "id": "opencode_go",
+        "name": "OpenCode Go",
+        "adapter": "openai",
+        "enabled": True,
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "api_key": "",
+        "options": {"provider_preset": "opencode_go"},
+    }
+    assert providers["gemini"] == {
+        "id": "gemini",
+        "name": "Gemini",
+        "adapter": "gemini",
+        "enabled": True,
+        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "api_key": "",
+        "options": {"provider_preset": "gemini"},
+    }
+    assert providers["openrouter"] == {
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "adapter": "openai",
+        "enabled": True,
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": "",
+        "options": {"provider_preset": "openrouter"},
+    }
+    assert providers["amd_gpu_cloud"] == {
+        "id": "amd_gpu_cloud",
+        "name": "AMD GPU Cloud",
+        "adapter": "openai",
+        "enabled": True,
+        "base_url": "https://developer.amd.com.cn/radeon/api/v1",
+        "api_key": "",
+        "options": {"provider_preset": "amd_gpu_cloud"},
+    }
     assert configured["profiles"] == []
     assert all(not route for route in configured["routes"].values())
 
@@ -335,6 +434,12 @@ def test_default_provider_connections_include_managed_local_provider(
         "deepseek",
         "codex_oauth",
         "local_onnx",
+        "kimi",
+        "glm",
+        "opencode_go",
+        "gemini",
+        "openrouter",
+        "amd_gpu_cloud",
     ]
 
 
@@ -388,7 +493,16 @@ def test_version_six_configuration_gains_managed_local_provider(
     ) == 1
     assert [
         connection["id"] for connection in upgraded["connections"]
-    ] == ["remote", "local_onnx"]
+    ] == [
+        "remote",
+        "local_onnx",
+        "kimi",
+        "glm",
+        "opencode_go",
+        "gemini",
+        "openrouter",
+        "amd_gpu_cloud",
+    ]
     assert upgraded["profiles"][0]["id"] == "remote-model"
     assert upgraded["routes"] == existing["routes"]
 
@@ -683,6 +797,45 @@ def test_runtime_candidates_keep_wire_protocols_distinct(monkeypatch):
     assert selected["adapter"] == "openai_responses"
 
 
+def test_opencode_go_profiles_route_to_model_specific_wire_protocols(monkeypatch):
+    from cyrene.model_runtime import client
+
+    models = ["kimi-k3", "minimax-m3", "gpt-5.6-luna"]
+    configured = [
+        {
+            "id": model,
+            "profile_id": model,
+            "connection_id": "opencode_go",
+            "adapter": "openai",
+            "provider": "openai",
+            "model": model,
+            "base_url": "https://opencode.ai/zen/go/v1",
+            "api_key": "go-key",
+            "options": {"provider_preset": "opencode_go"},
+        }
+        for model in models
+    ]
+    monkeypatch.setattr(client, "candidates_for_route", lambda _route: configured)
+
+    candidates = client.resolve_llm_candidates()
+
+    assert [candidate["provider"] for candidate in candidates] == [
+        "opencode_go",
+        "opencode_go",
+        "opencode_go",
+    ]
+    assert [candidate["adapter"] for candidate in candidates] == [
+        "openai",
+        "anthropic",
+        "openai_responses",
+    ]
+    assert [candidate["endpoints"][0] for candidate in candidates] == [
+        "https://opencode.ai/zen/go/v1/chat/completions",
+        "https://opencode.ai/zen/go/v1/messages",
+        "https://opencode.ai/zen/go/v1/responses",
+    ]
+
+
 def test_selectable_models_include_non_default_chat_profiles_only():
     from cyrene.runtime.model_configuration import (
         normalize_model_configuration,
@@ -964,6 +1117,19 @@ def test_model_service_credentials_are_agent_write_only_and_r3():
     assert '"aria-label": "连接名称"' in settings
     assert '"aria-label": "模型 ID"' in settings
     assert '"aria-label": "模型服务 API 地址"' in settings
+
+
+def test_model_service_api_row_has_per_connection_proxy_switch():
+    root = Path(__file__).resolve().parents[1]
+    settings = (root / "src/webui/frontend/settings-model-configuration.jsx").read_text()
+    styles = (root / "src/webui/frontend/settings-model-configuration.css").read_text()
+
+    assert 'className: "wb-mcfg-api-proxy-row"' in settings
+    assert 'checked: selected.use_proxy === true' in settings
+    assert 'v.updateConnection("use_proxy", value)' in settings
+    assert 'payload.external_agent_proxy_enabled === true' in settings
+    assert ".wb-mcfg-api-proxy-row" in styles
+    assert "grid-template-columns: minmax(0, 1fr) auto" in styles
 
 
 def test_services_autosave_is_single_flight_retryable_and_current_only():

@@ -13,6 +13,7 @@ import queue
 import re
 import signal
 import shutil
+import socket
 import sqlite3
 import struct
 import sys
@@ -27,7 +28,8 @@ from typing import Any
 
 import pyte
 
-from .history import osc133_commands, plain_terminal_text
+from .history import IncrementalPlainTextParser, osc133_commands, plain_terminal_text
+from .remote import build_managed_ssh_launch
 from .shell_integration import OscMetadataParser, prepare_shell_integration
 
 
@@ -42,6 +44,7 @@ SCREEN_DRAIN_BUDGET = 32 * 1024
 DEFAULT_PERSISTENCE_BACKLOG_LIMIT = 8 * 1024 * 1024
 PERSISTENCE_BACKLOG_POLL_SECONDS = 0.01
 SCROLLBACK_SEGMENT_SIZE = 4 * 1024 * 1024
+SSH_RECONNECT_DELAYS = (1.0, 2.0, 5.0, 10.0, 30.0)
 _DEFAULT_TITLE_RE = re.compile(r"^Terminal\s+(\d+)$", re.IGNORECASE)
 
 
@@ -77,7 +80,10 @@ _SESSION_UPSERT_SQL = """
 _SESSION_METADATA_SQL = """
     UPDATE terminal_sessions
        SET cwd_uri = ?, shell_title = ?, integration_level = ?,
-           command_state = ?, last_command_exit_code = ?
+           command_state = ?, last_command_exit_code = ?,
+           connection_kind = ?, ssh_target = ?, remote_cwd = ?,
+           tmux_session = ?, connection_status = ?, disconnect_reason = ?,
+           reconnect_attempt = ?
      WHERE id = ?
 """
 
@@ -102,6 +108,7 @@ class _ScreenUpdate:
     next_seq: int
     metadata_loop: Any = None
     metadata_callback: Any = None
+    enqueued_at: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +116,12 @@ class _ScreenResize:
     terminal_id: str
     cols: int
     rows: int
+    enqueued_at: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True, slots=True)
+class _TerminalWorkReady:
+    terminal_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +129,15 @@ class _WorkerQuery:
     operation: str
     arguments: tuple[Any, ...]
     future: concurrent.futures.Future[Any]
+    after_token: int = 0
+    enqueued_at: float = field(default_factory=time.monotonic)
+
+
+_QUERY_OPERATIONS = frozenset({
+    "history", "search", "commands", "command_output", "replay",
+})
+_TERMINAL_CONTROL_OPERATIONS = frozenset({"screen", "reset_metadata", "remove"})
+_WORKER_STOP = object()
 
 
 class _TerminalPersistenceWriter:
@@ -126,16 +148,27 @@ class _TerminalPersistenceWriter:
         self._db_path = state_dir / "terminals.sqlite3"
         self._output_limit = output_limit
         self._segment_size = min(SCROLLBACK_SEGMENT_SIZE, output_limit)
-        self._queue: queue.Queue[Any] = queue.Queue()
+        self._queue: queue.PriorityQueue[tuple[int, int, float, Any]] = (
+            queue.PriorityQueue()
+        )
+        self._query_queue: queue.Queue[Any] = queue.Queue()
         self._condition = threading.Condition()
+        self._queue_sequence = 0
         self._submitted = 0
         self._completed = 0
         self._failure: BaseException | None = None
         self._retained_starts: dict[str, int] = {}
         self._screens: dict[str, tuple[Any, Any, Any]] = {}
         self._metadata_parsers: dict[str, OscMetadataParser] = {}
+        self._command_index_parsers: dict[str, OscMetadataParser] = {}
+        self._segment_locks: dict[str, threading.RLock] = {}
+        self._terminal_work: dict[str, deque[Any]] = {}
+        self._terminal_work_scheduled: set[str] = set()
+        self._terminal_work_bytes = 0
+        self._terminal_work_peak_bytes = 0
         self._screen_snapshots: dict[str, tuple[int, dict[str, Any]]] = {}
         self.thread_id: int | None = None
+        self.query_thread_id: int | None = None
         self.batch_count = 0
         self.bytes_written = 0
         self.bytes_read = 0
@@ -143,12 +176,20 @@ class _TerminalPersistenceWriter:
         self.eviction_count = 0
         self.screen_bytes_parsed = 0
         self.query_count = 0
+        self.worker_queue_wait_max_ms = 0.0
+        self.query_queue_wait_max_ms = 0.0
         self._thread = threading.Thread(
-            target=self._run,
+            target=self._run_main,
             name="cyrene-terminal-worker",
             daemon=True,
         )
+        self._query_thread = threading.Thread(
+            target=self._run_queries,
+            name="cyrene-terminal-query-worker",
+            daemon=True,
+        )
         self._thread.start()
+        self._query_thread.start()
 
     @property
     def completed(self) -> int:
@@ -175,7 +216,32 @@ class _TerminalPersistenceWriter:
                 "evictions": self.eviction_count,
                 "screenBytesParsed": self.screen_bytes_parsed,
                 "queries": self.query_count,
+                "terminalWorkPeakBytes": self._terminal_work_peak_bytes,
+                "workerQueueWaitMaxUs": int(self.worker_queue_wait_max_ms * 1000),
+                "queryQueueWaitMaxUs": int(self.query_queue_wait_max_ms * 1000),
             }
+
+    def _put_main(self, priority: int, payload: Any) -> None:
+        with self._condition:
+            self._queue_sequence += 1
+            sequence = self._queue_sequence
+        self._queue.put((priority, sequence, time.monotonic(), payload))
+
+    def _submit_terminal_work(self, terminal_id: str, payload: Any) -> None:
+        schedule = False
+        with self._condition:
+            pending = self._terminal_work.setdefault(terminal_id, deque())
+            pending.append(payload)
+            if isinstance(payload, _ScreenUpdate):
+                self._terminal_work_bytes += len(payload.data)
+                self._terminal_work_peak_bytes = max(
+                    self._terminal_work_peak_bytes, self._terminal_work_bytes
+                )
+            if terminal_id not in self._terminal_work_scheduled:
+                self._terminal_work_scheduled.add(terminal_id)
+                schedule = True
+        if schedule:
+            self._put_main(0, _TerminalWorkReady(terminal_id))
 
     def cached_screen(
         self, terminal_id: str, minimum_seq: int,
@@ -194,7 +260,7 @@ class _TerminalPersistenceWriter:
                 raise RuntimeError("terminal persistence writer failed") from self._failure
             self._submitted += 1
             token = self._submitted
-        self._queue.put((token, tuple(items)))
+        self._put_main(1, (token, tuple(items)))
         return token
 
     def submit_screen(
@@ -202,15 +268,18 @@ class _TerminalPersistenceWriter:
         start_seq: int, next_seq: int, metadata_loop: Any = None,
         metadata_callback: Any = None,
     ) -> None:
-        self._queue.put(
+        self._submit_terminal_work(
+            terminal_id,
             _ScreenUpdate(
                 terminal_id, bytes(data), cols, rows, start_seq, next_seq,
                 metadata_loop, metadata_callback,
-            )
+            ),
         )
 
     def resize_screen(self, terminal_id: str, *, cols: int, rows: int) -> None:
-        self._queue.put(_ScreenResize(terminal_id, cols, rows))
+        self._submit_terminal_work(
+            terminal_id, _ScreenResize(terminal_id, cols, rows)
+        )
 
     def request(self, operation: str, *arguments: Any) -> concurrent.futures.Future[Any]:
         future: concurrent.futures.Future[Any] = concurrent.futures.Future()
@@ -220,7 +289,18 @@ class _TerminalPersistenceWriter:
                     RuntimeError("terminal background worker failed")
                 )
                 return future
-        self._queue.put(_WorkerQuery(operation, tuple(arguments), future))
+        query = _WorkerQuery(
+            operation,
+            tuple(arguments),
+            future,
+            self.submitted if operation in _QUERY_OPERATIONS else 0,
+        )
+        if operation in _QUERY_OPERATIONS:
+            self._query_queue.put(query)
+        elif operation in _TERMINAL_CONTROL_OPERATIONS and arguments:
+            self._submit_terminal_work(str(arguments[0]), query)
+        else:
+            self._put_main(2, query)
         return future
 
     def call(self, operation: str, *arguments: Any) -> Any:
@@ -238,7 +318,9 @@ class _TerminalPersistenceWriter:
     def close(self) -> None:
         token = self.submitted
         self.wait(token)
-        self._queue.put(None)
+        self._query_queue.put(_WORKER_STOP)
+        self._query_thread.join()
+        self._put_main(3, _WORKER_STOP)
         self._thread.join()
 
     def _legacy_path(self, terminal_id: str) -> Path:
@@ -246,6 +328,10 @@ class _TerminalPersistenceWriter:
 
     def _segment_dir(self, terminal_id: str) -> Path:
         return self._state_dir / "scrollback" / terminal_id
+
+    def _segment_lock(self, terminal_id: str) -> threading.RLock:
+        with self._condition:
+            return self._segment_locks.setdefault(terminal_id, threading.RLock())
 
     def _segments(self, terminal_id: str) -> list[tuple[int, Path, int]]:
         directory = self._segment_dir(terminal_id)
@@ -280,10 +366,15 @@ class _TerminalPersistenceWriter:
         legacy.unlink()
 
     def _oldest_seq(self, terminal_id: str, fallback: int) -> int:
-        segments = self._segments(terminal_id)
-        return segments[0][0] if segments else max(0, int(fallback))
+        with self._segment_lock(terminal_id):
+            segments = self._segments(terminal_id)
+            return segments[0][0] if segments else max(0, int(fallback))
 
     def _append_segments(self, item: _PersistenceItem) -> int | None:
+        with self._segment_lock(item.terminal_id):
+            return self._append_segments_locked(item)
+
+    def _append_segments_locked(self, item: _PersistenceItem) -> int | None:
         output_start_seq = int(item.session_values[14])
         self._migrate_legacy(item.terminal_id, output_start_seq)
         directory = self._segment_dir(item.terminal_id)
@@ -328,6 +419,14 @@ class _TerminalPersistenceWriter:
         return segments[0][0] if evicted and segments else None
 
     def _read_history(
+        self, terminal_id: str, start_seq: int, end_seq: int, fallback_start: int,
+    ) -> tuple[int, int, bytes]:
+        with self._segment_lock(terminal_id):
+            return self._read_history_locked(
+                terminal_id, start_seq, end_seq, fallback_start
+            )
+
+    def _read_history_locked(
         self, terminal_id: str, start_seq: int, end_seq: int, fallback_start: int,
     ) -> tuple[int, int, bytes]:
         self._migrate_legacy(terminal_id, fallback_start)
@@ -420,20 +519,275 @@ class _TerminalPersistenceWriter:
         ).fetchone()
         return str(row[0]) if row else default
 
-    def _commands_query(
+    def _index_output(
+        self, connection: sqlite3.Connection, item: _PersistenceItem,
+    ) -> None:
+        if not item.output:
+            return
+        terminal_id = item.terminal_id
+        chunk_start = item.next_seq - len(item.output)
+        output_start_seq = int(item.session_values[14])
+        state = connection.execute(
+            "SELECT * FROM terminal_index_state WHERE terminal_id = ?",
+            (terminal_id,),
+        ).fetchone()
+        if state is None:
+            if chunk_start != output_start_seq:
+                return
+            indexed_next_seq = chunk_start
+            capture_start: int | None = None
+            capture = bytearray()
+            running_start: int | None = None
+            running_command = ""
+        else:
+            indexed_next_seq = int(state["indexed_next_seq"])
+            if indexed_next_seq != chunk_start:
+                return
+            capture_start = state["command_capture_start_seq"]
+            capture = bytearray(bytes(state["command_capture"] or b""))
+            running_start = state["running_output_start_seq"]
+            running_command = str(state["running_command_text"] or "")
+
+        created_at = (
+            str(item.output_events[0][2])
+            if item.output_events
+            else self._history_timestamp(connection, terminal_id, chunk_start)
+        )
+        parser_state = {}
+        if state is not None and str(state["text_state_json"] or ""):
+            parser_state = json.loads(str(state["text_state_json"]))
+        text_parser = IncrementalPlainTextParser(parser_state or {
+            "nextSeq": chunk_start,
+            "lineStartSeq": chunk_start,
+        })
+        lines = text_parser.feed(item.output, start_seq=chunk_start)
+        lines.append(text_parser.current_line())
+        self._upsert_search_lines(
+            connection, terminal_id, lines, created_at=created_at
+        )
+
+        parser = self._command_index_parsers.setdefault(
+            terminal_id, OscMetadataParser()
+        )
+        events = parser.feed(item.output, start_seq=chunk_start)
+        cursor = chunk_start
+        for event in events:
+            event_start = int(event["startSeq"])
+            event_end = int(event["endSeq"])
+            if capture_start is not None and cursor < event_start:
+                capture.extend(item.output[
+                    cursor - chunk_start:event_start - chunk_start
+                ])
+            cursor = max(cursor, event_end)
+            kind = str(event.get("kind") or "")
+            if kind == "command":
+                capture_start = event_end
+                capture.clear()
+            elif kind == "output" and capture_start is not None:
+                running_command = plain_terminal_text(bytes(capture)).strip()
+                running_start = event_end
+                command_id = f"cmd_{running_start}"
+                connection.execute(
+                    """INSERT OR REPLACE INTO terminal_commands (
+                           terminal_id, command_id, command_start_seq,
+                           command_text, output_start_seq, output_end_seq,
+                           exit_code, started_at, finished_at, running
+                       ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, '', 1)""",
+                    (
+                        terminal_id, command_id, int(capture_start),
+                        running_command, running_start, item.next_seq,
+                        self._history_timestamp(
+                            connection, terminal_id, running_start, created_at
+                        ),
+                    ),
+                )
+                capture_start = None
+                capture.clear()
+            elif kind == "finished" and running_start is not None:
+                connection.execute(
+                    """UPDATE terminal_commands
+                          SET output_end_seq = ?, exit_code = ?, finished_at = ?,
+                              running = 0
+                        WHERE terminal_id = ? AND command_id = ?""",
+                    (
+                        event_start, event.get("exitCode"),
+                        self._history_timestamp(
+                            connection, terminal_id, event_start, created_at
+                        ),
+                        terminal_id, f"cmd_{running_start}",
+                    ),
+                )
+                running_start = None
+                running_command = ""
+        capture_end = item.next_seq
+        pending_sequence_start = parser.pending_sequence_start
+        if pending_sequence_start is not None:
+            capture_end = min(capture_end, max(chunk_start, pending_sequence_start))
+        if capture_start is not None and cursor < capture_end:
+            capture.extend(item.output[
+                cursor - chunk_start:capture_end - chunk_start
+            ])
+        if running_start is not None:
+            connection.execute(
+                """UPDATE terminal_commands SET output_end_seq = ?
+                    WHERE terminal_id = ? AND command_id = ? AND running = 1""",
+                (item.next_seq, terminal_id, f"cmd_{running_start}"),
+            )
+        connection.execute(
+            """INSERT OR REPLACE INTO terminal_index_state (
+                   terminal_id, indexed_next_seq, command_capture_start_seq,
+                   command_capture, running_output_start_seq,
+                   running_command_text, text_state_json
+               ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                terminal_id, item.next_seq, capture_start, bytes(capture),
+                running_start, running_command,
+                json.dumps(text_parser.state(), separators=(",", ":")),
+            ),
+        )
+
+    def _upsert_search_lines(
+        self, connection: sqlite3.Connection, terminal_id: str,
+        lines: list[dict[str, Any]], *, created_at: str = "",
+    ) -> None:
+        for line in lines:
+            line_start = int(line["startSeq"])
+            timestamp = self._history_timestamp(
+                connection, terminal_id, line_start, created_at
+            )
+            text = str(line["text"])
+            connection.execute(
+                """INSERT INTO terminal_text_chunks (
+                       terminal_id, line_number, start_seq, end_seq, text,
+                       search_text, complete, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(terminal_id, line_number) DO UPDATE SET
+                       start_seq=excluded.start_seq,
+                       end_seq=excluded.end_seq,
+                       text=excluded.text,
+                       search_text=excluded.search_text,
+                       complete=excluded.complete,
+                       created_at=excluded.created_at""",
+                (
+                    terminal_id, int(line["line"]), line_start,
+                    int(line["endSeq"]), text, text.casefold(),
+                    int(bool(line["complete"])), timestamp,
+                ),
+            )
+
+    def _rebuild_index(
         self, connection: sqlite3.Connection, terminal_id: str,
         output_start_seq: int, next_seq: int,
-    ) -> list[dict[str, Any]]:
-        oldest, _start, data = self._read_history(
+    ) -> None:
+        oldest, _actual, data = self._read_history(
             terminal_id, output_start_seq, next_seq, output_start_seq
         )
-        return osc133_commands(
+        connection.execute(
+            "DELETE FROM terminal_text_chunks WHERE terminal_id = ?",
+            (terminal_id,),
+        )
+        connection.execute(
+            "DELETE FROM terminal_commands WHERE terminal_id = ?",
+            (terminal_id,),
+        )
+        text_parser = IncrementalPlainTextParser({
+            "nextSeq": oldest,
+            "lineStartSeq": oldest,
+        })
+        for offset in range(0, len(data), OUTPUT_FLUSH_THRESHOLD):
+            raw = data[offset:offset + OUTPUT_FLUSH_THRESHOLD]
+            position = oldest + offset
+            self._upsert_search_lines(
+                connection, terminal_id,
+                text_parser.feed(raw, start_seq=position),
+            )
+        self._upsert_search_lines(
+            connection, terminal_id, [text_parser.current_line()]
+        )
+        commands = osc133_commands(
             data,
             base_seq=oldest,
             timestamp_at=lambda seq: self._history_timestamp(
                 connection, terminal_id, seq
             ),
         )
+        for command in commands:
+            connection.execute(
+                """INSERT INTO terminal_commands (
+                       terminal_id, command_id, command_start_seq, command_text,
+                       output_start_seq, output_end_seq, exit_code, started_at,
+                       finished_at, running
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    terminal_id, command["id"],
+                    int(command["outputStartSeq"]), str(command["command"]),
+                    int(command["outputStartSeq"]),
+                    int(command["outputEndSeq"]), command.get("exitCode"),
+                    str(command.get("startedAt") or ""),
+                    str(command.get("finishedAt") or ""),
+                    int(bool(command.get("running"))),
+                ),
+            )
+        running = next(
+            (command for command in reversed(commands) if command.get("running")),
+            None,
+        )
+        connection.execute(
+            """INSERT OR REPLACE INTO terminal_index_state (
+                   terminal_id, indexed_next_seq, command_capture_start_seq,
+                   command_capture, running_output_start_seq,
+                   running_command_text, text_state_json
+               ) VALUES (?, ?, NULL, X'', ?, ?, ?)""",
+            (
+                terminal_id, oldest + len(data),
+                int(running["outputStartSeq"]) if running else None,
+                str(running["command"]) if running else "",
+                json.dumps(text_parser.state(), separators=(",", ":")),
+            ),
+        )
+        connection.commit()
+
+    def _ensure_index(
+        self, connection: sqlite3.Connection, terminal_id: str,
+        output_start_seq: int, next_seq: int,
+    ) -> None:
+        row = connection.execute(
+            "SELECT indexed_next_seq FROM terminal_index_state WHERE terminal_id = ?",
+            (terminal_id,),
+        ).fetchone()
+        if row is not None and int(row[0]) >= int(next_seq):
+            return
+        self._rebuild_index(
+            connection, terminal_id, output_start_seq, next_seq
+        )
+
+    def _commands_query(
+        self, connection: sqlite3.Connection, terminal_id: str,
+        output_start_seq: int, next_seq: int,
+    ) -> list[dict[str, Any]]:
+        output_start_seq = self._oldest_seq(terminal_id, output_start_seq)
+        self._ensure_index(
+            connection, terminal_id, output_start_seq, next_seq
+        )
+        rows = connection.execute(
+            """SELECT command_id, command_text, output_start_seq,
+                      output_end_seq, exit_code, started_at, finished_at, running
+                 FROM terminal_commands
+                WHERE terminal_id = ? AND command_start_seq >= ?
+                  AND output_start_seq < ?
+                ORDER BY output_start_seq""",
+            (terminal_id, output_start_seq, next_seq),
+        ).fetchall()
+        return [{
+            "id": str(row["command_id"]),
+            "command": str(row["command_text"]),
+            "outputStartSeq": int(row["output_start_seq"]),
+            "outputEndSeq": min(next_seq, int(row["output_end_seq"])),
+            "exitCode": row["exit_code"],
+            "startedAt": str(row["started_at"] or ""),
+            "finishedAt": str(row["finished_at"] or ""),
+            "running": bool(row["running"]),
+        } for row in rows]
 
     def _search_query(
         self, connection: sqlite3.Connection, sessions: tuple[dict[str, Any], ...],
@@ -441,69 +795,33 @@ class _TerminalPersistenceWriter:
     ) -> list[dict[str, Any]]:
         matches: list[dict[str, Any]] = []
         for session in sessions:
-            oldest, _start, data = self._read_history(
-                session["id"], session["outputStartSeq"], session["nextSeq"],
-                session["outputStartSeq"],
+            terminal_id = str(session["id"])
+            oldest = self._oldest_seq(
+                terminal_id, int(session["outputStartSeq"])
             )
-            if not data:
-                continue
-            history_end = oldest + len(data)
+            next_seq = int(session["nextSeq"])
+            self._ensure_index(connection, terminal_id, oldest, next_seq)
+            first_line_row = connection.execute(
+                """SELECT MIN(line_number) FROM terminal_text_chunks
+                    WHERE terminal_id = ? AND end_seq > ? AND start_seq < ?""",
+                (terminal_id, oldest, next_seq),
+            ).fetchone()
+            first_line = int(first_line_row[0] or 1)
             rows = connection.execute(
-                """SELECT start_seq, end_seq, created_at
-                   FROM terminal_output_events WHERE terminal_id = ?
-                   ORDER BY start_seq""",
-                (session["id"],),
+                """SELECT line_number, text, created_at
+                     FROM terminal_text_chunks
+                    WHERE terminal_id = ? AND end_seq > ? AND start_seq < ?
+                      AND instr(search_text, ?) > 0
+                    ORDER BY line_number""",
+                (terminal_id, oldest, next_seq, needle),
             ).fetchall()
-            chunks: list[tuple[str, bytes]] = []
-            position = oldest
-            for row_start, row_end, created_at in rows:
-                start = max(oldest, int(row_start), position)
-                end = min(history_end, int(row_end))
-                if start > position:
-                    chunks.append((
-                        session["createdAt"],
-                        data[position - oldest:start - oldest],
-                    ))
-                if end > start:
-                    chunks.append((
-                        str(created_at), data[start - oldest:end - oldest]
-                    ))
-                    position = end
-            if position < history_end:
-                chunks.append((
-                    self._history_timestamp(
-                        connection, session["id"], position, session["createdAt"]
-                    ),
-                    data[position - oldest:],
-                ))
-            pending = ""
-            pending_at = ""
-            line_number = 0
-            for created_at, chunk in chunks:
-                line_timestamp = pending_at if pending else created_at
-                lines = (pending + plain_terminal_text(chunk)).split("\n")
-                pending = lines.pop() if lines else ""
-                for line in lines:
-                    line_number += 1
-                    if needle in line.casefold():
-                        matches.append({
-                            "terminalId": session["id"],
-                            "title": session["title"],
-                            "line": line_number,
-                            "text": line,
-                            "createdAt": line_timestamp,
-                        })
-                        if len(matches) >= limit:
-                            return matches
-                    line_timestamp = created_at
-                pending_at = line_timestamp
-            if pending and needle in pending.casefold():
+            for row in rows:
                 matches.append({
-                    "terminalId": session["id"],
+                    "terminalId": terminal_id,
                     "title": session["title"],
-                    "line": line_number + 1,
-                    "text": pending,
-                    "createdAt": pending_at,
+                    "line": int(row["line_number"]) - first_line + 1,
+                    "text": str(row["text"]),
+                    "createdAt": str(row["created_at"] or ""),
                 })
                 if len(matches) >= limit:
                     return matches
@@ -521,6 +839,7 @@ class _TerminalPersistenceWriter:
             return None
         if operation == "reset_metadata":
             self._metadata_parsers.pop(str(arguments[0]), None)
+            self._command_index_parsers.pop(str(arguments[0]), None)
             return None
         if operation == "screen":
             terminal_id, cols, rows, output_start_seq, next_seq = arguments
@@ -579,11 +898,20 @@ class _TerminalPersistenceWriter:
             terminal_id = str(arguments[0])
             self._screens.pop(terminal_id, None)
             self._metadata_parsers.pop(terminal_id, None)
+            self._command_index_parsers.pop(terminal_id, None)
             with self._condition:
                 self._screen_snapshots.pop(terminal_id, None)
-            shutil.rmtree(self._segment_dir(terminal_id), ignore_errors=True)
-            with contextlib.suppress(OSError):
-                self._legacy_path(terminal_id).unlink()
+            with self._segment_lock(terminal_id):
+                shutil.rmtree(self._segment_dir(terminal_id), ignore_errors=True)
+                with contextlib.suppress(OSError):
+                    self._legacy_path(terminal_id).unlink()
+            for table in (
+                "terminal_text_chunks", "terminal_commands", "terminal_index_state",
+            ):
+                connection.execute(
+                    f"DELETE FROM {table} WHERE terminal_id = ?", (terminal_id,)
+                )
+            connection.commit()
             return None
         raise ValueError(f"unknown terminal worker operation: {operation}")
 
@@ -591,20 +919,137 @@ class _TerminalPersistenceWriter:
         with self._condition:
             self._failure = exc
             self._condition.notify_all()
-        while True:
-            try:
-                pending = self._queue.get_nowait()
-            except queue.Empty:
-                break
+            terminal_items = [
+                item
+                for pending in self._terminal_work.values()
+                for item in pending
+            ]
+            self._terminal_work.clear()
+            self._terminal_work_scheduled.clear()
+        queued: list[Any] = terminal_items
+        for pending_queue, is_main in (
+            (self._queue, True), (self._query_queue, False),
+        ):
+            while True:
+                try:
+                    pending = pending_queue.get_nowait()
+                except queue.Empty:
+                    break
+                queued.append(pending[3] if is_main else pending)
+        for pending in queued:
             if isinstance(pending, _WorkerQuery) and not pending.future.done():
                 pending.future.set_exception(
                     RuntimeError("terminal background worker failed")
                 )
 
-    def _run(self) -> None:
+    def _take_terminal_work(self, terminal_id: str) -> Any:
+        with self._condition:
+            pending = self._terminal_work.get(terminal_id)
+            if not pending:
+                self._terminal_work.pop(terminal_id, None)
+                self._terminal_work_scheduled.discard(terminal_id)
+                return None
+            item = pending.popleft()
+            if isinstance(item, _ScreenUpdate):
+                self._terminal_work_bytes = max(
+                    0, self._terminal_work_bytes - len(item.data)
+                )
+            return item
+
+    def _finish_terminal_work(self, terminal_id: str) -> bool:
+        with self._condition:
+            pending = self._terminal_work.get(terminal_id)
+            if not pending:
+                self._terminal_work.pop(terminal_id, None)
+                self._terminal_work_scheduled.discard(terminal_id)
+                return False
+            return True
+
+    def _handle_terminal_work(
+        self, connection: sqlite3.Connection, item: Any,
+    ) -> None:
+        enqueued_at = float(getattr(item, "enqueued_at", time.monotonic()))
+        self.worker_queue_wait_max_ms = max(
+            self.worker_queue_wait_max_ms,
+            (time.monotonic() - enqueued_at) * 1000,
+        )
+        if isinstance(item, _ScreenUpdate):
+            self._feed_worker_screen(item)
+            return
+        if isinstance(item, _ScreenResize):
+            state = self._screens.get(item.terminal_id)
+            if state is not None:
+                state[0].resize(lines=item.rows, columns=item.cols)
+                with self._condition:
+                    previous = self._screen_snapshots.get(
+                        item.terminal_id, (0, {})
+                    )
+                    self._screen_snapshots[item.terminal_id] = (
+                        previous[0], self._screen_body(state)
+                    )
+            return
+        if isinstance(item, _WorkerQuery):
+            try:
+                item.future.set_result(self._execute_query(connection, item))
+            except BaseException as exc:
+                item.future.set_exception(exc)
+
+    def _persist_batch(
+        self, connection: sqlite3.Connection, token: int,
+        items: tuple[_PersistenceItem, ...],
+    ) -> None:
+        retained_starts: dict[str, int] = {}
+        for item in items:
+            retained_start = self._retained_starts.get(item.terminal_id, 0)
+            evicted_start: int | None = None
+            if item.output:
+                evicted_start = self._append_segments(item)
+                if evicted_start is not None:
+                    retained_start = evicted_start
+                    retained_starts[item.terminal_id] = retained_start
+            if item.output_events:
+                connection.executemany(
+                    """INSERT INTO terminal_output_events (
+                           terminal_id, start_seq, end_seq, created_at
+                       ) VALUES (?, ?, ?, ?)""",
+                    [
+                        (item.terminal_id, start, end, created_at)
+                        for start, end, created_at in item.output_events
+                    ],
+                )
+            self._index_output(connection, item)
+            session_values = list(item.session_values)
+            session_values[14] = max(int(session_values[14]), retained_start)
+            connection.execute(_SESSION_UPSERT_SQL, tuple(session_values))
+            connection.execute(_SESSION_METADATA_SQL, item.metadata_values)
+            if evicted_start is not None:
+                connection.execute(
+                    """DELETE FROM terminal_output_events
+                       WHERE terminal_id = ? AND end_seq <= ?""",
+                    (item.terminal_id, retained_start),
+                )
+                connection.execute(
+                    """DELETE FROM terminal_text_chunks
+                       WHERE terminal_id = ? AND start_seq < ?""",
+                    (item.terminal_id, retained_start),
+                )
+                connection.execute(
+                    """DELETE FROM terminal_commands
+                       WHERE terminal_id = ? AND command_start_seq < ?""",
+                    (item.terminal_id, retained_start),
+                )
+        connection.commit()
+        self.batch_count += 1
+        with self._condition:
+            self._retained_starts.update(retained_starts)
+            self._completed = token
+            self._condition.notify_all()
+
+    def _run_main(self) -> None:
         self.thread_id = threading.get_ident()
         try:
             connection = sqlite3.connect(self._db_path)
+            connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA synchronous=NORMAL")
             connection.execute("PRAGMA busy_timeout=5000")
         except BaseException as exc:
@@ -612,23 +1057,20 @@ class _TerminalPersistenceWriter:
             return
         try:
             while True:
-                entry = self._queue.get()
-                if entry is None:
+                _priority, _sequence, enqueued_at, entry = self._queue.get()
+                self.worker_queue_wait_max_ms = max(
+                    self.worker_queue_wait_max_ms,
+                    (time.monotonic() - enqueued_at) * 1000,
+                )
+                if entry is _WORKER_STOP:
                     return
-                if isinstance(entry, _ScreenUpdate):
-                    self._feed_worker_screen(entry)
-                    continue
-                if isinstance(entry, _ScreenResize):
-                    state = self._screens.get(entry.terminal_id)
-                    if state is not None:
-                        state[0].resize(lines=entry.rows, columns=entry.cols)
-                        with self._condition:
-                            previous = self._screen_snapshots.get(
-                                entry.terminal_id, (0, {})
-                            )
-                            self._screen_snapshots[entry.terminal_id] = (
-                                previous[0], self._screen_body(state)
-                            )
+                if isinstance(entry, _TerminalWorkReady):
+                    item = self._take_terminal_work(entry.terminal_id)
+                    if item is not None:
+                        self._handle_terminal_work(connection, item)
+                    has_more = self._finish_terminal_work(entry.terminal_id)
+                    if has_more:
+                        self._put_main(0, entry)
                     continue
                 if isinstance(entry, _WorkerQuery):
                     try:
@@ -638,45 +1080,42 @@ class _TerminalPersistenceWriter:
                     continue
                 token, items = entry
                 try:
-                    retained_starts: dict[str, int] = {}
-                    for item in items:
-                        retained_start = self._retained_starts.get(item.terminal_id, 0)
-                        evicted_start: int | None = None
-                        if item.output:
-                            evicted_start = self._append_segments(item)
-                            if evicted_start is not None:
-                                retained_start = evicted_start
-                                retained_starts[item.terminal_id] = retained_start
-                        if item.output_events:
-                            connection.executemany(
-                                """INSERT INTO terminal_output_events (
-                                       terminal_id, start_seq, end_seq, created_at
-                                   ) VALUES (?, ?, ?, ?)""",
-                                [
-                                    (item.terminal_id, start, end, created_at)
-                                    for start, end, created_at in item.output_events
-                                ],
-                            )
-                        session_values = list(item.session_values)
-                        session_values[14] = max(int(session_values[14]), retained_start)
-                        connection.execute(_SESSION_UPSERT_SQL, tuple(session_values))
-                        connection.execute(_SESSION_METADATA_SQL, item.metadata_values)
-                        if evicted_start is not None:
-                            connection.execute(
-                                """DELETE FROM terminal_output_events
-                                   WHERE terminal_id = ? AND end_seq <= ?""",
-                                (item.terminal_id, retained_start),
-                            )
-                    connection.commit()
-                    self.batch_count += 1
+                    self._persist_batch(connection, token, items)
                 except BaseException as exc:
                     connection.rollback()
                     self._record_failure(exc)
                     return
-                with self._condition:
-                    self._retained_starts.update(retained_starts)
-                    self._completed = token
-                    self._condition.notify_all()
+        except BaseException as exc:
+            self._record_failure(exc)
+        finally:
+            connection.close()
+
+    def _run_queries(self) -> None:
+        self.query_thread_id = threading.get_ident()
+        try:
+            connection = sqlite3.connect(self._db_path)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA synchronous=NORMAL")
+            connection.execute("PRAGMA busy_timeout=5000")
+        except BaseException as exc:
+            self._record_failure(exc)
+            return
+        try:
+            while True:
+                entry = self._query_queue.get()
+                if entry is _WORKER_STOP:
+                    return
+                assert isinstance(entry, _WorkerQuery)
+                try:
+                    self.wait(entry.after_token)
+                    self.query_queue_wait_max_ms = max(
+                        self.query_queue_wait_max_ms,
+                        (time.monotonic() - entry.enqueued_at) * 1000,
+                    )
+                    entry.future.set_result(self._execute_query(connection, entry))
+                except BaseException as exc:
+                    if not entry.future.done():
+                        entry.future.set_exception(exc)
         except BaseException as exc:
             self._record_failure(exc)
         finally:
@@ -800,6 +1239,17 @@ class TerminalSession:
     integration_level: str = "none"
     command_state: str = ""
     last_command_exit_code: int | None = None
+    connection_kind: str = "local"
+    ssh_target: str = ""
+    remote_cwd: str = ""
+    tmux_session: str = ""
+    connection_status: str = "local"
+    disconnect_reason: str = ""
+    reconnect_attempt: int = 0
+    remote_lifecycle: str = ""
+    remote_connected: bool = False
+    connection_event: asyncio.Event = field(default_factory=asyncio.Event)
+    reconnect_task: asyncio.Task[Any] | None = None
     osc_parser: OscMetadataParser = field(default_factory=OscMetadataParser)
     last_user_input_at: float = 0.0
     last_actor: str = ""
@@ -832,6 +1282,13 @@ class TerminalSession:
             "integrationLevel": self.integration_level,
             "commandState": self.command_state,
             "lastCommandExitCode": self.last_command_exit_code,
+            "connectionKind": self.connection_kind,
+            "sshTarget": self.ssh_target,
+            "remoteCwd": self.remote_cwd,
+            "tmuxSession": self.tmux_session,
+            "connectionStatus": self.connection_status,
+            "disconnectReason": self.disconnect_reason,
+            "reconnectAttempt": self.reconnect_attempt,
             "shell": self.shell,
             "status": self.status,
             "exitCode": self.exit_code,
@@ -971,8 +1428,83 @@ class TerminalManager:
             );
             CREATE INDEX IF NOT EXISTS idx_terminal_output_events_terminal
                 ON terminal_output_events(terminal_id, start_seq);
+            CREATE TABLE IF NOT EXISTS terminal_text_chunks (
+                chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                terminal_id TEXT NOT NULL,
+                line_number INTEGER NOT NULL,
+                start_seq INTEGER NOT NULL,
+                end_seq INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                search_text TEXT NOT NULL,
+                complete INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_terminal_text_chunks_terminal
+                ON terminal_text_chunks(terminal_id, start_seq);
+            CREATE TABLE IF NOT EXISTS terminal_commands (
+                terminal_id TEXT NOT NULL,
+                command_id TEXT NOT NULL,
+                command_start_seq INTEGER NOT NULL,
+                command_text TEXT NOT NULL,
+                output_start_seq INTEGER NOT NULL,
+                output_end_seq INTEGER NOT NULL,
+                exit_code INTEGER,
+                started_at TEXT NOT NULL DEFAULT '',
+                finished_at TEXT NOT NULL DEFAULT '',
+                running INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (terminal_id, command_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_terminal_commands_terminal
+                ON terminal_commands(terminal_id, output_start_seq);
+            CREATE TABLE IF NOT EXISTS terminal_index_state (
+                terminal_id TEXT PRIMARY KEY,
+                indexed_next_seq INTEGER NOT NULL DEFAULT 0,
+                command_capture_start_seq INTEGER,
+                command_capture BLOB NOT NULL DEFAULT X'',
+                running_output_start_seq INTEGER,
+                running_command_text TEXT NOT NULL DEFAULT '',
+                text_state_json TEXT NOT NULL DEFAULT ''
+            );
             """
         )
+        text_columns = {
+            str(row[1])
+            for row in self._db.execute("PRAGMA table_info(terminal_text_chunks)")
+        }
+        required_text_columns = {
+            "terminal_id", "line_number", "start_seq", "end_seq", "text",
+            "search_text", "complete", "created_at",
+        }
+        reset_terminal_indexes = not required_text_columns.issubset(text_columns)
+        if reset_terminal_indexes:
+            self._db.executescript(
+                """DROP TABLE terminal_text_chunks;
+                   CREATE TABLE terminal_text_chunks (
+                       chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       terminal_id TEXT NOT NULL,
+                       line_number INTEGER NOT NULL,
+                       start_seq INTEGER NOT NULL,
+                       end_seq INTEGER NOT NULL,
+                       text TEXT NOT NULL,
+                       search_text TEXT NOT NULL,
+                       complete INTEGER NOT NULL DEFAULT 0,
+                       created_at TEXT NOT NULL
+                   );"""
+            )
+        self._db.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_terminal_text_chunks_line
+               ON terminal_text_chunks(terminal_id, line_number)"""
+        )
+        self._db.execute(
+            """CREATE INDEX IF NOT EXISTS idx_terminal_text_chunks_terminal
+               ON terminal_text_chunks(terminal_id, start_seq)"""
+        )
+        self._ensure_column(
+            "terminal_index_state", "text_state_json", "TEXT NOT NULL DEFAULT ''"
+        )
+        if reset_terminal_indexes:
+            self._db.execute("DELETE FROM terminal_commands")
+            self._db.execute("DELETE FROM terminal_index_state")
         self._ensure_column("terminal_sessions", "owner_chat_id", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("terminal_sessions", "created_by", "TEXT NOT NULL DEFAULT 'user'")
         self._ensure_column("terminal_sessions", "owner_tool_call_id", "TEXT NOT NULL DEFAULT ''")
@@ -993,6 +1525,21 @@ class TerminalManager:
         )
         self._ensure_column("terminal_sessions", "command_state", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("terminal_sessions", "last_command_exit_code", "INTEGER")
+        self._ensure_column(
+            "terminal_sessions", "connection_kind", "TEXT NOT NULL DEFAULT 'local'"
+        )
+        self._ensure_column("terminal_sessions", "ssh_target", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("terminal_sessions", "remote_cwd", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("terminal_sessions", "tmux_session", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(
+            "terminal_sessions", "connection_status", "TEXT NOT NULL DEFAULT 'local'"
+        )
+        self._ensure_column(
+            "terminal_sessions", "disconnect_reason", "TEXT NOT NULL DEFAULT ''"
+        )
+        self._ensure_column(
+            "terminal_sessions", "reconnect_attempt", "INTEGER NOT NULL DEFAULT 0"
+        )
         self._db.commit()
         self._persistence_writer = _TerminalPersistenceWriter(
             self.state_dir, output_limit=self.output_limit
@@ -1072,6 +1619,18 @@ class TerminalManager:
                 integration_level=str(row["integration_level"] or "none"),
                 command_state=str(row["command_state"] or ""),
                 last_command_exit_code=row["last_command_exit_code"],
+                connection_kind=str(row["connection_kind"] or "local"),
+                ssh_target=str(row["ssh_target"] or ""),
+                remote_cwd=str(row["remote_cwd"] or ""),
+                tmux_session=str(row["tmux_session"] or ""),
+                connection_status=str(row["connection_status"] or "local"),
+                disconnect_reason=str(row["disconnect_reason"] or ""),
+                reconnect_attempt=int(row["reconnect_attempt"] or 0),
+                remote_connected=(
+                    str(row["connection_kind"] or "local") == "ssh"
+                    and str(row["connection_status"] or "")
+                    in {"connected", "reconnecting"}
+                ),
             )
             for event_row in self._db.execute(
                 """SELECT event_id, actor, input_kind, byte_count, accepted,
@@ -1237,6 +1796,13 @@ class TerminalManager:
             session.integration_level,
             session.command_state,
             session.last_command_exit_code,
+            session.connection_kind,
+            session.ssh_target,
+            session.remote_cwd,
+            session.tmux_session,
+            session.connection_status,
+            session.disconnect_reason,
+            session.reconnect_attempt,
             session.id,
         )
 
@@ -1393,6 +1959,10 @@ class TerminalManager:
 
     def close_store(self) -> None:
         """Flush and stop the dedicated persistence writer."""
+        for session in self._sessions.values():
+            if session.reconnect_task is not None:
+                session.reconnect_task.cancel()
+                session.reconnect_task = None
         if self._backpressure_handle is not None:
             self._backpressure_handle.cancel()
             self._backpressure_handle = None
@@ -1566,6 +2136,60 @@ class TerminalManager:
             rows=rows,
         )
 
+    async def create_ssh(
+        self,
+        project_id: str,
+        *,
+        ssh_target: str,
+        remote_cwd: str = "",
+        tmux_session: str = "",
+        title: str = "",
+        cwd: str = "",
+        cols: int = 100,
+        rows: int = 30,
+        owner_chat_id: str = "",
+        created_by: str = "user",
+        owner_tool_call_id: str = "",
+        wake_on_exit: bool = False,
+        wake_note: str = "",
+    ) -> dict[str, Any]:
+        """Create a managed SSH PTY whose remote bootstrap is restartable."""
+        local_cwd = str(self._resolve_cwd(project_id, cwd))
+        requested_remote_cwd = str(remote_cwd or "")
+        if not requested_remote_cwd:
+            active_id = self.active_terminal_id(project_id)
+            active = self._sessions.get(str(active_id or ""))
+            if (
+                active is not None
+                and active.connection_kind == "ssh"
+                and active.ssh_target == str(ssh_target or "").strip()
+            ):
+                requested_remote_cwd = active.remote_cwd
+        launch = build_managed_ssh_launch(
+            target=ssh_target,
+            remote_cwd=requested_remote_cwd,
+            tmux_session=tmux_session,
+        )
+        return await self.create_resolved(
+            project_id,
+            cwd=local_cwd,
+            shell="ssh",
+            argv=launch.argv,
+            title=title,
+            cols=cols,
+            rows=rows,
+            owner_chat_id=owner_chat_id,
+            created_by=created_by,
+            owner_tool_call_id=owner_tool_call_id,
+            launch_mode="interactive",
+            wake_on_exit=wake_on_exit,
+            wake_note=wake_note,
+            connection_kind="ssh",
+            ssh_target=launch.target,
+            remote_cwd=launch.remote_cwd,
+            tmux_session=launch.tmux_session,
+        )
+
     async def create_resolved(
         self,
         project_id: str,
@@ -1582,6 +2206,10 @@ class TerminalManager:
         launch_mode: str = "interactive",
         wake_on_exit: bool = False,
         wake_note: str = "",
+        connection_kind: str = "local",
+        ssh_target: str = "",
+        remote_cwd: str = "",
+        tmux_session: str = "",
     ) -> dict[str, Any]:
         project_id = str(project_id or "").strip()
         requested_cwd = str(cwd or "").strip()
@@ -1639,6 +2267,16 @@ class TerminalManager:
                 created_by=str(created_by or "user").strip() or "user",
                 owner_tool_call_id=str(owner_tool_call_id or "").strip(),
                 launch_mode=str(launch_mode or "interactive").strip() or "interactive",
+                connection_kind=(
+                    "ssh" if str(connection_kind or "local") == "ssh" else "local"
+                ),
+                ssh_target=str(ssh_target or ""),
+                remote_cwd=str(remote_cwd or ""),
+                tmux_session=str(tmux_session or ""),
+                connection_status=(
+                    "connecting"
+                    if str(connection_kind or "local") == "ssh" else "local"
+                ),
             )
             self._reset_screen(session)
             if wake_on_exit:
@@ -2362,8 +3000,24 @@ class TerminalManager:
         fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
         os.set_blocking(master_fd, False)
         env = _terminal_environment()
-        command = list(session.argv)
-        if self.state_dir is not None:
+        if session.connection_kind == "ssh":
+            session.connection_event.clear()
+            launch = build_managed_ssh_launch(
+                target=session.ssh_target,
+                remote_cwd=session.remote_cwd,
+                tmux_session=session.tmux_session,
+            )
+            session.argv = list(launch.argv)
+            command = list(launch.argv)
+            session.integration_level = "none"
+            session.connection_status = (
+                "reconnecting" if session.reconnect_attempt else "connecting"
+            )
+            session.disconnect_reason = ""
+            session.remote_lifecycle = ""
+        else:
+            command = list(session.argv)
+        if self.state_dir is not None and session.connection_kind != "ssh":
             launch = prepare_shell_integration(
                 shell=session.shell,
                 argv=session.argv,
@@ -2394,6 +3048,10 @@ class TerminalManager:
                 preexec_fn=child_setup,
                 close_fds=True,
             )
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.close(master_fd)
+            raise
         finally:
             os.close(slave_fd)
         session.process = process
@@ -2415,8 +3073,24 @@ class TerminalManager:
             raise RuntimeError("pywinpty is required for terminal support on Windows") from exc
 
         env = _terminal_environment()
-        command = session.argv
-        if self.state_dir is not None:
+        if session.connection_kind == "ssh":
+            session.connection_event.clear()
+            launch = build_managed_ssh_launch(
+                target=session.ssh_target,
+                remote_cwd=session.remote_cwd,
+                tmux_session=session.tmux_session,
+            )
+            session.argv = list(launch.argv)
+            command = list(launch.argv)
+            session.integration_level = "none"
+            session.connection_status = (
+                "reconnecting" if session.reconnect_attempt else "connecting"
+            )
+            session.disconnect_reason = ""
+            session.remote_lifecycle = ""
+        else:
+            command = session.argv
+        if self.state_dir is not None and session.connection_kind != "ssh":
             launch = prepare_shell_integration(
                 shell=session.shell,
                 argv=session.argv,
@@ -2480,6 +3154,7 @@ class TerminalManager:
             raise
         except Exception:
             exit_code = None
+        await self._synchronize_exit_metadata(session)
         self._mark_exited(session, exit_code)
 
     async def _wait_posix(self, terminal_id: str) -> None:
@@ -2503,7 +3178,15 @@ class TerminalManager:
             with contextlib.suppress(OSError):
                 os.close(session.master_fd)
             session.master_fd = None
+        await self._synchronize_exit_metadata(session)
         self._mark_exited(session, exit_code)
+
+    async def _synchronize_exit_metadata(self, session: TerminalSession) -> None:
+        if self._persistence_writer is None:
+            return
+        self._flush_pending_outputs()
+        await self._worker_call("barrier")
+        await asyncio.sleep(0)
 
     def _mark_exited(self, session: TerminalSession, exit_code: int | None) -> None:
         self._drain_screen_now(session)
@@ -2514,6 +3197,31 @@ class TerminalManager:
         session.exit_at = now
         if session.closing:
             session.exit_reason = "deleted"
+            if session.connection_kind == "ssh":
+                session.connection_status = "exited"
+                session.disconnect_reason = "user_exit"
+        elif session.connection_kind == "ssh" and session.remote_lifecycle in {
+            "user_exit", "tmux_detached", "tmux_ended",
+        }:
+            session.exit_reason = session.remote_lifecycle
+            session.connection_status = (
+                "detached"
+                if session.remote_lifecycle == "tmux_detached" else "exited"
+            )
+            session.disconnect_reason = session.remote_lifecycle
+        elif session.connection_kind == "ssh" and session.remote_connected:
+            session.exit_reason = "transport_lost"
+            session.disconnect_reason = "transport_lost"
+            session.connection_status = "reconnecting"
+            if self._schedule_remote_reconnect(session):
+                session.status = "starting"
+            else:
+                session.connection_status = "disconnected"
+                session.disconnect_reason = "reconnect_exhausted"
+        elif session.connection_kind == "ssh":
+            session.exit_reason = "connection_failed"
+            session.connection_status = "disconnected"
+            session.disconnect_reason = "connection_failed"
         elif exit_code is None:
             session.exit_reason = "pty_lost"
         elif exit_code < 0:
@@ -2521,10 +3229,71 @@ class TerminalManager:
         else:
             session.exit_reason = "process_exit"
         session.updated_at = now
+        session.connection_event.set()
         self._persist_session(session)
-        self._ready_wake(session, exit_code=exit_code)
+        if session.status != "starting":
+            self._ready_wake(session, exit_code=exit_code)
         self._publish_state(session)
         self._publish_list_change(session.project_id, "status", session.id)
+
+    def _schedule_remote_reconnect(self, session: TerminalSession) -> bool:
+        if session.closing or session.reconnect_task is not None:
+            return False
+        if session.reconnect_attempt >= len(SSH_RECONNECT_DELAYS):
+            return False
+        delay = SSH_RECONNECT_DELAYS[session.reconnect_attempt]
+        session.reconnect_attempt += 1
+        session.connection_status = "reconnecting"
+        session.reconnect_task = asyncio.create_task(
+            self._reconnect_remote(session.id, delay)
+        )
+        return True
+
+    async def _reconnect_remote(self, terminal_id: str, delay: float) -> None:
+        session = self._sessions.get(terminal_id)
+        if session is None:
+            return
+        current_task = asyncio.current_task()
+        try:
+            await asyncio.sleep(max(0.0, float(delay)))
+            if session.closing or session.status != "starting":
+                return
+            session.process = None
+            session.master_fd = None
+            session.winpty = None
+            self._append_output(
+                session,
+                (
+                    "\r\n[Cyrene reconnecting SSH "
+                    f"({session.reconnect_attempt}/{len(SSH_RECONNECT_DELAYS)})…]\r\n"
+                ).encode("utf-8"),
+            )
+            try:
+                if sys.platform == "win32":  # pragma: no cover - Windows only
+                    await self._spawn_windows(session)
+                else:
+                    await self._spawn_posix(session)
+            except Exception:
+                session.status = "starting"
+                session.connection_status = "reconnecting"
+                session.disconnect_reason = "transport_lost"
+                session.updated_at = _now_iso()
+                self._persist_session(session)
+                self._publish_state(session, reason="reconnect")
+                session.reconnect_task = None
+                if not self._schedule_remote_reconnect(session):
+                    session.status = "exited"
+                    session.connection_status = "disconnected"
+                    session.disconnect_reason = "reconnect_exhausted"
+                    self._persist_session(session)
+                    self._ready_wake(session, exit_code=session.exit_code)
+                    self._publish_state(session, reason="reconnect")
+                    self._publish_list_change(
+                        session.project_id, "status", session.id
+                    )
+        finally:
+            if session.reconnect_task is current_task:
+                session.reconnect_task = None
 
     def _append_output(self, session: TerminalSession, data: bytes) -> None:
         if not data:
@@ -2594,6 +3363,40 @@ class TerminalManager:
         session: TerminalSession, metadata: dict[str, Any],
     ) -> bool:
         kind = str(metadata.get("kind") or "")
+        if kind in {"context", "profile"}:
+            return False
+        if kind == "lifecycle":
+            if session.connection_kind != "ssh":
+                return False
+            value = str(metadata.get("value") or "")
+            if value not in {
+                "connected", "user_exit", "tmux_detached", "tmux_ended",
+            }:
+                return False
+            before = (
+                session.remote_lifecycle,
+                session.connection_status,
+                session.disconnect_reason,
+                session.reconnect_attempt,
+            )
+            session.remote_lifecycle = value
+            if value == "connected":
+                session.remote_connected = True
+                session.connection_status = "connected"
+                session.disconnect_reason = ""
+                session.reconnect_attempt = 0
+            else:
+                session.connection_status = (
+                    "detached" if value == "tmux_detached" else "exited"
+                )
+                session.disconnect_reason = value
+            session.connection_event.set()
+            return before != (
+                session.remote_lifecycle,
+                session.connection_status,
+                session.disconnect_reason,
+                session.reconnect_attempt,
+            )
         if kind == "integration":
             value = str(metadata.get("value") or "none")
             if value not in {"none", "basic", "full"} or value == session.integration_level:
@@ -2615,6 +3418,18 @@ class TerminalManager:
             changed = uri != session.cwd_uri
             session.cwd_uri = uri
             value = str(metadata.get("value") or "")
+            if session.connection_kind == "ssh":
+                if value.startswith("/") or value == "~" or value.startswith("~/"):
+                    if value != session.remote_cwd:
+                        session.remote_cwd = value
+                        changed = True
+                return changed
+            host = str(metadata.get("host") or "").casefold()
+            local_hosts = {
+                "", "localhost", socket.gethostname().casefold(),
+            }
+            if host not in local_hosts:
+                return changed
             candidate = Path(value).expanduser() if value else None
             if (
                 candidate is not None
@@ -2737,6 +3552,35 @@ class TerminalManager:
             binary=False,
             actor=actor,
         )
+
+    async def wait_until_connected(
+        self, terminal_id: str, *, timeout: float = 300.0,
+    ) -> dict[str, Any]:
+        """Wait for the managed remote launcher to confirm shell readiness."""
+        session = self.get(terminal_id)
+        if session.connection_kind != "ssh":
+            return session.public()
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        while True:
+            if session.remote_connected and session.connection_status == "connected":
+                return session.public()
+            if session.status in {"closed", "exited"} or session.connection_status in {
+                "detached", "disconnected", "exited",
+            }:
+                reason = session.disconnect_reason or session.exit_reason or "connection_failed"
+                raise RuntimeError(f"SSH connection did not become ready: {reason}")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("SSH connection did not become ready before timeout")
+            session.connection_event.clear()
+            if session.remote_connected and session.connection_status == "connected":
+                continue
+            try:
+                await asyncio.wait_for(session.connection_event.wait(), timeout=remaining)
+            except TimeoutError as exc:
+                raise RuntimeError(
+                    "SSH connection did not become ready before timeout"
+                ) from exc
 
     async def write_bytes(
         self,
@@ -2890,7 +3734,10 @@ class TerminalManager:
         if session.status == "running":
             return session.public()
         if session.status == "starting":
-            raise RuntimeError("terminal restart is already in progress")
+            if session.reconnect_task is None:
+                raise RuntimeError("terminal restart is already in progress")
+            session.reconnect_task.cancel()
+            session.reconnect_task = None
         session.closing = False
         session.process = None
         session.master_fd = None
@@ -2902,6 +3749,8 @@ class TerminalManager:
         session.recovery_reason = "pty_restart"
         session.recovered_at = _now_iso()
         session.recovery_count += 1
+        session.reconnect_attempt = 0
+        session.remote_connected = False
         self._append_output(
             session,
             (
@@ -2930,6 +3779,9 @@ class TerminalManager:
     async def close(self, terminal_id: str, *, remove: bool = False) -> dict[str, Any]:
         session = self.get(terminal_id)
         session.closing = True
+        if session.reconnect_task is not None:
+            session.reconnect_task.cancel()
+            session.reconnect_task = None
         if session.status == "running":
             if sys.platform == "win32":  # pragma: no cover - Windows only
                 if session.winpty is not None:
@@ -2950,6 +3802,15 @@ class TerminalManager:
                                 os.killpg(session.pid, signal.SIGKILL)
         if session.status == "running":
             self._mark_exited(session, session.exit_code)
+        elif session.status == "starting":
+            session.status = "closed"
+            session.exit_reason = "deleted"
+            session.exit_at = _now_iso()
+            if session.connection_kind == "ssh":
+                session.connection_status = "exited"
+                session.disconnect_reason = "user_exit"
+                session.connection_event.set()
+            self._persist_session(session)
         result = session.public()
         if remove:
             async with self._lock:
@@ -2969,6 +3830,14 @@ class TerminalManager:
                         "DELETE FROM terminal_output_events WHERE terminal_id = ?",
                         (session.id,),
                     )
+                    for table in (
+                        "terminal_text_chunks", "terminal_commands",
+                        "terminal_index_state",
+                    ):
+                        self._db.execute(
+                            f"DELETE FROM {table} WHERE terminal_id = ?",
+                            (session.id,),
+                        )
                     self._db.execute(
                         """UPDATE terminal_wakes SET status='cancelled', cancelled_at=?,
                                lease_token='', lease_until=0

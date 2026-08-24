@@ -38,10 +38,34 @@ async def _tool_read_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_p
         access="read",
     )
     view = str(args.get("view") or "screen").strip().lower()
-    if view not in {"screen", "scrollback"}:
-        raise ValueError("view must be 'screen' or 'scrollback'")
+    if view not in {"screen", "scrollback", "commands", "command_output"}:
+        raise ValueError(
+            "view must be 'screen', 'scrollback', 'commands', or 'command_output'"
+        )
     client = get_terminal_daemon_client()
     terminal_id = str(terminal.get("id") or "")
+    if view == "commands":
+        payload = await client.commands(terminal_id)
+        return json_result({
+            "shell_id": terminal_id,
+            "terminal_id": terminal_id,
+            "title": terminal.get("title", "Terminal"),
+            "source": "commands",
+            "commands": list(payload.get("commands") or []),
+        })
+    if view == "command_output":
+        command_id = str(args.get("command_id") or "").strip()
+        if not command_id:
+            raise ValueError("command_id is required for view=command_output")
+        payload = await client.command_output(terminal_id, command_id)
+        return json_result({
+            "shell_id": terminal_id,
+            "terminal_id": terminal_id,
+            "title": terminal.get("title", "Terminal"),
+            "source": "command_output",
+            "command": payload.get("command") or {},
+            "text": str(payload.get("text") or ""),
+        })
     if view == "scrollback":
         requested_cursor = args.get("cursor")
         snap = await client.scrollback(
@@ -74,6 +98,11 @@ async def _tool_read_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_p
             "last_actor": terminal_state.get("lastActor", ""),
             "last_input_at": terminal_state.get("lastInputAt", ""),
             "input_event_count": terminal_state.get("inputEventCount", 0),
+            "connection_kind": terminal_state.get("connectionKind", "local"),
+            "connection_status": terminal_state.get("connectionStatus", "local"),
+            "ssh_target": terminal_state.get("sshTarget", ""),
+            "remote_cwd": terminal_state.get("remoteCwd", ""),
+            "tmux_session": terminal_state.get("tmuxSession", ""),
         })
 
     snap = await client.screen(terminal_id)
@@ -102,6 +131,11 @@ async def _tool_read_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_p
         "last_actor": terminal_state.get("lastActor", ""),
         "last_input_at": terminal_state.get("lastInputAt", ""),
         "input_event_count": terminal_state.get("inputEventCount", 0),
+        "connection_kind": terminal_state.get("connectionKind", "local"),
+        "connection_status": terminal_state.get("connectionStatus", "local"),
+        "ssh_target": terminal_state.get("sshTarget", ""),
+        "remote_cwd": terminal_state.get("remoteCwd", ""),
+        "tmux_session": terminal_state.get("tmuxSession", ""),
     })
 
 

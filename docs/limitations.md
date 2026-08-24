@@ -64,5 +64,5 @@ open bugs.
   checks remain release or manual gates.
 
 See [Development](development.md) for the exact validation baseline and
-[Current Development Progress](../project-notes/CONTEXT_DEV_PROGRESS.md) for
+[Development Status](../project-notes/README.md) for
 known engineering risks.

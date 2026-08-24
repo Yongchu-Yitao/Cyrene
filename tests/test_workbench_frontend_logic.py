@@ -310,7 +310,7 @@ process.stdout.write(JSON.stringify(files.map(wbcAttachmentVisualKind)));
     assert json.loads(completed.stdout) == ["markdown", "code", "note", "doc", "markdown"]
 
 
-def test_file_view_kind_recognizes_project_images_without_mime_metadata():
+def test_file_view_kind_recognizes_media_extensions_without_mime_metadata():
     source = workbench_chat_source()
     constants = "var WBC_CODE_EXTS" + source.split("var WBC_CODE_EXTS", 1)[1].split(
         "function wbcFileViewKind", 1
@@ -324,13 +324,22 @@ const files = [
   {{ name: 'sorting_viz_preview.png' }},
   {{ path: 'images/photo.JPG' }},
   {{ filename: 'cover.avif' }},
-  {{ contentType: 'image/jpeg' }}
+  {{ contentType: 'image/jpeg' }},
+  {{ name: 'generated.MP4', content_type: 'application/octet-stream' }},
+  {{ url: '/api/chat/export/voice.opus?download=1', content_type: 'application/octet-stream' }}
 ];
 process.stdout.write(JSON.stringify(files.map(wbcFileViewKind)));
 """
     completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
 
-    assert json.loads(completed.stdout) == ["image", "image", "image", "image"]
+    assert json.loads(completed.stdout) == [
+        "image",
+        "image",
+        "image",
+        "image",
+        "video",
+        "audio",
+    ]
 
 
 def test_office_files_use_lazy_browser_renderers_with_resource_limits():
@@ -2759,7 +2768,7 @@ def test_project_text_files_use_codemirror_with_live_markdown_and_conflict_contr
     assert "root.CyreneCodeMirror = Object.freeze({" in editor
     assert "Editor: Editor," in editor
     assert 'key: "Mod-s"' in editor
-    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta1">' in index
+    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta2">' in index
     assert 'import "../code/editor.jsx"' in (
         root / "src/webui/frontend/entry/app.jsx"
     ).read_text(encoding="utf-8")
@@ -5713,7 +5722,7 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in composer
     assert "if (running) { onInterrupt(); return; }" not in composer
     assert "输入内容以引导正在运行的 Agent" in workbench_i18n_source()
-    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta1"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta2"></script>' in index
 
 
 def test_task_answer_resume_uses_interrupt_not_pause_and_suppresses_cancel_error():
@@ -7363,13 +7372,23 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
     assert 'className="wbc-inline-image-preview"' in message_attachment
     assert 'className="wbc-inline-image-footer"' in message_attachment
     assert 'className="wbc-inline-image-actions"' in message_attachment
+    assert 'className={"wbc-inline-media " + viewKind}' in message_attachment
+    assert (
+        '<video src={file.url} controls preload="metadata" playsInline draggable="false" />'
+        in message_attachment
+    )
+    assert (
+        '<audio src={file.url} controls preload="metadata" draggable="false" />'
+        in message_attachment
+    )
+    assert 'className="wbc-inline-media-footer"' in message_attachment
     assert 'draggable="true"' in message_attachment
     assert "wbcStartFileDrag(event, file)" in message_attachment
     assert 'draggable="false"' in message_attachment
     assert "wbcCanOpenExternally(file)" in message_attachment
     assert "WBC_ICONS.openExternal" in message_attachment
     assert 'className: "wbc-inline-image-action"' in message_attachment
-    assert source.count("<WbcMessageAttachment key=") == 3
+    assert source.count("<WbcMessageAttachment key=") == 4
     assert "workbenchServices.library().FileVisual" in source
     assert 'className="wbc-attach-file"' in message_attachment
     assert 'wbcT("workbenchChat.openPreview", "Open preview")' in message_attachment
@@ -7385,6 +7404,10 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
     assert "width: min(calc(280px + 28px), 100%);" in image_bubble_rule
     assert "max-width: 100%;" in image_bubble_rule
     assert ".wbc-inline-image-actions .wbc-inline-image-action" in styles
+    assert ".wbc-inline-media > video" in styles
+    assert ".wbc-inline-media > audio" in styles
+    assert "max-height: min(58vh, 520px);" in styles
+    assert "width: calc(100% - 16px);" in styles
     inline_image_rule = styles.split(".wbc-inline-image {", 1)[1].split("}", 1)[0]
     assert "width: min(280px, 100%);" in inline_image_rule
     preview_rule = styles.split(".wbc-inline-image-preview {", 1)[1].split("}", 1)[0]
@@ -7415,15 +7438,40 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
     assert "overflow: hidden;" in image_rule
 
 
-def test_workbench_agent_images_render_inline_with_viewer_and_file_actions():
+def test_workbench_agent_media_and_references_reuse_inline_attachment_renderer():
     source = workbench_chat_source()
+    i18n = workbench_i18n_source()
 
     agent_files = source.split("function WbcAgentFiles(", 1)[1].split(
-        "function WbcTraceCard(", 1
+        "function WbcMediaReferences(", 1
     )[0]
-    assert 'wbcFileViewKind(file) === "image" && file.url' in agent_files
+    references = source.split("function WbcMediaReferences(", 1)[1].split(
+        "function WbcLiveAgentArtifacts(", 1
+    )[0]
+    assistant = source.split("function WbcAssistantMessage(", 1)[1].split(
+        "var WbcRemoteDeviceCatalog", 1
+    )[0]
+    assert (
+        '["image", "video", "audio"].indexOf(wbcFileViewKind(file)) !== -1 && file.url'
+        in agent_files
+    )
     assert "<WbcMessageAttachment" in agent_files
     assert "wbcStartFileDrag(event, file)" in agent_files
+    assert 'className="wbc-media-references"' in references
+    assert 'wbcT("workbenchChat.mediaReferences", "References")' in references
+    assert "<WbcMessageAttachment" in references
+    assert "Array.isArray(msg.referenceAttachments)" in assistant
+    assert "Array.isArray(msg.reference_attachments)" in assistant
+    assert "<WbcMediaReferences files={referenceAttachments}" in assistant
+    assert "<WbcAgentFiles files={msg.attachments}" in assistant
+    assert '"workbenchChat.mediaReferences": "References"' in i18n
+    assert '"workbenchChat.mediaReferences": "参考素材"' in i18n
+
+    styles = workbench_style_source()
+    assert ".wbc-media-references" in styles
+    assert ".wbc-media-references-list .wbc-inline-image" in styles
+    assert ".wbc-media-references-list .wbc-inline-media.video" in styles
+    assert ".wbc-media-references-list .wbc-inline-media.audio" in styles
 
 
 def test_workbench_execution_card_uses_collapsible_activity_summary():
@@ -7604,7 +7652,7 @@ process.stdout.write(JSON.stringify(result));
 def test_workbench_chat_splits_live_tools_around_intermediate_messages():
     source = workbench_chat_source()
     append_block = source.split("function appendIntermediate(chatId, message)", 1)[1].split(
-        "function streamHandlers(chatId)", 1
+        "function streamHandlers(chatId, generation)", 1
     )[0]
 
     assert 'type === "intermediate_message"' in source
@@ -7699,10 +7747,10 @@ def test_workbench_chat_error_retry_replays_failed_message_instead_of_reloading(
 def test_workbench_chat_waits_for_terminal_failure_and_retains_it_until_retry():
     source = workbench_chat_source()
 
-    stream_failure = source.split("function failRun(chatId, err) {", 1)[1].split(
+    stream_failure = source.split("function failRun(chatId, err, generation) {", 1)[1].split(
         "function appendActivity", 1
     )[0]
-    stream_owner = source.split("function ownStream(chatId, streamPromise, ac, model) {", 1)[1].split(
+    stream_owner = source.split("function ownStream(chatId, generation, streamPromise, ac, model) {", 1)[1].split(
         "// Begin a streamed send", 1
     )[0]
     page_error = frontend_module_source("features/chat/runtime-page-hooks.jsx").split(
@@ -7727,6 +7775,60 @@ def test_workbench_chat_waits_for_terminal_failure_and_retains_it_until_retry():
     assert "clearFailure(chatId);" in start_run
 
 
+def test_late_terminal_event_from_completed_stream_cannot_fail_next_turn():
+    result = _run_workbench_runtime_js(
+        """
+(() => {
+  let firstHandlers = null;
+  let secondHandlers = null;
+  let terminalErrors = 0;
+  const pending = new Promise(() => {});
+  WorkbenchChatRuntimes.setHooks({
+    onError: (_chatId, _error, state) => {
+      if (state && state.terminal) terminalErrors += 1;
+    }
+  });
+  WorkbenchChatRuntimes.start("chat-race", {
+    message: "first", clientRequestId: "first"
+  }, {
+    sendMessage: (_chatId, _input, handlers) => {
+      firstHandlers = handlers;
+      return pending;
+    }
+  });
+  // ``saved`` clears the visible runtime before the HTTP stream itself closes.
+  WorkbenchChatRuntimes.clear("chat-race");
+  WorkbenchChatRuntimes.start("chat-race", {
+    message: "second", clientRequestId: "second"
+  }, {
+    sendMessage: (_chatId, _input, handlers) => {
+      secondHandlers = handlers;
+      return pending;
+    }
+  });
+  firstHandlers.onReplyDelta("stale reply");
+  firstHandlers.onError(new Error("stale driver failure"));
+  const current = WorkbenchChatRuntimes.get("chat-race");
+  return {
+    terminalErrors,
+    currentRequest: current && current.clientRequestId,
+    currentText: current && current.text,
+    hasFailure: !!WorkbenchChatRuntimes.getFailure("chat-race"),
+    secondReady: !!secondHandlers
+  };
+})()
+"""
+    )
+
+    assert result == {
+        "terminalErrors": 0,
+        "currentRequest": "second",
+        "currentText": "",
+        "hasFailure": False,
+        "secondReady": True,
+    }
+
+
 def test_workbench_chat_errors_keep_i18n_metadata_and_localize_known_codes():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
@@ -7747,6 +7849,8 @@ def test_workbench_chat_errors_keep_i18n_metadata_and_localize_known_codes():
         '"workbenchChat.error.quotaExhausted": "Codex 额度已耗尽，',
         '"workbenchChat.error.processRestarted": "Cyrene restarted',
         '"workbenchChat.error.processRestarted": "Cyrene 在消息完成前重启了',
+        '"workbenchChat.error.driverFailed": "The agent run stopped unexpectedly.',
+        '"workbenchChat.error.driverFailed": "Agent 运行意外停止，',
     ):
         assert expected in i18n
 
@@ -8307,7 +8411,7 @@ def test_workbench_chat_uses_explicit_run_reconnect_without_resubmitting_message
 def test_workbench_chat_reconnect_keeps_live_timeline_and_resumes_from_cursor():
     source = workbench_chat_source()
     stream_owner = source.split(
-        "function ownStream(chatId, streamPromise, ac, model) {", 1
+        "function ownStream(chatId, generation, streamPromise, ac, model) {", 1
     )[1].split("// Begin a streamed send", 1)[0]
 
     assert "scheduleReconnect(chatId, model);" in stream_owner
@@ -8636,7 +8740,7 @@ def test_workbench_task_panel_reuses_conversation_panel_structure_and_styles():
     assert 'html[data-theme="dark"] .wbc-page .wbc-side-card.wb-task-detail-card' in styles
     assert '"task.side.detailPanel": "Task panel"' in i18n
     assert '"task.side.detailPanel": "任务面板"' in i18n
-    assert "workbench.css?v=0.8.0-beta1" in index
+    assert "workbench.css?v=0.8.0-beta2" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -8658,7 +8762,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.8.0-beta1" in index
+    assert "workbench.css?v=0.8.0-beta2" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -8729,7 +8833,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta1"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta2"></script>' in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -9131,6 +9235,8 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     styles = workbench_style_source()
+    runtime_hooks = frontend_module_source("features/chat/runtime-page-hooks.jsx")
+    file_resources = frontend_module_source("features/chat/file-resources.jsx")
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     tools_rule = styles.split(".wbc-tools-menu {", 1)[1].split("}", 1)[0]
@@ -9138,7 +9244,7 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     command_rule = styles.split(".wbc-tools-command-grid {", 1)[1].split("}", 1)[0]
     command_section_rule = styles.split(".wbc-tools-commands {", 1)[1].split("}", 1)[0]
 
-    assert "width: min(260px, calc(100cqw - 58px));" in tools_rule
+    assert "width: min(320px, calc(100cqw - 58px));" in tools_rule
     assert "max-height: min(390px, calc(100vh - 190px));" in tools_rule
     assert "overflow-y: auto;" in tools_rule
     assert "max-height:" not in content_rule
@@ -9157,6 +9263,27 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     assert "setToolsPanel" not in chat
     assert "function WbcCtxPicker" not in chat
     assert 'className="wbc-tools-command-grid"' in chat
+    assert 'role="combobox"' in chat
+    assert 'event.key === "ArrowDown" || event.key === "ArrowUp"' in chat
+    assert "wbcParseSlashCommandText(text, slashPool)" in chat
+    assert '"/api/workbench/context-capabilities"' in chat
+    assert '"/api/workbench/slash-commands?project_id="' in chat
+    assert "slashCommandCatalog.length ? slashCommandCatalog : WBC_COMMANDS" in chat
+    assert 'item.group === "skill"' in chat
+    assert 'item.group === "mcp"' in chat
+    assert 'item.group === "toolPackage"' in chat
+    assert 'item.group === "customTool"' in chat
+    assert 'item.group === "plugin"' in chat
+    assert "contextActivations: submittedContextActivations" in chat
+    assert "submittedDescriptor && submittedDescriptor.activation" in chat
+    assert 'key: "mcpServers"' in chat
+    assert 'key: "skills"' in chat
+    assert 'key: "toolPackages"' in chat
+    assert 'key: "customTools"' in chat
+    assert ".wbc-tools-context-options" in styles
+    command_clear_guard = 'session.updateKind === "available_commands_update" || session.commands.length'
+    assert command_clear_guard in runtime_hooks
+    assert command_clear_guard in file_resources
     assert 'className={"wbc-composer-icon wbc-tools-trigger"' in chat
     assert 'enabledContentCount > 0 ? " has-content" : ""' in chat
     assert 'className="wbc-tools-trigger-count"' in chat
@@ -9165,7 +9292,7 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     assert 'className={"wbc-send"' in chat
     assert ".wbc-send span" not in styles
     assert "transform: none;" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta1"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta2"></script>' in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -9177,7 +9304,7 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert 'window.prompt("后续任务标题"' not in source
     assert "model.createFollowUp(sid, options)" in source
     assert '"/follow-up"' in model
-    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta1"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta2"></script>' in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -9304,7 +9431,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.custom_models || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta1"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta2"></script>' in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -10785,6 +10912,7 @@ def test_custom_model_connection_protocol_does_not_select_a_brand_icon():
     resolver = source[start:end]
     assert "provider_preset" in resolver
     assert "presetIcons[preset]" in resolver
+    assert 'isLocalConnection(connection) ? "onnx"' in resolver
     assert "connectionAdapter(connection)" not in resolver
 
 
@@ -11260,7 +11388,7 @@ def test_workbench_assistant_message_mounts_charts_and_contract_teaches_chart():
     assert ".wbc-chart-spec" in styles
     assert ":::chart line" in contract
     assert "y-binds" in contract
-    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta1">' in index_html
+    assert '<script type="module" src="compiled/app.js?v=0.8.0-beta2">' in index_html
     entry_html = (root / "src/webui/frontend/entry/app.jsx").read_text(encoding="utf-8")
     assert 'import "../shared/chart/spec.jsx"' in entry_html
     assert 'import "../shared/chart/mount.jsx"' in entry_html
@@ -11744,3 +11872,118 @@ def test_workbench_durable_trace_skips_when_boundaries_diverge():
         "noSaved": None,
         "emptyRuntime": None,
     }
+
+
+def test_media_settings_hide_comfyui_and_use_progressive_autosave_ui():
+    media = frontend_module_source("features/settings/media.jsx")
+    settings_index = frontend_module_source("shared/settings-index.jsx")
+    settings_overlay = workbench_settings_source()
+    build = Path("src/webui/build-jsx.mjs").read_text(encoding="utf-8")
+    controls = (Path("src/webui/frontend/features/settings/controls.css")).read_text(
+        encoding="utf-8"
+    )
+    zh = Path("src/webui/frontend/shared/i18n/catalog-zh.jsx").read_text(encoding="utf-8")
+
+    visible_order = media.split("var MEDIA_PROVIDER_ORDER =", 1)[1].split(";", 1)[0]
+    visible_defaults = media.split("var MEDIA_KIND_PROVIDERS =", 1)[1].split(";", 1)[0]
+    panel = media.split("function MediaPanel(p)", 1)[1].split("export {", 1)[0]
+
+    assert "comfyui" not in visible_order.lower()
+    assert "comfyui" not in visible_defaults.lower()
+    assert 'return provider === "comfyui" ? provider' in media
+    assert 'id: "setting-media-comfyui"' not in settings_index
+    assert 'className: "wb-media-provider"' in media
+    assert 'className: "wb-media-advanced"' in media
+    assert 'className: "wb-media-runtime"' in media
+    assert '{ id: "media", labelKey: "settings.mediaGeneration", icon: "photo-video" }' in settings_overlay
+    assert "'photo-video.svg'" in build
+    assert 'icon: "sparkles"' not in settings_overlay
+    assert 'kind: "image"' in media
+    assert 'kind: "video"' in media
+    assert 'kind: "music"' in media
+    assert "function MediaModelSelect(p)" in media
+    assert "function MediaDisclosure(p)" in media
+    assert '"aria-expanded": open' in media
+    assert 'className: p.bodyClassName + (open ? " open" : "")' in media
+    assert 'React.createElement("select"' in media
+    assert 'value: MEDIA_CUSTOM_MODEL_VALUE' in media
+    assert '"/api/settings/media/providers/" + encodeURIComponent(id) + "/models"' in media
+    assert 'p.loadProviderModels(p.id, false)' in media
+    assert "function scheduleMediaSave(queue, delay)" in media
+    assert "scheduleMediaSave(store.saveQueue, immediate ? 0 : 600)" in media
+    assert "failMediaSave(queue, error, version)" in media
+    assert "if (saveQueue.dirty) persistMediaSave(saveQueue, true)" in media
+    assert "expectedRevision" in media
+    assert "onClick: media.save" not in panel
+    assert 't("settings.mediaSave")' not in panel
+    assert panel.index("MediaDefaultsSection(") < panel.index('id: "setting-media-providers"')
+    assert panel.index('id: "setting-media-providers"') < panel.index("MediaRuntimeSection(")
+    assert ".wb-media-default-grid" in controls
+    assert ".wb-media-provider-summary:focus-visible" in controls
+    advanced_rule = controls.split(".wb-media-advanced {", 1)[1].split("}", 1)[0]
+    assert "margin-top: 0;" in advanced_rule
+    assert "border-top: 0;" in advanced_rule
+    assert "border-top: 1px" not in advanced_rule
+    assert '"settings.mediaFlowDeliverHint": "完成后，图片、视频或音乐会自动加入发起生成的对话。"' in zh
+    assert "wake_agent" not in zh.split('"settings.mediaGeneration"', 1)[1].split(
+        '"settings.capabilitiesSubtitle"', 1
+    )[0]
+    runtime_summary = controls.split(
+        ".wb-media-advanced-summary,\n.wb-media-runtime-summary {", 1
+    )[1].split("}", 1)[0]
+    assert (
+        "grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 10px;"
+        in runtime_summary
+    )
+    assert ".wb-media-runtime-summary::after" in controls
+    assert "grid-template-rows: 0fr;" in controls
+    assert "grid-template-rows: 1fr;" in controls
+    assert "grid-template-rows 0.22s ease-out" in controls
+    assert ".wb-media-provider-body-content" in controls
+    assert ".wb-media-advanced-body-content" in controls
+    assert "@media (prefers-reduced-motion: reduce)" in controls
+
+
+def test_media_model_dropdown_filters_kinds_and_preserves_custom_selection():
+    media = frontend_module_source("features/settings/media.jsx")
+    helper = "function mediaModelEntries" + media.split(
+        "function mediaModelEntries", 1
+    )[1].split("function mediaModelOption", 1)[0]
+    catalog = {
+        "models": [
+            {
+                "id": "image-recommended",
+                "label": "Image Recommended",
+                "kinds": ["image"],
+                "recommended": True,
+                "source": "catalog",
+                "available": True,
+            },
+            {
+                "id": "video-only",
+                "kinds": ["video"],
+                "source": "live",
+                "verified": True,
+            },
+        ]
+    }
+    script = f"""
+eval({json.dumps(helper)});
+process.stdout.write(JSON.stringify(mediaModelEntries(
+  {json.dumps(catalog)},
+  "image",
+  "custom-image-model"
+)));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    entries = json.loads(completed.stdout)
+
+    assert [entry["id"] for entry in entries] == [
+        "custom-image-model",
+        "image-recommended",
+    ]
+    assert entries[0]["source"] == "configured"
+    assert entries[1]["accountAvailable"] is True
+    assert entries[1]["recommended"] is True

@@ -616,10 +616,21 @@ def test_general_settings_has_opt_in_external_agent_proxy():
 
     assert 't("settings.agentProxyEnabled")' in general_panel
     assert 'external_agent_proxy_enabled: !!nextEnabled' in general_panel
-    assert 'external_agent_proxy_port: port' in general_panel
-    assert 'disabled: !agentProxyEnabled' in general_panel
+    assert 'external_agent_proxy_url: address' in general_panel
+    assert 't("settings.agentProxyAddress")' in general_panel
+    assert 'placeholder: "http://proxy.example.com:7897"' in general_panel
+    assert 'proxy_search_enabled: !!scopes.search' in general_panel
+    assert 'proxy_browser_enabled: !!scopes.browser' in general_panel
+    assert 'proxy_extensions_enabled: !!scopes.extensions' in general_panel
+    assert 't("settings.proxySearch")' in general_panel
+    assert 't("settings.proxyBrowser")' in general_panel
+    assert 't("settings.proxyExtensions")' in general_panel
+    assert '{ search: !proxySearchEnabled }); }, !agentProxyEnabled' in general_panel
     assert i18n.count('"settings.agentProxyEnabled"') == 2
-    assert i18n.count('"settings.agentProxyPort"') == 2
+    assert i18n.count('"settings.agentProxyAddress"') == 2
+    assert i18n.count('"settings.proxySearch"') == 2
+    assert i18n.count('"settings.proxyBrowser"') == 2
+    assert i18n.count('"settings.proxyExtensions"') == 2
 def test_performance_mode_is_an_appearance_runtime_setting():
     from cyrene.runtime.settings_service import SETTING_SPECS
     from cyrene.workbench.runtime import _build_config
