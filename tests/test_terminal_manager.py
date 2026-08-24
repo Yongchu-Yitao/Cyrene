@@ -58,6 +58,50 @@ async def test_windows_reader_drains_buffered_output_after_process_exit(
 
 
 @pytest.mark.asyncio
+async def test_windows_waiter_unblocks_reader_after_process_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader_released = asyncio.Event()
+
+    class FileObject:
+        def shutdown(self, _how: int) -> None:
+            reader_released.set()
+
+    class FinishedWinPty:
+        fileobj = FileObject()
+
+        def wait(self) -> int:
+            return 0
+
+    manager = TerminalManager()
+    monkeypatch.setattr(
+        "cyrene.terminal.manager.WINDOWS_POST_EXIT_DRAIN_IDLE_SECONDS",
+        0.01,
+    )
+    session = TerminalSession(
+        id="windows-waiter",
+        project_id="project-1",
+        title="Windows waiter",
+        cwd=".",
+        shell="python",
+        argv=[],
+        created_at="2026-08-25T00:00:00+00:00",
+        updated_at="2026-08-25T00:00:00+00:00",
+        status="running",
+        winpty=FinishedWinPty(),
+    )
+    session.read_task = asyncio.create_task(reader_released.wait())
+    manager._sessions[session.id] = session
+    try:
+        await manager._wait_windows(session.id)
+        assert reader_released.is_set()
+        assert session.status == "exited"
+        assert session.exit_code == 0
+    finally:
+        manager.close_store()
+
+
+@pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX PTY behavior")
 async def test_terminal_manager_keeps_a_resizable_replayable_pty(
     monkeypatch: pytest.MonkeyPatch,
