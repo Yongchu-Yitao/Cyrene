@@ -55,6 +55,38 @@ def _winpty_output_ready(process: Any, timeout: float) -> bool:
     return bool(select.select([process.fileobj], [], [], timeout)[0])
 
 
+def _wait_windows_process(pid: int) -> int | None:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    open_process.restype = wintypes.HANDLE
+    wait_for_single_object = kernel32.WaitForSingleObject
+    wait_for_single_object.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    wait_for_single_object.restype = wintypes.DWORD
+    get_exit_code = kernel32.GetExitCodeProcess
+    get_exit_code.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    get_exit_code.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    handle = open_process(0x00100000 | 0x1000, False, int(pid))
+    if not handle:
+        return None
+    try:
+        if wait_for_single_object(handle, 0xFFFFFFFF) != 0:
+            return None
+        exit_code = wintypes.DWORD()
+        if not get_exit_code(handle, ctypes.byref(exit_code)):
+            return None
+        return int(exit_code.value)
+    finally:
+        close_handle(handle)
+
+
 _SESSION_UPSERT_SQL = """
     INSERT INTO terminal_sessions (
         id, project_id, title, cwd, shell, argv_json, created_at,
@@ -3191,7 +3223,12 @@ class TerminalManager:
         if session.wait_task is not None:
             return
         try:
-            exit_code = await asyncio.to_thread(session.winpty.wait)
+            if session.pid is not None:
+                exit_code = await asyncio.to_thread(
+                    _wait_windows_process, session.pid
+                )
+            else:
+                exit_code = await asyncio.to_thread(session.winpty.wait)
         except Exception:
             exit_code = None
         await self._synchronize_exit_metadata(session)

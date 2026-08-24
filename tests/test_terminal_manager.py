@@ -78,6 +78,10 @@ async def test_windows_waiter_unblocks_reader_after_process_exit(
         "cyrene.terminal.manager.WINDOWS_POST_EXIT_DRAIN_IDLE_SECONDS",
         0.01,
     )
+    monkeypatch.setattr(
+        "cyrene.terminal.manager._wait_windows_process",
+        lambda _pid: 0,
+    )
     session = TerminalSession(
         id="windows-waiter",
         project_id="project-1",
@@ -88,6 +92,7 @@ async def test_windows_waiter_unblocks_reader_after_process_exit(
         created_at="2026-08-25T00:00:00+00:00",
         updated_at="2026-08-25T00:00:00+00:00",
         status="running",
+        pid=123,
         winpty=FinishedWinPty(),
     )
     session.read_task = asyncio.create_task(reader_released.wait())
