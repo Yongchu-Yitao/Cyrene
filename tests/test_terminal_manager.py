@@ -11,7 +11,9 @@ from cyrene.terminal.manager import TerminalManager, TerminalSession
 
 
 @pytest.mark.asyncio
-async def test_windows_reader_drains_buffered_output_after_process_exit() -> None:
+async def test_windows_reader_drains_buffered_output_after_process_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class FinishedWinPty:
         def __init__(self) -> None:
             self.chunks = iter(("first", "-tail"))
@@ -29,6 +31,10 @@ async def test_windows_reader_drains_buffered_output_after_process_exit() -> Non
             return 0
 
     manager = TerminalManager()
+    monkeypatch.setattr(
+        "cyrene.terminal.manager._winpty_output_ready",
+        lambda _process, _timeout: True,
+    )
     session = TerminalSession(
         id="windows-drain",
         project_id="project-1",

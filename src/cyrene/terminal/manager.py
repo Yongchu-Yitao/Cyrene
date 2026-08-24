@@ -11,6 +11,7 @@ import json
 import os
 import queue
 import re
+import select
 import signal
 import shutil
 import socket
@@ -43,9 +44,15 @@ PTY_READ_BUDGET = 64 * 1024
 SCREEN_DRAIN_BUDGET = 32 * 1024
 DEFAULT_PERSISTENCE_BACKLOG_LIMIT = 8 * 1024 * 1024
 PERSISTENCE_BACKLOG_POLL_SECONDS = 0.01
+WINDOWS_POST_EXIT_DRAIN_IDLE_SECONDS = 5.0
+WINDOWS_POST_EXIT_DRAIN_POLL_SECONDS = 0.05
 SCROLLBACK_SEGMENT_SIZE = 4 * 1024 * 1024
 SSH_RECONNECT_DELAYS = (1.0, 2.0, 5.0, 10.0, 30.0)
 _DEFAULT_TITLE_RE = re.compile(r"^Terminal\s+(\d+)$", re.IGNORECASE)
+
+
+def _winpty_output_ready(process: Any, timeout: float) -> bool:
+    return bool(select.select([process.fileobj], [], [], timeout)[0])
 
 
 _SESSION_UPSERT_SQL = """
@@ -3141,18 +3148,37 @@ class TerminalManager:
         if not session or session.winpty is None:
             return
         try:
+            loop = asyncio.get_running_loop()
+            drain_idle_deadline: float | None = None
             while True:
                 await self._wait_for_persistence_capacity()
+                if not session.winpty.isalive() and drain_idle_deadline is None:
+                    drain_idle_deadline = (
+                        loop.time() + WINDOWS_POST_EXIT_DRAIN_IDLE_SECONDS
+                    )
+                ready = await asyncio.to_thread(
+                    _winpty_output_ready,
+                    session.winpty,
+                    WINDOWS_POST_EXIT_DRAIN_POLL_SECONDS,
+                )
+                if not ready:
+                    if (
+                        drain_idle_deadline is not None
+                        and loop.time() >= drain_idle_deadline
+                    ):
+                        break
+                    continue
                 try:
                     text = await asyncio.to_thread(session.winpty.read, 4096)
                 except EOFError:
                     break
                 if text:
                     self._append_output(session, str(text).encode("utf-8", errors="replace"))
+                    if drain_idle_deadline is not None:
+                        drain_idle_deadline = (
+                            loop.time() + WINDOWS_POST_EXIT_DRAIN_IDLE_SECONDS
+                        )
                     continue
-                if not session.winpty.isalive():
-                    break
-                await asyncio.sleep(0)
             exit_code = await asyncio.to_thread(session.winpty.wait)
         except asyncio.CancelledError:
             raise
