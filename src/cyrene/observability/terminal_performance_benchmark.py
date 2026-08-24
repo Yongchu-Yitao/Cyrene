@@ -61,6 +61,7 @@ stream.write(
     b"\x1b]133;C\x1b\\CYRENE_BENCHMARK_COMMAND_OUTPUT\r\n"
     b"\x1b]133;D;0\x1b\\"
 )
+stream.write(b"__CYRENE_BENCHMARK_COMPLETE__")
 stream.flush()
 while release and not os.path.exists(release):
     time.sleep(0.001)
@@ -82,6 +83,7 @@ for line in sys.stdin.buffer:
 _SOURCE_FRAME_RE = re.compile(
     rb"__CYRENE_(FRAME_COUNT|FRAME)_([0-9a-f]{8})__"
 )
+_SOURCE_COMPLETE_MARKER = b"__CYRENE_BENCHMARK_COMPLETE__"
 
 
 class _SourceFrameValidator:
@@ -93,10 +95,13 @@ class _SourceFrameValidator:
         self.frames_seen = 0
         self.sequence_errors = 0
         self.expected_frames: int | None = None
+        self.complete = False
 
     def feed(self, data: bytes) -> None:
         self.bytes_seen += len(data)
         self._buffer.extend(data)
+        if _SOURCE_COMPLETE_MARKER in self._buffer:
+            self.complete = True
         consumed = 0
         for match in _SOURCE_FRAME_RE.finditer(self._buffer):
             kind = bytes(match.group(1))
@@ -224,7 +229,8 @@ async def _heartbeat(
 
 
 async def _websocket_relay(
-    manager: Any, terminal_id: str, gate: Path,
+    manager: Any, terminal_id: str, gate: Path, release: Path,
+    source_frames: _SourceFrameValidator,
 ) -> tuple[list[float], int, int, int]:
     from websockets.asyncio.client import connect
     from websockets.asyncio.server import serve
@@ -268,6 +274,8 @@ async def _websocket_relay(
                     latencies_ms.append(
                         max(0.0, (received_at - created_at.timestamp()) * 1000)
                     )
+                    if source_frames.complete:
+                        release.touch()
                 elif event.get("type") == "resync_required":
                     resyncs += 1
                 elif (
@@ -291,6 +299,7 @@ async def _run_case(
     case_root = root / f"{workload}-{'subscribed' if subscribed else 'unsubscribed'}"
     case_root.mkdir(parents=True)
     gate = case_root / "start.gate"
+    release = case_root / "release.gate"
     manager = TerminalManager(output_limit=output_limit, state_dir=case_root / "state")
     source_frames = _SourceFrameValidator()
     append_output = manager._append_output
@@ -304,7 +313,10 @@ async def _run_case(
         "benchmark",
         cwd=str(case_root),
         shell="python",
-        argv=[sys.executable, "-u", "-c", _CHILD_PROGRAM, workload, str(total_bytes), str(gate)],
+        argv=[
+            sys.executable, "-u", "-c", _CHILD_PROGRAM, workload,
+            str(total_bytes), str(gate), str(release),
+        ],
         title=f"{workload}-{subscribed}",
         launch_mode="one_shot",
     )
@@ -330,9 +342,15 @@ async def _run_case(
             (
                 websocket_latencies, websocket_bytes, resyncs,
                 websocket_sequence_errors,
-            ) = await _websocket_relay(manager, terminal_id, gate)
+            ) = await _websocket_relay(
+                manager, terminal_id, gate, release, source_frames
+            )
         else:
             gate.touch()
+            async with asyncio.timeout(_PROCESS_EXIT_TIMEOUT_SECONDS):
+                while not source_frames.complete:
+                    await asyncio.sleep(0.005)
+            release.touch()
         await _wait_for_exit(manager, terminal_id)
         manager.flush()
         screen = await manager.screen_snapshot_async(terminal_id)
