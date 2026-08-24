@@ -19,6 +19,12 @@ not counted as conversation history or cache reuse.
 | `search` | Search-and-fetch orchestration with deterministic delayed network boundaries |
 | `features` | Event fanout, terminal output, knowledge FTS/read-write concurrency, database initialization, scheduled-task CRUD and file hashing |
 
+The terminal also has a platform benchmark outside the deterministic suite. It
+launches real children through POSIX PTY or Windows ConPTY, covers plain text,
+ANSI compilation logs, and TUI repaint traffic with and without a loopback
+WebSocket subscriber, and reports event-loop delay, RSS, process disk writes,
+segmented-scrollback write amplification, and WebSocket delivery latency.
+
 ## Run
 
 ```bash
@@ -34,6 +40,17 @@ uv run python -m cyrene.observability.performance_suite \
   --groups chat,features \
   --output-dir output/performance
 ```
+
+Run the real terminal matrix on each target platform (the default writes 24
+MiB per case so it crosses the 16 MiB retention limit):
+
+```bash
+uv run python -m cyrene.observability.terminal_performance_benchmark \
+  --json output/performance/terminal-real.json
+```
+
+The JSON records `ptyBackend` as `posix_pty` or `conpty`, so macOS/Linux and
+Windows results can be compared without maintaining different benchmark code.
 
 The command writes `cyrene-performance-suite.json` for automation and
 `cyrene-performance-suite.md` for review. Report schema version 2 records the

@@ -85,11 +85,6 @@ function WorkbenchHelpCenter({ onNewProject, onNewTask, onOpenPage, onSettings }
       action: function () { workbenchServices.tour().open(); },
     },
     {
-      id: "get-started", tone: "purple", title: t("help.getStarted"), desc: t("help.getStartedDesc"),
-      icon: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M5 15c-1.5 1.5-2 5-2 5s3.5-.5 5-2M9 11a9 9 0 0 1 9-9c1.5 0 2 .5 2 2a9 9 0 0 1-9 9M9 11l4 4M9 11l-4-1 2.5-2.5M13 15l1 4 2.5-2.5"/></svg>,
-      action: function () { onOpenPage && onOpenPage("welcome"); },
-    },
-    {
       id: "new-project", tone: "blue", title: t("help.newProject"), desc: t("help.newProjectDesc"),
       icon: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18"/><path d="M7 14h7M7 17h4"/></svg>,
       action: function () { onNewProject && onNewProject(); },

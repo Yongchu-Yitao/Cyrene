@@ -155,6 +155,7 @@ async def test_terminal_manager_repairs_historical_duplicate_titles(
         "project-1", cwd=str(tmp_path), shell="sh", argv=["/bin/sh"],
         title="Temporary",
     )
+    manager.flush()
     assert manager._db is not None
     manager._db.execute(
         "UPDATE terminal_sessions SET title = ? WHERE id = ?",
@@ -197,6 +198,7 @@ async def test_terminal_metadata_and_scrollback_survive_manager_restart(
     assert history_before[-1]["actor"] == "agent"
     assert history_before[-1]["accepted"] is True
 
+    manager.flush()
     restored = TerminalManager(output_limit=64 * 1024, state_dir=state_dir)
     listed = restored.list("project-1")
     assert listed[0]["title"] == "Persistent shell"
@@ -216,7 +218,7 @@ async def test_terminal_metadata_and_scrollback_survive_manager_restart(
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX PTY behavior")
-async def test_durable_history_exceeds_memory_window_and_remains_searchable(
+async def test_pending_history_pages_fully_then_segment_retention_advances_cursor(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -245,22 +247,21 @@ async def test_durable_history_exceeds_memory_window_and_remains_searchable(
         pages.append(base64.b64decode(page["data"]))
         cursor = page["endSeq"]
     assert b"".join(pages) == expected
-    assert b"".join(
-        base64.b64decode(event["data"])
-        for event in manager.iter_replay(terminal["id"], 0, chunk_size=16 * 1024)
-    ) == expected
-
-    matches = manager.search_history("project-1", "early_history")
-    assert matches[0]["terminalId"] == terminal["id"]
-    assert matches[0]["createdAt"]
 
     manager.flush()
     restored = TerminalManager(output_limit=64 * 1024, state_dir=state_dir)
     restored_page = restored.scrollback_snapshot(
         terminal["id"], cursor=0, max_bytes=32 * 1024
     )
-    assert base64.b64decode(restored_page["data"]).startswith(b"EARLY_HISTORY")
-    assert restored_page["oldestSeq"] == 0
+    assert b"EARLY_HISTORY" not in base64.b64decode(restored_page["data"])
+    assert restored_page["oldestSeq"] > 0
+    replayed = b"".join(
+        base64.b64decode(event["data"])
+        for event in restored.iter_replay(
+            terminal["id"], 0, chunk_size=16 * 1024
+        )
+    )
+    assert replayed.endswith(b"LATE_HISTORY\r\n")
     assert restored.search_history("project-1", "late_history")
 
 
@@ -327,6 +328,7 @@ async def test_interrupted_interactive_shell_is_restored_without_rerunning_one_s
             break
 
     await manager.close(interactive["id"])
+    manager.flush()
     assert manager._db is not None
     manager._db.execute(
         "UPDATE terminal_sessions SET status='running', exit_code=NULL WHERE id=?",

@@ -122,6 +122,89 @@ def _run_smoke_test() -> None:
         print("playwright_browser=not bundled")
 
 
+def _run_terminal_smoke_test() -> None:
+    """Exercise the frozen daemon and a real ConPTY-backed cmd session."""
+    import asyncio
+    import base64
+    import contextlib
+    import os
+    import shutil
+    import tempfile
+    import time
+    from pathlib import Path
+
+    if os.name != "nt":
+        raise RuntimeError("terminal smoke test is Windows-only")
+
+    async def run() -> None:
+        from cyrene.terminal.client import TerminalDaemonClient
+
+        state_dir = Path(tempfile.mkdtemp(prefix="cyrene-terminal-smoke-"))
+        client = TerminalDaemonClient(state_dir=state_dir)
+        terminal_id = ""
+        try:
+            shell = os.environ.get("COMSPEC") or r"C:\Windows\System32\cmd.exe"
+            created = await client._request(
+                "create",
+                projectId="release-smoke",
+                cwd=str(state_dir),
+                defaultCwd=str(state_dir),
+                shell="cmd",
+                argv=[shell, "/d", "/q"],
+                title="ConPTY smoke",
+                cols=100,
+                rows=30,
+                createdBy="release-smoke",
+                launchMode="interactive",
+                activate=True,
+            )
+            terminal = dict(created.get("terminal") or {})
+            terminal_id = str(terminal.get("id") or "")
+            if not terminal_id or terminal.get("status") != "running":
+                raise RuntimeError(f"ConPTY session did not stay running: {terminal!r}")
+            before = client._connection_info() or {}
+            daemon_pid = int(before.get("pid") or 0)
+            marker = "CYRENE_WINDOWS_TERMINAL_SMOKE_OUTPUT"
+            await client.input(terminal_id, f"echo {marker}\r\n", actor="user")
+            deadline = time.monotonic() + 8
+            output = b""
+            while time.monotonic() < deadline:
+                snapshot = await client.scrollback(
+                    terminal_id, cursor=0, max_bytes=512 * 1024
+                )
+                output = base64.b64decode(str(snapshot.get("data") or ""))
+                if marker.encode() in output:
+                    break
+                await asyncio.sleep(0.05)
+            if marker.encode() not in output:
+                raise RuntimeError("ConPTY output did not reach durable scrollback")
+            listed = await client.list("release-smoke")
+            after = client._connection_info() or {}
+            terminals = list(listed.get("terminals") or [])
+            if (
+                int(after.get("pid") or 0) != daemon_pid
+                or not terminals
+                or terminals[0].get("status") != "running"
+            ):
+                raise RuntimeError("terminal daemon restarted during ConPTY smoke test")
+            print("CYRENE_WINDOWS_TERMINAL_SMOKE=ok")
+        finally:
+            if terminal_id:
+                with contextlib.suppress(Exception):
+                    await client.remove(terminal_id)
+            info = client._connection_info()
+            if info:
+                with contextlib.suppress(Exception):
+                    await client._recorded_request(info, "shutdown")
+                    await client._wait_for_graceful_retirement(
+                        int(info.get("pid") or 0)
+                    )
+            with contextlib.suppress(OSError):
+                shutil.rmtree(state_dir)
+
+    asyncio.run(run())
+
+
 def _write_crash_log(exc: BaseException) -> None:
     """Write traceback to cyrene_error.log in the OS temp dir.
 
@@ -170,6 +253,15 @@ if __name__ == "__main__":
             # PyInstaller's bootloader can swallow the exit code.
             _write_crash_log(_exc)
             print(f"SMOKE TEST FAILED: {_exc!r}", file=sys.stderr)
+            raise SystemExit(1)
+        raise SystemExit(0)
+
+    if "--terminal-smoke-test" in sys.argv:
+        try:
+            _run_terminal_smoke_test()
+        except Exception as _exc:
+            _write_crash_log(_exc)
+            print(f"TERMINAL SMOKE TEST FAILED: {_exc!r}", file=sys.stderr)
             raise SystemExit(1)
         raise SystemExit(0)
 

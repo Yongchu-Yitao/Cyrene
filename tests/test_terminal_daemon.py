@@ -12,7 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from cyrene.terminal.client import TerminalDaemonClient, TerminalRequestError
+from cyrene.terminal.client import (
+    LIFECYCLE_VERSION,
+    TerminalDaemonClient,
+    TerminalRequestError,
+)
 
 
 @pytest.mark.asyncio
@@ -27,6 +31,43 @@ async def test_terminal_daemon_requests_have_a_hard_timeout() -> None:
     with pytest.raises(TerminalRequestError) as exc:
         await client._request("screen", request_timeout=0.01)
     assert exc.value.code == "daemon_timeout"
+
+
+@pytest.mark.asyncio
+async def test_legacy_retirement_never_uses_signal_zero(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    client = TerminalDaemonClient(state_dir=tmp_path)
+    payload = {
+        "version": 6,
+        "pid": 12345,
+        "port": 54321,
+        "token": "private-token",
+    }
+    client.connection_path.write_text(json.dumps(payload), encoding="utf-8")
+    actions: list[str] = []
+    signals: list[tuple[int, int]] = []
+
+    async def recorded_request(_payload, action):
+        actions.append(action)
+        return {"ok": action == "ping"}
+
+    async def retired(_payload):
+        return True
+
+    monkeypatch.setattr(client, "_recorded_request", recorded_request)
+    monkeypatch.setattr(client, "_wait_for_legacy_retirement", retired)
+    monkeypatch.setattr(
+        "cyrene.terminal.client.os.kill",
+        lambda pid, signum: signals.append((pid, signum)),
+    )
+
+    assert await client._retire_incompatible_daemon() is True
+    assert actions == ["ping", "shutdown"]
+    assert signals == [(12345, signal.SIGTERM)]
+    assert all(signum != 0 for _pid, signum in signals)
+    assert not client.connection_path.exists()
 
 
 @pytest.mark.asyncio
@@ -229,12 +270,15 @@ async def test_terminal_daemon_shutdown_closes_views_and_recovers_shell(
     terminal = (await client.create("project-1"))["terminal"]
     info = json.loads((state_dir / "connection.json").read_text(encoding="utf-8"))
     daemon_pid = int(info["pid"])
+    assert info["lifecycleVersion"] == LIFECYCLE_VERSION
     connection, _ = await client.connect_terminal(terminal["id"], 0)
-    os.kill(daemon_pid, signal.SIGTERM)
+    # Simulate opening the upgraded app against a daemon whose connection file
+    # predates the acknowledged lifecycle protocol. The client must request a
+    # graceful handoff, then start exactly one replacement daemon.
+    info.pop("lifecycleVersion")
+    (state_dir / "connection.json").write_text(json.dumps(info), encoding="utf-8")
     try:
-        await asyncio.wait_for(
-            asyncio.to_thread(os.waitpid, daemon_pid, 0), timeout=3
-        )
+        listed = await client.list("project-1")
         disconnected = False
         for _ in range(20):
             try:
@@ -245,17 +289,19 @@ async def test_terminal_daemon_shutdown_closes_views_and_recovers_shell(
                 break
         assert disconnected is True
 
-        listed = await client.list("project-1")
         recovered = listed["terminals"][0]
         assert recovered["id"] == terminal["id"]
         assert recovered["status"] == "running"
-        assert recovered["recoveryReason"] == "daemon_restart"
+        assert recovered["recoveryReason"] == "app_upgrade"
         assert recovered["recoveredAt"]
         assert recovered["recoveryCount"] == 1
 
-        daemon_pid = int(json.loads(
+        replacement = json.loads(
             (state_dir / "connection.json").read_text(encoding="utf-8")
-        )["pid"])
+        )
+        assert replacement["lifecycleVersion"] == LIFECYCLE_VERSION
+        assert int(replacement["pid"]) != daemon_pid
+        daemon_pid = int(replacement["pid"])
         reconnected, snapshot = await client.connect_terminal(terminal["id"], 0)
         assert snapshot["terminal"]["status"] == "running"
         await reconnected.send({

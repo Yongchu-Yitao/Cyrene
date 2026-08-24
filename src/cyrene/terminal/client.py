@@ -16,7 +16,61 @@ from typing import Any
 from cyrene.runtime.paths import user_data_dir
 
 PROTOCOL_VERSION = 7
+LIFECYCLE_VERSION = 1
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024
+_CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+_JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800
+_JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK = 0x00001000
+
+
+def _windows_daemon_creation_flags() -> int:
+    """Detach the daemon from a kill-on-close parent Job when Windows permits it."""
+    base = int(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS)
+    import ctypes
+    from ctypes import wintypes
+
+    class JobObjectBasicLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.IsProcessInJob.argtypes = [
+        wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)
+    ]
+    kernel32.IsProcessInJob.restype = wintypes.BOOL
+    kernel32.QueryInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    kernel32.QueryInformationJobObject.restype = wintypes.BOOL
+    in_job = wintypes.BOOL()
+    if not kernel32.IsProcessInJob(
+        kernel32.GetCurrentProcess(), None, ctypes.byref(in_job)
+    ) or not in_job.value:
+        return base
+    limits = JobObjectBasicLimitInformation()
+    if not kernel32.QueryInformationJobObject(
+        None, 2, ctypes.byref(limits), ctypes.sizeof(limits), None
+    ):
+        return base
+    if limits.LimitFlags & _JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK:
+        return base
+    if limits.LimitFlags & _JOB_OBJECT_LIMIT_BREAKAWAY_OK:
+        return base | _CREATE_BREAKAWAY_FROM_JOB
+    return base
 
 
 def terminal_state_dir() -> Path:
@@ -67,6 +121,7 @@ class TerminalDaemonConnection:
 class TerminalDaemonClient:
     def __init__(self, *, state_dir: Path | None = None) -> None:
         self.state_dir = Path(state_dir or terminal_state_dir()).resolve()
+        self._lifecycle_lock = asyncio.Lock()
 
     @property
     def connection_path(self) -> Path:
@@ -77,20 +132,16 @@ class TerminalDaemonClient:
             payload = json.loads(self.connection_path.read_text(encoding="utf-8"))
             if int(payload.get("version") or 0) != PROTOCOL_VERSION:
                 return None
+            if int(payload.get("lifecycleVersion") or 0) < LIFECYCLE_VERSION:
+                return None
             return payload
         except (OSError, ValueError, TypeError):
             return None
 
-    async def _retire_incompatible_daemon(self) -> bool:
-        try:
-            payload = dict(json.loads(self.connection_path.read_text(encoding="utf-8")))
-            version = int(payload.get("version") or 0)
-            pid = int(payload.get("pid") or 0)
-        except (OSError, ValueError, TypeError):
-            return False
-        if version == PROTOCOL_VERSION or pid <= 1 or pid == os.getpid():
-            return False
-        verified_daemon = False
+    async def _recorded_request(
+        self, payload: dict[str, Any], action: str,
+    ) -> dict[str, Any] | None:
+        writer: asyncio.StreamWriter | None = None
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(
@@ -100,79 +151,119 @@ class TerminalDaemonClient:
                 timeout=0.5,
             )
             writer.write(json.dumps({
-                "version": version,
+                "version": int(payload.get("version") or 0),
                 "token": payload.get("token"),
-                "action": "ping",
+                "action": action,
             }, separators=(",", ":")).encode() + b"\n")
             await writer.drain()
-            response = json.loads(await asyncio.wait_for(reader.readline(), timeout=0.5))
-            verified_daemon = bool(response.get("ok"))
-            writer.close()
-            with contextlib.suppress(Exception):
-                await writer.wait_closed()
+            response = dict(json.loads(
+                await asyncio.wait_for(reader.readline(), timeout=1.0)
+            ))
+            return response
         except (
             OSError, ValueError, TypeError, AttributeError, TimeoutError,
             json.JSONDecodeError,
         ):
-            pass
-        if not verified_daemon:
-            # A stale PID may have been recycled by the OS. Never signal it
-            # unless the private token/version handshake proves it is Cyrene's
-            # recorded daemon.
-            with contextlib.suppress(OSError):
-                current = json.loads(self.connection_path.read_text(encoding="utf-8"))
-                if int(current.get("pid") or 0) == pid:
-                    self.connection_path.unlink()
-            return True
-        # connection.json is written by the daemon inside this client's private
-        # state directory. Retiring only that recorded PID lets a new protocol
-        # version take ownership of the same persistent database safely.
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.kill(pid, signal.SIGTERM)
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                break
-            except PermissionError:
-                return True
-            await asyncio.sleep(0.05)
-        with contextlib.suppress(OSError):
+            return None
+        finally:
+            if writer is not None:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+
+    def _unlink_recorded_connection(self, pid: int) -> None:
+        with contextlib.suppress(OSError, ValueError, TypeError):
             current = json.loads(self.connection_path.read_text(encoding="utf-8"))
             if int(current.get("pid") or 0) == pid:
                 self.connection_path.unlink()
+
+    async def _wait_for_graceful_retirement(self, pid: int) -> bool:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                current = json.loads(self.connection_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                return True
+            if int(current.get("pid") or 0) != pid:
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
+    async def _wait_for_legacy_retirement(self, payload: dict[str, Any]) -> bool:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if await self._recorded_request(payload, "ping") is None:
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
+    async def _retire_incompatible_daemon(self) -> bool:
+        try:
+            payload = dict(json.loads(self.connection_path.read_text(encoding="utf-8")))
+            version = int(payload.get("version") or 0)
+            pid = int(payload.get("pid") or 0)
+            lifecycle_version = int(payload.get("lifecycleVersion") or 0)
+        except (OSError, ValueError, TypeError):
+            return False
+        if (
+            version == PROTOCOL_VERSION
+            and lifecycle_version >= LIFECYCLE_VERSION
+        ) or pid <= 1 or pid == os.getpid():
+            return False
+        response = await self._recorded_request(payload, "ping")
+        if not response or not response.get("ok"):
+            # A stale PID may have been recycled by the OS. Never signal it
+            # unless the private token/version handshake proves it is Cyrene's
+            # recorded daemon.
+            self._unlink_recorded_connection(pid)
+            return True
+
+        shutdown = await self._recorded_request(payload, "shutdown")
+        if shutdown and shutdown.get("ok"):
+            if not await self._wait_for_graceful_retirement(pid):
+                raise ConnectionError("terminal daemon did not finish graceful shutdown")
+            return True
+
+        # Daemons created before lifecycle version 1 do not understand the
+        # shutdown request. Retire that verified legacy owner once; all current
+        # and future daemons use the acknowledged IPC path above.
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.kill(pid, signal.SIGTERM)
+        if not await self._wait_for_legacy_retirement(payload):
+            raise ConnectionError("legacy terminal daemon did not stop")
+        self._unlink_recorded_connection(pid)
         return True
 
     async def _open(self, *, start: bool = True) -> TerminalDaemonConnection:
-        upgrading = await self._retire_incompatible_daemon()
-        info = self._connection_info()
-        if info:
-            try:
-                return TerminalDaemonConnection(*await asyncio.wait_for(
-                    asyncio.open_connection(
-                        "127.0.0.1", int(info["port"]), limit=MAX_MESSAGE_BYTES
-                    ),
-                    timeout=0.8,
-                ))
-            except (OSError, TimeoutError, ValueError, KeyError):
-                pass
-        if not start:
-            raise ConnectionError("terminal daemon is unavailable")
-        self._start_daemon("app_upgrade" if upgrading else "daemon_restart")
-        deadline = time.monotonic() + 8
-        while time.monotonic() < deadline:
-            await asyncio.sleep(0.08)
+        async with self._lifecycle_lock:
+            upgrading = await self._retire_incompatible_daemon()
             info = self._connection_info()
-            if not info:
-                continue
-            try:
-                reader, writer = await asyncio.open_connection(
-                    "127.0.0.1", int(info["port"]), limit=MAX_MESSAGE_BYTES
-                )
-                return TerminalDaemonConnection(reader, writer)
-            except (OSError, ValueError, KeyError):
-                continue
+            if info:
+                try:
+                    return TerminalDaemonConnection(*await asyncio.wait_for(
+                        asyncio.open_connection(
+                            "127.0.0.1", int(info["port"]), limit=MAX_MESSAGE_BYTES
+                        ),
+                        timeout=0.8,
+                    ))
+                except (OSError, TimeoutError, ValueError, KeyError):
+                    pass
+            if not start:
+                raise ConnectionError("terminal daemon is unavailable")
+            self._start_daemon("app_upgrade" if upgrading else "daemon_restart")
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                await asyncio.sleep(0.08)
+                info = self._connection_info()
+                if not info:
+                    continue
+                try:
+                    reader, writer = await asyncio.open_connection(
+                        "127.0.0.1", int(info["port"]), limit=MAX_MESSAGE_BYTES
+                    )
+                    return TerminalDaemonConnection(reader, writer)
+                except (OSError, ValueError, KeyError):
+                    continue
         raise ConnectionError("terminal daemon did not start")
 
     def _start_daemon(self, start_reason: str = "daemon_restart") -> None:
@@ -193,7 +284,7 @@ class TerminalDaemonClient:
         log = (self.state_dir / "daemon.log").open("ab")
         flags = 0
         if sys.platform == "win32":  # pragma: no cover - Windows only
-            flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+            flags = _windows_daemon_creation_flags()
         try:
             subprocess.Popen(
                 command,
@@ -470,6 +561,7 @@ def get_terminal_daemon_client() -> TerminalDaemonClient:
 
 
 __all__ = [
-    "TerminalDaemonClient", "TerminalDaemonConnection", "TerminalNotFoundError",
-    "TerminalRequestError", "get_terminal_daemon_client", "terminal_state_dir",
+    "LIFECYCLE_VERSION", "TerminalDaemonClient", "TerminalDaemonConnection",
+    "TerminalNotFoundError", "TerminalRequestError", "get_terminal_daemon_client",
+    "terminal_state_dir",
 ]

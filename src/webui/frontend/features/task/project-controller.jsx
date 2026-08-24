@@ -3,33 +3,18 @@ import { mergeSessionPayload } from "./store-merge.jsx"
 
 function createWorkbenchProjectDataActions(
   model,
-  dataStore,
-  autoWelcomePendingRef,
   sessionLoadSeqRef,
   setStore,
   setLoading,
-  setError,
-  setFullPage,
-  hasUserContent,
-  rememberWelcomeHandled
+  setError
 ) {
   function reloadWorkbench(nextProjectId, nextSessionId, options) {
     options = options || {};
     var showLoading = options.showLoading !== false;
     if (showLoading) setLoading(true);
     setError("");
-    var contentReady = autoWelcomePendingRef.current
-      ? Promise.resolve(dataStore.ready).catch(function () {})
-      : Promise.resolve();
-    return Promise.all([model.fetchProjects(), contentReady])
-      .then(function (results) {
-        var next = results[0];
-        if (autoWelcomePendingRef.current) {
-          autoWelcomePendingRef.current = false;
-          var onboardingState = dataStore.state.onboarding || {};
-          if (onboardingState.hasExistingData || hasUserContent(next)) rememberWelcomeHandled();
-          else setFullPage(function (current) { return current == null ? "welcome" : current; });
-        }
+    return model.fetchProjects()
+      .then(function (next) {
         setStore(function (prev) {
           var projectId = nextProjectId || (prev && prev.activeProjectId) || next.activeProjectId;
           var sessionId = nextSessionId || (prev && prev.activeSessionId) || next.activeSessionId;

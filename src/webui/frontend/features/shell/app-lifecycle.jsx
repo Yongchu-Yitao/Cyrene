@@ -6,17 +6,12 @@ import { dispatchWorkbenchGlobalShortcut } from "./global-shortcuts.mjs"
 
 var { useEffect } = React;
 
-function useWorkbenchStartupLifecycle(fullPage, rememberWelcomeHandled, reloadWorkbench, reloadNotifications) {
+function useWorkbenchStartupLifecycle(fullPage, reloadWorkbench, reloadNotifications) {
   useEffect(function () {
     try {
-      if (fullPage && fullPage !== "welcome") localStorage.setItem("wb-active-page", fullPage);
+      if (fullPage) localStorage.setItem("wb-active-page", fullPage);
       else localStorage.removeItem("wb-active-page");
     } catch (e) {}
-  }, [fullPage]);
-
-  useEffect(function () {
-    if (fullPage !== "welcome") return;
-    rememberWelcomeHandled();
   }, [fullPage]);
 
   useEffect(function () {

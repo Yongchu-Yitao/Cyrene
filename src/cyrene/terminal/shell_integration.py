@@ -15,12 +15,22 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 
-_BASH_SCRIPT = r'''# Cyrene shell integration. Loaded after the user's bashrc.
+_BASH_SCRIPT = r'''# Cyrene shell integration launcher. Loaded instead of the user's bashrc.
 if [[ -r "${HOME}/.bashrc" ]]; then
   source "${HOME}/.bashrc"
 fi
+__cyrene_launcher_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "${__cyrene_launcher_dir}/cyrene.bash.integration"
+unset __cyrene_launcher_dir
+'''
+
+_BASH_INTEGRATION_SCRIPT = r'''# Cyrene shell integration. Safe to source in child shells.
 if [[ -z "${__CYRENE_SHELL_INTEGRATION_LOADED:-}" ]]; then
   __CYRENE_SHELL_INTEGRATION_LOADED=1
+  __cyrene_integration_level=basic
+  if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )); then
+    __cyrene_integration_level=full
+  fi
   __cyrene_original_prompt_command="${PROMPT_COMMAND-}"
   if declare -p PROMPT_COMMAND 2>/dev/null | grep -q '^declare -a'; then
     __cyrene_original_prompt_command="$(IFS=';'; printf '%s' "${PROMPT_COMMAND[*]}")"
@@ -37,11 +47,17 @@ if [[ -z "${__CYRENE_SHELL_INTEGRATION_LOADED:-}" ]]; then
     printf '\033]133;D;%s\033\\' "${__cyrene_status}"
     printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-localhost}" "${__cyrene_path}"
     printf '\033]2;%s\033\\' "${PWD}"
+    printf '\033]133;P;Integration=%s\033\\' "${__cyrene_integration_level}"
     printf '\033]133;A\033\\'
   }
   PROMPT_COMMAND=__cyrene_prompt_command
   PS1="${PS1}"'\[\e]133;B\e\\\]'
-  PS0="${PS0-}"'\[\e]133;C\e\\\]'
+  if [[ "${__cyrene_integration_level}" == full ]]; then
+    PS0="${PS0-}"'\[\e]133;C\e\\\]'
+  fi
+  export PROMPT_COMMAND PS0 PS1
+  export __cyrene_integration_level __cyrene_original_prompt_command
+  export -f __cyrene_restore_status __cyrene_prompt_command
 fi
 '''
 
@@ -52,10 +68,14 @@ fi
 export ZDOTDIR="${CYRENE_INTEGRATION_ZDOTDIR}"
 '''
 
-_ZSH_RC_SCRIPT = r'''# Cyrene shell integration. Loaded after the user's zshrc.
+_ZSH_RC_SCRIPT = r'''# Cyrene shell integration launcher. Loaded instead of the user's zshrc.
 if [[ -n "${CYRENE_ORIGINAL_ZDOTDIR:-}" && -r "${CYRENE_ORIGINAL_ZDOTDIR}/.zshrc" ]]; then
   source "${CYRENE_ORIGINAL_ZDOTDIR}/.zshrc"
 fi
+source "${CYRENE_SHELL_INTEGRATION_SCRIPT}"
+'''
+
+_ZSH_INTEGRATION_SCRIPT = r'''# Cyrene shell integration. Safe to source in child shells.
 if [[ -z "${__CYRENE_SHELL_INTEGRATION_LOADED:-}" ]]; then
   typeset -g __CYRENE_SHELL_INTEGRATION_LOADED=1
   autoload -Uz add-zsh-hook
@@ -105,6 +125,8 @@ end
 '''
 
 _POWERSHELL_SCRIPT = r'''# Cyrene shell integration. PowerShell is launched with -NoProfile as before.
+if ($global:CyreneShellIntegrationLoaded) { return }
+$global:CyreneShellIntegrationLoaded = $true
 $script:CyreneEsc = [char]27
 $script:CyreneOriginalPrompt = if (Test-Path Function:\prompt) {
     (Get-Item Function:\prompt).ScriptBlock
@@ -197,35 +219,60 @@ def prepare_shell_integration(
     scripts = Path(runtime_dir) / "shell-integration"
     executable = original_argv[0]
     if kind == "bash":
-        script = _write_script(scripts / "cyrene.bash", _BASH_SCRIPT)
-        launch_argv = [executable, "--rcfile", str(script), "-i"]
-        level = "full"
+        integration = _write_script(
+            scripts / "cyrene.bash.integration", _BASH_INTEGRATION_SCRIPT
+        )
+        launcher = _write_script(scripts / "cyrene.bash", _BASH_SCRIPT)
+        prepared_env["CYRENE_SHELL_INTEGRATION_SCRIPT"] = str(integration)
+        # Bash imports these hooks in descendant shells. Interactive children
+        # inherit the exported prompt hooks; non-interactive children source
+        # the same script through Bash's native BASH_ENV mechanism.
+        prepared_env["BASH_ENV"] = str(integration)
+        launch_argv = [executable, "--rcfile", str(launcher), "-i"]
+        # Bash itself upgrades this to full after confirming PS0 support (4.4+).
+        level = "basic"
     elif kind == "zsh":
         zsh_dir = scripts / "zsh"
         _write_script(zsh_dir / ".zshenv", _ZSH_ENV_SCRIPT)
         _write_script(zsh_dir / ".zshrc", _ZSH_RC_SCRIPT)
+        integration = _write_script(
+            scripts / "cyrene.zsh.integration", _ZSH_INTEGRATION_SCRIPT
+        )
         prepared_env["CYRENE_ORIGINAL_ZDOTDIR"] = (
             prepared_env.get("ZDOTDIR") or prepared_env.get("HOME") or ""
         )
         prepared_env["CYRENE_INTEGRATION_ZDOTDIR"] = str(zsh_dir)
+        prepared_env["CYRENE_SHELL_INTEGRATION_SCRIPT"] = str(integration)
         prepared_env["ZDOTDIR"] = str(zsh_dir)
         launch_argv = [executable, "-i"]
         level = "full"
     elif kind == "fish":
         script = _write_script(scripts / "cyrene.fish", _FISH_SCRIPT)
+        xdg_root = scripts / "xdg"
+        _write_script(xdg_root / "fish" / "conf.d" / "cyrene.fish", _FISH_SCRIPT)
+        config_dirs = prepared_env.get("XDG_CONFIG_DIRS") or (
+            "/etc/xdg" if os.name != "nt" else ""
+        )
+        prepared_env["XDG_CONFIG_DIRS"] = os.pathsep.join(
+            part for part in (str(xdg_root), config_dirs) if part
+        )
+        prepared_env["CYRENE_SHELL_INTEGRATION_SCRIPT"] = str(script)
         launch_argv = [executable, "-C", f'source "{script}"', "-i"]
         level = "full"
     elif kind == "powershell":
         script = _write_script(scripts / "cyrene.ps1", _POWERSHELL_SCRIPT)
+        prepared_env["CYRENE_SHELL_INTEGRATION_SCRIPT"] = str(script)
         launch_argv = [
             executable, "-NoLogo", "-NoProfile", "-NoExit", "-File", str(script),
         ]
         level = "full"
     else:
         script = _write_script(scripts / "cyrene.cmd", _CMD_SCRIPT)
+        prepared_env["CYRENE_SHELL_INTEGRATION_SCRIPT"] = str(script)
         launch_argv = [executable, "/d", "/q", "/k", f'call "{script}"']
-        level = "prompt"
+        level = "basic"
     prepared_env["CYRENE_SHELL_INTEGRATION"] = "1"
+    prepared_env["CYRENE_SHELL_INTEGRATION_DIR"] = str(scripts)
     return ShellIntegrationLaunch(launch_argv, prepared_env, level, kind)
 
 
@@ -329,6 +376,18 @@ class OscMetadataParser:
         if identifier != b"133" or not body:
             return None
         marker, _, detail = body.partition(b";")
+        if marker == b"P":
+            name, separator, value = detail.partition(b"=")
+            if separator and name == b"Integration" and value in {
+                b"none", b"basic", b"full",
+            }:
+                return {
+                    "kind": "integration",
+                    "value": value.decode("ascii"),
+                    "startSeq": start_seq,
+                    "endSeq": end_seq,
+                }
+            return None
         names = {b"A": "prompt", b"B": "command", b"C": "output", b"D": "finished"}
         kind = names.get(marker)
         if kind is None:

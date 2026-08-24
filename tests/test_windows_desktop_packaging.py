@@ -87,8 +87,15 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert '@("/S", "/D=$installDir")' in smoke
     assert '"resources\\python-bundle\\Cyrene.exe"' in smoke
     assert 'Arguments @("--desktop-smoke-test")' in smoke
+    assert 'Arguments @("--terminal-smoke-test")' in smoke
     assert 'SuccessMarker "Cyrene smoke test OK:"' in smoke
     assert 'SuccessMarker "DESKTOP_SMOKE_TEST=ok"' in smoke
+    assert 'SuccessMarker "CYRENE_WINDOWS_TERMINAL_SMOKE=ok"' in smoke
+    client = (ROOT / "src" / "cyrene" / "terminal" / "client.py").read_text(
+        encoding="utf-8"
+    )
+    assert "_CREATE_BREAKAWAY_FROM_JOB" in client
+    assert "QueryInformationJobObject" in client
     assert "function Get-PeArchitecture" in smoke
     assert "function Assert-NativeArm64Tree" in smoke
     assert 'contains non-ARM native binaries' in smoke

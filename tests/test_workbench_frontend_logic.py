@@ -4116,48 +4116,14 @@ def test_persisted_workbench_state_uses_sse_instead_of_polling():
     assert "}, 1500);" not in chat_page
 
 
-def test_workbench_auto_welcome_waits_for_backend_and_skips_existing_content():
-    root = Path(__file__).resolve().parent.parent
+def test_workbench_does_not_auto_open_the_removed_welcome_page():
     source = workbench_shell_source()
-    data_store = (root / "src" / "webui" / "frontend" / "platform" / "data-store.jsx").read_text(
-        encoding="utf-8"
-    )
     project_controller = frontend_module_source("features/task/project-controller.jsx")
 
-    assert "function wbProjectStoreHasUserContent(store)" in source
-    assert "autoWelcomePendingRef.current = true" in source
-    assert "Promise.resolve(dataStore.ready)" in source
-    assert "onboardingState.hasExistingData || hasUserContent(next)" in project_controller
-    assert 'current == null ? "welcome" : current' in project_controller
-    assert 'hasExistingData: false' in data_store
-
-    helper_source = "function wbProjectStoreHasUserContent(" + source.split(
-        "function wbProjectStoreHasUserContent(", 1
-    )[1].split("function wbRememberWelcomeHandled", 1)[0]
-    script = f"""
-eval({json.dumps(helper_source)});
-const blankDefault = {{projects: [{{
-  dataKey: "default",
-  sessions: [{{title: "新任务", goal: "", plan: [], events: [], runs: [], artifacts: []}}]
-}}]}};
-const explicitProject = {{projects: [{{dataKey: "project_123", sessions: []}}]}};
-const usedLegacyProject = {{projects: [{{
-  dataKey: "default",
-  sessions: [{{title: "Research", goal: "Find sources"}}]
-}}]}};
-process.stdout.write(JSON.stringify({{
-  blankDefault: wbProjectStoreHasUserContent(blankDefault),
-  explicitProject: wbProjectStoreHasUserContent(explicitProject),
-  usedLegacyProject: wbProjectStoreHasUserContent(usedLegacyProject)
-}}));
-"""
-    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
-    result = json.loads(completed.stdout)
-    assert result == {
-        "blankDefault": False,
-        "explicitProject": True,
-        "usedLegacyProject": True,
-    }
+    assert "function wbProjectStoreHasUserContent(store)" not in source
+    assert "autoWelcomePendingRef" not in source
+    assert 'stored && stored !== "welcome"' in source
+    assert 'current == null ? "welcome" : current' not in project_controller
 
 
 def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():

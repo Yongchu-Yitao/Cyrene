@@ -63,37 +63,6 @@ window.CyreneUI.performanceMode = {
   },
 };
 
-function wbProjectStoreHasUserContent(store) {
-  var projects = store && Array.isArray(store.projects) ? store.projects : [];
-  return projects.some(function (project) {
-    if (!project || typeof project !== "object") return false;
-    // The legacy/default project and its blank "New task" session are created
-    // automatically. A separately keyed project was explicitly created or
-    // imported and therefore counts as user content even before its first run.
-    var dataKey = String(project.dataKey || "").trim();
-    if (dataKey && dataKey !== "default") return true;
-    if (String(project.description || "").trim()) return true;
-    if (Array.isArray(project.sharedArtifacts) && project.sharedArtifacts.length) return true;
-    var context = project.context && typeof project.context === "object" ? project.context : {};
-    if (Array.isArray(context.knowledgeDocumentIds) && context.knowledgeDocumentIds.length) return true;
-    return (Array.isArray(project.sessions) ? project.sessions : []).some(function (session) {
-      if (!session || typeof session !== "object") return false;
-      var title = String(session.title || "").trim();
-      var goal = String(session.goal || "").trim();
-      if (title && title !== "新任务" && title !== "New task") return true;
-      if (goal && goal !== "通过对话明确当前任务目标。") return true;
-      return ["plan", "events", "runs", "artifacts", "acceptanceCriteria"].some(function (key) {
-        return Array.isArray(session[key]) && session[key].length > 0;
-      }) || !!String(session.agentReply || "").trim();
-    });
-  });
-}
-
-function wbRememberWelcomeHandled() {
-  try { localStorage.setItem("cyrene-workbench-welcomed", "1"); } catch (e) {}
-}
-
-
 // Tag the host platform on <html> so CSS can reserve the macOS traffic-light
 // gutter only where it actually exists. window.cyrene.platform comes from the
 // Electron preload ('darwin' | 'win32' | 'linux'); fall back to 'web' in a
@@ -120,25 +89,11 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   });
   var [loading, setLoading] = useWorkbenchState(true);
   var [error, setError] = useWorkbenchState("");
-  var autoWelcomePendingRef = useWorkbenchRef(false);
   var [fullPage, setFullPage] = useWorkbenchState(function () {
     try {
-      // Returning users resume their last page. First-time users (no page ever
-      // stored AND never welcomed) land on the welcome / get-started page — it
-      // is auto-detected here rather than opened from a rail button.
       var stored = localStorage.getItem("wb-active-page");
-      // "welcome" must never be treated as a resumable page. Older builds wrongly
-      // persisted it here, trapping users on the welcome screen every relaunch —
-      // ignore a stale "welcome" value so those installs fall through to the
-      // workspace instead of re-opening onboarding's get-started page.
       if (stored === "profile") return "settings";
       if (stored && stored !== "welcome") return stored;
-      // Do not decide from origin-scoped localStorage alone. The desktop may
-      // move to a fallback port, which creates a fresh storage origin even for
-      // an established user. Wait for authoritative backend content first.
-      if (!localStorage.getItem("cyrene-workbench-welcomed")) {
-        autoWelcomePendingRef.current = true;
-      }
       return null;
     } catch (e) { return null; }
   });
@@ -252,8 +207,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   }
 
   var projectDataActions = createWorkbenchProjectDataActions(
-    model, dataStore, autoWelcomePendingRef, sessionLoadSeqRef, setStore,
-    setLoading, setError, setFullPage, wbProjectStoreHasUserContent, wbRememberWelcomeHandled
+    model, sessionLoadSeqRef, setStore, setLoading, setError
   );
   var reloadWorkbench = projectDataActions.reloadWorkbench;
   var refreshTaskBoard = projectDataActions.refreshTaskBoard;
@@ -267,7 +221,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var openTaskInWorkspace = selectionActions.openTask;
   var openChatInWorkspace = selectionActions.openChat;
 
-  useWorkbenchStartupLifecycle(fullPage, wbRememberWelcomeHandled, reloadWorkbench, reloadNotifications);
+  useWorkbenchStartupLifecycle(fullPage, reloadWorkbench, reloadNotifications);
   useWorkbenchRecentChatLifecycle(
     store.projects,
     reloadRecentChats,
@@ -468,7 +422,6 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var isSchedule = modulePresentation.isSchedule;
   var isMemory = modulePresentation.isMemory;
   var isChat = modulePresentation.isChat;
-  var isWelcome = modulePresentation.isWelcome;
   var isSettings = modulePresentation.isSettings;
   var isModulePage = modulePresentation.isModulePage;
   var fullPageConfig = modulePresentation.fullPageConfig;
@@ -476,7 +429,6 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var showKnowledgePage = modulePresentation.showKnowledgePage;
   var showSchedulePage = modulePresentation.showSchedulePage;
   var showMemoryPage = modulePresentation.showMemoryPage;
-  var showWelcomePage = modulePresentation.showWelcomePage;
   var showSettingsPage = modulePresentation.showSettingsPage;
   var activeDestination = modulePresentation.activeDestination;
   var activeSessionKey = modulePresentation.activeSessionKey;
@@ -492,7 +444,6 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var onboarding = dataState.onboarding || {};
   var onboardingActive = onboarding.needsOnboarding != null ? !!onboarding.needsOnboarding : !!needsOnboarding;
   function handleOnboardingComplete() {
-    wbRememberWelcomeHandled();
     setFullPage("chat");
   }
   if (onboardingActive) {
@@ -615,7 +566,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       {fullPageConfig ? (
         <WorkbenchFullPage config={fullPageConfig} onClose={function () { setFullPage(null); }} />
       ) : (
-        <div ref={wbApplyStoredRightWidth} className={"workbench-grid integrated-sidebars" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat ? " is-chat" : "") + (isWelcome ? " is-welcome" : "") + (isSettings ? " is-settings" : "") + (!isModulePage ? (taskView === "board" ? " is-task-board" : " is-task-detail") : "")} onWheel={handleSidebarModuleWheel}>
+        <div ref={wbApplyStoredRightWidth} className={"workbench-grid integrated-sidebars" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat ? " is-chat" : "") + (isSettings ? " is-settings" : "") + (!isModulePage ? (taskView === "board" ? " is-task-board" : " is-task-detail") : "")} onWheel={handleSidebarModuleWheel}>
           <WorkbenchSidebarDock
             persistent={true}
             collapsed={railCollapsed}

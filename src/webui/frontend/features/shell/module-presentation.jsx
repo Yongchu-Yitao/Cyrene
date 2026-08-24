@@ -70,9 +70,8 @@ function useWorkbenchModulePresentation(
   var isSchedule = fullPage === "schedule";
   var isMemory = fullPage === "memory";
   var isChat = fullPage === "chat";
-  var isWelcome = fullPage === "welcome";
   var isSettings = fullPage === "settings";
-  var isModulePage = isKnowledge || isSchedule || isMemory || isChat || isWelcome || isSettings;
+  var isModulePage = isKnowledge || isSchedule || isMemory || isChat || isSettings;
   var fullPageConfig = fullPage && !isModulePage ? workbenchFullPageConfig(fullPage, setFullPage, store) : null;
 
   useEffect(function () {
@@ -102,7 +101,6 @@ function useWorkbenchModulePresentation(
     isSchedule: isSchedule,
     isMemory: isMemory,
     isChat: isChat,
-    isWelcome: isWelcome,
     isSettings: isSettings,
     isModulePage: isModulePage,
     fullPageConfig: fullPageConfig,
@@ -110,7 +108,6 @@ function useWorkbenchModulePresentation(
     showKnowledgePage: isKnowledge || mountedPages.knowledge,
     showSchedulePage: isSchedule || mountedPages.schedule,
     showMemoryPage: isMemory || mountedPages.memory,
-    showWelcomePage: isWelcome || mountedPages.welcome,
     showSettingsPage: isSettings || mountedPages.settings,
     activeDestination: activeDestination,
     activeSessionKey: activeSessionKey,

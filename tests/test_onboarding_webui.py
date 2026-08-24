@@ -455,11 +455,10 @@ def test_completed_onboarding_enters_chat_instead_of_welcome():
         in welcome_source
     )
     assert "props.onComplete();" in welcome_source
-    assert "onComplete={props.onComplete}" in welcome_source
+    assert "Page: OnboardingFlow" in welcome_source
 
     completion_handler = workbench_source.split(
         "function handleOnboardingComplete() {", 1
     )[1].split("}", 1)[0]
-    assert "wbRememberWelcomeHandled();" in completion_handler
     assert 'setFullPage("chat");' in completion_handler
     assert "onComplete={handleOnboardingComplete}" in workbench_source

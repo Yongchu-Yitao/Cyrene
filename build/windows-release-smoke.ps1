@@ -283,6 +283,15 @@ if ($installedSmoke.Output -notmatch '(?m)^numpy=') {
     throw "Installed frozen backend did not confirm NumPy import"
 }
 
+$terminalSmoke = Invoke-CapturedProcess `
+    -Path $installedBackend `
+    -Arguments @("--terminal-smoke-test") `
+    -Label "windows-$Arch-installed-terminal"
+Assert-SmokeSucceeded `
+    -Result $terminalSmoke `
+    -SuccessMarker "CYRENE_WINDOWS_TERMINAL_SMOKE=ok" `
+    -Label "Installed ConPTY terminal smoke test"
+
 $env:CYRENE_USER_DATA_DIR = Join-Path $smokeRoot "data"
 $env:CYRENE_CACHE_DIR = Join-Path $smokeRoot "cache"
 $env:CYRENE_TEMP_DIR = Join-Path $smokeRoot "tmp"

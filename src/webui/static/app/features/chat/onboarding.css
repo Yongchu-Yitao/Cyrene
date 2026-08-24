@@ -1,11 +1,4 @@
-/* ===================================================================
-   Welcome / get-started page (fullPage === "welcome")
-   Keeps the ProjectRail; the rest of the grid becomes a single scroll
-   surface. Mirrors the knowledge / schedule / memory 2-column layout.
-   =================================================================== */
-.workbench-grid.is-welcome {
-  grid-template-columns: var(--wb-rail-w) minmax(0, 1fr);
-}
+/* Required first-run model and personality configuration. */
 
 .wb-wel-page {
   --wb-wel-blue: #3b82f6;
@@ -752,4 +745,3 @@
   .wb-ob-oauth-head { align-items: stretch; flex-direction: column; }
   .wb-ob-oauth-grid { grid-template-columns: 1fr; }
 }
-

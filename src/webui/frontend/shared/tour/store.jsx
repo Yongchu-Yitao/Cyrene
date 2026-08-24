@@ -1,7 +1,6 @@
 // Tour state machine + completion persistence. The store is framework-free;
 // the React host (host.jsx) subscribes and renders center/spotlight.
-// Completion is plain localStorage state, same convention as the welcome
-// gate (`cyrene-workbench-welcomed`) — no backend round-trip.
+// Completion is plain localStorage state with no backend round-trip.
 (function (root) {
   "use strict";
 

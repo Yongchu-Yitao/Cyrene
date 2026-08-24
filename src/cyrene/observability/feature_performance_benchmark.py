@@ -202,7 +202,7 @@ async def _benchmark_terminal(
     manager.flush()
     flush_ms = (time.perf_counter() - flush_started) * 1000
     screen_started = time.perf_counter()
-    manager._drain_screen_now(session)
+    await manager.screen_snapshot_async(session.id)
     screen_ms = (time.perf_counter() - screen_started) * 1000
     replay_started = time.perf_counter()
     replay = manager.replay(session.id, 0)
@@ -210,10 +210,11 @@ async def _benchmark_terminal(
     replay_ms = (time.perf_counter() - replay_started) * 1000
     await asyncio.sleep(0)
 
-    durable_path = manager._scroll_path(session.id)
-    durable_bytes = durable_path.stat().st_size if durable_path.exists() else 0
-    if manager._db is not None:
-        manager._db.close()
+    durable_directory = manager._scroll_segment_dir(session.id)
+    durable_bytes = sum(
+        path.stat().st_size for path in durable_directory.glob("*.bin")
+    )
+    manager.close_store()
     wall_ms = append_ms + flush_ms + screen_ms + replay_ms
     return _result(
         "terminal",

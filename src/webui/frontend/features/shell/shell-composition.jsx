@@ -227,15 +227,6 @@ function WorkbenchSecondaryModuleSurfaces({ context }) {
         moduleDock: p.isMemory ? navigation.renderDockSlot() : null,
       })}
     </WorkbenchStableSurface>}
-    {p.showWelcomePage && <WorkbenchStableSurface active={p.isWelcome}>
-      {React.createElement(workbenchServices.welcome().Page || fallback("workbench.welcomeLoading"), {
-        active: p.isWelcome, project: project,
-        hasProjects: Array.isArray(context.store.projects) && context.store.projects.length > 0,
-        onNewProject: context.actions.createProject, onOpenPage: navigation.openPage,
-        onSettings: navigation.openSettings, theme: appearance.theme,
-        actualTheme: appearance.actualTheme, onToggleTheme: appearance.onToggleTheme,
-      })}
-    </WorkbenchStableSurface>}
     {p.showSettingsPage && <WorkbenchStableSurface active={p.isSettings}>
       {React.createElement(workbenchServices.settings().Page, {
         active: p.isSettings, collapsed: navigation.railCollapsed,

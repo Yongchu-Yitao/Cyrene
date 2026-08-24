@@ -31,7 +31,7 @@ def test_prepare_bash_integration_preserves_inputs_and_generates_wrapper(tmp_pat
         shell="bash", argv=argv, env=env, runtime_dir=tmp_path,
     )
 
-    assert launch.integration_level == "full"
+    assert launch.integration_level == "basic"
     assert launch.argv[0] == "/bin/bash"
     assert launch.argv[1] == "--rcfile"
     assert launch.argv[-1] == "-i"
@@ -40,8 +40,15 @@ def test_prepare_bash_integration_preserves_inputs_and_generates_wrapper(tmp_pat
     assert env == {"HOME": "/home/user", "TERM": "xterm-256color"}
     wrapper = (tmp_path / "shell-integration" / "cyrene.bash").read_text()
     assert "${HOME}/.bashrc" in wrapper
-    assert "]133;A" in wrapper
-    assert "]133;D;%s" in wrapper
+    integration = launch.env["CYRENE_SHELL_INTEGRATION_SCRIPT"]
+    integration_source = open(integration, encoding="utf-8").read()
+    assert "BASH_VERSINFO" in integration_source
+    assert "Integration=%s" in integration_source
+    assert "]133;A" in integration_source
+    assert "]133;D;%s" in integration_source
+    assert "export PROMPT_COMMAND PS0 PS1" in integration_source
+    assert launch.env["BASH_ENV"] == integration
+    assert "BASH_SOURCE[0]" in wrapper
 
 
 def test_prepare_zsh_and_fish_preserve_user_startup(tmp_path) -> None:
@@ -56,6 +63,9 @@ def test_prepare_zsh_and_fish_preserve_user_startup(tmp_path) -> None:
     assert zsh.env["CYRENE_ORIGINAL_ZDOTDIR"] == "/home/user/.config/zsh"
     assert zsh.env["ZDOTDIR"].endswith("shell-integration/zsh")
     assert ".zshrc" in (tmp_path / "shell-integration" / "zsh" / ".zshrc").read_text()
+    assert zsh.env["CYRENE_SHELL_INTEGRATION_SCRIPT"].endswith(
+        "cyrene.zsh.integration"
+    )
 
     fish = prepare_shell_integration(
         shell="fish", argv=["/usr/bin/fish", "-i"], env={}, runtime_dir=tmp_path,
@@ -63,6 +73,12 @@ def test_prepare_zsh_and_fish_preserve_user_startup(tmp_path) -> None:
     assert fish.argv[1] == "-C"
     assert fish.integration_level == "full"
     assert "fish_preexec" in (tmp_path / "shell-integration" / "cyrene.fish").read_text()
+    assert fish.env["XDG_CONFIG_DIRS"].split(__import__("os").pathsep)[0].endswith(
+        "shell-integration/xdg"
+    )
+    assert (
+        tmp_path / "shell-integration" / "xdg" / "fish" / "conf.d" / "cyrene.fish"
+    ).is_file()
 
 
 def test_prepare_powershell_and_cmd_report_capability(tmp_path) -> None:
@@ -78,7 +94,7 @@ def test_prepare_powershell_and_cmd_report_capability(tmp_path) -> None:
     cmd = prepare_shell_integration(
         shell="cmd", argv=["cmd.exe", "/d", "/q"], env={}, runtime_dir=tmp_path,
     )
-    assert cmd.integration_level == "prompt"
+    assert cmd.integration_level == "basic"
     assert cmd.argv[:4] == ["cmd.exe", "/d", "/q", "/k"]
 
 
@@ -135,6 +151,18 @@ def test_parser_ignores_non_metadata_and_resets_on_sequence_gap() -> None:
     assert parser.feed(b"plain output", start_seq=101) == []
 
 
+def test_parser_reports_runtime_integration_capability() -> None:
+    parser = OscMetadataParser()
+    data = b"\x1b]133;P;Integration=full\x1b\\"
+
+    assert parser.feed(data, start_seq=12) == [{
+        "kind": "integration",
+        "value": "full",
+        "startSeq": 12,
+        "endSeq": 12 + len(data),
+    }]
+
+
 def test_parser_normalizes_windows_file_uri() -> None:
     parser = OscMetadataParser()
     data = b"\x1b]7;file://localhost/C:/Users/me/project\x07"
@@ -183,6 +211,8 @@ async def test_manager_publishes_dynamic_shell_metadata_without_renaming(
 
     for offset in range(0, len(stream), 3):
         manager._append_output(session, stream[offset:offset + 3])
+    await manager.screen_snapshot_async(session.id)
+    await asyncio.sleep(0)
 
     events = []
     while not queue.empty():

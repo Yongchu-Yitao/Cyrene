@@ -13,7 +13,12 @@ import signal
 from pathlib import Path
 from typing import Any
 
-from .client import MAX_MESSAGE_BYTES, PROTOCOL_VERSION, terminal_state_dir
+from .client import (
+    LIFECYCLE_VERSION,
+    MAX_MESSAGE_BYTES,
+    PROTOCOL_VERSION,
+    terminal_state_dir,
+)
 from .manager import TerminalInputBusyError, TerminalManager
 
 
@@ -38,7 +43,7 @@ def _acquire_lock(state_dir: Path):
 
 
 class TerminalDaemon:
-    def __init__(self, state_dir: Path) -> None:
+    def __init__(self, state_dir: Path, *, stop_event: asyncio.Event | None = None) -> None:
         self.state_dir = state_dir.resolve()
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.token = secrets.token_urlsafe(32)
@@ -50,6 +55,7 @@ class TerminalDaemon:
         )
         self.server: asyncio.AbstractServer | None = None
         self.connections: set[asyncio.StreamWriter] = set()
+        self.stop_event = stop_event
 
     async def start(self) -> None:
         await self.manager.restore_interrupted_sessions()
@@ -61,6 +67,7 @@ class TerminalDaemon:
         temporary = connection_path.with_suffix(".tmp")
         temporary.write_text(json.dumps({
             "version": PROTOCOL_VERSION,
+            "lifecycleVersion": LIFECYCLE_VERSION,
             "pid": os.getpid(),
             "port": port,
             "token": self.token,
@@ -88,7 +95,7 @@ class TerminalDaemon:
         if self.server is not None:
             await self.server.wait_closed()
             self.server = None
-        self.manager.flush()
+        self.manager.close_store()
 
     async def _send(self, writer: asyncio.StreamWriter, message: dict[str, Any]) -> None:
         writer.write(json.dumps(message, separators=(",", ":")).encode() + b"\n")
@@ -124,6 +131,8 @@ class TerminalDaemon:
         try:
             if action == "ping":
                 payload: dict[str, Any] = {}
+            elif action == "shutdown":
+                payload = {"stopping": True}
             elif action == "list":
                 project_id = str(request.get("projectId") or "")
                 payload = {
@@ -139,10 +148,12 @@ class TerminalDaemon:
             elif action == "create":
                 payload = {"terminal": await self._create_terminal(request)}
             elif action == "screen":
-                payload = self.manager.screen_snapshot(str(request.get("terminalId") or ""))
+                payload = await self.manager.screen_snapshot_async(
+                    str(request.get("terminalId") or "")
+                )
             elif action == "scrollback":
                 requested_cursor = request.get("cursor")
-                payload = self.manager.scrollback_snapshot(
+                payload = await self.manager.scrollback_snapshot_async(
                     str(request.get("terminalId") or ""),
                     cursor=(
                         int(requested_cursor)
@@ -151,18 +162,18 @@ class TerminalDaemon:
                     max_bytes=int(request.get("maxBytes") or 64 * 1024),
                 )
             elif action == "historySearch":
-                payload = {"matches": self.manager.search_history(
+                payload = {"matches": await self.manager.search_history_async(
                     str(request.get("projectId") or ""),
                     str(request.get("query") or ""),
                     terminal_id=str(request.get("terminalId") or ""),
                     limit=int(request.get("limit") or 100),
                 )}
             elif action == "commands":
-                payload = {"commands": self.manager.commands(
+                payload = {"commands": await self.manager.commands_async(
                     str(request.get("terminalId") or "")
                 )}
             elif action == "commandOutput":
-                payload = self.manager.command_output(
+                payload = await self.manager.command_output_async(
                     str(request.get("terminalId") or ""),
                     str(request.get("commandId") or ""),
                 )
@@ -187,11 +198,13 @@ class TerminalDaemon:
                         str(request.get("terminalId") or ""), data,
                         actor=str(request.get("actor") or "agent"),
                     )
-                payload = self.manager.screen_snapshot(str(request.get("terminalId") or ""))
+                payload = await self.manager.screen_snapshot_async(
+                    str(request.get("terminalId") or "")
+                )
             elif action == "interrupt":
                 terminal_id = str(request.get("terminalId") or "")
                 await self.manager.interrupt(terminal_id)
-                payload = self.manager.screen_snapshot(terminal_id)
+                payload = await self.manager.screen_snapshot_async(terminal_id)
             elif action == "restart":
                 payload = {"terminal": await self.manager.restart(
                     str(request.get("terminalId") or ""),
@@ -254,6 +267,8 @@ class TerminalDaemon:
             })
             return
         await self._send(writer, {"ok": True, **payload})
+        if action == "shutdown" and self.stop_event is not None:
+            self.stop_event.set()
 
     async def _create_terminal(self, request: dict[str, Any]) -> dict[str, Any]:
         project_id = str(request.get("projectId") or "")
@@ -305,7 +320,7 @@ class TerminalDaemon:
                 max(cursor, int(snapshot.get("oldestSeq") or 0)), replay_target
             )
             await self._send(writer, {"type": "snapshot", "terminal": snapshot})
-            for event in self.manager.iter_replay(
+            for event in await self.manager.replay_async(
                 terminal_id, cursor, end_seq=replay_target
             ):
                 await self._send(writer, event)
@@ -396,9 +411,9 @@ async def run_daemon() -> None:
         lock = _acquire_lock(state_dir)
     except AlreadyRunning:
         return
-    daemon = TerminalDaemon(state_dir)
-    await daemon.start()
     stop = asyncio.Event()
+    daemon = TerminalDaemon(state_dir, stop_event=stop)
+    await daemon.start()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
         with contextlib.suppress(NotImplementedError, RuntimeError):
@@ -407,9 +422,12 @@ async def run_daemon() -> None:
         await stop.wait()
     finally:
         await daemon.stop()
-        with contextlib.suppress(OSError):
-            (state_dir / "connection.json").unlink()
         lock.close()
+        connection_path = state_dir / "connection.json"
+        with contextlib.suppress(OSError, ValueError, TypeError):
+            current = json.loads(connection_path.read_text(encoding="utf-8"))
+            if int(current.get("pid") or 0) == os.getpid():
+                connection_path.unlink()
 
 
 def main() -> None:

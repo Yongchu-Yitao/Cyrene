@@ -262,22 +262,6 @@
       ],
     },
     {
-      id: "welcome",
-      module: "overview",
-      order: 2,
-      minutes: 1,
-      titleKey: "tour.welcome.title",
-      descKey: "tour.welcome.desc",
-      steps: [
-        { id: "page", navigate: { page: "welcome" },
-          bodyKey: "tour.welcome.page.body" },
-        { id: "import", points: ["tour.welcome.import.p1", "tour.welcome.import.p2"],
-          bodyKey: "tour.welcome.import.body" },
-        { id: "tip", points: ["tour.welcome.tip.p1", "tour.welcome.tip.p2"],
-          bodyKey: "tour.welcome.tip.body" },
-      ],
-    },
-    {
       id: "profile-tray",
       module: "extras",
       order: 4,

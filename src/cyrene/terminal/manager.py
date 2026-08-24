@@ -5,13 +5,18 @@ from __future__ import annotations
 import asyncio
 import base64
 import codecs
+import concurrent.futures
 import contextlib
+import json
 import os
+import queue
 import re
 import signal
+import shutil
 import sqlite3
 import struct
 import sys
+import threading
 import time
 import uuid
 from collections import deque
@@ -34,7 +39,648 @@ OUTPUT_FLUSH_INTERVAL_SECONDS = 0.05
 OUTPUT_FLUSH_THRESHOLD = 256 * 1024
 PTY_READ_BUDGET = 64 * 1024
 SCREEN_DRAIN_BUDGET = 32 * 1024
+DEFAULT_PERSISTENCE_BACKLOG_LIMIT = 8 * 1024 * 1024
+PERSISTENCE_BACKLOG_POLL_SECONDS = 0.01
+SCROLLBACK_SEGMENT_SIZE = 4 * 1024 * 1024
 _DEFAULT_TITLE_RE = re.compile(r"^Terminal\s+(\d+)$", re.IGNORECASE)
+
+
+_SESSION_UPSERT_SQL = """
+    INSERT INTO terminal_sessions (
+        id, project_id, title, cwd, shell, argv_json, created_at,
+        updated_at, status, exit_code, pid, cols, rows, next_seq,
+        output_start_seq, order_index, pinned,
+        owner_chat_id, created_by, owner_tool_call_id, launch_mode, wake_id,
+        last_input_actor, last_input_at, input_event_count,
+        exit_reason, exit_at, recovery_reason, recovered_at, recovery_count
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+        project_id=excluded.project_id, title=excluded.title,
+        cwd=excluded.cwd, shell=excluded.shell, argv_json=excluded.argv_json,
+        updated_at=excluded.updated_at, status=excluded.status,
+        exit_code=excluded.exit_code, pid=excluded.pid, cols=excluded.cols,
+        rows=excluded.rows, next_seq=excluded.next_seq,
+        output_start_seq=excluded.output_start_seq,
+        order_index=excluded.order_index, pinned=excluded.pinned,
+        owner_chat_id=excluded.owner_chat_id, created_by=excluded.created_by,
+        owner_tool_call_id=excluded.owner_tool_call_id,
+        launch_mode=excluded.launch_mode, wake_id=excluded.wake_id,
+        last_input_actor=excluded.last_input_actor,
+        last_input_at=excluded.last_input_at,
+        input_event_count=excluded.input_event_count,
+        exit_reason=excluded.exit_reason, exit_at=excluded.exit_at,
+        recovery_reason=excluded.recovery_reason,
+        recovered_at=excluded.recovered_at,
+        recovery_count=excluded.recovery_count
+"""
+
+_SESSION_METADATA_SQL = """
+    UPDATE terminal_sessions
+       SET cwd_uri = ?, shell_title = ?, integration_level = ?,
+           command_state = ?, last_command_exit_code = ?
+     WHERE id = ?
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class _PersistenceItem:
+    terminal_id: str
+    next_seq: int
+    output: bytes
+    output_events: tuple[tuple[int, int, str], ...]
+    session_values: tuple[Any, ...]
+    metadata_values: tuple[Any, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ScreenUpdate:
+    terminal_id: str
+    data: bytes
+    cols: int
+    rows: int
+    start_seq: int
+    next_seq: int
+    metadata_loop: Any = None
+    metadata_callback: Any = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ScreenResize:
+    terminal_id: str
+    cols: int
+    rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkerQuery:
+    operation: str
+    arguments: tuple[Any, ...]
+    future: concurrent.futures.Future[Any]
+
+
+class _TerminalPersistenceWriter:
+    """Own durable scrollback, SQLite, screen parsing, and history queries."""
+
+    def __init__(self, state_dir: Path, *, output_limit: int) -> None:
+        self._state_dir = state_dir
+        self._db_path = state_dir / "terminals.sqlite3"
+        self._output_limit = output_limit
+        self._segment_size = min(SCROLLBACK_SEGMENT_SIZE, output_limit)
+        self._queue: queue.Queue[Any] = queue.Queue()
+        self._condition = threading.Condition()
+        self._submitted = 0
+        self._completed = 0
+        self._failure: BaseException | None = None
+        self._retained_starts: dict[str, int] = {}
+        self._screens: dict[str, tuple[Any, Any, Any]] = {}
+        self._metadata_parsers: dict[str, OscMetadataParser] = {}
+        self._screen_snapshots: dict[str, tuple[int, dict[str, Any]]] = {}
+        self.thread_id: int | None = None
+        self.batch_count = 0
+        self.bytes_written = 0
+        self.bytes_read = 0
+        self.segments_deleted = 0
+        self.eviction_count = 0
+        self.screen_bytes_parsed = 0
+        self.query_count = 0
+        self._thread = threading.Thread(
+            target=self._run,
+            name="cyrene-terminal-worker",
+            daemon=True,
+        )
+        self._thread.start()
+
+    @property
+    def completed(self) -> int:
+        with self._condition:
+            return self._completed
+
+    @property
+    def submitted(self) -> int:
+        with self._condition:
+            return self._submitted
+
+    def retained_start(self, terminal_id: str) -> int:
+        with self._condition:
+            return self._retained_starts.get(terminal_id, 0)
+
+    def metrics(self) -> dict[str, int]:
+        """Return monotonic worker counters used by the performance harness."""
+        with self._condition:
+            return {
+                "batches": self.batch_count,
+                "bytesWritten": self.bytes_written,
+                "bytesRead": self.bytes_read,
+                "segmentsDeleted": self.segments_deleted,
+                "evictions": self.eviction_count,
+                "screenBytesParsed": self.screen_bytes_parsed,
+                "queries": self.query_count,
+            }
+
+    def cached_screen(
+        self, terminal_id: str, minimum_seq: int,
+    ) -> dict[str, Any] | None:
+        with self._condition:
+            entry = self._screen_snapshots.get(terminal_id)
+            if entry is None or entry[0] < minimum_seq:
+                return None
+            return dict(entry[1])
+
+    def submit(self, items: list[_PersistenceItem]) -> int:
+        if not items:
+            return self.submitted
+        with self._condition:
+            if self._failure is not None:
+                raise RuntimeError("terminal persistence writer failed") from self._failure
+            self._submitted += 1
+            token = self._submitted
+        self._queue.put((token, tuple(items)))
+        return token
+
+    def submit_screen(
+        self, terminal_id: str, data: bytes, *, cols: int, rows: int,
+        start_seq: int, next_seq: int, metadata_loop: Any = None,
+        metadata_callback: Any = None,
+    ) -> None:
+        self._queue.put(
+            _ScreenUpdate(
+                terminal_id, bytes(data), cols, rows, start_seq, next_seq,
+                metadata_loop, metadata_callback,
+            )
+        )
+
+    def resize_screen(self, terminal_id: str, *, cols: int, rows: int) -> None:
+        self._queue.put(_ScreenResize(terminal_id, cols, rows))
+
+    def request(self, operation: str, *arguments: Any) -> concurrent.futures.Future[Any]:
+        future: concurrent.futures.Future[Any] = concurrent.futures.Future()
+        with self._condition:
+            if self._failure is not None:
+                future.set_exception(
+                    RuntimeError("terminal background worker failed")
+                )
+                return future
+        self._queue.put(_WorkerQuery(operation, tuple(arguments), future))
+        return future
+
+    def call(self, operation: str, *arguments: Any) -> Any:
+        return self.request(operation, *arguments).result()
+
+    def wait(self, token: int) -> None:
+        if token <= 0:
+            return
+        with self._condition:
+            while self._completed < token and self._failure is None:
+                self._condition.wait()
+            if self._failure is not None:
+                raise RuntimeError("terminal persistence writer failed") from self._failure
+
+    def close(self) -> None:
+        token = self.submitted
+        self.wait(token)
+        self._queue.put(None)
+        self._thread.join()
+
+    def _legacy_path(self, terminal_id: str) -> Path:
+        return self._state_dir / "scrollback" / f"{terminal_id}.bin"
+
+    def _segment_dir(self, terminal_id: str) -> Path:
+        return self._state_dir / "scrollback" / terminal_id
+
+    def _segments(self, terminal_id: str) -> list[tuple[int, Path, int]]:
+        directory = self._segment_dir(terminal_id)
+        if not directory.is_dir():
+            return []
+        entries: list[tuple[int, Path, int]] = []
+        for path in directory.glob("*.bin"):
+            try:
+                entries.append((int(path.stem), path, path.stat().st_size))
+            except (OSError, ValueError):
+                continue
+        entries.sort(key=lambda entry: entry[0])
+        return entries
+
+    def _migrate_legacy(self, terminal_id: str, output_start_seq: int) -> None:
+        legacy = self._legacy_path(terminal_id)
+        target = self._segment_dir(terminal_id)
+        if target.is_dir() or not legacy.is_file():
+            return
+        temporary = target.with_name(f".{target.name}.{os.getpid()}.migrating")
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        temporary.mkdir(parents=True)
+        cursor = max(0, int(output_start_seq))
+        with legacy.open("rb") as source:
+            while data := source.read(self._segment_size):
+                with (temporary / f"{cursor:020d}.bin").open("wb") as stream:
+                    stream.write(data)
+                self.bytes_written += len(data)
+                cursor += len(data)
+        os.replace(temporary, target)
+        legacy.unlink()
+
+    def _oldest_seq(self, terminal_id: str, fallback: int) -> int:
+        segments = self._segments(terminal_id)
+        return segments[0][0] if segments else max(0, int(fallback))
+
+    def _append_segments(self, item: _PersistenceItem) -> int | None:
+        output_start_seq = int(item.session_values[14])
+        self._migrate_legacy(item.terminal_id, output_start_seq)
+        directory = self._segment_dir(item.terminal_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        cursor = item.next_seq - len(item.output)
+        offset = 0
+        segments = self._segments(item.terminal_id)
+        while offset < len(item.output):
+            if segments:
+                segment_start, path, size = segments[-1]
+                if segment_start + size == cursor and size < self._segment_size:
+                    capacity = self._segment_size - size
+                else:
+                    path = directory / f"{cursor:020d}.bin"
+                    size = 0
+                    capacity = self._segment_size
+                    segments.append((cursor, path, 0))
+            else:
+                path = directory / f"{cursor:020d}.bin"
+                size = 0
+                capacity = self._segment_size
+                segments.append((cursor, path, 0))
+            chunk = item.output[offset:offset + capacity]
+            with path.open("ab") as stream:
+                stream.write(chunk)
+            self.bytes_written += len(chunk)
+            new_size = size + len(chunk)
+            segments[-1] = (segments[-1][0], path, new_size)
+            cursor += len(chunk)
+            offset += len(chunk)
+
+        total = sum(size for _start, _path, size in segments)
+        evicted = False
+        while total > self._output_limit and len(segments) > 1:
+            _start, path, size = segments.pop(0)
+            path.unlink()
+            self.segments_deleted += 1
+            total -= size
+            evicted = True
+        if evicted:
+            self.eviction_count += 1
+        return segments[0][0] if evicted and segments else None
+
+    def _read_history(
+        self, terminal_id: str, start_seq: int, end_seq: int, fallback_start: int,
+    ) -> tuple[int, int, bytes]:
+        self._migrate_legacy(terminal_id, fallback_start)
+        segments = self._segments(terminal_id)
+        oldest = segments[0][0] if segments else max(0, int(fallback_start))
+        start = max(oldest, int(start_seq))
+        end = max(start, int(end_seq))
+        if end <= start:
+            return oldest, start, b""
+        if not segments:
+            legacy = self._legacy_path(terminal_id)
+            try:
+                with legacy.open("rb") as stream:
+                    stream.seek(start - oldest)
+                    return oldest, start, stream.read(end - start)
+            except OSError:
+                return oldest, start, b""
+        parts: list[bytes] = []
+        for segment_start, path, size in segments:
+            segment_end = segment_start + size
+            if segment_end <= start or segment_start >= end:
+                continue
+            left = max(start, segment_start) - segment_start
+            right = min(end, segment_end) - segment_start
+            with path.open("rb") as stream:
+                stream.seek(left)
+                data = stream.read(right - left)
+                self.bytes_read += len(data)
+                parts.append(data)
+        return oldest, start, b"".join(parts)
+
+    def _screen_state(self, terminal_id: str, cols: int, rows: int):
+        state = self._screens.get(terminal_id)
+        if state is None:
+            screen = pyte.Screen(cols, rows)
+            state = (
+                screen,
+                pyte.Stream(screen),
+                codecs.getincrementaldecoder("utf-8")(errors="replace"),
+            )
+            self._screens[terminal_id] = state
+        return state
+
+    def _feed_worker_screen(self, update: _ScreenUpdate) -> None:
+        screen, stream, decoder = self._screen_state(
+            update.terminal_id, update.cols, update.rows
+        )
+        stream.feed(decoder.decode(update.data, final=False))
+        self.screen_bytes_parsed += len(update.data)
+        parser = self._metadata_parsers.setdefault(
+            update.terminal_id, OscMetadataParser()
+        )
+        metadata = parser.feed(update.data, start_seq=update.start_seq)
+        if metadata and update.metadata_loop is not None:
+            update.metadata_loop.call_soon_threadsafe(
+                update.metadata_callback, update.terminal_id, tuple(metadata)
+            )
+        snapshot = self._screen_body((screen, stream, decoder))
+        with self._condition:
+            self._screen_snapshots[update.terminal_id] = (
+                update.next_seq, snapshot
+            )
+
+    @staticmethod
+    def _screen_body(state: tuple[Any, Any, Any]) -> dict[str, Any]:
+        screen = state[0]
+        lines = [str(line).rstrip() for line in screen.display]
+        while lines and not lines[-1]:
+            lines.pop()
+        return {
+            "rows": int(screen.lines),
+            "cols": int(screen.columns),
+            "cursor": {
+                "x": int(screen.cursor.x),
+                "y": int(screen.cursor.y),
+                "visible": not bool(getattr(screen.cursor, "hidden", False)),
+            },
+            "screenText": "\n".join(lines),
+        }
+
+    @staticmethod
+    def _history_timestamp(
+        connection: sqlite3.Connection, terminal_id: str, seq: int, default: str = "",
+    ) -> str:
+        row = connection.execute(
+            """SELECT created_at FROM terminal_output_events
+               WHERE terminal_id = ? AND start_seq <= ?
+               ORDER BY start_seq DESC LIMIT 1""",
+            (terminal_id, max(0, int(seq))),
+        ).fetchone()
+        return str(row[0]) if row else default
+
+    def _commands_query(
+        self, connection: sqlite3.Connection, terminal_id: str,
+        output_start_seq: int, next_seq: int,
+    ) -> list[dict[str, Any]]:
+        oldest, _start, data = self._read_history(
+            terminal_id, output_start_seq, next_seq, output_start_seq
+        )
+        return osc133_commands(
+            data,
+            base_seq=oldest,
+            timestamp_at=lambda seq: self._history_timestamp(
+                connection, terminal_id, seq
+            ),
+        )
+
+    def _search_query(
+        self, connection: sqlite3.Connection, sessions: tuple[dict[str, Any], ...],
+        needle: str, limit: int,
+    ) -> list[dict[str, Any]]:
+        matches: list[dict[str, Any]] = []
+        for session in sessions:
+            oldest, _start, data = self._read_history(
+                session["id"], session["outputStartSeq"], session["nextSeq"],
+                session["outputStartSeq"],
+            )
+            if not data:
+                continue
+            history_end = oldest + len(data)
+            rows = connection.execute(
+                """SELECT start_seq, end_seq, created_at
+                   FROM terminal_output_events WHERE terminal_id = ?
+                   ORDER BY start_seq""",
+                (session["id"],),
+            ).fetchall()
+            chunks: list[tuple[str, bytes]] = []
+            position = oldest
+            for row_start, row_end, created_at in rows:
+                start = max(oldest, int(row_start), position)
+                end = min(history_end, int(row_end))
+                if start > position:
+                    chunks.append((
+                        session["createdAt"],
+                        data[position - oldest:start - oldest],
+                    ))
+                if end > start:
+                    chunks.append((
+                        str(created_at), data[start - oldest:end - oldest]
+                    ))
+                    position = end
+            if position < history_end:
+                chunks.append((
+                    self._history_timestamp(
+                        connection, session["id"], position, session["createdAt"]
+                    ),
+                    data[position - oldest:],
+                ))
+            pending = ""
+            pending_at = ""
+            line_number = 0
+            for created_at, chunk in chunks:
+                line_timestamp = pending_at if pending else created_at
+                lines = (pending + plain_terminal_text(chunk)).split("\n")
+                pending = lines.pop() if lines else ""
+                for line in lines:
+                    line_number += 1
+                    if needle in line.casefold():
+                        matches.append({
+                            "terminalId": session["id"],
+                            "title": session["title"],
+                            "line": line_number,
+                            "text": line,
+                            "createdAt": line_timestamp,
+                        })
+                        if len(matches) >= limit:
+                            return matches
+                    line_timestamp = created_at
+                pending_at = line_timestamp
+            if pending and needle in pending.casefold():
+                matches.append({
+                    "terminalId": session["id"],
+                    "title": session["title"],
+                    "line": line_number + 1,
+                    "text": pending,
+                    "createdAt": pending_at,
+                })
+                if len(matches) >= limit:
+                    return matches
+        return matches
+
+    def _execute_query(
+        self, connection: sqlite3.Connection, query: _WorkerQuery,
+    ) -> Any:
+        self.query_count += 1
+        operation = query.operation
+        arguments = query.arguments
+        if operation == "history":
+            return self._read_history(*arguments)
+        if operation == "barrier":
+            return None
+        if operation == "reset_metadata":
+            self._metadata_parsers.pop(str(arguments[0]), None)
+            return None
+        if operation == "screen":
+            terminal_id, cols, rows, output_start_seq, next_seq = arguments
+            state = self._screens.get(terminal_id)
+            if state is None:
+                state = self._screen_state(terminal_id, cols, rows)
+                _oldest, _start, data = self._read_history(
+                    terminal_id, output_start_seq, next_seq, output_start_seq
+                )
+                if data:
+                    state[1].feed(state[2].decode(data, final=False))
+            body = self._screen_body(state)
+            with self._condition:
+                self._screen_snapshots[terminal_id] = (next_seq, body)
+            return body
+        if operation == "commands":
+            return self._commands_query(connection, *arguments)
+        if operation == "command_output":
+            terminal_id, command_id, output_start_seq, next_seq = arguments
+            command = next((item for item in self._commands_query(
+                connection, terminal_id, output_start_seq, next_seq
+            ) if item["id"] == command_id), None)
+            if command is None:
+                raise LookupError("terminal command not found")
+            _oldest, _actual, data = self._read_history(
+                terminal_id, int(command["outputStartSeq"]),
+                int(command["outputEndSeq"]), output_start_seq,
+            )
+            return command, data, plain_terminal_text(data)
+        if operation == "search":
+            return self._search_query(connection, *arguments)
+        if operation == "replay":
+            terminal_id, cursor, target, chunk_size, output_start_seq = arguments
+            oldest = self._oldest_seq(terminal_id, output_start_seq)
+            position = max(oldest, min(target, cursor))
+            events: list[dict[str, Any]] = []
+            while position < target:
+                _oldest, actual, data = self._read_history(
+                    terminal_id, position, min(target, position + chunk_size), oldest
+                )
+                if not data:
+                    break
+                end = actual + len(data)
+                events.append({
+                    "type": "output",
+                    "seq": actual,
+                    "nextSeq": end,
+                    "createdAt": self._history_timestamp(
+                        connection, terminal_id, actual
+                    ),
+                    "data": base64.b64encode(data).decode("ascii"),
+                })
+                position = end
+            return events
+        if operation == "remove":
+            terminal_id = str(arguments[0])
+            self._screens.pop(terminal_id, None)
+            self._metadata_parsers.pop(terminal_id, None)
+            with self._condition:
+                self._screen_snapshots.pop(terminal_id, None)
+            shutil.rmtree(self._segment_dir(terminal_id), ignore_errors=True)
+            with contextlib.suppress(OSError):
+                self._legacy_path(terminal_id).unlink()
+            return None
+        raise ValueError(f"unknown terminal worker operation: {operation}")
+
+    def _record_failure(self, exc: BaseException) -> None:
+        with self._condition:
+            self._failure = exc
+            self._condition.notify_all()
+        while True:
+            try:
+                pending = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            if isinstance(pending, _WorkerQuery) and not pending.future.done():
+                pending.future.set_exception(
+                    RuntimeError("terminal background worker failed")
+                )
+
+    def _run(self) -> None:
+        self.thread_id = threading.get_ident()
+        try:
+            connection = sqlite3.connect(self._db_path)
+            connection.execute("PRAGMA synchronous=NORMAL")
+            connection.execute("PRAGMA busy_timeout=5000")
+        except BaseException as exc:
+            self._record_failure(exc)
+            return
+        try:
+            while True:
+                entry = self._queue.get()
+                if entry is None:
+                    return
+                if isinstance(entry, _ScreenUpdate):
+                    self._feed_worker_screen(entry)
+                    continue
+                if isinstance(entry, _ScreenResize):
+                    state = self._screens.get(entry.terminal_id)
+                    if state is not None:
+                        state[0].resize(lines=entry.rows, columns=entry.cols)
+                        with self._condition:
+                            previous = self._screen_snapshots.get(
+                                entry.terminal_id, (0, {})
+                            )
+                            self._screen_snapshots[entry.terminal_id] = (
+                                previous[0], self._screen_body(state)
+                            )
+                    continue
+                if isinstance(entry, _WorkerQuery):
+                    try:
+                        entry.future.set_result(self._execute_query(connection, entry))
+                    except BaseException as exc:
+                        entry.future.set_exception(exc)
+                    continue
+                token, items = entry
+                try:
+                    retained_starts: dict[str, int] = {}
+                    for item in items:
+                        retained_start = self._retained_starts.get(item.terminal_id, 0)
+                        evicted_start: int | None = None
+                        if item.output:
+                            evicted_start = self._append_segments(item)
+                            if evicted_start is not None:
+                                retained_start = evicted_start
+                                retained_starts[item.terminal_id] = retained_start
+                        if item.output_events:
+                            connection.executemany(
+                                """INSERT INTO terminal_output_events (
+                                       terminal_id, start_seq, end_seq, created_at
+                                   ) VALUES (?, ?, ?, ?)""",
+                                [
+                                    (item.terminal_id, start, end, created_at)
+                                    for start, end, created_at in item.output_events
+                                ],
+                            )
+                        session_values = list(item.session_values)
+                        session_values[14] = max(int(session_values[14]), retained_start)
+                        connection.execute(_SESSION_UPSERT_SQL, tuple(session_values))
+                        connection.execute(_SESSION_METADATA_SQL, item.metadata_values)
+                        if evicted_start is not None:
+                            connection.execute(
+                                """DELETE FROM terminal_output_events
+                                   WHERE terminal_id = ? AND end_seq <= ?""",
+                                (item.terminal_id, retained_start),
+                            )
+                    connection.commit()
+                    self.batch_count += 1
+                except BaseException as exc:
+                    connection.rollback()
+                    self._record_failure(exc)
+                    return
+                with self._condition:
+                    self._retained_starts.update(retained_starts)
+                    self._completed = token
+                    self._condition.notify_all()
+        except BaseException as exc:
+            self._record_failure(exc)
+        finally:
+            connection.close()
 
 
 class TerminalInputBusyError(RuntimeError):
@@ -145,6 +791,10 @@ class TerminalSession:
     screen_task: asyncio.Task[Any] | None = None
     pending_output: bytearray = field(default_factory=bytearray)
     pending_output_events: list[tuple[int, int, str]] = field(default_factory=list)
+    persist_queued_bytes: int = 0
+    persist_queued_events: int = 0
+    persist_jobs: deque[tuple[int, int, int]] = field(default_factory=deque)
+    pty_read_paused: bool = False
     cwd_uri: str = ""
     shell_title: str = ""
     integration_level: str = "none"
@@ -221,6 +871,7 @@ class TerminalManager:
         state_dir: Path | None = None,
         user_input_priority_seconds: float = USER_INPUT_PRIORITY_SECONDS,
         startup_reason: str = "daemon_restart",
+        persistence_backlog_limit: int = DEFAULT_PERSISTENCE_BACKLOG_LIMIT,
     ) -> None:
         self.output_limit = max(64 * 1024, int(output_limit))
         self.user_input_priority_seconds = max(
@@ -232,9 +883,16 @@ class TerminalManager:
         self.started_at = _now_iso()
         self.state_dir = Path(state_dir).resolve() if state_dir else None
         self._db: sqlite3.Connection | None = None
+        self._persistence_writer: _TerminalPersistenceWriter | None = None
         self._dirty_sessions: set[str] = set()
         self._pending_output_bytes = 0
+        self.persistence_backlog_limit = max(
+            PTY_READ_BUDGET * 2, int(persistence_backlog_limit)
+        )
+        self.persistence_backlog_low_water = self.persistence_backlog_limit // 2
+        self._persistence_backlog_bytes = 0
         self._flush_handle: asyncio.Handle | None = None
+        self._backpressure_handle: asyncio.Handle | None = None
         if self.state_dir is not None:
             self._open_store()
 
@@ -246,6 +904,7 @@ class TerminalManager:
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=NORMAL")
+        self._db.execute("PRAGMA busy_timeout=5000")
         self._db.executescript(
             """
             CREATE TABLE IF NOT EXISTS terminal_sessions (
@@ -335,6 +994,9 @@ class TerminalManager:
         self._ensure_column("terminal_sessions", "command_state", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("terminal_sessions", "last_command_exit_code", "INTEGER")
         self._db.commit()
+        self._persistence_writer = _TerminalPersistenceWriter(
+            self.state_dir, output_limit=self.output_limit
+        )
         self._load_sessions()
 
     def _ensure_column(self, table: str, name: str, declaration: str) -> None:
@@ -346,6 +1008,10 @@ class TerminalManager:
     def _scroll_path(self, terminal_id: str) -> Path:
         assert self.state_dir is not None
         return self.state_dir / "scrollback" / f"{terminal_id}.bin"
+
+    def _scroll_segment_dir(self, terminal_id: str) -> Path:
+        assert self.state_dir is not None
+        return self.state_dir / "scrollback" / terminal_id
 
     def _load_sessions(self) -> None:
         import json
@@ -416,20 +1082,6 @@ class TerminalManager:
             ).fetchall()[::-1]:
                 session.input_events.append(self._input_event_public(event_row))
             self._reset_screen(session)
-            if self.state_dir is not None:
-                with contextlib.suppress(OSError):
-                    path = self._scroll_path(session.id)
-                    with path.open("rb") as stream:
-                        size = path.stat().st_size
-                        if size > self.output_limit:
-                            stream.seek(-self.output_limit, os.SEEK_END)
-                        data = stream.read()
-                    if data:
-                        start = max(0, session.next_seq - len(data))
-                        session.output.append(OutputChunk(start, session.next_seq, data))
-                        session.output_bytes = len(data)
-                        session.output_start_seq = max(0, session.next_seq - size)
-                        self._feed_screen(session, data)
             self._sessions[session.id] = session
             if (
                 status == "exited"
@@ -479,6 +1131,7 @@ class TerminalManager:
 
     def _repair_duplicate_titles(self) -> None:
         """Repair historical duplicates so title-based lookup is unambiguous."""
+        repaired_any = False
         by_project: dict[str, list[TerminalSession]] = {}
         for session in self._sessions.values():
             by_project.setdefault(session.project_id, []).append(session)
@@ -498,6 +1151,9 @@ class TerminalManager:
                 occupied.add(repaired_key)
                 seen.add(repaired_key)
                 self._persist_session(session)
+                repaired_any = True
+        if repaired_any:
+            self.flush()
 
     async def restore_interrupted_sessions(self) -> list[dict[str, Any]]:
         """Restart interactive shells whose PTY owner stopped unexpectedly.
@@ -553,103 +1209,113 @@ class TerminalManager:
         return restored
 
     def _upsert_session(self, session: TerminalSession) -> None:
-        import json
-
         if self._db is None:
             return
-        self._db.execute(
-            """
-            INSERT INTO terminal_sessions (
-                id, project_id, title, cwd, shell, argv_json, created_at,
-                updated_at, status, exit_code, pid, cols, rows, next_seq,
-                output_start_seq, order_index, pinned
-                , owner_chat_id, created_by, owner_tool_call_id, launch_mode, wake_id,
-                last_input_actor, last_input_at, input_event_count,
-                exit_reason, exit_at, recovery_reason, recovered_at, recovery_count
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                project_id=excluded.project_id, title=excluded.title,
-                cwd=excluded.cwd, shell=excluded.shell, argv_json=excluded.argv_json,
-                updated_at=excluded.updated_at, status=excluded.status,
-                exit_code=excluded.exit_code, pid=excluded.pid, cols=excluded.cols,
-                rows=excluded.rows, next_seq=excluded.next_seq,
-                output_start_seq=excluded.output_start_seq,
-                order_index=excluded.order_index, pinned=excluded.pinned,
-                owner_chat_id=excluded.owner_chat_id, created_by=excluded.created_by,
-                owner_tool_call_id=excluded.owner_tool_call_id,
-                launch_mode=excluded.launch_mode, wake_id=excluded.wake_id,
-                last_input_actor=excluded.last_input_actor,
-                last_input_at=excluded.last_input_at,
-                input_event_count=excluded.input_event_count,
-                exit_reason=excluded.exit_reason, exit_at=excluded.exit_at,
-                recovery_reason=excluded.recovery_reason,
-                recovered_at=excluded.recovered_at,
-                recovery_count=excluded.recovery_count
-            """,
-            (
-                session.id, session.project_id, session.title, session.cwd,
-                session.shell, json.dumps(session.argv), session.created_at,
-                session.updated_at, session.status, session.exit_code, session.pid,
-                session.cols, session.rows, session.next_seq,
-                session.output_start_seq, session.order_index, int(session.pinned),
-                session.owner_chat_id, session.created_by, session.owner_tool_call_id,
-                session.launch_mode, session.wake_id,
-                session.last_actor, session.last_input_at, session.input_event_count,
-                session.exit_reason, session.exit_at, session.recovery_reason,
-                session.recovered_at, session.recovery_count,
-            ),
-        )
-        self._db.execute(
-            """UPDATE terminal_sessions
-               SET cwd_uri = ?, shell_title = ?, integration_level = ?,
-                   command_state = ?, last_command_exit_code = ?
-               WHERE id = ?""",
-            (
-                session.cwd_uri,
-                session.shell_title,
-                session.integration_level,
-                session.command_state,
-                session.last_command_exit_code,
-                session.id,
-            ),
+        self._db.execute(_SESSION_UPSERT_SQL, self._session_values(session))
+        self._db.execute(_SESSION_METADATA_SQL, self._metadata_values(session))
+
+    @staticmethod
+    def _session_values(session: TerminalSession) -> tuple[Any, ...]:
+        return (
+            session.id, session.project_id, session.title, session.cwd,
+            session.shell, json.dumps(session.argv), session.created_at,
+            session.updated_at, session.status, session.exit_code, session.pid,
+            session.cols, session.rows, session.next_seq,
+            session.output_start_seq, session.order_index, int(session.pinned),
+            session.owner_chat_id, session.created_by, session.owner_tool_call_id,
+            session.launch_mode, session.wake_id,
+            session.last_actor, session.last_input_at, session.input_event_count,
+            session.exit_reason, session.exit_at, session.recovery_reason,
+            session.recovered_at, session.recovery_count,
         )
 
-    def _write_pending_output(self, session: TerminalSession) -> None:
-        if not session.pending_output or self.state_dir is None or self._db is None:
+    @staticmethod
+    def _metadata_values(session: TerminalSession) -> tuple[Any, ...]:
+        return (
+            session.cwd_uri,
+            session.shell_title,
+            session.integration_level,
+            session.command_state,
+            session.last_command_exit_code,
+            session.id,
+        )
+
+    def _reap_persisted_output(self, session: TerminalSession | None = None) -> None:
+        writer = self._persistence_writer
+        if writer is None:
             return
-        data = bytes(session.pending_output)
-        events = list(session.pending_output_events)
-        path = self._scroll_path(session.id)
-        with path.open("ab") as stream:
-            stream.write(data)
-        session.pending_output.clear()
-        session.pending_output_events.clear()
-        self._pending_output_bytes = max(0, self._pending_output_bytes - len(data))
-        self._dirty_sessions.discard(session.id)
-        if events:
-            self._db.executemany(
-                """INSERT INTO terminal_output_events (
-                       terminal_id, start_seq, end_seq, created_at
-                   ) VALUES (?, ?, ?, ?)""",
-                [(session.id, start, end, created_at) for start, end, created_at in events],
+        completed = writer.completed
+        sessions = (session,) if session is not None else tuple(self._sessions.values())
+        for current in sessions:
+            while current.persist_jobs and current.persist_jobs[0][0] <= completed:
+                _token, byte_count, event_count = current.persist_jobs.popleft()
+                del current.pending_output[:byte_count]
+                del current.pending_output_events[:event_count]
+                current.persist_queued_bytes -= byte_count
+                current.persist_queued_events -= event_count
+                self._persistence_backlog_bytes = max(
+                    0, self._persistence_backlog_bytes - byte_count
+                )
+            current.output_start_seq = max(
+                current.output_start_seq, writer.retained_start(current.id)
             )
 
-    def _flush_pending_outputs(self) -> None:
+    def _persistence_item(self, session: TerminalSession) -> _PersistenceItem | None:
+        byte_start = session.persist_queued_bytes
+        event_start = session.persist_queued_events
+        data = bytes(session.pending_output[byte_start:])
+        events = tuple(session.pending_output_events[event_start:])
+        if not data and not events:
+            return None
+        return _PersistenceItem(
+            terminal_id=session.id,
+            next_seq=session.next_seq,
+            output=data,
+            output_events=events,
+            session_values=self._session_values(session),
+            metadata_values=self._metadata_values(session),
+        )
+
+    def _submit_persistence_items(
+        self, batches: list[tuple[TerminalSession, _PersistenceItem]],
+    ) -> int:
+        writer = self._persistence_writer
+        if writer is None:
+            return 0
+        token = writer.submit([item for _session, item in batches])
+        for session, item in batches:
+            byte_count = len(item.output)
+            event_count = len(item.output_events)
+            if byte_count or event_count:
+                session.persist_queued_bytes += byte_count
+                session.persist_queued_events += event_count
+                session.persist_jobs.append((token, byte_count, event_count))
+                self._pending_output_bytes = max(
+                    0, self._pending_output_bytes - byte_count
+                )
+                self._dirty_sessions.discard(session.id)
+        return token
+
+    def _flush_pending_outputs(self) -> int:
         if self._flush_handle is not None:
             self._flush_handle.cancel()
             self._flush_handle = None
-        if self._db is None or not self._dirty_sessions:
-            return
+        writer = self._persistence_writer
+        if writer is None or not self._dirty_sessions:
+            return writer.submitted if writer is not None else 0
+        self._reap_persisted_output()
         self._dirty_sessions.intersection_update(self._sessions)
         sessions = [
             self._sessions[terminal_id]
             for terminal_id in tuple(self._dirty_sessions)
             if terminal_id in self._sessions
         ]
+        batches: list[tuple[TerminalSession, _PersistenceItem]] = []
         for session in sessions:
-            self._write_pending_output(session)
-            self._upsert_session(session)
-        self._db.commit()
+            item = self._persistence_item(session)
+            if item is not None:
+                batches.append((session, item))
+        return self._submit_persistence_items(batches)
 
     def _schedule_output_flush(self, session: TerminalSession) -> None:
         if self.state_dir is None or not session.pending_output:
@@ -669,16 +1335,97 @@ class TerminalManager:
                 OUTPUT_FLUSH_INTERVAL_SECONDS, self._flush_pending_outputs
             )
 
+    def _persistence_is_pressured(self) -> bool:
+        if self._persistence_writer is None:
+            return False
+        self._reap_persisted_output()
+        return self._persistence_backlog_bytes >= self.persistence_backlog_limit
+
+    def _pause_posix_reader(self, session: TerminalSession) -> None:
+        if session.master_fd is None or session.pty_read_paused:
+            return
+        with contextlib.suppress(Exception):
+            asyncio.get_running_loop().remove_reader(session.master_fd)
+        session.pty_read_paused = True
+        self._schedule_backpressure_poll()
+
+    def _schedule_backpressure_poll(self) -> None:
+        if self._backpressure_handle is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._backpressure_handle = loop.call_later(
+            PERSISTENCE_BACKLOG_POLL_SECONDS,
+            self._poll_persistence_backpressure,
+        )
+
+    def _poll_persistence_backpressure(self) -> None:
+        self._backpressure_handle = None
+        self._reap_persisted_output()
+        if self._persistence_backlog_bytes > self.persistence_backlog_low_water:
+            self._schedule_backpressure_poll()
+            return
+        loop = asyncio.get_running_loop()
+        for session in self._sessions.values():
+            if not session.pty_read_paused or session.master_fd is None:
+                continue
+            session.pty_read_paused = False
+            loop.add_reader(session.master_fd, self._read_posix_ready, session.id)
+
+    async def _wait_for_persistence_capacity(self) -> None:
+        while self._persistence_is_pressured():
+            await asyncio.sleep(PERSISTENCE_BACKLOG_POLL_SECONDS)
+
+    async def _worker_call(self, operation: str, *arguments: Any) -> Any:
+        writer = self._persistence_writer
+        if writer is None:
+            raise RuntimeError("terminal background worker is unavailable")
+        return await asyncio.wrap_future(writer.request(operation, *arguments))
+
     def flush(self) -> None:
         """Synchronously checkpoint pending terminal output and metadata."""
-        self._flush_pending_outputs()
+        token = self._flush_pending_outputs()
+        if self._persistence_writer is not None:
+            self._persistence_writer.wait(token)
+            self._reap_persisted_output()
+
+    def close_store(self) -> None:
+        """Flush and stop the dedicated persistence writer."""
+        if self._backpressure_handle is not None:
+            self._backpressure_handle.cancel()
+            self._backpressure_handle = None
+        self.flush()
+        if self._persistence_writer is not None:
+            self._persistence_writer.close()
+            self._persistence_writer = None
+        if self._db is not None:
+            self._db.close()
+            self._db = None
 
     def _persist_session(self, session: TerminalSession) -> None:
         if self._db is None:
             return
-        self._write_pending_output(session)
-        self._upsert_session(session)
-        self._db.commit()
+        writer = self._persistence_writer
+        if writer is None:
+            self._upsert_session(session)
+            self._db.commit()
+            return
+        if self._db.in_transaction:
+            self._db.commit()
+        self._reap_persisted_output(session)
+        item = self._persistence_item(session)
+        if item is None:
+            item = _PersistenceItem(
+                terminal_id=session.id,
+                next_seq=session.next_seq,
+                output=b"",
+                output_events=(),
+                session_values=self._session_values(session),
+                metadata_values=self._metadata_values(session),
+            )
+        self._submit_persistence_items([(session, item)])
 
     @staticmethod
     def _input_event_public(row: Any) -> dict[str, Any]:
@@ -849,6 +1596,12 @@ class TerminalManager:
             raise ValueError("terminal cwd does not exist")
         if not argv:
             raise ValueError("terminal command is required")
+        if resolved_cwd is None and self._persistence_writer is not None:
+            # Drain preceding OSC 7 output before inheriting the active shell's
+            # cwd. The worker posts metadata callbacks before completing this
+            # barrier, and one loop turn applies those callbacks locally.
+            await self._worker_call("barrier")
+            await asyncio.sleep(0)
         async with self._lock:
             if resolved_cwd is None:
                 active_id = self.active_terminal_id(project_id)
@@ -903,6 +1656,7 @@ class TerminalManager:
                 await self._spawn_posix(session)
         except Exception:
             async with self._lock:
+                self.flush()
                 self._sessions.pop(session.id, None)
                 if self._db is not None:
                     self._db.execute("DELETE FROM terminal_sessions WHERE id = ?", (session.id,))
@@ -944,6 +1698,8 @@ class TerminalManager:
         return b"".join(parts)
 
     async def _drain_screen(self, terminal_id: str) -> None:
+        if self._persistence_writer is not None:
+            return
         session = self._sessions.get(terminal_id)
         if session is None:
             return
@@ -959,6 +1715,28 @@ class TerminalManager:
                 session.screen_task = None
 
     def _queue_screen_data(self, session: TerminalSession, data: bytes) -> None:
+        if self._persistence_writer is not None:
+            try:
+                metadata_loop = asyncio.get_running_loop()
+                metadata_callback = self._apply_worker_metadata
+            except RuntimeError:
+                metadata_loop = None
+                metadata_callback = None
+                changed = False
+                for metadata in session.osc_parser.feed(
+                    data, start_seq=session.next_seq - len(data)
+                ):
+                    changed = self._apply_osc_metadata(session, metadata) or changed
+                if changed:
+                    self._persist_session(session)
+                    self._publish_state(session, reason="metadata")
+            self._persistence_writer.submit_screen(
+                session.id, data, cols=session.cols, rows=session.rows,
+                start_seq=session.next_seq - len(data), next_seq=session.next_seq,
+                metadata_loop=metadata_loop,
+                metadata_callback=metadata_callback,
+            )
+            return
         session.screen_pending.append(data)
         session.screen_pending_bytes += len(data)
         if session.screen_pending_bytes > self.output_limit:
@@ -975,7 +1753,23 @@ class TerminalManager:
             return
         session.screen_task = loop.create_task(self._drain_screen(session.id))
 
+    def _apply_worker_metadata(
+        self, terminal_id: str, metadata_events: tuple[dict[str, Any], ...],
+    ) -> None:
+        session = self._sessions.get(terminal_id)
+        if session is None:
+            return
+        changed = False
+        for metadata in metadata_events:
+            changed = self._apply_osc_metadata(session, metadata) or changed
+        if changed:
+            session.updated_at = _now_iso()
+            self._persist_session(session)
+            self._publish_state(session, reason="metadata")
+
     def _drain_screen_now(self, session: TerminalSession) -> None:
+        if self._persistence_writer is not None:
+            return
         while session.screen_pending:
             data = self._take_screen_data(session, SCREEN_DRAIN_BUDGET)
             if data:
@@ -983,6 +1777,16 @@ class TerminalManager:
 
     def screen_snapshot(self, terminal_id: str) -> dict[str, Any]:
         session = self.get(terminal_id)
+        if self._persistence_writer is not None:
+            body = self._persistence_writer.cached_screen(
+                session.id, session.next_seq
+            )
+            if body is None:
+                body = self._persistence_writer.call(
+                    "screen", session.id, session.cols, session.rows,
+                    session.output_start_seq, session.next_seq,
+                )
+            return {"terminal": session.public(), **body}
         if session.screen is None:
             self._reset_screen(session)
             for chunk in session.output:
@@ -1003,6 +1807,20 @@ class TerminalManager:
             "screenText": "\n".join(lines),
         }
 
+    async def screen_snapshot_async(self, terminal_id: str) -> dict[str, Any]:
+        session = self.get(terminal_id)
+        if self._persistence_writer is None:
+            return self.screen_snapshot(terminal_id)
+        body = self._persistence_writer.cached_screen(
+            session.id, session.next_seq
+        )
+        if body is None:
+            body = await self._worker_call(
+                "screen", session.id, session.cols, session.rows,
+                session.output_start_seq, session.next_seq,
+            )
+        return {"terminal": session.public(), **body}
+
     def scrollback_snapshot(
         self,
         terminal_id: str,
@@ -1017,6 +1835,7 @@ class TerminalManager:
         cursor reads forward and lets callers page through retained history.
         """
         session = self.get(terminal_id)
+        self._reap_persisted_output(session)
         limit = max(1, min(int(max_bytes or 64 * 1024), 512 * 1024))
         oldest_seq = session.output_start_seq
         next_seq = session.next_seq
@@ -1027,6 +1846,8 @@ class TerminalManager:
             start_seq = min(next_seq, max(oldest_seq, requested_start_seq))
 
         data = self._history_bytes(session, start_seq, min(next_seq, start_seq + limit))
+        oldest_seq = session.output_start_seq
+        start_seq = max(oldest_seq, start_seq)
         end_seq = start_seq + len(data)
 
         truncated_before = (
@@ -1051,29 +1872,68 @@ class TerminalManager:
             "truncatedAfter": truncated_after,
         }
 
+    async def scrollback_snapshot_async(
+        self, terminal_id: str, *, cursor: int | None = None,
+        max_bytes: int = 64 * 1024,
+    ) -> dict[str, Any]:
+        session = self.get(terminal_id)
+        if self._persistence_writer is None:
+            return self.scrollback_snapshot(
+                terminal_id, cursor=cursor, max_bytes=max_bytes
+            )
+        limit = max(1, min(int(max_bytes or 64 * 1024), 512 * 1024))
+        requested = None if cursor is None else max(0, int(cursor))
+        requested_start = (
+            max(session.output_start_seq, session.next_seq - limit)
+            if requested is None
+            else min(session.next_seq, max(session.output_start_seq, requested))
+        )
+        start, data = await self._history_bytes_async(
+            session, requested_start,
+            min(session.next_seq, requested_start + limit),
+        )
+        oldest = session.output_start_seq
+        end = start + len(data)
+        truncated_before = start > oldest or (requested is not None and requested < oldest)
+        truncated_after = end < session.next_seq
+        return {
+            "terminal": session.public(),
+            "encoding": "base64",
+            "data": base64.b64encode(data).decode("ascii"),
+            "requestedStartSeq": requested,
+            "startSeq": start,
+            "endSeq": end,
+            "oldestSeq": oldest,
+            "nextSeq": session.next_seq,
+            "truncated": truncated_before or truncated_after,
+            "truncatedBefore": truncated_before,
+            "truncatedAfter": truncated_after,
+        }
+
     def _history_bytes(
         self, session: TerminalSession, start_seq: int, end_seq: int,
     ) -> bytes:
+        self._reap_persisted_output(session)
         start = max(session.output_start_seq, min(session.next_seq, int(start_seq)))
         end = max(start, min(session.next_seq, int(end_seq)))
         if end <= start:
             return b""
-        if self.state_dir is not None:
-            path = self._scroll_path(session.id)
-            pending_start = session.next_seq - len(session.pending_output)
+        if self._persistence_writer is not None:
+            pending = bytes(session.pending_output)
+            pending_start = session.next_seq - len(pending)
             durable_end = min(end, pending_start)
             parts: list[bytes] = []
             if start < durable_end:
-                try:
-                    with path.open("rb") as stream:
-                        stream.seek(start - session.output_start_seq)
-                        parts.append(stream.read(durable_end - start))
-                except OSError:
-                    pass
+                oldest, _actual, data = self._persistence_writer.call(
+                    "history", session.id, start, durable_end,
+                    session.output_start_seq,
+                )
+                session.output_start_seq = max(session.output_start_seq, oldest)
+                parts.append(data)
             pending_from = max(start, pending_start)
             if pending_from < end:
                 offset = pending_from - pending_start
-                parts.append(bytes(session.pending_output[offset:offset + end - pending_from]))
+                parts.append(pending[offset:offset + end - pending_from])
             return b"".join(parts)
         parts: list[bytes] = []
         for chunk in session.output:
@@ -1084,6 +1944,36 @@ class TerminalManager:
             parts.append(chunk.data[left:right])
         return b"".join(parts)
 
+    async def _history_bytes_async(
+        self, session: TerminalSession, start_seq: int, end_seq: int,
+    ) -> tuple[int, bytes]:
+        self._reap_persisted_output(session)
+        start = max(session.output_start_seq, min(session.next_seq, int(start_seq)))
+        end = max(start, min(session.next_seq, int(end_seq)))
+        if end <= start:
+            return start, b""
+        if self._persistence_writer is None:
+            return start, self._history_bytes(session, start, end)
+        pending = bytes(session.pending_output)
+        pending_start = session.next_seq - len(pending)
+        durable_end = min(end, pending_start)
+        parts: list[bytes] = []
+        actual_start = start
+        if start < durable_end:
+            oldest, actual_start, data = await self._worker_call(
+                "history", session.id, start, durable_end,
+                session.output_start_seq,
+            )
+            session.output_start_seq = max(session.output_start_seq, oldest)
+            parts.append(data)
+        pending_from = max(start, pending_start)
+        if pending_from < end:
+            if not parts:
+                actual_start = pending_from
+            offset = pending_from - pending_start
+            parts.append(pending[offset:offset + end - pending_from])
+        return actual_start, b"".join(parts)
+
     def iter_replay(
         self,
         terminal_id: str,
@@ -1093,9 +1983,18 @@ class TerminalManager:
         end_seq: int | None = None,
     ):
         session = self.get(terminal_id)
-        position = max(session.output_start_seq, min(session.next_seq, int(cursor or 0)))
         target = session.next_seq if end_seq is None else min(session.next_seq, int(end_seq))
         size = max(4096, min(int(chunk_size), 512 * 1024))
+        if self._persistence_writer is not None:
+            self._flush_pending_outputs()
+            events = self._persistence_writer.call(
+                "replay", session.id, int(cursor or 0), target, size,
+                session.output_start_seq,
+            )
+            self._reap_persisted_output(session)
+            yield from events
+            return
+        position = max(session.output_start_seq, min(session.next_seq, int(cursor or 0)))
         while position < target:
             data = self._history_bytes(
                 session, position, min(target, position + size)
@@ -1111,6 +2010,29 @@ class TerminalManager:
                 "data": base64.b64encode(data).decode("ascii"),
             }
             position = end
+
+    async def replay_async(
+        self, terminal_id: str, cursor: int = 0, *,
+        chunk_size: int = 256 * 1024, end_seq: int | None = None,
+    ) -> list[dict[str, Any]]:
+        session = self.get(terminal_id)
+        if self._persistence_writer is None:
+            return list(self.iter_replay(
+                terminal_id, cursor, chunk_size=chunk_size, end_seq=end_seq
+            ))
+        target = session.next_seq if end_seq is None else min(session.next_seq, int(end_seq))
+        size = max(4096, min(int(chunk_size), 512 * 1024))
+        self._flush_pending_outputs()
+        events = await self._worker_call(
+            "replay", session.id, int(cursor or 0), target, size,
+            session.output_start_seq,
+        )
+        self._reap_persisted_output(session)
+        if events:
+            session.output_start_seq = max(
+                session.output_start_seq, int(events[0]["seq"])
+            )
+        return list(events)
 
     def _history_timestamp(self, terminal_id: str, seq: int) -> str:
         position = max(0, int(seq))
@@ -1204,6 +2126,20 @@ class TerminalManager:
             if session.project_id == str(project_id or "")
             and (not terminal_id or session.id == str(terminal_id))
         ]
+        if self._persistence_writer is not None:
+            self._flush_pending_outputs()
+            specs = tuple({
+                "id": session.id,
+                "title": session.title,
+                "createdAt": session.created_at,
+                "outputStartSeq": session.output_start_seq,
+                "nextSeq": session.next_seq,
+            } for session in sessions)
+            result = self._persistence_writer.call(
+                "search", specs, needle, bounded
+            )
+            self._reap_persisted_output()
+            return list(result)
         for session in sessions:
             pending = ""
             pending_at = ""
@@ -1241,8 +2177,44 @@ class TerminalManager:
                         return matches
         return matches
 
+    async def search_history_async(
+        self, project_id: str, query: str, *, terminal_id: str = "",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        if self._persistence_writer is None:
+            return self.search_history(
+                project_id, query, terminal_id=terminal_id, limit=limit
+            )
+        needle = str(query or "").strip().casefold()
+        if not needle:
+            raise ValueError("terminal history query is required")
+        bounded = max(1, min(int(limit or 100), 500))
+        sessions = [
+            session for session in self._sessions.values()
+            if session.project_id == str(project_id or "")
+            and (not terminal_id or session.id == str(terminal_id))
+        ]
+        specs = tuple({
+            "id": session.id,
+            "title": session.title,
+            "createdAt": session.created_at,
+            "outputStartSeq": session.output_start_seq,
+            "nextSeq": session.next_seq,
+        } for session in sessions)
+        self._flush_pending_outputs()
+        result = await self._worker_call("search", specs, needle, bounded)
+        self._reap_persisted_output()
+        return list(result)
+
     def commands(self, terminal_id: str) -> list[dict[str, Any]]:
         session = self.get(terminal_id)
+        if self._persistence_writer is not None:
+            self._flush_pending_outputs()
+            result = self._persistence_writer.call(
+                "commands", session.id, session.output_start_seq, session.next_seq
+            )
+            self._reap_persisted_output(session)
+            return list(result)
         data = self._history_bytes(session, session.output_start_seq, session.next_seq)
         return osc133_commands(
             data,
@@ -1250,8 +2222,33 @@ class TerminalManager:
             timestamp_at=lambda seq: self._history_timestamp(session.id, seq),
         )
 
+    async def commands_async(self, terminal_id: str) -> list[dict[str, Any]]:
+        session = self.get(terminal_id)
+        if self._persistence_writer is None:
+            return self.commands(terminal_id)
+        self._flush_pending_outputs()
+        result = await self._worker_call(
+            "commands", session.id, session.output_start_seq, session.next_seq
+        )
+        self._reap_persisted_output(session)
+        return list(result)
+
     def command_output(self, terminal_id: str, command_id: str) -> dict[str, Any]:
         session = self.get(terminal_id)
+        if self._persistence_writer is not None:
+            self._flush_pending_outputs()
+            command, data, text = self._persistence_writer.call(
+                "command_output", session.id, command_id,
+                session.output_start_seq, session.next_seq,
+            )
+            self._reap_persisted_output(session)
+            return {
+                "terminal": session.public(),
+                "command": command,
+                "encoding": "base64",
+                "data": base64.b64encode(data).decode("ascii"),
+                "text": text,
+            }
         command = next(
             (item for item in self.commands(terminal_id) if item["id"] == command_id),
             None,
@@ -1267,6 +2264,26 @@ class TerminalManager:
             "encoding": "base64",
             "data": base64.b64encode(data).decode("ascii"),
             "text": plain_terminal_text(data),
+        }
+
+    async def command_output_async(
+        self, terminal_id: str, command_id: str,
+    ) -> dict[str, Any]:
+        session = self.get(terminal_id)
+        if self._persistence_writer is None:
+            return self.command_output(terminal_id, command_id)
+        self._flush_pending_outputs()
+        command, data, text = await self._worker_call(
+            "command_output", session.id, command_id,
+            session.output_start_seq, session.next_seq,
+        )
+        self._reap_persisted_output(session)
+        return {
+            "terminal": session.public(),
+            "command": command,
+            "encoding": "base64",
+            "data": base64.b64encode(data).decode("ascii"),
+            "text": text,
         }
 
     def _register_wake(self, session: TerminalSession, note: str) -> None:
@@ -1358,6 +2375,8 @@ class TerminalManager:
             env = launch.env
             session.integration_level = launch.integration_level
         session.osc_parser.reset()
+        if self._persistence_writer is not None:
+            await self._worker_call("reset_metadata", session.id)
         session.command_state = ""
 
         def child_setup() -> None:
@@ -1384,6 +2403,7 @@ class TerminalManager:
         session.updated_at = _now_iso()
         self._persist_session(session)
         loop = asyncio.get_running_loop()
+        session.pty_read_paused = False
         loop.add_reader(master_fd, self._read_posix_ready, session.id)
         session.wait_task = asyncio.create_task(self._wait_posix(session.id))
         self._publish_state(session)
@@ -1408,6 +2428,8 @@ class TerminalManager:
             env = launch.env
             session.integration_level = launch.integration_level
         session.osc_parser.reset()
+        if self._persistence_writer is not None:
+            await self._worker_call("reset_metadata", session.id)
         session.command_state = ""
         process = await asyncio.to_thread(
             PtyProcess.spawn,
@@ -1428,12 +2450,17 @@ class TerminalManager:
         session = self._sessions.get(terminal_id)
         if not session or session.master_fd is None:
             return
+        if self._persistence_is_pressured():
+            self._pause_posix_reader(session)
+            return
         try:
             data = os.read(session.master_fd, PTY_READ_BUDGET)
         except (BlockingIOError, OSError):
             return
         if data:
             self._append_output(session, data)
+            if self._persistence_is_pressured():
+                self._pause_posix_reader(session)
 
     async def _read_windows(self, terminal_id: str) -> None:  # pragma: no cover - Windows only
         session = self._sessions.get(terminal_id)
@@ -1441,6 +2468,7 @@ class TerminalManager:
             return
         try:
             while session.winpty.isalive():
+                await self._wait_for_persistence_capacity()
                 try:
                     text = await asyncio.to_thread(session.winpty.read, 4096)
                 except EOFError:
@@ -1463,6 +2491,7 @@ class TerminalManager:
             with contextlib.suppress(Exception):
                 asyncio.get_running_loop().remove_reader(session.master_fd)
             while session.master_fd is not None:
+                await self._wait_for_persistence_capacity()
                 try:
                     data = os.read(session.master_fd, PTY_READ_BUDGET)
                 except (BlockingIOError, OSError):
@@ -1500,6 +2529,7 @@ class TerminalManager:
     def _append_output(self, session: TerminalSession, data: bytes) -> None:
         if not data:
             return
+        self._reap_persisted_output(session)
         created_at = _now_iso()
         start = session.next_seq
         end = start + len(data)
@@ -1526,14 +2556,27 @@ class TerminalManager:
             )
         else:
             session.pending_output.extend(data)
-            session.pending_output_events.append((start, end, created_at))
+            if (
+                len(session.pending_output_events) > session.persist_queued_events
+                and session.pending_output_events[-1][1] == start
+            ):
+                event_start, _event_end, event_created_at = (
+                    session.pending_output_events[-1]
+                )
+                session.pending_output_events[-1] = (
+                    event_start, end, event_created_at
+                )
+            else:
+                session.pending_output_events.append((start, end, created_at))
             self._pending_output_bytes += len(data)
+            self._persistence_backlog_bytes += len(data)
             self._schedule_output_flush(session)
         metadata_changed = False
-        for metadata in session.osc_parser.feed(data, start_seq=start):
-            metadata_changed = (
-                self._apply_osc_metadata(session, metadata) or metadata_changed
-            )
+        if self._persistence_writer is None:
+            for metadata in session.osc_parser.feed(data, start_seq=start):
+                metadata_changed = (
+                    self._apply_osc_metadata(session, metadata) or metadata_changed
+                )
         event = {
             "type": "output",
             "seq": start,
@@ -1551,6 +2594,12 @@ class TerminalManager:
         session: TerminalSession, metadata: dict[str, Any],
     ) -> bool:
         kind = str(metadata.get("kind") or "")
+        if kind == "integration":
+            value = str(metadata.get("value") or "none")
+            if value not in {"none", "basic", "full"} or value == session.integration_level:
+                return False
+            session.integration_level = value
+            return True
         if kind == "title":
             value = "".join(
                 character
@@ -1751,7 +2800,9 @@ class TerminalManager:
             return
         session.cols = cols
         session.rows = rows
-        if session.screen is not None:
+        if self._persistence_writer is not None:
+            self._persistence_writer.resize_screen(session.id, cols=cols, rows=rows)
+        elif session.screen is not None:
             self._drain_screen_now(session)
             session.screen.resize(lines=rows, columns=cols)
         if sys.platform == "win32":  # pragma: no cover - Windows only
@@ -1903,8 +2954,10 @@ class TerminalManager:
         if remove:
             async with self._lock:
                 self._drain_screen_now(session)
-                self._write_pending_output(session)
+                self.flush()
                 self._dirty_sessions.discard(session.id)
+                if self._persistence_writer is not None:
+                    self._persistence_writer.call("remove", session.id)
                 self._sessions.pop(session.id, None)
                 if self._db is not None:
                     self._db.execute("DELETE FROM terminal_sessions WHERE id = ?", (session.id,))
@@ -1927,9 +2980,6 @@ class TerminalManager:
                         (session.id,),
                     )
                     self._db.commit()
-                if self.state_dir is not None:
-                    with contextlib.suppress(OSError):
-                        self._scroll_path(session.id).unlink()
         self._publish_list_change(
             session.project_id,
             "deleted" if remove else "closed",
