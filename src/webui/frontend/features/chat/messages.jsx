@@ -694,8 +694,19 @@ function WbcLiveAgentArtifacts({ files, onOpenFile }) {
 
 var WBC_ACTIVITY_GROUP_MIN_ITEMS = 3;
 
+function wbcIsActivityMessage(message) {
+  if (!message || typeof message !== "object") return false;
+  if (message.runtimeActivity || message.activityCard) return true;
+  if (String(message.content || "").trim()) return false;
+  var reasoning = String(message.reasoning || "").trim();
+  var trace = Array.isArray(message.trace) ? message.trace : [];
+  if (reasoning || trace.length > 0) return true;
+  var id = String(message.id || "");
+  return !!message.intermediate && /^(reasoning|activity)_msg_/.test(id);
+}
+
 function wbcActivityMessageView(message) {
-  if (!message || !(message.runtimeActivity || message.activityCard)) return null;
+  if (!wbcIsActivityMessage(message)) return null;
   var activity = message.runtimeActivity || {
     id: message.id,
     reasoning: message.reasoning || "",
@@ -1662,4 +1673,4 @@ var WbcRemoteDeviceCatalog = (function () {
   return { subscribe: subscribe, refresh: refresh, invalidate: invalidate };
 })();
 
-export { WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRemoteDeviceCatalog, WbcRuntimeTranscript, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey }
+export { WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRemoteDeviceCatalog, WbcRuntimeTranscript, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey }

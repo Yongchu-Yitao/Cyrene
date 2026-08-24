@@ -45,6 +45,30 @@ function wbRealGoal(session) {
   return (g && g !== WB_PLACEHOLDER_GOAL) ? g : "";
 }
 
+function priorityText(priority) {
+  var raw = String(priority || "medium");
+  return ({
+    high: wbT("priority.high", "High"),
+    medium: wbT("priority.medium", "Medium"),
+    low: wbT("priority.low", "Low"),
+  })[raw] || raw;
+}
+
+function hasAcceptanceFailure(session) {
+  if (!session || String(session.status || "") !== "failed") return false;
+  var criteria = Array.isArray(session.acceptanceCriteria) ? session.acceptanceCriteria : [];
+  return !!session.verifyReason || criteria.some(function (item) {
+    return item && item.status === "failed";
+  });
+}
+
+function wbRenderMarkdown(text) {
+  return workbenchServices.markdown().render(text, {
+    fallback: "raw-breaks",
+    errorFallback: "raw",
+  });
+}
+
 
 function compactText(value, limit) {
   var text = String(value || "").replace(/\s+/g, " ").trim();
@@ -63,4 +87,4 @@ function sessionSummaryText(session) {
 }
 
 
-export { ICONS, compactText, sessionSummaryText, wbRealGoal, wbT }
+export { ICONS, compactText, hasAcceptanceFailure, priorityText, sessionSummaryText, wbRealGoal, wbRenderMarkdown, wbT }

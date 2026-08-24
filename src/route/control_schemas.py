@@ -74,6 +74,10 @@ class ControlMessage(ControlModel):
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     question_id: str = ""
     question_kind: str = ""
+    activity_card: bool = False
+    intermediate: bool = False
+    reasoning_available: bool = False
+    trace: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ControlChatDetail(ControlChatSummary):

@@ -184,6 +184,58 @@ def test_workbench_chat_detail_does_not_hydrate_sibling_transcripts(
     assert response.json()["chat"]["id"] == "chat_1"
 
 
+def test_control_chat_detail_preserves_safe_activity_shape(control_env):
+    from cyrene.workbench import chat as chat_service
+
+    payload = chat_service._read_chats_store()
+    chat = payload["chats"][0]
+    chat["messages"] = [
+        {
+            "id": "reasoning_msg_1",
+            "role": "assistant",
+            "content": "",
+            "createdAt": "2026-07-27T00:30:00+00:00",
+            "activityCard": True,
+            "intermediate": True,
+            "reasoning": "private chain",
+            "trace": [],
+        },
+        {
+            "id": "activity_msg_1",
+            "role": "assistant",
+            "content": "",
+            "createdAt": "2026-07-27T00:31:00+00:00",
+            "activityCard": True,
+            "intermediate": True,
+            "trace": [{
+                "toolCallId": "call_1",
+                "tool": "Read",
+                "preview": "app.py",
+                "status": "completed",
+                "privateResult": "must not cross the boundary",
+            }],
+        },
+    ]
+    chat_service._write_chats_store(payload)
+
+    response = control_env["client"].get("/v1/control/chats/chat_1")
+
+    assert response.status_code == 200
+    messages = response.json()["chat"]["messages"]
+    assert messages[0]["activity_card"] is True
+    assert messages[0]["intermediate"] is True
+    assert messages[0]["reasoning_available"] is True
+    assert messages[0]["trace"] == []
+    assert "private chain" not in response.text
+    assert messages[1]["trace"] == [{
+        "toolCallId": "call_1",
+        "tool": "Read",
+        "preview": "app.py",
+        "status": "completed",
+    }]
+    assert "must not cross the boundary" not in response.text
+
+
 def test_control_projects_are_summaries_without_local_paths_or_credentials(
     control_env,
 ):

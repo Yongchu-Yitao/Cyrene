@@ -444,7 +444,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var onboarding = dataState.onboarding || {};
   var onboardingActive = onboarding.needsOnboarding != null ? !!onboarding.needsOnboarding : !!needsOnboarding;
   function handleOnboardingComplete() {
-    setFullPage("chat");
+    createChat();
   }
   if (onboardingActive) {
     return <WorkbenchOnboardingShell

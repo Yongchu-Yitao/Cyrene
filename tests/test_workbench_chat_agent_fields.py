@@ -109,6 +109,31 @@ def test_public_chat_includes_agent_block():
     assert full["capabilitiesRevision"] == 1
 
 
+def test_public_chat_recovers_missing_activity_marker():
+    chat = _new_chat("project_1", "Activity", "gpt-5")
+    chat["messages"] = [
+        {
+            "id": "reasoning_msg_1",
+            "role": "assistant",
+            "content": "",
+            "reasoning": "Inspecting the repository",
+            "trace": [],
+        },
+        {
+            "id": "activity_msg_1",
+            "role": "assistant",
+            "content": "",
+            "reasoning": "",
+            "trace": [{"tool": "Read", "preview": "app.py"}],
+        },
+    ]
+
+    public = _public_chat_full(chat)
+
+    assert [message["activityCard"] for message in public["messages"]] == [True, True]
+    assert "activityCard" not in chat["messages"][0]
+
+
 def test_public_chat_legacy_chat_normalizes_to_builtin_without_store_write(chats_store):
     legacy = {
         "id": "wbchat_legacy",

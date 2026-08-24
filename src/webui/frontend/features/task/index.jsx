@@ -19,7 +19,7 @@ import { wbErrorText } from "../../shared/errors.jsx"
 import { WorkbenchFileDropOverlay, useWorkbenchFileDrop } from "../../shared/file-drop.jsx"
 import { TaskBoard } from "./board.jsx"
 import { RightContextPanel } from "./context-panel.jsx"
-import { ICONS, compactText, sessionSummaryText, wbRealGoal, wbT } from "./presentation.jsx"
+import { ICONS, compactText, hasAcceptanceFailure, priorityText, sessionSummaryText, wbRealGoal, wbRenderMarkdown, wbT } from "./presentation.jsx"
 
 var {
   useEffect: useWorkbenchEffect,
@@ -733,22 +733,8 @@ function StateCard(props) {
   return <TaskBriefCard {...props} />; // idle / pending / unknown
 }
 
-function priorityText(p) {
-  var raw = String(p || "medium");
-  return ({ high: wbT("priority.high", "High"), medium: wbT("priority.medium", "Medium"), low: wbT("priority.low", "Low") })[raw] || raw;
-}
-
 function focusComposer() {
   window.dispatchEvent(new CustomEvent("wb-focus-composer"));
-}
-
-function hasAcceptanceFailure(session) {
-  if (!session) return false;
-  if (String(session.status || "") !== "failed") return false;
-  var criteria = Array.isArray(session.acceptanceCriteria) ? session.acceptanceCriteria : [];
-  return !!session.verifyReason || criteria.some(function (item) {
-    return item && item.status === "failed";
-  });
 }
 
 function openAcceptanceEditor(onRightTab) {
@@ -981,13 +967,6 @@ function WbBtn({ kind, onClick, disabled, children }) {
       {children}
     </button>
   );
-}
-
-function wbRenderMarkdown(text) {
-  return workbenchServices.markdown().render(text, {
-    fallback: "raw-breaks",
-    errorFallback: "raw",
-  });
 }
 
 function AgentReplyBlock({ text }) {

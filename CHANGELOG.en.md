@@ -91,9 +91,12 @@ The Chinese edition remains the most detailed record for older releases.
 - Web search adds quick preview and full-content modes. Preview prioritizes a small number of the most relevant pages, while full mode retrieves more content only when needed, preventing one slow page from blocking the entire task.
 - After the first useful page arrives, remaining search candidates receive a bounded time to finish. Proxy, search-service, and page-fetch failures move to later candidates sooner while retaining an understandable explanation.
 - Chat text, tool calls, and completion states connect more reliably. After a reply has been saved, a late terminal cleanup event or status update cannot revoke it or contaminate the next turn.
+- Historical reasoning and tool activity continue to appear as activity cards after reloading a conversation or viewing it through a control client. Empty messages without text, attachments, or meaningful activity are hidden instead of appearing as blank assistant bubbles.
 - User-input prompts are deduplicated between live events and page hydration. Stop, reconnect, and background completion are owned by one task state, reducing repeated questions, duplicate completion, and stuck replies.
 - Notifications, message attachments, and background media results remain consistent across several windows and rapid navigation. Slow background storage no longer blocks visible replies or live terminal output.
+- HTML previews can now run single-file apps and small games that depend on browser local or session storage while remaining sandboxed. Preview data stays within that preview and cannot access Cyrene's own stored data.
 - Removed the old Welcome/Get Started page and its automatic startup entry. Cyrene now opens directly into the unified Workbench, while required first-use model and personality setup remains in the supported onboarding flow.
+- Completing first-use setup now creates and opens the first conversation immediately, so users can begin typing instead of landing on an empty page without an active chat.
 - Settings further unifies cards, fields, dropdowns, status labels, autosave feedback, keyboard focus, and narrow-window layouts so model, proxy, and media configuration behave consistently.
 - Current version presentation across the README, application, web assets, and desktop packages is unified as `0.8.0-beta2`.
 

@@ -1,6 +1,6 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WbColResizer } from "../layout/right-panel-resizer.jsx"
-import { ICONS, wbRealGoal, wbT } from "./presentation.jsx"
+import { ICONS, hasAcceptanceFailure, priorityText, wbRealGoal, wbRenderMarkdown, wbT } from "./presentation.jsx"
 
 var { useEffect: useWorkbenchEffect, useRef: useWorkbenchRef, useState: useWorkbenchState } = React;
 var WorkbenchModel = workbenchServices.model();

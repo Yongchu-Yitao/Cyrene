@@ -7940,7 +7940,9 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert "!msg.runtimeActivityActive" in chat
     assert "activityEntries.length === 0" in chat
     assert "wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder }))" in chat
-    assert "if (msg.runtimeActivity || msg.activityCard)" in chat
+    assert "if (wbcIsActivityMessage(msg))" in chat
+    assert 'if (String(message.content || "").trim()) return false;' in chat
+    assert 'if (reasoning || trace.length > 0) return true;' in chat
     history_renderer = chat.split("function wbcRenderHistoryMessage", 1)[1].split(
         "function WbcConversationTimeline", 1
     )[0]
@@ -8006,9 +8008,9 @@ const live = wbcGroupConsecutiveActivityMessages([
   {{ id: "l3", runtimeActivity: {{ reasoning: "thinking", progress: [] }} }}
 ], {{ startedAt: 1000, lastEventAt: 5000 }});
 const historicalReasoning = wbcGroupConsecutiveActivityMessages([
-  {{ id: "h1", activityCard: true, reasoning: "historical thought", trace: [] }},
-  {{ id: "h2", activityCard: true, reasoning: "historical thought", trace: [] }},
-  {{ id: "only-command", activityCard: true, trace: [{{ kind: "tool", status: "completed" }}] }},
+  {{ id: "h1", content: "", reasoning: "historical thought", trace: [] }},
+  {{ id: "h2", content: "", reasoning: "historical thought", trace: [] }},
+  {{ id: "only-command", content: "", trace: [{{ kind: "tool", status: "completed" }}] }},
   {{ id: "reply-2", role: "assistant", content: "done" }}
 ], null);
 process.stdout.write(JSON.stringify({{
@@ -8539,6 +8541,9 @@ def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
     assert 'wbcFileViewKind(file) !== "html"' in source
     assert 'function wbcHtmlPreviewDocument(source, sourceUrl)' in source
     assert '<base href="' in source
+    assert 'data-cyrene-html-preview-bootstrap="storage"' in source
+    assert 'installMemoryFallback("localStorage")' in source
+    assert 'installMemoryFallback("sessionStorage")' in source
     assert 'sandbox="allow-scripts"' in source
     assert 'srcDoc={htmlPreview}' in source
     assert 'pdf.installCopyFix(container, viewer)' in source
@@ -8605,6 +8610,56 @@ def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
     assert 'background: #d9dde4;' in pptx_surface_rule
     assert 'color-scheme: light;' in pptx_surface_rule
     assert r"/\.html?$/i.test(target.pathname)" in main
+
+
+def test_html_preview_storage_fallback_runs_before_game_scripts_without_weakening_sandbox():
+    source = workbench_chat_source()
+    helper_source = "var WBC_HTML_PREVIEW_STORAGE_BOOTSTRAP" + source.split(
+        "var WBC_HTML_PREVIEW_STORAGE_BOOTSTRAP", 1
+    )[1].split("// Map tools mark", 1)[0]
+    script = f"""
+global.window = {{ location: {{ href: "http://127.0.0.1:3000/" }} }};
+Object.defineProperty(window, "localStorage", {{
+  configurable: true,
+  get: function () {{ throw new Error("opaque origin"); }}
+}});
+Object.defineProperty(window, "sessionStorage", {{
+  configurable: true,
+  get: function () {{ throw new Error("opaque origin"); }}
+}});
+eval({json.dumps(helper_source)});
+const sourceHtml = '<!doctype html><html><head><title>Game</title></head><body><script>window.gameScore = localStorage.getItem("score");<\\/script></body></html>';
+const preview = wbcHtmlPreviewDocument(sourceHtml, "/api/files/snake.html");
+const bootstrapStart = preview.indexOf('<script data-cyrene-html-preview-bootstrap="storage">');
+const bootstrapBodyStart = preview.indexOf('>', bootstrapStart) + 1;
+const bootstrapEnd = preview.indexOf('</script>', bootstrapBodyStart);
+eval(preview.slice(bootstrapBodyStart, bootstrapEnd));
+window.localStorage.setItem("score", 7);
+window.sessionStorage.setItem("paused", false);
+process.stdout.write(JSON.stringify({{
+  bootstrapBeforeGame: bootstrapStart < preview.indexOf("window.gameScore"),
+  localValue: window.localStorage.getItem("score"),
+  localLength: window.localStorage.length,
+  missing: window.localStorage.getItem("missing"),
+  firstKey: window.localStorage.key(0),
+  sessionValue: window.sessionStorage.getItem("paused"),
+  storagesAreIsolated: window.localStorage.getItem("paused") === null,
+  hasBase: preview.includes('<base href="http://127.0.0.1:3000/api/files/snake.html">')
+}}));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    result = json.loads(completed.stdout)
+
+    assert result == {
+        "bootstrapBeforeGame": True,
+        "localValue": "7",
+        "localLength": 1,
+        "missing": None,
+        "firstKey": "score",
+        "sessionValue": "false",
+        "storagesAreIsolated": True,
+        "hasBase": True,
+    }
 
 
 def test_workbench_acceptance_button_calls_agent_endpoint():

@@ -2118,9 +2118,27 @@ def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
 
 def _public_message(message: dict[str, Any]) -> dict[str, Any]:
     """Transcript entry without server-private fields (local upload paths)."""
-    if isinstance(message, dict) and "agentAttachments" in message:
-        return {k: v for k, v in message.items() if k != "agentAttachments"}
-    return message
+    if not isinstance(message, dict):
+        return message
+    payload = {
+        key: value
+        for key, value in message.items()
+        if key != "agentAttachments"
+    }
+    # Older durable records and narrow transport adapters may omit the
+    # activity marker while retaining the structured payload. Reconstruct the
+    # marker at the public boundary so an empty ``content`` field cannot turn a
+    # reasoning/tool activity into a blank assistant bubble.
+    if (
+        str(payload.get("role") or "") == "assistant"
+        and not str(payload.get("content") or "").strip()
+        and (
+            bool(str(payload.get("reasoning") or "").strip())
+            or bool(payload.get("trace"))
+        )
+    ):
+        payload.setdefault("activityCard", True)
+    return payload
 
 
 def _is_hidden_protocol_record(message: Any) -> bool:

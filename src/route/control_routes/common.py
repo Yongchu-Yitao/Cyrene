@@ -62,8 +62,25 @@ def chat_summary(raw: dict[str, Any], run_manager: Any) -> ControlChatSummary:
     )
 
 
+def _control_trace(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    public_keys = (
+        "toolCallId", "tool_call_id", "tool", "text", "preview", "status",
+        "failed", "kind", "detailKey", "detail_key", "detailParams",
+        "detail_params", "progress", "progressCurrent", "progressTotal",
+    )
+    return [
+        {key: item[key] for key in public_keys if key in item}
+        for item in raw
+        if isinstance(item, dict)
+    ]
+
+
 def message(raw: dict[str, Any], chat_id: str) -> ControlMessage:
     attachments = raw.get("attachments")
+    trace = _control_trace(raw.get("trace"))
+    reasoning_available = bool(str(raw.get("reasoning") or "").strip())
     return ControlMessage(
         id=str(raw.get("id") or ""), role=str(raw.get("role") or ""),
         content=str(raw.get("content") or ""), created_at=str(raw.get("createdAt") or ""),
@@ -75,6 +92,10 @@ def message(raw: dict[str, Any], chat_id: str) -> ControlMessage:
         ],
         question_id=str(raw.get("questionId") or ""),
         question_kind=str(raw.get("questionKind") or ""),
+        activity_card=bool(raw.get("activityCard") or reasoning_available or trace),
+        intermediate=bool(raw.get("intermediate")),
+        reasoning_available=reasoning_available,
+        trace=trace,
     )
 
 

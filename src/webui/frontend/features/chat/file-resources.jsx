@@ -42,17 +42,65 @@ function wbcDownloadLink(file, overrides) {
   return <a {...attrs}>{WBC_ICONS.download}</a>;
 }
 
+// Sandboxed srcDoc pages have an opaque origin, so merely reading Web Storage
+// throws before many single-file apps can attach their event handlers. Provide
+// per-preview, in-memory stores without granting the iframe same-origin access.
+var WBC_HTML_PREVIEW_STORAGE_BOOTSTRAP = [
+  '<script data-cyrene-html-preview-bootstrap="storage">',
+  '(function () {',
+  '  function createMemoryStorage() {',
+  '    var values = Object.create(null);',
+  '    var storage = {',
+  '      key: function (index) {',
+  '        var keys = Object.keys(values);',
+  '        var position = Number(index);',
+  '        return Number.isInteger(position) && position >= 0 && position < keys.length ? keys[position] : null;',
+  '      },',
+  '      getItem: function (key) {',
+  '        key = String(key);',
+  '        return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : null;',
+  '      },',
+  '      setItem: function (key, value) { values[String(key)] = String(value); },',
+  '      removeItem: function (key) { delete values[String(key)]; },',
+  '      clear: function () { values = Object.create(null); }',
+  '    };',
+  '    Object.defineProperty(storage, "length", {',
+  '      enumerable: true,',
+  '      get: function () { return Object.keys(values).length; }',
+  '    });',
+  '    return storage;',
+  '  }',
+  '  function installMemoryFallback(name) {',
+  '    try {',
+  '      var existing = window[name];',
+  '      if (existing && typeof existing.getItem === "function" && typeof existing.setItem === "function") return;',
+  '    } catch (error) {}',
+  '    try {',
+  '      Object.defineProperty(window, name, {',
+  '        configurable: true,',
+  '        value: createMemoryStorage()',
+  '      });',
+  '    } catch (error) {}',
+  '  }',
+  '  installMemoryFallback("localStorage");',
+  '  installMemoryFallback("sessionStorage");',
+  '})();',
+  '</script>',
+].join("");
+
 function wbcHtmlPreviewDocument(source, sourceUrl) {
   var html = String(source || "");
-  if (!sourceUrl) return html;
   var absoluteUrl = "";
-  try {
-    absoluteUrl = new URL(sourceUrl, window.location.href).href;
-  } catch (e) {
-    return html;
+  if (sourceUrl) {
+    try {
+      absoluteUrl = new URL(sourceUrl, window.location.href).href;
+    } catch (e) {}
   }
-  var escapedUrl = absoluteUrl.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
-  var headContent = '<base href="' + escapedUrl + '">';
+  var headContent = WBC_HTML_PREVIEW_STORAGE_BOOTSTRAP;
+  if (absoluteUrl) {
+    var escapedUrl = absoluteUrl.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+    headContent = '<base href="' + escapedUrl + '">' + headContent;
+  }
   // Only inject viewport meta if the source HTML doesn't already have one
   if (!/<meta\s+name=["']viewport["']/i.test(html)) {
     headContent += '<meta name="viewport" content="width=device-width, initial-scale=1">';

@@ -1,6 +1,6 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_ICONS, WBC_SIDE_TAB_ICONS, useWbcCallback, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcAttachmentTypeLabel, wbcBrowserAvoidancePlan, wbcBrowserFullscreenStatusText, wbcBrowserPageTitle, wbcBrowserTabPickerPayload, wbcBrowserTabPickerToggleIsDebounced, wbcBrowserWindowTitle, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcClampBrowserWindowFrame, wbcConversationTabAtPoint, wbcCycleTopbarSessionTab, wbcHandleHorizontalWheelGesture, wbcHasAgentCapabilitySnapshot, wbcHasChatDrag, wbcIsBuiltinAgent, wbcKeepBrowserWindowClearOfComposer, wbcLoadBrowserWindowFrame, wbcMergeChronologicalMessages, wbcNotifyBrowserLayoutChanged, wbcNotifyBrowserWindowInteraction, wbcNotifyResourceShelfPointerDrag, wbcPointInsideResourceShelf, wbcReadChatDrag, wbcReconcileLiveUserMessages, wbcRuntimeSegmentMessages, wbcRuntimeTimelineMessages, wbcSaveBrowserWindowFrame, wbcT, wbcTraceDedupeKey } from "../../workbench-chat.jsx"
-import { WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcUserMessage, wbcGroupConsecutiveActivityMessages } from "./messages.jsx"
+import { WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage } from "./messages.jsx"
 import { WbcComposer } from "./composer.jsx"
 import { WbcConversationNavigator } from "./conversation-navigator.jsx"
 
@@ -1440,7 +1440,7 @@ function useWbcConversationProjection(chat, runtime, retryClearingMessageIds, re
   var activityTraceKeys = useWbcMemo(function () {
     var keys = new Set();
     messages.forEach(function (message) {
-      if (!message || !(message.activityCard || message.runtimeActivity)) return;
+      if (!wbcIsActivityMessage(message)) return;
       var trace = message.runtimeActivity ? message.runtimeActivity.progress : message.trace;
       var key = wbcTraceDedupeKey(trace);
       if (key) keys.add(key);
@@ -1523,7 +1523,7 @@ function wbcRenderHistoryMessage(msg, context) {
   if (msg.runtimeNotification || msg.notificationCard) {
     return <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}><WbcAgentNotification notice={msg.notification} /></WbcThreadItem>;
   }
-  if (msg.runtimeActivity || msg.activityCard) {
+  if (wbcIsActivityMessage(msg)) {
     var activity = msg.runtimeActivity || {
       id: msg.id,
       reasoning: msg.reasoning || "",
@@ -1545,6 +1545,13 @@ function wbcRenderHistoryMessage(msg, context) {
   if (isActiveQuestion) {
     return <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}><WbcQuestionPrompt pending={context.chat.pendingQuestion} onAnswer={context.onAnswer ? context.answerHistoryQuestion : context.onAnswer} busy={context.running} trace={msg.trace} /></WbcThreadItem>;
   }
+  if (
+    msg.role !== "user"
+    && !String(msg.content || "").trim()
+    && !(Array.isArray(msg.attachments) && msg.attachments.length)
+    && !(Array.isArray(msg.referenceAttachments) && msg.referenceAttachments.length)
+    && !(Array.isArray(msg.reference_attachments) && msg.reference_attachments.length)
+  ) return null;
   var messageTraceKey = wbcTraceDedupeKey(msg.trace);
   var visibleMessage = messageTraceKey && context.activityTraceKeys.has(messageTraceKey)
     ? { ...msg, trace: [] }
