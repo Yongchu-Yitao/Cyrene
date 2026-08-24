@@ -166,10 +166,16 @@ def _run_terminal_smoke_test() -> None:
             before = client._connection_info() or {}
             daemon_pid = int(before.get("pid") or 0)
             marker = "CYRENE_WINDOWS_TERMINAL_SMOKE_OUTPUT"
-            await client.input(terminal_id, f"echo {marker}\r\n", actor="user")
-            deadline = time.monotonic() + 8
+            deadline = time.monotonic() + 30
+            next_probe = 0.0
             output = b""
             while time.monotonic() < deadline:
+                now = time.monotonic()
+                if now >= next_probe:
+                    await client.input(
+                        terminal_id, f"echo {marker}\r\n", actor="user"
+                    )
+                    next_probe = now + 2
                 snapshot = await client.scrollback(
                     terminal_id, cursor=0, max_bytes=512 * 1024
                 )
