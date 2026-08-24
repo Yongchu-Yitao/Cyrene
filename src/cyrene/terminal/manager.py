@@ -55,38 +55,6 @@ def _winpty_output_ready(process: Any, timeout: float) -> bool:
     return bool(select.select([process.fileobj], [], [], timeout)[0])
 
 
-def _wait_windows_process(pid: int) -> int | None:
-    import ctypes
-    from ctypes import wintypes
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    open_process = kernel32.OpenProcess
-    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    open_process.restype = wintypes.HANDLE
-    wait_for_single_object = kernel32.WaitForSingleObject
-    wait_for_single_object.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-    wait_for_single_object.restype = wintypes.DWORD
-    get_exit_code = kernel32.GetExitCodeProcess
-    get_exit_code.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-    get_exit_code.restype = wintypes.BOOL
-    close_handle = kernel32.CloseHandle
-    close_handle.argtypes = [wintypes.HANDLE]
-    close_handle.restype = wintypes.BOOL
-
-    handle = open_process(0x00100000 | 0x1000, False, int(pid))
-    if not handle:
-        return None
-    try:
-        if wait_for_single_object(handle, 0xFFFFFFFF) != 0:
-            return None
-        exit_code = wintypes.DWORD()
-        if not get_exit_code(handle, ctypes.byref(exit_code)):
-            return None
-        return int(exit_code.value)
-    finally:
-        close_handle(handle)
-
-
 _SESSION_UPSERT_SQL = """
     INSERT INTO terminal_sessions (
         id, project_id, title, cwd, shell, argv_json, created_at,
@@ -3157,7 +3125,6 @@ class TerminalManager:
         session.updated_at = _now_iso()
         self._persist_session(session)
         session.read_task = asyncio.create_task(self._read_windows(session.id))
-        session.wait_task = asyncio.create_task(self._wait_windows(session.id))
         self._publish_state(session)
 
     def _read_posix_ready(self, terminal_id: str) -> None:
@@ -3216,46 +3183,13 @@ class TerminalManager:
                     drain_idle_deadline = (
                         loop.time() + WINDOWS_POST_EXIT_DRAIN_IDLE_SECONDS
                     )
+            exit_code = await asyncio.to_thread(session.winpty.wait)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            pass
-        if session.wait_task is not None:
-            return
-        try:
-            if session.pid is not None:
-                exit_code = await asyncio.to_thread(
-                    _wait_windows_process, session.pid
-                )
-            else:
-                exit_code = await asyncio.to_thread(session.winpty.wait)
         except Exception:
             exit_code = None
         await self._synchronize_exit_metadata(session)
         self._mark_exited(session, exit_code)
-
-    async def _wait_windows(self, terminal_id: str) -> None:  # pragma: no cover - Windows only
-        session = self._sessions.get(terminal_id)
-        if not session or session.winpty is None:
-            return
-        try:
-            exit_code = await asyncio.to_thread(session.winpty.wait)
-        except Exception:
-            exit_code = None
-        read_task = session.read_task
-        if read_task is not None and not read_task.done():
-            try:
-                await asyncio.wait_for(
-                    asyncio.shield(read_task),
-                    timeout=WINDOWS_POST_EXIT_DRAIN_IDLE_SECONDS,
-                )
-            except TimeoutError:
-                with contextlib.suppress(OSError):
-                    session.winpty.fileobj.shutdown(socket.SHUT_RDWR)
-                await asyncio.gather(read_task, return_exceptions=True)
-        if session.status == "running":
-            await self._synchronize_exit_metadata(session)
-            self._mark_exited(session, exit_code)
 
     async def _wait_posix(self, terminal_id: str) -> None:
         session = self._sessions.get(terminal_id)

@@ -65,8 +65,6 @@ stream.write(b"__CYRENE_BENCHMARK_COMPLETE__")
 stream.flush()
 while release and not os.path.exists(release):
     time.sleep(0.001)
-stream.write(b"__CYRENE_BENCHMARK_RELEASED__")
-stream.flush()
 """
 
 _INTERACTIVE_CHILD_PROGRAM = r"""
@@ -241,6 +239,7 @@ async def _websocket_relay(
     resyncs = 0
     sequence_errors = 0
     expected_seq = 0
+    released = False
     latencies_ms: list[float] = []
     relayed_frames = _SourceFrameValidator()
 
@@ -260,7 +259,7 @@ async def _websocket_relay(
             manager.unsubscribe(terminal_id, queue)
 
     async def client(uri: str) -> None:
-        nonlocal received_bytes, resyncs, sequence_errors, expected_seq
+        nonlocal received_bytes, resyncs, sequence_errors, expected_seq, released
         async with connect(uri, max_size=None, proxy=None) as websocket:
             await connected.wait()
             gate.touch()
@@ -277,8 +276,11 @@ async def _websocket_relay(
                     latencies_ms.append(
                         max(0.0, (received_at - created_at.timestamp()) * 1000)
                     )
-                    if relayed_frames.complete:
+                    if relayed_frames.complete and not released:
+                        released = True
                         release.touch()
+                        if sys.platform == "win32":
+                            await manager.close(terminal_id)
                 elif event.get("type") == "resync_required":
                     resyncs += 1
                 elif (
@@ -354,6 +356,8 @@ async def _run_case(
                 while not source_frames.complete:
                     await asyncio.sleep(0.005)
             release.touch()
+            if sys.platform == "win32":
+                await manager.close(terminal_id)
         await _wait_for_exit(manager, terminal_id)
         manager.flush()
         screen = await manager.screen_snapshot_async(terminal_id)

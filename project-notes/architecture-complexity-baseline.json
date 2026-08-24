@@ -18,7 +18,7 @@
     "src/cyrene/model_runtime/client.py::_normalized_candidate": 107,
     "src/cyrene/model_runtime/client.py::sanitize_messages_for_llm": 112,
     "src/cyrene/observability/powerpoint_performance_benchmark.py::_run_strategy": 108,
-    "src/cyrene/observability/terminal_performance_benchmark.py::_run_case": 176,
+    "src/cyrene/observability/terminal_performance_benchmark.py::_run_case": 178,
     "src/cyrene/observability/terminal_performance_benchmark.py::_run_fairness_case": 153,
     "src/cyrene/office/file_engine.py::PptxFileEngine.call": 101,
     "src/cyrene/office/slide_layout.py::compile_slide_spec": 122,
