@@ -12,6 +12,7 @@ import re
 import time
 from urllib.parse import urlparse
 
+import httpx
 import requests
 
 from cyrene.config import SEARXNG_URL
@@ -45,6 +46,7 @@ def _proxied_session() -> requests.Session:
 _HTTP_TIMEOUT = 30.0
 _MAX_CONCURRENT = 20
 _EVIDENCE_EXCERPT_CHARS = 1_500
+_PREVIEW_REMAINING_TIMEOUT = 5.0
 
 
 def _get_simplexng_url() -> str:
@@ -190,6 +192,74 @@ async def _fetch_url(url: str, session: requests.Session | None = None) -> str:
     return text[:3000]
 
 
+async def _fetch_preview_url(url: str, client: httpx.AsyncClient) -> str:
+    """Fetch a preview page with cancellation support and no request timeout."""
+    try:
+        response = await client.get(url)
+        response.raise_for_status()
+        encoding = response.charset_encoding
+        if not encoding:
+            probe = requests.Response()
+            probe._content = response.content
+            encoding = probe.apparent_encoding or "utf-8"
+        html = response.content.decode(encoding, errors="replace")
+    except Exception as exc:
+        logger.debug("Failed to fetch preview URL %r: %s", url, exc)
+        return ""
+    return _strip_html(html)[:3000]
+
+
+async def _fetch_preview_pages(
+    results: list[dict],
+    *,
+    remaining_timeout: float = _PREVIEW_REMAINING_TIMEOUT,
+) -> list[str]:
+    """Fetch three pages concurrently, then bound laggards after first success."""
+    from cyrene.tooling.backends.searxng_manager import get_effective_search_proxy
+
+    proxy_url = get_effective_search_proxy()
+    async with httpx.AsyncClient(
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36"
+            )
+        },
+        proxy=proxy_url or None,
+        timeout=None,
+        follow_redirects=True,
+    ) as client:
+        tasks = [
+            asyncio.create_task(_fetch_preview_url(str(result.get("url") or ""), client))
+            for result in results[:3]
+        ]
+        task_indexes = {task: index for index, task in enumerate(tasks)}
+        outputs = [""] * len(tasks)
+        pending = set(tasks)
+        first_success = False
+
+        while pending and not first_success:
+            done, pending = await asyncio.wait(
+                pending,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                value = task.result()
+                outputs[task_indexes[task]] = value
+                first_success = first_success or bool(value)
+
+        if first_success and pending:
+            done, pending = await asyncio.wait(pending, timeout=remaining_timeout)
+            for task in done:
+                outputs[task_indexes[task]] = task.result()
+
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        return outputs
+
+
 def _self_contained_search_result(
     relevant_results: list[dict],
     fetched_contents: list[str],
@@ -222,6 +292,37 @@ def _self_contained_search_result(
                 f"[{index}] {result.get('title', '?')}",
                 f"URL: {result.get('url', '')}",
                 f"Excerpt: {excerpt}" if excerpt else "Excerpt: unavailable",
+                "",
+            ]
+        )
+    return "\n".join(sections).rstrip()
+
+
+def _preview_search_result(
+    results: list[dict],
+    fetched_contents: list[str],
+) -> str:
+    """Return page previews for the first three search results."""
+    sections = [
+        "WebSearch completed a preview search and fetched the first three result pages.",
+        "Use the titles, URLs, and page previews below to answer. If broader evidence "
+        "is needed, repeat WebSearch "
+        'with detail="content".',
+        "",
+        "Preview results:",
+    ]
+    for index, result in enumerate(results, start=1):
+        content = (
+            fetched_contents[index - 1]
+            if index - 1 < len(fetched_contents)
+            else ""
+        ) or str(result.get("snippet") or "")
+        preview = str(content).strip()[:_EVIDENCE_EXCERPT_CHARS]
+        sections.extend(
+            [
+                f"[{index}] {result.get('title', '?')}",
+                f"URL: {result.get('url', '')}",
+                f"Preview: {preview}" if preview else "Preview: unavailable",
                 "",
             ]
         )
@@ -322,7 +423,12 @@ async def _search_brave(topic: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def _deep_search_simplexng(topic: str) -> str:
+async def _deep_search_simplexng(
+    topic: str,
+    *,
+    detail: str = "content",
+    max_results: int = 5,
+) -> str:
     """Run the SimpleXNG search pipeline.
 
     Stages:
@@ -377,11 +483,38 @@ async def _deep_search_simplexng(topic: str) -> str:
         elif not u:
             deduped.append(r)
 
-    # Cap at 15 results
-    deduped = deduped[:15]
+    deduped = deduped[:max_results]
 
-    # Stage 2: Fetch page bodies for the top results. One shared session
-    # reuses keep-alive connections (and the TLS handshake) across URLs.
+    fetch_targets = deduped[:3] if detail == "preview" else deduped
+
+    if detail == "preview":
+        started = time.perf_counter()
+        fetched_results = await _fetch_preview_pages(fetch_targets)
+        fetch_ms = (time.perf_counter() - started) * 1000
+        for index, result_item in enumerate(fetch_targets):
+            result_item["fetched_content"] = fetched_results[index]
+        logger.info(
+            "Preview fetch complete: %d URLs fetched (%.0f ms)",
+            sum(1 for item in fetched_results if item),
+            fetch_ms,
+        )
+        preview_contents = [
+            r.get("fetched_content", "") or r.get("snippet", "")
+            for r in fetch_targets
+        ]
+        if not any(str(content or "").strip() for content in preview_contents):
+            raise SearchBackendUnavailable(
+                "SimpleXNG returned previews without usable content."
+            )
+        result = _preview_search_result(fetch_targets, preview_contents)
+        logger.info(
+            "WebSearch preview result generated (%d chars, %d sources)",
+            len(result),
+            len(fetch_targets),
+        )
+        return result
+
+    # Content mode fetches page bodies using the existing shared session.
     fetch_session = _proxied_session()
     try:
         async def _limited_fetch(r: dict) -> str:
@@ -391,7 +524,7 @@ async def _deep_search_simplexng(topic: str) -> str:
             async with semaphore:
                 return await _fetch_url(url, session=fetch_session)
 
-        fetch_tasks = [_limited_fetch(r) for r in deduped[:8]]
+        fetch_tasks = [_limited_fetch(r) for r in fetch_targets]
         started = time.perf_counter()
         async with trace_span(
             "search_stage", "simplexng_fetch", attributes={"url_count": len(fetch_tasks)}
@@ -406,7 +539,7 @@ async def _deep_search_simplexng(topic: str) -> str:
         fetch_session.close()
 
     # Attach fetched content back to results
-    for i, r in enumerate(deduped[:8]):
+    for i, r in enumerate(fetch_targets):
         if i < len(fetched_results) and isinstance(fetched_results[i], str):
             r["fetched_content"] = fetched_results[i]
         else:
@@ -456,10 +589,20 @@ async def _deep_search_deepseek(topic: str) -> str:
         return result.text
 
 
-async def _run_search_provider(provider: str, topic: str) -> str:
+async def _run_search_provider(
+    provider: str,
+    topic: str,
+    *,
+    detail: str = "content",
+    max_results: int = 5,
+) -> str:
     try:
         if provider == "simplexng":
-            return await _deep_search_simplexng(topic)
+            return await _deep_search_simplexng(
+                topic,
+                detail=detail,
+                max_results=max_results,
+            )
         if provider == "deepseek":
             return await _deep_search_deepseek(topic)
         if provider == "tavily":
@@ -484,6 +627,8 @@ async def _deep_search_impl(
     db_path: str = "",
     session_id: str = "",
     round_id: str = "",
+    detail: str = "content",
+    max_results: int = 5,
 ) -> str:
     """Try enabled search providers in user-configured order."""
     del db_path, session_id, round_id
@@ -500,7 +645,14 @@ async def _deep_search_impl(
                 f"{provider}_pipeline",
                 attributes={"backend": provider},
             ):
-                result = str(await _run_search_provider(provider, topic)).strip()
+                result = str(
+                    await _run_search_provider(
+                        provider,
+                        topic,
+                        detail=detail,
+                        max_results=max_results,
+                    )
+                ).strip()
             if not result:
                 raise SearchBackendUnavailable("provider returned empty content")
             return result
@@ -518,6 +670,8 @@ async def deep_search(
     db_path: str = "",
     session_id: str = "",
     round_id: str = "",
+    detail: str = "content",
+    max_results: int = 5,
 ) -> str:
     """Run one search under a stable, query-free trace identifier."""
     search_id = new_trace_id("search")
@@ -533,6 +687,8 @@ async def deep_search(
             db_path=db_path,
             session_id=session_id,
             round_id=round_id,
+            detail=detail,
+            max_results=max_results,
         )
         search_span.set_attribute("answer_chars", len(result))
         return result

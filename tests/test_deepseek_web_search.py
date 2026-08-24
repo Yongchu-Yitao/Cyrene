@@ -217,7 +217,7 @@ async def test_deep_search_uses_first_enabled_provider(monkeypatch):
 
     calls = []
 
-    async def run(provider, topic):
+    async def run(provider, topic, **_kwargs):
         calls.append((provider, topic))
         return "brave result"
 
@@ -240,7 +240,7 @@ async def test_deep_search_falls_back_after_empty_or_unusable_provider(monkeypat
 
     calls = []
 
-    async def run(provider, topic):
+    async def run(provider, topic, **_kwargs):
         calls.append(provider)
         if provider == "simplexng":
             raise search.SearchBackendUnavailable("no usable content")
@@ -263,7 +263,7 @@ async def test_deep_search_reports_all_provider_failures(monkeypatch):
     from cyrene.tooling.backends import search
     from cyrene.runtime.search_settings import SearchRuntimeSettings
 
-    async def run(provider, _topic):
+    async def run(provider, _topic, **_kwargs):
         raise search.SearchBackendUnavailable(f"{provider} unavailable")
 
     monkeypatch.setattr(
@@ -285,7 +285,7 @@ async def test_deep_search_reports_all_provider_failures(monkeypatch):
 async def test_provider_boundary_converts_unexpected_failure_for_fallback(monkeypatch):
     from cyrene.tooling.backends import search
 
-    async def broken_simplexng(_topic):
+    async def broken_simplexng(_topic, **_kwargs):
         raise ValueError("bad provider response")
 
     monkeypatch.setattr(search, "_deep_search_simplexng", broken_simplexng)
@@ -312,7 +312,11 @@ async def test_tool_passes_run_context_to_search(monkeypatch):
     monkeypatch.setattr(web_search, "deep_search", fake_search)
     with bind_run_context(session_id="session-context", round_id="round-context"):
         result = await web_search._tool_websearch(
-            {"query": "facts"}, None, 123, "runtime.db", None
+            {"query": "facts", "detail": "preview", "max_results": 3},
+            None,
+            123,
+            "runtime.db",
+            None,
         )
 
     assert result == "ok"
@@ -323,6 +327,8 @@ async def test_tool_passes_run_context_to_search(monkeypatch):
                 "db_path": "runtime.db",
                 "session_id": "session-context",
                 "round_id": "round-context",
+                "detail": "preview",
+                "max_results": 3,
             },
         )
     ]

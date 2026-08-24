@@ -136,6 +136,20 @@ def prepend_path_dirs(path: str, dirs: list[str]) -> str:
     return merge_path_entries(*dirs, path)
 
 
+def agent_child_path(installation: dict[str, Any]) -> str:
+    """Return the effective PATH used to validate and spawn an Agent.
+
+    Managed bins stay first for reproducibility, while the complete user PATH
+    remains available as a fallback for every Agent command and runtime
+    dependency. ``ensure_user_path`` augments ``os.environ`` during normal app
+    startup, including GUI launches whose inherited PATH is minimal.
+    """
+    return prepend_path_dirs(
+        os.environ.get("PATH", ""),
+        agent_child_path_dirs(installation),
+    )
+
+
 class AcpProcessManager:
     """Spawns, caches, and reaps ACP stdio transports keyed by installation."""
 
@@ -205,10 +219,17 @@ class AcpProcessManager:
                 detail={"command": command},
             )
         managed_path = str(installation.get("managed_path") or "").strip()
-        if managed_path and not Path(managed_path).is_file():
+        search_path = agent_child_path(installation)
+        managed_command_available = bool(managed_path and Path(managed_path).is_file())
+        path_command = (
+            self._which(command, search_path)
+            if managed_path and not managed_command_available
+            else None
+        )
+        if managed_path and not managed_command_available and not path_command:
             raise AgentRuntimeError(
                 "dependency_missing",
-                "managed Agent executable is missing",
+                f"Agent executable {command!r} is unavailable in its managed install and on PATH",
                 detail={"command": command},
             )
         # Recommended npm agents may declare a runtime dependency (e.g. pi-acp
@@ -217,7 +238,7 @@ class AcpProcessManager:
         # incomplete rather than spawning it.
         agent_id = str(installation.get("agent_id") or "").strip()
         version = str(installation.get("version") or "").strip()
-        if agent_id and version and managed_path:
+        if agent_id and version:
             try:
                 from cyrene.extensions.catalog import RECOMMENDED_AGENTS
             except ImportError:
@@ -227,12 +248,22 @@ class AcpProcessManager:
             dependency_bin = str(dependency.get("bin") or "")
             if dependency_bin:
                 shim_name = dependency_bin + (".cmd" if os.name == "nt" else "")
-                if not (Path(managed_path).parent / shim_name).is_file():
+                managed_dependency_available = bool(
+                    managed_path
+                    and (Path(managed_path).parent / shim_name).is_file()
+                )
+                if not managed_dependency_available and not self._which(dependency_bin, search_path):
                     raise AgentRuntimeError(
                         "dependency_missing",
-                        f"managed Agent runtime dependency {dependency_bin!r} is missing; reinstall the agent",
-                        detail={"command": command},
+                        f"Agent runtime dependency {dependency_bin!r} is unavailable in its managed install and on PATH",
+                        detail={"command": command, "dependency": dependency_bin},
                     )
+
+    def _which(self, command: str, search_path: str) -> str | None:
+        """Resolve a bare command with the same PATH policy used for spawning."""
+        if self._which_fn is not None:
+            return self._which_fn(command)
+        return shutil.which(command, path=search_path)
 
     def resolve_args(self, installation: dict[str, Any]) -> tuple[str, ...]:
         """Return the built-in profile args for this installation.
@@ -321,9 +352,10 @@ class AcpProcessManager:
             base=os.environ,
             extra={**configured_agent_proxy_environment(), **(env or {})},
         )
-        extra_dirs = agent_child_path_dirs(installation)
-        if extra_dirs:
-            child_env["PATH"] = prepend_path_dirs(child_env.get("PATH", ""), extra_dirs)
+        child_env["PATH"] = prepend_path_dirs(
+            child_env.get("PATH", ""),
+            agent_child_path_dirs(installation),
+        )
         signature = self._spawn_signature(
             command=command,
             args=args,
@@ -359,7 +391,7 @@ class AcpProcessManager:
             which_fn = self._which_fn
             if which_fn is None:
                 def which_fn(name: str) -> str | None:
-                    if managed_path and name == command:
+                    if managed_path and name == command and Path(managed_path).is_file():
                         return managed_path
                     return shutil.which(name, path=child_env.get("PATH"))
 

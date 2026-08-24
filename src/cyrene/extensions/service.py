@@ -1465,7 +1465,11 @@ class ExtensionService:
         return await agent_runtime.create_agent_install_proposal(source, requested_version, actor=actor)
 
     def _agent_install_complete(self, agent_id: str, version: str) -> bool:
-        """Whether the installed adapter (and any declared runtime dependency) exists."""
+        """Whether the adapter and declared runtime dependencies are resolvable.
+
+        A managed executable is preferred, but a command already installed on
+        the user's PATH is a complete and directly usable component too.
+        """
         try:
             from cyrene.extensions.catalog import RECOMMENDED_AGENTS
         except ImportError:
@@ -1476,12 +1480,15 @@ class ExtensionService:
         if distribution.get("kind") != "npm" or not command:
             return True
         install_root = _AGENT_DIR / str(agent_id or "") / str(version or "")
-        if not (install_root / "node_modules" / ".bin" / _npm_bin_shim(command)).is_file():
+        managed_command = install_root / "node_modules" / ".bin" / _npm_bin_shim(command)
+        if not managed_command.is_file() and not shutil.which(command):
             return False
         dependency = profile.get("dependency") if isinstance(profile.get("dependency"), dict) else {}
         dependency_bin = str(dependency.get("bin") or "")
-        if dependency_bin and not (install_root / "node_modules" / ".bin" / _npm_bin_shim(dependency_bin)).is_file():
-            return False
+        if dependency_bin:
+            managed_dependency = install_root / "node_modules" / ".bin" / _npm_bin_shim(dependency_bin)
+            if not managed_dependency.is_file() and not shutil.which(dependency_bin):
+                return False
         return True
 
     async def confirm_agent_install_proposal(self, proposal_id: str, *, actor: str = "user") -> dict[str, Any]:

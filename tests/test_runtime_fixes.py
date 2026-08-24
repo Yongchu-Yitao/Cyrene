@@ -5936,6 +5936,152 @@ async def test_run_main_agent_retries_invalid_phase1_tool_and_returns_model_expl
     assert saved
 
 
+async def test_phase1_plain_text_completes_after_one_missing_control_repair(monkeypatch):
+    from cyrene.agent import agent as _agent_core
+
+    responses = iter([
+        {"content": "first answer", "tool_calls": []},
+        {"content": "repaired answer", "tool_calls": []},
+    ])
+    calls = []
+    saved = []
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        calls.append(messages)
+        return next(responses)
+
+    async def fake_save(messages, **_kwargs):
+        saved.append(messages)
+
+    _patch_call_llm(monkeypatch, fake_call_llm)
+    _patch_append_session(monkeypatch, AsyncMock())
+    _patch_save_session(monkeypatch, fake_save)
+
+    result = await _agent_core._run_main_agent(
+        "answer directly",
+        [],
+        None,
+        0,
+        "db.sqlite3",
+        client_request_id="req_phase1_fallback",
+    )
+
+    assert result == "repaired answer"
+    assert len(calls) == 2
+    assert saved[-1][-1]["content"] == "repaired answer"
+    assert saved[-1][-1]["client_request_id"] == "req_phase1_fallback"
+
+
+async def test_phase1_empty_reply_fails_after_one_missing_control_repair(monkeypatch):
+    from cyrene.agent import agent as _agent_core
+
+    calls = []
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        calls.append(messages)
+        return {"content": "", "tool_calls": []}
+
+    _patch_call_llm(monkeypatch, fake_call_llm)
+    _patch_append_session(monkeypatch, AsyncMock())
+    _patch_save_session(monkeypatch, AsyncMock())
+
+    with pytest.raises(
+        _agent_core.AgentControlProtocolError,
+        match="neither a control signal nor a usable answer",
+    ):
+        await _agent_core._run_main_agent(
+            "answer directly",
+            [],
+            None,
+            0,
+            "db.sqlite3",
+        )
+
+    assert len(calls) == 2
+
+
+async def test_phase2_plain_text_completes_after_one_missing_control_repair(monkeypatch):
+    from cyrene.agent import agent as _agent_core
+
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "phase1",
+                "function": {"name": "use_tools", "arguments": '{"task":"check"}'},
+            }],
+        },
+        {"content": "first execution answer", "tool_calls": []},
+        {"content": "repaired execution answer", "tool_calls": []},
+    ])
+    calls = []
+    saved = []
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        calls.append(messages)
+        return next(responses)
+
+    async def fake_save(messages, **_kwargs):
+        saved.append(messages)
+
+    _patch_call_llm(monkeypatch, fake_call_llm)
+    _patch_append_session(monkeypatch, AsyncMock())
+    _patch_save_session(monkeypatch, fake_save)
+
+    result = await _agent_core._run_main_agent(
+        "inspect first",
+        [],
+        None,
+        0,
+        "db.sqlite3",
+        client_request_id="req_phase2_fallback",
+    )
+
+    assert result == "repaired execution answer"
+    assert len(calls) == 3
+    assert saved[-1][-1]["content"] == "repaired execution answer"
+    assert saved[-1][-1]["client_request_id"] == "req_phase2_fallback"
+
+
+async def test_phase2_empty_reply_fails_after_one_missing_control_repair(monkeypatch):
+    from cyrene.agent import agent as _agent_core
+
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "phase1",
+                "function": {"name": "use_tools", "arguments": '{"task":"check"}'},
+            }],
+        },
+        {"content": "", "tool_calls": []},
+        {"content": "", "tool_calls": []},
+    ])
+    calls = []
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        calls.append(messages)
+        return next(responses)
+
+    _patch_call_llm(monkeypatch, fake_call_llm)
+    _patch_append_session(monkeypatch, AsyncMock())
+    _patch_save_session(monkeypatch, AsyncMock())
+
+    with pytest.raises(
+        _agent_core.AgentControlProtocolError,
+        match="neither a control signal nor a usable answer",
+    ):
+        await _agent_core._run_main_agent(
+            "inspect first",
+            [],
+            None,
+            0,
+            "db.sqlite3",
+        )
+
+    assert len(calls) == 3
+
+
 def test_build_current_session_uses_saved_session_and_round_titles(tmp_path, monkeypatch):
     from cyrene.workbench import runtime as routes
 

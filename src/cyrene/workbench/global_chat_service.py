@@ -36,10 +36,7 @@ from cyrene.runtime.attachments import (
 )
 from cyrene.runtime.memory.conversations import archive_exchange
 from cyrene.workbench import generation_gateway, presentation_runtime
-from cyrene.workbench.chat_service import (
-    get_chat_run_manager,
-    settle_chat_running_status,
-)
+from cyrene.workbench.chat_service import get_chat_run_manager
 from cyrene.workbench.subagent_messaging_service import (
     AgentMentionCommand,
     SubagentMessagingService,
@@ -224,11 +221,19 @@ class GlobalChatApplicationService:
     async def interrupt(self, session_id: str = "") -> dict[str, Any]:
         manager = get_chat_run_manager()
         workbench_run = manager.get(session_id) if session_id else None
-        interrupted = agent.interrupt_active_run(session_id=session_id)
         if not session_id:
-            return {"ok": True, "interrupted": interrupted}
-        interrupted = manager.interrupt(session_id) or interrupted
-        if workbench_run is not None and not workbench_run.done.is_set():
+            return {
+                "ok": True,
+                "interrupted": agent.interrupt_active_run(session_id=session_id),
+            }
+        if workbench_run is None:
+            return {
+                "ok": True,
+                "interrupted": agent.interrupt_active_run(session_id=session_id),
+            }
+
+        interrupted = manager.interrupt(session_id)
+        if not workbench_run.done.is_set():
             try:
                 await asyncio.wait_for(
                     asyncio.shield(workbench_run.done.wait()), timeout=8.0
@@ -243,7 +248,6 @@ class GlobalChatApplicationService:
                         "code": "chat_interrupt_timeout",
                     },
                 ) from exc
-        await asyncio.to_thread(settle_chat_running_status, session_id)
         return {"ok": True, "interrupted": interrupted}
 
     async def clear(self) -> dict[str, Any]:

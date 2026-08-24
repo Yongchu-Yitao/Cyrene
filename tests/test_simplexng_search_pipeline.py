@@ -18,7 +18,7 @@ async def test_simplexng_fetches_pages_and_returns_evidence(monkeypatch):
     async def fake_search(_query):
         return [dict(item) for item in results]
 
-    async def fake_fetch(_url, session=None):
+    async def fake_fetch(_url, session=None, **_kwargs):
         await asyncio.sleep(0)
         return "Fetched body"
 
@@ -33,6 +33,74 @@ async def test_simplexng_fetches_pages_and_returns_evidence(monkeypatch):
     assert "Do not call WebFetch" in result
 
 
+async def test_simplexng_preview_fetches_only_first_three_pages(monkeypatch):
+    from cyrene.tooling.backends import search
+
+    async def fake_search(_query):
+        return [
+            {
+                "title": f"Weather source {index}",
+                "url": f"https://example.test/weather-{index}",
+                "snippet": f"Search snippet {index}",
+                "query": "Guangzhou weather",
+            }
+            for index in range(1, 5)
+        ]
+
+    fetches = []
+
+    async def fake_fetch(url, _client):
+        fetches.append(url)
+        return f"Fetched preview for {url}"
+
+    monkeypatch.setattr(search, "_search_simplexng", fake_search)
+    monkeypatch.setattr(search, "_fetch_preview_url", fake_fetch)
+
+    result = await search._deep_search_simplexng(
+        "Guangzhou weather",
+        detail="preview",
+    )
+
+    assert fetches == [
+        "https://example.test/weather-1",
+        "https://example.test/weather-2",
+        "https://example.test/weather-3",
+    ]
+    assert "fetched the first three result pages" in result
+    assert "[1] Weather source 1" in result
+    assert "[2] Weather source 2" in result
+    assert "[3] Weather source 3" in result
+    assert "Weather source 4" not in result
+    assert "Preview: Fetched preview" in result
+
+
+async def test_preview_gives_remaining_page_five_seconds_after_first_success(monkeypatch):
+    from cyrene.tooling.backends import search
+
+    assert search._PREVIEW_REMAINING_TIMEOUT == 5.0
+    results = [
+        {"url": "https://example.test/fast"},
+        {"url": "https://example.test/slow-1"},
+        {"url": "https://example.test/slow-2"},
+    ]
+    slow_cancelled = asyncio.Event()
+
+    async def staged_fetch(url, _client):
+        if url.endswith("/fast"):
+            return "fast page"
+        try:
+            await asyncio.sleep(60)
+        finally:
+            slow_cancelled.set()
+
+    monkeypatch.setattr(search, "_fetch_preview_url", staged_fetch)
+
+    output = await search._fetch_preview_pages(results, remaining_timeout=0.01)
+
+    assert output == ["fast page", "", ""]
+    assert slow_cancelled.is_set()
+
+
 async def test_simplexng_pipeline_makes_no_internal_model_calls(monkeypatch):
     from cyrene.tooling.backends import search
 
@@ -44,7 +112,7 @@ async def test_simplexng_pipeline_makes_no_internal_model_calls(monkeypatch):
             "query": "topic",
         }]
 
-    async def fake_fetch(_url, session=None):
+    async def fake_fetch(_url, session=None, **_kwargs):
         return "Fetched evidence"
 
     monkeypatch.setattr(search, "_search_simplexng", fake_search)
@@ -155,7 +223,7 @@ async def test_simplexng_result_without_snippet_or_page_content_is_unusable(monk
             "query": "topic",
         }]
 
-    async def fake_fetch(_url, session=None):
+    async def fake_fetch(_url, session=None, **_kwargs):
         return ""
 
     monkeypatch.setattr(search, "_search_simplexng", fake_search)
@@ -297,15 +365,18 @@ async def test_fetch_url_respects_declared_non_utf8_charset(monkeypatch):
     assert text == "广州天气"
 
 
-def test_web_search_contract_declares_self_contained_fetched_evidence():
+def test_web_search_contract_exposes_preview_and_content_detail_modes():
     from cyrene.tooling.native_definitions import get_native_tool_def
 
-    description = get_native_tool_def("WebSearch")["function"]["description"]
+    tool = get_native_tool_def("WebSearch")["function"]
+    description = tool["description"]
+    properties = tool["parameters"]["properties"]
 
     assert "filter them for relevance" not in description
-    assert "Synthesize the answer from this evidence" in description
-    assert "detailed fetched excerpts" in description
-    assert "do not call WebFetch" in description
+    assert 'detail="preview"' in description
+    assert 'detail="content"' in description
+    assert properties["detail"]["enum"] == ["preview", "content"]
+    assert properties["detail"]["default"] == "preview"
 
 
 def test_self_contained_result_preserves_evidence_order():

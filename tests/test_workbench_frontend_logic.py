@@ -3753,6 +3753,46 @@ def test_workbench_hydration_deduplicates_pending_question_answer_after_navigati
     }
 
 
+def test_workbench_live_event_deduplicates_pending_question_answer_before_hydration():
+    result = _run_workbench_timeline_js(
+        """
+(() => {
+  const optimisticAnswer = {
+    id: "answer_pending_1",
+    role: "user",
+    content: "红熊猫动物",
+    createdAt: "2026-07-15T09:27:52.100Z",
+    answerToQuestionId: "question_1",
+    optimistic: true
+  };
+  const savedAnswer = {
+    id: "msg_saved_answer",
+    role: "user",
+    content: "红熊猫动物",
+    createdAt: "2026-07-15T09:27:52.180000+00:00",
+    answerToQuestionId: "question_1"
+  };
+  const merged = wbcMergeChronologicalMessages([optimisticAnswer], [savedAnswer]);
+  return {
+    ids: merged.map(item => item.id),
+    answerCount: merged.filter(item => item.answerToQuestionId === "question_1").length,
+    optimistic: merged[0].optimistic,
+    createdAt: merged[0].createdAt,
+    serverCreatedAt: merged[0].serverCreatedAt
+  };
+})()
+"""
+    )
+
+    assert result == {
+        "ids": ["msg_saved_answer"],
+        "answerCount": 1,
+        "optimistic": False,
+        "createdAt": "2026-07-15T09:27:52.100Z",
+        "serverCreatedAt": "2026-07-15T09:27:52.180000+00:00",
+    }
+
+
 def test_workbench_hydration_cannot_remove_the_live_user_turn():
     result = _run_workbench_timeline_js(
         """

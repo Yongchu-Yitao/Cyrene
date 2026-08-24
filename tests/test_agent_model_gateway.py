@@ -218,6 +218,62 @@ def test_responses_protocol_maps_messages_tool_results_and_calls():
     }]
 
 
+def test_responses_stream_emits_complete_text_and_tool_lifecycles():
+    import json
+
+    from route.agent_model_gateway import (
+        _responses_output,
+        _responses_stream_events,
+    )
+
+    payload = {
+        "id": "resp_test",
+        "object": "response",
+        "status": "completed",
+        "output": _responses_output({
+            "content": "hello",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": '{"q":"x"}'},
+            }],
+        }),
+        "usage": {},
+    }
+    events = _responses_stream_events(payload)
+    event_types = []
+    decoded = []
+    for event in events:
+        for line in event.splitlines():
+            if line.startswith("event: "):
+                event_types.append(line.removeprefix("event: "))
+            elif line.startswith("data: {"):
+                decoded.append(json.loads(line.removeprefix("data: ")))
+
+    assert event_types == [
+        "response.created",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.output_item.added",
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    assert next(
+        item for item in decoded if item["type"] == "response.output_text.delta"
+    )["delta"] == "hello"
+    assert next(
+        item for item in decoded
+        if item["type"] == "response.function_call_arguments.done"
+    )["arguments"] == '{"q":"x"}'
+    assert events[-1] == "data: [DONE]\n\n"
+
+
 def test_pi_acp_binding_injects_redirected_config_dir_pointing_at_gateway(monkeypatch, tmp_path):
     from cyrene.agent_runtime import model_gateway
     from cyrene.agent_runtime.models import ModelAccess

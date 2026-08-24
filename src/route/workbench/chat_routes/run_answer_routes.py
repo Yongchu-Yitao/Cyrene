@@ -2,26 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import json
 import logging
 import time
-import uuid
 from typing import Any
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from cyrene.runtime.memory.conversations import archive_session_exchange
-from cyrene.workbench.chat_answer_stream_service import (
-    ChatAnswerStreamApplicationService,
-    ChatAnswerStreamDependencies,
-)
 from cyrene.workbench.chat_events import publish_chat_changed
+from cyrene.workbench.chat_runs import ChatRun
 from route import schemas as api_models
 from route.workbench.chat_routes.context import ChatRouteContext
 from route.workbench.chat_routes.shared import (
-    _DETACHED_ANSWER_TASKS,
-    finish_detached_answer_task,
     schedule_structured_memory_capture,
 )
 
@@ -60,38 +53,8 @@ class ChatAnswerController:
     def __init__(self, context: ChatRouteContext):
         self.context = context
 
-        def track_task(task: asyncio.Task[Any]) -> None:
-            _DETACHED_ANSWER_TASKS.add(task)
-            task.add_done_callback(finish_detached_answer_task)
-
-        self.stream_service = ChatAnswerStreamApplicationService(ChatAnswerStreamDependencies(track_task=track_task))
-
     async def answer(self, chat_id: str, body: dict[str, Any]):
-        if bool(body.get("stream")):
-            return self._stream_response(chat_id, body)
         return await _AnswerOperation(self.context, chat_id, body).execute()
-
-    def _stream_response(self, chat_id: str, body: dict[str, Any]):
-        async def event_stream():
-            next_body = api_models.AnswerBody(**{**body, "stream": False})
-
-            async def answer_once():
-                return await self.answer(
-                    chat_id,
-                    api_models.body_dict(next_body),
-                )
-
-            async for event in self.stream_service.stream(
-                chat_id=chat_id,
-                answer_once=answer_once,
-            ):
-                yield json.dumps(event, ensure_ascii=False) + "\n"
-
-        return StreamingResponse(
-            event_stream(),
-            media_type="application/x-ndjson",
-            headers={"Cache-Control": "no-cache"},
-        )
 
 
 class _AnswerOperation:
@@ -108,6 +71,7 @@ class _AnswerOperation:
         self.question_id = str(body.get("question_id") or "").strip()
         self.answer_text = str(body.get("answer") or body.get("selected_option") or "").strip()
         self.ui_instance_id = str(body.get("uiInstanceId") or "").strip()
+        self.wants_stream = bool(body.get("stream"))
         self.processing_started_at = time.monotonic()
 
     async def execute(self):
@@ -117,22 +81,34 @@ class _AnswerOperation:
         error = await self._prepare(PERMISSION_MODES)
         if error is not None:
             return error
-        error = await self._persist_answer()
-        if error is not None:
-            return error
-        reply = await self._resume_agent()
-        if isinstance(reply, (dict, JSONResponse)):
-            return reply
-        await self.service.finalize_workspace_changes(
-            chat_id=self.chat_id,
-            run_id=self.resume_run_id,
-            workspace_dir=self.workspace_dir,
-            before=self.changes_before,
-            status=("awaiting_user" if reply == self.routes.awaiting_user_sentinel else "completed"),
+
+        async def runner(run: ChatRun) -> None:
+            await self._run(run)
+
+        run, is_new = self.service.run_manager.start_or_get(
+            self.chat_id,
+            {"type": "ack", "chatId": self.chat_id},
+            runner,
+            stream=self.wants_stream,
+            settler=self._publish_settled,
         )
-        if reply == self.routes.awaiting_user_sentinel:
-            return await self._handle_awaiting_user()
-        return await self._handle_reply(reply)
+        if not is_new:
+            return JSONResponse(
+                {
+                    "error": "chat already has a running reply",
+                    "code": "chat_run_in_progress",
+                },
+                status_code=409,
+            )
+        self.run = run
+        if self.wants_stream:
+            return StreamingResponse(
+                self.service.run_manager.stream(run),
+                media_type="application/x-ndjson",
+                headers={"Cache-Control": "no-cache"},
+            )
+        await run.done.wait()
+        return self._response(run)
 
     async def _prepare(self, permission_modes):
         if not self.question_id or not self.answer_text:
@@ -174,7 +150,7 @@ class _AnswerOperation:
             return JSONResponse({"error": str(exc)}, status_code=400)
         return None
 
-    async def _persist_answer(self):
+    async def _persist_answer(self, run: ChatRun) -> None:
         self.now = self.service.utc_now_iso()
         self.answer_entry = _answer_message(
             self.answer_text,
@@ -186,18 +162,30 @@ class _AnswerOperation:
             self.chat,
             [self.answer_entry],
         )
+        self.chat["status"] = "running"
         self.service.mark_user_activity(self.chat, self.now)
         await asyncio.to_thread(
             self.service.repository.write_one,
             self.chat,
             base_chat=self.base_chat,
         )
+        # From this point on cancellation must consume the answered question.
+        # Set the marker before any more await points so cleanup reflects the
+        # durable write rather than how far the preparation happened to get.
+        self.answer_persisted = True
+        running_summary = self.service.public_chat_light(self.chat)
+        # The durable pending question stays in the store until the resumed run
+        # settles so an agent failure can still restore the prompt.  The live
+        # projection must hide it immediately, though; otherwise this event
+        # overwrites the frontend's optimistic clear and mounts the answered
+        # question card again while the agent is running.
+        running_summary["pendingQuestion"] = None
         await publish_chat_changed(
             self.chat_id,
             self.project_id,
             "answer_submitted",
             run_status="running",
-            chatSummary=self.service.public_chat_light(self.chat),
+            chatSummary=running_summary,
             userMessage=self.service.public_message(self.answer_entry),
         )
         self.state_ids_before_resume: set[str] = set()
@@ -209,15 +197,80 @@ class _AnswerOperation:
             message_id = str(message.get("message_id") or message.get("id") or "").strip()
             if message_id:
                 self.state_ids_before_resume.add(message_id)
-        self.resume_run_id = f"resume_{uuid.uuid4().hex}"
         self.changes_before = await self.service.capture_workspace_changes_baseline(
             self.workspace_dir,
-            self.resume_run_id,
+            run.run_id,
         )
         from cyrene.runtime.host_bridge import resolve_conversation_source
 
         self.conversation_source = await resolve_conversation_source(self.ui_instance_id)
-        return None
+
+    async def _run(self, run: ChatRun) -> None:
+        self.changes_before = None
+        self.answer_persisted = False
+        try:
+            await self._persist_answer(run)
+            reply = await self._resume_agent()
+            run.status = "finishing"
+            status = (
+                "awaiting_user"
+                if reply == self.routes.awaiting_user_sentinel
+                else "completed"
+            )
+            await self.service.finalize_workspace_changes(
+                chat_id=self.chat_id,
+                run_id=run.run_id,
+                workspace_dir=self.workspace_dir,
+                before=self.changes_before,
+                status=status,
+                run=run,
+            )
+            if reply == self.routes.awaiting_user_sentinel:
+                payload = await self._handle_awaiting_user(run)
+                run.outcome = {
+                    "kind": "awaiting",
+                    "pending": payload.get("pendingQuestion"),
+                    "assistantMessages": payload.get("assistantMessages") or [],
+                    "payload": payload,
+                }
+                if self.wants_stream:
+                    await run.publish(
+                        {
+                            "type": "awaiting_user",
+                            "pending_question": payload.get("pendingQuestion"),
+                            "assistantMessages": payload.get("assistantMessages") or [],
+                        }
+                    )
+                return
+
+            payload = await self._handle_reply(run, reply)
+            run.outcome = {"kind": "reply", "payload": payload}
+            if self.wants_stream:
+                event_types = {str(event.get("type") or "") for event in run.events}
+                if "reply_start" not in event_types:
+                    await run.publish({"type": "reply_start"})
+                if "reply_done" not in event_types:
+                    text = str((payload.get("assistantMessage") or {}).get("content") or "")
+                    if text:
+                        await run.publish({"type": "reply_delta", "delta": text})
+                    await run.publish({"type": "reply_done", "response": text})
+                await run.publish(
+                    {
+                        "type": "saved",
+                        "assistantMessage": payload.get("assistantMessage") or {},
+                        "assistantMessages": payload.get("assistantMessages") or [],
+                        "chatSummary": payload.get("chatSummary") or {},
+                    }
+                )
+        except asyncio.CancelledError:
+            if not run.outcome:
+                run.outcome = {"kind": "interrupted"}
+            if not run.termination_reason:
+                run.termination_reason = "user_interrupted"
+            await self._handle_cancelled(run)
+            raise
+        except Exception as exc:
+            await self._handle_error(run, exc)
 
     async def _resume_agent(self):
         kwargs = {
@@ -226,102 +279,59 @@ class _AnswerOperation:
         }
         if self.mode != "default":
             kwargs["permission_mode"] = self.mode
-        try:
-            return await self.routes.answer_pending(
-                self.chat_id,
-                self.question_id,
-                self.answer_text,
-                self.workspace_dir,
-                **kwargs,
-            )
-        except asyncio.CancelledError:
-            return await self._handle_cancelled()
-        except Exception as exc:
-            return await self._handle_error(exc)
+        return await self.routes.answer_pending(
+            self.chat_id,
+            self.question_id,
+            self.answer_text,
+            self.workspace_dir,
+            **kwargs,
+        )
 
-    async def _handle_cancelled(self) -> dict[str, Any]:
+    async def _handle_cancelled(self, run: ChatRun) -> None:
         await self.service.finalize_workspace_changes(
             chat_id=self.chat_id,
-            run_id=self.resume_run_id,
+            run_id=run.run_id,
             workspace_dir=self.workspace_dir,
             before=self.changes_before,
             status="cancelled",
+            run=run,
         )
-        await asyncio.to_thread(
-            self.service.stash_chat_pending_for,
-            self.chat_id,
-            None,
-        )
-        await asyncio.to_thread(
-            self.service.record_chat_run_outcome,
-            self.chat_id,
-            run_id=self.resume_run_id,
-            status="cancelled",
-            termination_reason="user_interrupted",
-            outcome_kind="interrupted",
-            created_at=self.now,
-        )
-        summary = await asyncio.to_thread(self._load_chat_summary)
-        await publish_chat_changed(
-            self.chat_id,
-            self.project_id,
-            "settled",
-            run_id=self.resume_run_id,
-            run_status="cancelled",
-            chatSummary=summary,
-        )
-        return {
-            "ok": True,
-            "interrupted": True,
-            "awaitingUser": False,
-            "runId": self.resume_run_id,
-            "userMessage": self.service.public_message(self.answer_entry),
-        }
+        if self.answer_persisted:
+            await asyncio.to_thread(
+                self.service.stash_chat_pending_for,
+                self.chat_id,
+                None,
+            )
 
-    async def _handle_error(self, exc: Exception):
+    async def _handle_error(self, run: ChatRun, exc: Exception) -> None:
         await self.service.finalize_workspace_changes(
             chat_id=self.chat_id,
-            run_id=self.resume_run_id,
+            run_id=run.run_id,
             workspace_dir=self.workspace_dir,
             before=self.changes_before,
             status="error",
+            run=run,
         )
         logger.exception(
             "Workbench chat answer-resume failed for %s",
             self.chat_id,
         )
-        await asyncio.to_thread(
-            self.service.record_chat_run_outcome,
-            self.chat_id,
-            run_id=self.resume_run_id,
-            status="error",
-            termination_reason="agent_error",
-            outcome_kind="error",
-            created_at=self.now,
-        )
-        summary = await asyncio.to_thread(self._load_chat_summary)
-        await publish_chat_changed(
-            self.chat_id,
-            self.project_id,
-            "settled",
-            run_id=self.resume_run_id,
-            run_status="failed",
-            chatSummary=summary,
-        )
-        return JSONResponse(
-            {
-                "error": "answer resume failed",
-                "detail": str(exc),
-                **self.service.chat_error_metadata(exc),
-            },
-            status_code=502,
-        )
+        run.outcome = {"kind": "error", "exc": exc}
+        if self.wants_stream:
+            await run.publish(
+                {
+                    "type": "error",
+                    "error": "answer_resume_failed",
+                    "message": str(exc),
+                    **self.service.chat_error_metadata(exc),
+                }
+            )
 
     def _load_chat_summary(self) -> dict[str, Any]:
         chat = self.service.repository.get(self.chat_id)
         return self.service.public_chat_light(chat) if chat else {}
 
-    async def _handle_awaiting_user(self) -> dict[str, Any]:
+    async def _handle_awaiting_user(self, run: ChatRun) -> dict[str, Any]:
         pending = await asyncio.to_thread(
             self.routes.pending_question_for,
             self.chat_id,
@@ -358,34 +368,17 @@ class _AnswerOperation:
             pending,
             additions=additions,
         )
-        await asyncio.to_thread(
-            self.service.record_chat_run_outcome,
-            self.chat_id,
-            run_id=self.resume_run_id,
-            status="done",
-            termination_reason="awaiting_user",
-            outcome_kind="awaiting",
-            created_at=self.now,
-        )
-        summary = await asyncio.to_thread(self._load_chat_summary)
-        await publish_chat_changed(
-            self.chat_id,
-            self.project_id,
-            "settled",
-            run_id=self.resume_run_id,
-            run_status="awaiting_user",
-            chatSummary=summary,
-            assistantMessages=[self.service.public_message(item) for item in additions],
-        )
+        public_additions = [self.service.public_message(item) for item in additions]
         return {
             "ok": True,
             "awaitingUser": True,
-            "runId": self.resume_run_id,
+            "runId": run.run_id,
             "pendingQuestion": pending,
             "userMessage": self.service.public_message(self.answer_entry),
+            "assistantMessages": public_additions,
         }
 
-    async def _handle_reply(self, reply: Any) -> dict[str, Any]:
+    async def _handle_reply(self, run: ChatRun, reply: Any) -> dict[str, Any]:
         state_messages = await asyncio.to_thread(
             self.service.session_state_messages,
             self.chat_id,
@@ -400,7 +393,7 @@ class _AnswerOperation:
             self.chat_id,
         )
         if not fresh_chat:
-            return JSONResponse({"error": "chat not found"}, status_code=404)
+            raise RuntimeError("chat disappeared while resuming its answer")
         model = self.service.last_exchange_model(
             state_messages,
             self.state_ids_before_resume,
@@ -414,7 +407,10 @@ class _AnswerOperation:
             saved_messages,
             assistant,
         )
-        summary = await self._publish_completed(saved_messages)
+        summary = await asyncio.to_thread(self._load_chat_summary)
+        # ChatRunManager records lastRun immediately after the runner returns.
+        # Keep the terminal stream projection accurate during that tiny gap.
+        summary["runStatus"] = "completed"
         await self._archive_reply(fresh_chat, reply)
         if self.project_id and not self.is_side_agent:
             await self._schedule_memory(
@@ -426,7 +422,7 @@ class _AnswerOperation:
         return {
             "ok": True,
             "awaitingUser": False,
-            "runId": self.resume_run_id,
+            "runId": run.run_id,
             "userMessage": self.service.public_message(self.answer_entry),
             "assistantMessage": self.service.public_message(assistant),
             "assistantMessages": [self.service.public_message(item) for item in saved_messages],
@@ -485,30 +481,62 @@ class _AnswerOperation:
         await asyncio.to_thread(self.service.complete_chat_plan, self.chat_id)
         return completed
 
-    async def _publish_completed(
-        self,
-        saved_messages: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        await asyncio.to_thread(
-            self.service.record_chat_run_outcome,
-            self.chat_id,
-            run_id=self.resume_run_id,
-            status="done",
-            termination_reason="completed",
-            outcome_kind="reply",
-            created_at=self.now,
+    def _response(self, run: ChatRun):
+        outcome = run.outcome or {}
+        kind = str(outcome.get("kind") or "")
+        if kind == "error":
+            exc = outcome.get("exc")
+            if not isinstance(exc, Exception):
+                exc = RuntimeError("answer resume failed")
+            return JSONResponse(
+                {
+                    "error": "answer resume failed",
+                    "detail": str(exc),
+                    **self.service.chat_error_metadata(exc),
+                },
+                status_code=502,
+            )
+        if kind == "interrupted" or run.status == "cancelled":
+            payload: dict[str, Any] = {
+                "ok": True,
+                "interrupted": True,
+                "awaitingUser": False,
+                "runId": run.run_id,
+            }
+            if self.answer_persisted:
+                payload["userMessage"] = self.service.public_message(self.answer_entry)
+            return payload
+        payload = outcome.get("payload")
+        if isinstance(payload, dict):
+            return payload
+        return JSONResponse(
+            {"error": "answer resume ended without an outcome"},
+            status_code=500,
         )
-        summary = await asyncio.to_thread(self._load_chat_summary)
+
+    async def _publish_settled(self, run: ChatRun) -> None:
+        outcome = run.outcome or {}
+        kind = str(outcome.get("kind") or "")
+        run_status = {
+            "reply": "completed",
+            "awaiting": "awaiting_user",
+            "error": "failed",
+            "interrupted": "cancelled",
+        }.get(kind, "cancelled" if run.status == "cancelled" else run.status)
+        payload = outcome.get("payload")
+        details: dict[str, Any] = {
+            "run_id": run.run_id,
+            "run_status": run_status,
+            "chatSummary": await asyncio.to_thread(self._load_chat_summary),
+        }
+        if isinstance(payload, dict):
+            details["assistantMessages"] = payload.get("assistantMessages") or []
         await publish_chat_changed(
             self.chat_id,
             self.project_id,
             "settled",
-            run_id=self.resume_run_id,
-            run_status="completed",
-            chatSummary=summary,
-            assistantMessages=[self.service.public_message(item) for item in saved_messages],
+            **details,
         )
-        return summary
 
     async def _archive_reply(self, chat: dict[str, Any], reply: Any) -> None:
         try:

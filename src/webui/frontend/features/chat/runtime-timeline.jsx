@@ -229,6 +229,26 @@ function wbcMergeChronologicalMessages(messages, additions) {
     if (!item) return;
     var id = String(item.id || "");
     if (id && known.has(id)) return;
+    var answerToQuestionId = String(item.answerToQuestionId || "");
+    if (item.role === "user" && answerToQuestionId) {
+      for (var answerIndex = 0; answerIndex < merged.length; answerIndex++) {
+        var priorAnswer = merged[answerIndex] || {};
+        if (priorAnswer.role !== "user"
+          || String(priorAnswer.answerToQuestionId || "") !== answerToQuestionId) continue;
+        var priorAnswerId = String(priorAnswer.id || "");
+        if (priorAnswer.optimistic && !item.optimistic) {
+          merged[answerIndex] = wbcConfirmOptimisticMessage(priorAnswer, item);
+        } else if (!priorAnswer.optimistic && item.optimistic) {
+          merged[answerIndex] = priorAnswer;
+        } else {
+          merged[answerIndex] = { ...priorAnswer, ...item };
+        }
+        if (priorAnswerId) known.delete(priorAnswerId);
+        var mergedAnswerId = String(merged[answerIndex] && merged[answerIndex].id || "");
+        if (mergedAnswerId) known.add(mergedAnswerId);
+        return;
+      }
+    }
     var clientRequestId = String(item.clientRequestId || "");
     if (clientRequestId) {
       for (var requestIndex = 0; requestIndex < merged.length; requestIndex++) {

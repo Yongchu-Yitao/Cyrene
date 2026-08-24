@@ -139,8 +139,11 @@ def _assistant_entry_from_response(response: dict[str, Any], round_id: str, incl
         "content": response.get("content") or "",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    if response.get("reasoning_content"):
-        entry["reasoning_content"] = response["reasoning_content"]
+    if "reasoning_content" in response and response["reasoning_content"] is not None:
+        # Keep the provider field even when it is an empty string. DeepSeek's
+        # thinking-mode tool protocol requires the assistant tool-call message
+        # to be replayed with reasoning_content on every continuation request.
+        entry["reasoning_content"] = str(response["reasoning_content"])
     if include_tool_calls and response.get("tool_calls"):
         entry["tool_calls"] = response["tool_calls"]
     if response.get("usage"):

@@ -224,8 +224,8 @@ async def _run_execution_agent_locked(task: str, bot: Any, chat_id: int, db_path
             assistant_entry["content"] = ""
         if response.get("tool_calls"):
             assistant_entry["tool_calls"] = response["tool_calls"]
-        if response.get("reasoning_content"):
-            assistant_entry["reasoning_content"] = response["reasoning_content"]
+        if "reasoning_content" in response and response["reasoning_content"] is not None:
+            assistant_entry["reasoning_content"] = str(response["reasoning_content"])
         if response.get("usage"):
             assistant_entry["usage"] = response["usage"]
         messages.append(assistant_entry)

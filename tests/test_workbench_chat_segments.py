@@ -387,6 +387,24 @@ def test_all_assistant_entry_builders_stamp_event_time():
     assert applied["created_at"]
 
 
+def test_assistant_entry_preserves_empty_reasoning_for_tool_replay():
+    entry = _assistant_entry_from_response(
+        {
+            "content": "",
+            "reasoning_content": "",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+            }],
+        },
+        "round_1",
+    )
+
+    assert "reasoning_content" in entry
+    assert entry["reasoning_content"] == ""
+
+
 def test_retry_cut_preserves_guidance_added_during_regeneration():
     chat = {
         "messages": [

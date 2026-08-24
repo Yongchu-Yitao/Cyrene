@@ -97,8 +97,10 @@ def _responses_output(message: dict[str, Any]) -> list[dict[str, Any]]:
     text = str(message.get("content") or "")
     if text:
         output.append({
+            "id": f"msg_{secrets.token_hex(8)}",
             "type": "message",
             "role": "assistant",
+            "status": "completed",
             "content": [{"type": "output_text", "text": text, "annotations": []}],
         })
     for call in message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else []:
@@ -114,6 +116,96 @@ def _responses_output(message: dict[str, Any]) -> list[dict[str, Any]]:
             "status": "completed",
         })
     return output
+
+
+def _responses_sse_event(event_type: str, payload: dict[str, Any]) -> str:
+    return (
+        f"event: {event_type}\n"
+        f"data: {json.dumps({'type': event_type, **payload}, ensure_ascii=False)}\n\n"
+    )
+
+
+def _responses_stream_events(payload: dict[str, Any]) -> list[str]:
+    """Build a complete Responses SSE lifecycle for text and tool calls.
+
+    Pi's Responses consumer creates content blocks from output-item lifecycle
+    events before applying deltas. Sending only a delta and response.completed
+    makes it discard the content and can leave the Agent turn waiting forever.
+    """
+    events = [
+        _responses_sse_event(
+            "response.created",
+            {"response": {**payload, "status": "in_progress", "output": []}},
+        )
+    ]
+    for output_index, item in enumerate(payload.get("output") or []):
+        if not isinstance(item, dict):
+            continue
+        item_type = str(item.get("type") or "")
+        if item_type == "message":
+            added_item = {**item, "status": "in_progress", "content": []}
+            events.append(_responses_sse_event(
+                "response.output_item.added",
+                {"output_index": output_index, "item": added_item},
+            ))
+            for content_index, part in enumerate(item.get("content") or []):
+                if not isinstance(part, dict) or str(part.get("type") or "") != "output_text":
+                    continue
+                text = str(part.get("text") or "")
+                empty_part = {**part, "text": ""}
+                coordinates = {
+                    "item_id": str(item.get("id") or ""),
+                    "output_index": output_index,
+                    "content_index": content_index,
+                }
+                events.append(_responses_sse_event(
+                    "response.content_part.added",
+                    {**coordinates, "part": empty_part},
+                ))
+                if text:
+                    events.append(_responses_sse_event(
+                        "response.output_text.delta",
+                        {**coordinates, "delta": text},
+                    ))
+                events.append(_responses_sse_event(
+                    "response.output_text.done",
+                    {**coordinates, "text": text},
+                ))
+                events.append(_responses_sse_event(
+                    "response.content_part.done",
+                    {**coordinates, "part": part},
+                ))
+            events.append(_responses_sse_event(
+                "response.output_item.done",
+                {"output_index": output_index, "item": item},
+            ))
+        elif item_type == "function_call":
+            arguments = str(item.get("arguments") or "{}")
+            added_item = {**item, "status": "in_progress", "arguments": ""}
+            coordinates = {
+                "item_id": str(item.get("id") or ""),
+                "output_index": output_index,
+            }
+            events.append(_responses_sse_event(
+                "response.output_item.added",
+                {"output_index": output_index, "item": added_item},
+            ))
+            if arguments:
+                events.append(_responses_sse_event(
+                    "response.function_call_arguments.delta",
+                    {**coordinates, "delta": arguments},
+                ))
+            events.append(_responses_sse_event(
+                "response.function_call_arguments.done",
+                {**coordinates, "arguments": arguments},
+            ))
+            events.append(_responses_sse_event(
+                "response.output_item.done",
+                {"output_index": output_index, "item": item},
+            ))
+    events.append(_responses_sse_event("response.completed", {"response": payload}))
+    events.append("data: [DONE]\n\n")
+    return events
 
 
 def register_agent_model_gateway_routes(router: APIRouter) -> None:
@@ -199,10 +291,8 @@ def register_agent_model_gateway_routes(router: APIRouter) -> None:
                 return payload
 
             async def stream() -> AsyncIterator[str]:
-                yield "event: response.created\ndata: " + json.dumps({"type": "response.created", "response": {**payload, "status": "in_progress", "output": []}}, ensure_ascii=False) + "\n\n"
-                if text:
-                    yield "event: response.output_text.delta\ndata: " + json.dumps({"type": "response.output_text.delta", "delta": text}, ensure_ascii=False) + "\n\n"
-                yield "event: response.completed\ndata: " + json.dumps({"type": "response.completed", "response": payload}, ensure_ascii=False) + "\n\n"
+                for event in _responses_stream_events(payload):
+                    yield event
 
             return StreamingResponse(stream(), media_type="text/event-stream")
         except ValueError as exc:

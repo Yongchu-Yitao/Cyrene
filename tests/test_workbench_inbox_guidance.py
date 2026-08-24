@@ -1933,11 +1933,6 @@ async def test_interrupt_waits_for_workbench_run_cleanup_before_acknowledging(
         lambda session_id="": calls.append(f"agent:{session_id}") or False,
     )
 
-    def settle(session_id: str):
-        assert done.is_set()
-        calls.append(f"settle:{session_id}")
-
-    monkeypatch.setattr(global_chat_service, "settle_chat_running_status", settle)
     service = GlobalChatApplicationService(
         "",
         bot=None,
@@ -1950,9 +1945,7 @@ async def test_interrupt_waits_for_workbench_run_cleanup_before_acknowledging(
     assert result == {"ok": True, "interrupted": True}
     assert calls == [
         "get:chat_1",
-        "agent:chat_1",
         "manager:chat_1",
-        "settle:chat_1",
     ]
 
 

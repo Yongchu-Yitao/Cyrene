@@ -1254,7 +1254,10 @@ def _build_payload(
                 # empty optional values.  Restore the required wire field here
                 # rather than teaching every agent loop about a
                 # provider-specific protocol requirement.
-                message.setdefault("reasoning_content", "")
+                reasoning_content = message.get("reasoning_content")
+                message["reasoning_content"] = (
+                    "" if reasoning_content is None else str(reasoning_content)
+                )
     payload: dict[str, Any] = {
         "model": model,
         "messages": prepared_messages,

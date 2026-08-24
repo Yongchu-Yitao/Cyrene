@@ -78,6 +78,12 @@ from cyrene.workbench.inbox import current_workbench_inbox
 
 logger = logging.getLogger(__name__)
 
+_MAX_MISSING_CONTROL_REPAIRS = 1
+
+
+class AgentControlProtocolError(RuntimeError):
+    """Raised when the model cannot produce a control signal or usable reply."""
+
 
 async def _call_phase1_llm(
     messages: list[dict[str, Any]],
@@ -368,6 +374,18 @@ def _missing_completion_signal_entry(round_id: str) -> dict[str, Any]:
         "hidden_from_ui": True,
         **({"round_id": round_id} if round_id else {}),
     }
+
+
+def _implicit_completion_text(response_obj: dict[str, Any]) -> str:
+    """Return a usable plain-text answer for bounded protocol fallback."""
+    text = assistant_text(response_obj).strip()
+    if (
+        not text
+        or _is_placeholder_reply(text)
+        or _contains_visible_dsml_tool_markup(text)
+    ):
+        return ""
+    return text
 
 
 def _attach_final_usage(entry: dict[str, Any]) -> dict[str, Any]:
@@ -798,7 +816,25 @@ async def _run_main_agent_impl(
         context_messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> dict[str, Any]:
+        repairs = 0
         while not (response_obj.get("tool_calls") or []):
+            if repairs >= _MAX_MISSING_CONTROL_REPAIRS:
+                if _implicit_completion_text(response_obj):
+                    logger.warning(
+                        "Phase 1 accepted a plain-text reply after %s missing-control repair(s)",
+                        repairs,
+                    )
+                    return {
+                        **response_obj,
+                        "tool_calls": [{
+                            "id": f"implicit_quit_{uuid4().hex}",
+                            "function": {"name": "quit", "arguments": "{}"},
+                        }],
+                        "implicit_completion": True,
+                    }
+                raise AgentControlProtocolError(
+                    "Model repeatedly returned neither a control signal nor a usable answer."
+                )
             incomplete_entry = _assistant_entry_from_response(
                 response_obj,
                 round_id,
@@ -815,6 +851,7 @@ async def _run_main_agent_impl(
                     tools=tools,
                 ),
             )
+            repairs += 1
         return response_obj
 
     async def _ensure_text_reply(
@@ -1250,6 +1287,7 @@ async def _run_main_agent_impl(
                         phase2_tool_entry["round_id"] = round_id
                     messages.append(phase2_tool_entry)
 
+            missing_control_repairs = 0
             while True:
                 if promoted_phase1_response is not None:
                     response = promoted_phase1_response
@@ -1265,8 +1303,11 @@ async def _run_main_agent_impl(
                         ),
                     )
                     entry = {"role": "assistant", "content": response.get("content") or ""}
-                    if response.get("reasoning_content"):
-                        entry["reasoning_content"] = response["reasoning_content"]
+                    if (
+                        "reasoning_content" in response
+                        and response["reasoning_content"] is not None
+                    ):
+                        entry["reasoning_content"] = str(response["reasoning_content"])
                     if response.get("tool_calls"):
                         entry["tool_calls"] = response["tool_calls"]
                     if response.get("usage"):
@@ -1281,9 +1322,61 @@ async def _run_main_agent_impl(
                 # it with sibling calls, none of those siblings may execute.
                 done_via_quit = "quit" in tool_names
                 if not tcs:
-                    entry["hidden_from_ui"] = True
-                    messages.append(_missing_completion_signal_entry(round_id))
-                    continue
+                    if missing_control_repairs < _MAX_MISSING_CONTROL_REPAIRS:
+                        missing_control_repairs += 1
+                        entry["hidden_from_ui"] = True
+                        messages.append(_missing_completion_signal_entry(round_id))
+                        continue
+
+                    final_text = _implicit_completion_text(response)
+                    if not final_text:
+                        raise AgentControlProtocolError(
+                            "Model repeatedly returned neither a control signal nor a usable answer."
+                        )
+                    logger.warning(
+                        "Phase 2 accepted a plain-text reply after %s missing-control repair(s)",
+                        missing_control_repairs,
+                    )
+                    if runtime_inbox is not None:
+                        await runtime_inbox.wait_for_active_tools()
+                    entry["content"] = final_text
+                    if client_request_id:
+                        entry["client_request_id"] = client_request_id
+                    await _publish_runtime_event({
+                        "type": "phase_transition",
+                        "from": "execution",
+                        "to": "done",
+                        "detail": "Agent completed after bounded protocol repair",
+                    })
+                    if _streaming_reply_requested():
+                        await _emit_reply_stream_event({"type": "reply_start"})
+                        await _emit_reply_stream_event({
+                            "type": "reply_delta",
+                            "delta": final_text,
+                        })
+                        await _emit_reply_stream_event({
+                            "type": "reply_done",
+                            "response": final_text,
+                        })
+
+                    # Preserve the same atomic guidance boundary as an explicit
+                    # quit: guidance that arrived during the repair starts a
+                    # continuation instead of being lost behind this fallback.
+                    late_guidance = (
+                        await runtime_inbox.collect_guidance_or_seal()
+                        if runtime_inbox is not None
+                        else []
+                    )
+                    if late_guidance:
+                        entry["intermediate_reply"] = True
+                        await _inject_runtime_guidance(messages, late_guidance)
+                        await _save(_session_messages_to_save(messages))
+                        missing_control_repairs = 0
+                        continue
+                    await _save(_session_messages_to_save(messages))
+                    final_saved = True
+                    return final_text
+                missing_control_repairs = 0
                 if done_via_quit:
                     if runtime_inbox is not None:
                         await runtime_inbox.wait_for_active_tools()

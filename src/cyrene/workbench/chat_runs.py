@@ -95,6 +95,7 @@ _REPLY_EVENT_PREFIX = "reply_"
 # A runner is the per-send coroutine supplied by the route layer. It runs the
 # agent, finalizes, and publishes terminal events via ``run.publish``.
 Runner = Callable[["ChatRun"], Awaitable[None]]
+Settler = Callable[["ChatRun"], Awaitable[None]]
 
 
 def _ndjson_line(payload: dict[str, Any]) -> str:
@@ -490,6 +491,7 @@ class ChatRun:
         #   {"kind": "awaiting", "pending": {...}} — paused for an answer
         #   {"kind": "error", "exc": Exception}    — run failed
         self.outcome: dict[str, Any] | None = None
+        self.settler: Settler | None = None
 
     @classmethod
     def restore(
@@ -532,6 +534,7 @@ class ChatRun:
         run.status = str(status)
         run.termination_reason = str(termination_reason)
         run.outcome = {"kind": str(outcome_kind)} if outcome_kind else None
+        run.settler = None
         return run
 
     async def configure_event_store(self, store: ChatRunEventStore) -> None:
@@ -735,10 +738,8 @@ class ChatRunManager:
             run.chat_id,
             reason=run.termination_reason,
         )
-        if not interrupted and run.task is not None and not run.task.done():
-            # Defensive compatibility for a run created by an older manager
-            # before the shared coordinator was configured.
-            run.task.cancel()
+        if not interrupted:
+            raise RuntimeError(f"conversation run lost ownership: {run.chat_id}")
         try:
             asyncio.create_task(run.publish({"type": "interrupted", "chatId": run.chat_id}))
         except RuntimeError:
@@ -815,6 +816,7 @@ class ChatRunManager:
         runner: Runner,
         *,
         stream: bool = True,
+        settler: Settler | None = None,
     ) -> tuple[ChatRun, bool]:
         """Start a background run for ``chat_id``, or return the live one.
 
@@ -829,6 +831,11 @@ class ChatRunManager:
         the agent emits ``reply_*`` / ``intermediate_message`` events into the
         buffer. Non-streaming callers pass ``False`` to preserve the legacy
         single-shot reply behavior; they read :attr:`ChatRun.outcome` instead.
+
+        ``settler`` runs after the manager has persisted the terminal outcome
+        and before :attr:`ChatRun.done` is exposed. Route-specific projections
+        can therefore publish one final state without owning task lifecycle or
+        duplicating run-outcome persistence.
         """
         chat_id = str(chat_id)
         existing = self.get(chat_id)
@@ -838,6 +845,7 @@ class ChatRunManager:
         # Do not open SQLite while handling the HTTP request.  The driver
         # attaches storage from a worker thread before invoking the runner.
         run = ChatRun(chat_id, ack_event, max_buffer=self._max_buffer, db_path="")
+        run.settler = settler
         lease = self._coordinator.try_acquire(
             "conversation",
             chat_id,
@@ -997,6 +1005,14 @@ class ChatRunManager:
                         "%d event(s) not persisted (in-memory only, lost on restart)",
                         run.run_id,
                         len(run._event_store_pending),
+                    )
+            if run.settler is not None:
+                try:
+                    await run.settler(run)
+                except Exception:
+                    logger.exception(
+                        "Failed to publish terminal chat state for %s",
+                        run.chat_id,
                     )
             await persistence_span.finish()
             await run_span.finish(status=run.status)

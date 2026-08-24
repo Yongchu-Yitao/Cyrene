@@ -1197,6 +1197,7 @@ def test_workbench_chat_answer_resumes_in_conversation_workspace(
     client, search_env, monkeypatch,
 ):
     from cyrene.workbench import runtime as routes_mod
+    from route.workbench.chat_routes import run_answer_routes
 
     chats_path = search_env["data_dir"] / "workbench_chats.json"
     chats = json.loads(chats_path.read_text(encoding="utf-8"))
@@ -1213,6 +1214,19 @@ def test_workbench_chat_answer_resumes_in_conversation_workspace(
     }
     chats_path.write_text(json.dumps(chats), encoding="utf-8")
     captured = {}
+    published = []
+
+    async def capture_chat_changed(chat_id, project_id, change, **details):
+        durable = json.loads(chats_path.read_text(encoding="utf-8"))["chats"][0]
+        published.append({
+            "chat_id": chat_id,
+            "project_id": project_id,
+            "change": change,
+            "details": details,
+            "durable_pending": durable.get("pendingQuestion"),
+        })
+
+    monkeypatch.setattr(run_answer_routes, "publish_chat_changed", capture_chat_changed)
 
     async def fake_answer_pending(
         session_id, question_id, answer_text, workspace_dir, **_kwargs,
@@ -1245,10 +1259,19 @@ def test_workbench_chat_answer_resumes_in_conversation_workspace(
     assert payload["runId"] == stored_chat["lastRun"]["id"]
     assert payload["chatSummary"]["id"] == "chat_1"
     assert payload["chatSummary"]["runStatus"] == "completed"
+    submitted = next(event for event in published if event["change"] == "answer_submitted")
+    assert submitted["details"]["chatSummary"]["pendingQuestion"] is None
+    assert submitted["details"]["userMessage"]["answerToQuestionId"] == "question_1"
+    # Keep the durable prompt recoverable until the resumed run settles; only
+    # the realtime summary should clear it optimistically.
+    assert submitted["durable_pending"] == {"id": "question_1"}
+    settled = next(event for event in published if event["change"] == "settled")
+    assert settled["details"]["run_id"] == payload["runId"]
+    assert settled["details"]["chatSummary"]["lastRun"]["id"] == payload["runId"]
     assert [message["content"] for message in stored_chat["messages"][-2:]] == ["continue", "continued"]
     assert stored_chat["messages"][-2]["answerToQuestionId"] == "question_1"
     assert "pendingQuestion" not in stored_chat
-    assert stored_chat["lastRun"]["id"].startswith("resume_")
+    assert stored_chat["lastRun"]["id"].startswith("run_")
     assert stored_chat["lastRun"]["outcome"] == "reply"
 
     listed = client.get("/api/workbench/chats?project=project_1").json()["chats"][0]
@@ -1287,6 +1310,76 @@ async def test_cancelled_workbench_chat_answer_consumes_question_and_records_int
     stored = json.loads(chats_path.read_text(encoding="utf-8"))["chats"][0]
     assert result["runId"] == stored["lastRun"]["id"]
     assert "pendingQuestion" not in stored
+    assert stored["lastRun"]["status"] == "cancelled"
+    assert stored["lastRun"]["terminationReason"] == "user_interrupted"
+    assert stored["lastRun"]["outcome"] == "interrupted"
+
+
+async def test_workbench_chat_answer_stop_is_owned_and_settled_by_run_manager(
+    search_env, monkeypatch,
+):
+    from cyrene.workbench import global_chat_service
+    from cyrene.workbench.global_chat_service import GlobalChatApplicationService
+    from cyrene.workbench.subagent_messaging_service import SubagentMessagingService
+    from route.workbench.chat_routes.context import ChatRouteContext
+    from route.workbench.chat_routes.run_answer_routes import ChatAnswerController
+
+    chats_path = search_env["data_dir"] / "workbench_chats.json"
+    chats = json.loads(chats_path.read_text(encoding="utf-8"))
+    chats["chats"][0]["pendingQuestion"] = {"id": "question_stop"}
+    chats_path.write_text(json.dumps(chats), encoding="utf-8")
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def blocking_resume(*_args, **_kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(
+        search_env["routes_mod"],
+        "_workbench_answer_pending",
+        blocking_resume,
+    )
+    agent_interrupts: list[str] = []
+    monkeypatch.setattr(
+        global_chat_service.agent,
+        "interrupt_active_run",
+        lambda session_id="": agent_interrupts.append(session_id) or False,
+    )
+
+    controller = ChatAnswerController(
+        ChatRouteContext.create(bot=None, db_path=search_env["db_path"])
+    )
+    answer_task = asyncio.create_task(controller.answer(
+        "chat_1",
+        {"question_id": "question_stop", "answer": "继续"},
+    ))
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    service = GlobalChatApplicationService(
+        search_env["db_path"],
+        bot=None,
+        subagents=SubagentMessagingService(None, search_env["db_path"]),
+        reset_agent_lottery=lambda: None,
+    )
+    stopped = await service.interrupt("chat_1")
+    result = await asyncio.wait_for(answer_task, timeout=1)
+
+    assert stopped == {"ok": True, "interrupted": True}
+    assert result["interrupted"] is True
+    assert cancelled.is_set()
+    # A manager-owned continuation has one cancellation owner. The global
+    # endpoint must not race it with a second agent-level interrupt.
+    assert agent_interrupts == []
+    stored = json.loads(chats_path.read_text(encoding="utf-8"))["chats"][0]
+    assert stored["status"] == "idle"
+    assert "pendingQuestion" not in stored
+    assert stored["lastRun"]["id"] == result["runId"]
     assert stored["lastRun"]["status"] == "cancelled"
     assert stored["lastRun"]["terminationReason"] == "user_interrupted"
     assert stored["lastRun"]["outcome"] == "interrupted"
@@ -1406,13 +1499,14 @@ def test_workbench_chat_answer_can_stream_continuation_events(
         if line.strip()
     ]
     assert [event["type"] for event in events] == [
+        "ack",
         "tool_call_started",
         "reply_start",
         "reply_delta",
         "reply_done",
-        "reply_done",
+        "workspace_changes",
         "saved",
     ]
-    assert events[-2]["response"] == "继续完成"
+    assert events[4]["response"] == "继续完成"
     assert events[-1]["chatSummary"]["id"] == "chat_1"
     assert events[-1]["chatSummary"]["runStatus"] == "completed"

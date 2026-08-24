@@ -5,7 +5,8 @@ time, but the adapter package does not bundle it. The recommended-agent
 catalog declares the runtime as a pinned ``dependency``; installs stage both
 packages into the same prefix and the ACP process manager prepends the
 installed ``node_modules/.bin`` (plus the managed Node bin dir) to the child
-PATH so the adapter can resolve ``pi`` without a global npm/PATH install.
+PATH. Managed executables are preferred, while globally installed components
+on the user's PATH remain valid fallbacks.
 
 Covers the catalog declaration, the npm install command composition and
 idempotency short-circuit in ``_install_recommended_agent``, the dependency
@@ -272,6 +273,62 @@ def test_agent_child_path_dirs_skips_missing_install_dir(monkeypatch, tmp_path):
     assert process_manager.agent_child_path_dirs(install) == []
     # No managed_path at all (binary distributions) yields no extra dirs.
     assert process_manager.agent_child_path_dirs(_installation()) == []
+
+
+def test_validation_accepts_global_agent_and_dependency_fallback(monkeypatch, tmp_path):
+    from cyrene.agent_runtime import process_manager
+
+    monkeypatch.setattr(process_manager, "_managed_runtime_bin_dir", lambda: None)
+    global_bin = tmp_path / "global-bin"
+    global_bin.mkdir()
+    for name in ("pi-acp", "pi"):
+        executable = global_bin / name
+        executable.write_bytes(b"#!/bin/sh\n")
+        executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(global_bin))
+
+    missing_managed = tmp_path / "gone" / "node_modules" / ".bin" / "pi-acp"
+    AcpProcessManager().validate_installation(
+        _installation(managed_path=str(missing_managed))
+    )
+    # The same policy applies to a fully system-provided Agent record.
+    AcpProcessManager().validate_installation(_installation())
+
+
+def test_validation_rejects_component_missing_from_managed_and_global_path(monkeypatch, tmp_path):
+    from cyrene.agent_runtime import process_manager
+    from cyrene.agent_runtime.errors import AgentRuntimeError
+
+    monkeypatch.setattr(process_manager, "_managed_runtime_bin_dir", lambda: None)
+    shim_dir = tmp_path / "agents" / "pi-acp" / "node_modules" / ".bin"
+    shim_dir.mkdir(parents=True)
+    adapter = shim_dir / "pi-acp"
+    adapter.write_bytes(b"#!/bin/sh\n")
+    adapter.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+
+    with pytest.raises(AgentRuntimeError) as excinfo:
+        AcpProcessManager().validate_installation(
+            _installation(managed_path=str(adapter))
+        )
+    assert excinfo.value.kind == "dependency_missing"
+    assert excinfo.value.detail["dependency"] == "pi"
+
+
+def test_agent_install_completeness_accepts_global_dependency(monkeypatch, tmp_path):
+    from cyrene.extensions import service as service_module
+
+    monkeypatch.setattr(service_module, "_AGENT_DIR", tmp_path / "agents")
+    install_bin = tmp_path / "agents" / "pi-acp" / "0.0.33" / "node_modules" / ".bin"
+    install_bin.mkdir(parents=True)
+    (install_bin / "pi-acp").write_bytes(b"#!/usr/bin/env node\n")
+    monkeypatch.setattr(
+        service_module.shutil,
+        "which",
+        lambda name: "/global/bin/pi" if name == "pi" else None,
+    )
+
+    assert _service()._agent_install_complete("pi-acp", "0.0.33") is True
 
 
 class _CapturingTransport:

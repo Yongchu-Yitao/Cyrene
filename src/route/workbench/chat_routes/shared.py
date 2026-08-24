@@ -12,7 +12,6 @@ from cyrene.workbench.chat_service import ChatService
 
 logger = logging.getLogger(__name__)
 
-_DETACHED_ANSWER_TASKS: set[asyncio.Task[Any]] = set()
 _SESSION_TITLE_TASKS: set[asyncio.Task[Any]] = set()
 
 
@@ -30,10 +29,6 @@ def finish_detached_done(
         return
     if exc is not None:
         logger.error("%s", error_context, exc_info=exc)
-
-
-def finish_detached_answer_task(task: asyncio.Task[Any]) -> None:
-    finish_detached_done(_DETACHED_ANSWER_TASKS, "Detached answer task failed", task)
 
 
 def track_session_title_task(task: asyncio.Task[Any]) -> None:
@@ -198,8 +193,6 @@ def schedule_workspace_changes_finalize(
 
 
 __all__ = [
-    "_DETACHED_ANSWER_TASKS",
-    "finish_detached_answer_task",
     "schedule_reply_bookkeeping",
     "schedule_structured_memory_capture",
     "schedule_workspace_changes_finalize",
