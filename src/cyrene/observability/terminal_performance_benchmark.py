@@ -29,6 +29,7 @@ from typing import Any
 
 
 WORKLOADS = ("plain", "ansi", "tui")
+_PROCESS_EXIT_TIMEOUT_SECONDS = 120 if sys.platform == "win32" else 30
 _CHILD_PROGRAM = r"""
 import os
 import sys
@@ -201,7 +202,9 @@ def _process_write_bytes() -> int:
 
 
 async def _wait_for_exit(manager: Any, terminal_id: str) -> None:
-    async with asyncio.timeout(30):
+    # ConPTY can keep draining a sustained multi-megabyte stream after the
+    # child has finished writing, especially on emulated ARM64 CI runners.
+    async with asyncio.timeout(_PROCESS_EXIT_TIMEOUT_SECONDS):
         while manager.get(terminal_id).status not in {"exited", "closed"}:
             await asyncio.sleep(0.005)
 
