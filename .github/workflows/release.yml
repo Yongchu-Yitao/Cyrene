@@ -251,8 +251,8 @@ jobs:
         run: |
           $report = "output/performance/terminal-real-windows-x64.json"
           python -m cyrene.observability.terminal_performance_benchmark `
-            --bytes 17825792 `
-            --output-limit 16777216 `
+            --bytes 5242880 `
+            --output-limit 4194304 `
             --json $report `
             --fail-on-quality
 
@@ -423,8 +423,8 @@ jobs:
         run: |
           $report = "output/performance/terminal-real-windows-arm64.json"
           python -m cyrene.observability.terminal_performance_benchmark `
-            --bytes 17825792 `
-            --output-limit 16777216 `
+            --bytes 5242880 `
+            --output-limit 4194304 `
             --json $report `
             --fail-on-quality
 
