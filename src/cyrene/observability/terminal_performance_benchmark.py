@@ -230,7 +230,6 @@ async def _heartbeat(
 
 async def _websocket_relay(
     manager: Any, terminal_id: str, gate: Path, release: Path,
-    source_frames: _SourceFrameValidator,
 ) -> tuple[list[float], int, int, int]:
     from websockets.asyncio.client import connect
     from websockets.asyncio.server import serve
@@ -241,6 +240,7 @@ async def _websocket_relay(
     sequence_errors = 0
     expected_seq = 0
     latencies_ms: list[float] = []
+    relayed_frames = _SourceFrameValidator()
 
     async def handler(websocket: Any) -> None:
         queue = manager.subscribe(terminal_id)
@@ -270,11 +270,12 @@ async def _websocket_relay(
                         sequence_errors += 1
                     expected_seq = int(event["nextSeq"])
                     received_bytes += int(event["nextSeq"]) - int(event["seq"])
+                    relayed_frames.feed(base64.b64decode(event["data"]))
                     created_at = datetime.fromisoformat(str(event["createdAt"]))
                     latencies_ms.append(
                         max(0.0, (received_at - created_at.timestamp()) * 1000)
                     )
-                    if source_frames.complete:
+                    if relayed_frames.complete:
                         release.touch()
                 elif event.get("type") == "resync_required":
                     resyncs += 1
@@ -343,7 +344,7 @@ async def _run_case(
                 websocket_latencies, websocket_bytes, resyncs,
                 websocket_sequence_errors,
             ) = await _websocket_relay(
-                manager, terminal_id, gate, release, source_frames
+                manager, terminal_id, gate, release
             )
         else:
             gate.touch()
