@@ -56,7 +56,6 @@ from cyrene.agent.prompts import (
     PHASE1_DECISION_PROMPT,
     prompt_for_enabled_tool_packs,
 )
-_PHASE1_DECISION_PROMPT = PHASE1_DECISION_PROMPT
 from cyrene.agent.model_service import take_final_reply_usage
 from cyrene.agent.session import (
     _append_session_message,
@@ -103,6 +102,8 @@ from cyrene.tooling import (
 from cyrene.tooling.mcp_content import build_mcp_observation_message
 from cyrene.tooling.result_store import project_tool_result_for_model
 from cyrene.workbench.inbox import current_workbench_inbox
+
+_PHASE1_DECISION_PROMPT = PHASE1_DECISION_PROMPT
 
 logger = logging.getLogger(__name__)
 
