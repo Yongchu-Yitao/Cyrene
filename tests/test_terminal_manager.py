@@ -7,7 +7,48 @@ from pathlib import Path
 
 import pytest
 
-from cyrene.terminal.manager import TerminalManager
+from cyrene.terminal.manager import TerminalManager, TerminalSession
+
+
+@pytest.mark.asyncio
+async def test_windows_reader_drains_buffered_output_after_process_exit() -> None:
+    class FinishedWinPty:
+        def __init__(self) -> None:
+            self.chunks = iter(("first", "-tail"))
+
+        def isalive(self) -> bool:
+            return False
+
+        def read(self, _size: int) -> str:
+            try:
+                return next(self.chunks)
+            except StopIteration as exc:
+                raise EOFError from exc
+
+        def wait(self) -> int:
+            return 0
+
+    manager = TerminalManager()
+    session = TerminalSession(
+        id="windows-drain",
+        project_id="project-1",
+        title="Windows drain",
+        cwd=".",
+        shell="python",
+        argv=[],
+        created_at="2026-08-25T00:00:00+00:00",
+        updated_at="2026-08-25T00:00:00+00:00",
+        status="running",
+        winpty=FinishedWinPty(),
+    )
+    manager._sessions[session.id] = session
+    try:
+        await manager._read_windows(session.id)
+        assert b"".join(chunk.data for chunk in session.output) == b"first-tail"
+        assert session.status == "exited"
+        assert session.exit_code == 0
+    finally:
+        manager.close_store()
 
 
 @pytest.mark.asyncio

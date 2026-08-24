@@ -3141,7 +3141,7 @@ class TerminalManager:
         if not session or session.winpty is None:
             return
         try:
-            while session.winpty.isalive():
+            while True:
                 await self._wait_for_persistence_capacity()
                 try:
                     text = await asyncio.to_thread(session.winpty.read, 4096)
@@ -3149,6 +3149,10 @@ class TerminalManager:
                     break
                 if text:
                     self._append_output(session, str(text).encode("utf-8", errors="replace"))
+                    continue
+                if not session.winpty.isalive():
+                    break
+                await asyncio.sleep(0)
             exit_code = await asyncio.to_thread(session.winpty.wait)
         except asyncio.CancelledError:
             raise
