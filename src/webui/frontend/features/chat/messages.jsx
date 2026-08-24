@@ -1172,6 +1172,28 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
     WbcVoice.speak(msg.content, messageVoiceKey);
   }
   var messageSpeaking = voiceSnapshot.activeKey === messageVoiceKey;
+  // Some compact conversation surfaces (split chat, side agents, quick views)
+  // reuse this component directly instead of going through the primary
+  // timeline renderer. Keep the activity-card compatibility boundary here as
+  // well, otherwise a durable reasoning/tool record with empty `content`
+  // degrades into a footer-only assistant row on those surfaces.
+  var activityView = wbcActivityMessageView(msg);
+  if (activityView) {
+    if (!activityView.visible) return null;
+    return (
+      <WbcLiveActivityCard
+        activity={activityView.activity}
+        active={activityView.active}
+        hasReplyText={activityView.hasReplyText}
+        live={activityView.live}
+      />
+    );
+  }
+  if (
+    !String(msg && msg.content || "").trim()
+    && !(Array.isArray(msg && msg.attachments) && msg.attachments.length)
+    && !referenceAttachments.length
+  ) return null;
   return (
     <div className="wbc-msg assistant">
       {msg.trace && msg.trace.length > 0 && <WbcTraceCard trace={msg.trace} />}

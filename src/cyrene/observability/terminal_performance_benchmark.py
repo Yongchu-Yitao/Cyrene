@@ -30,6 +30,7 @@ from typing import Any
 
 WORKLOADS = ("plain", "ansi", "tui")
 _PROCESS_EXIT_TIMEOUT_SECONDS = 120 if sys.platform == "win32" else 30
+_INPUT_LINE_ENDING = b"\r" if sys.platform == "win32" else b"\n"
 _CHILD_PROGRAM = r"""
 import os
 import sys
@@ -540,7 +541,7 @@ async def _run_fairness_case(
                 sent_at = time.perf_counter()
                 await websocket.send(json.dumps({
                     "type": "input",
-                    "data": base64.b64encode(b"latency-probe\n").decode("ascii"),
+                    "data": base64.b64encode(b"latency-probe" + _INPUT_LINE_ENDING).decode("ascii"),
                 }))
                 async with asyncio.timeout(30):
                     async for raw in websocket:
@@ -565,7 +566,7 @@ async def _run_fairness_case(
                             noisy_release.touch()
                             await websocket.send(json.dumps({
                                 "type": "input",
-                                "data": base64.b64encode(b"quit\n").decode("ascii"),
+                                "data": base64.b64encode(b"quit" + _INPUT_LINE_ENDING).decode("ascii"),
                             }))
                             break
         await _wait_for_exit(manager, noisy_id)

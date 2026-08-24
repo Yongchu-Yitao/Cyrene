@@ -7943,6 +7943,12 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert "if (wbcIsActivityMessage(msg))" in chat
     assert 'if (String(message.content || "").trim()) return false;' in chat
     assert 'if (reasoning || trace.length > 0) return true;' in chat
+    assistant_message = chat.split("function WbcAssistantMessage", 1)[1].split(
+        "var WBC_HEARTBEAT_STALL_MS", 1
+    )[0]
+    assert "var activityView = wbcActivityMessageView(msg);" in assistant_message
+    assert "activity={activityView.activity}" in assistant_message
+    assert "if (!activityView.visible) return null;" in assistant_message
     history_renderer = chat.split("function wbcRenderHistoryMessage", 1)[1].split(
         "function WbcConversationTimeline", 1
     )[0]
