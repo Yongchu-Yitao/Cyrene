@@ -3148,25 +3148,31 @@ class TerminalManager:
         if not session or session.winpty is None:
             return
         try:
-            loop = asyncio.get_running_loop()
-            drain_idle_deadline: float | None = None
-            while True:
+            reached_eof = False
+            while session.winpty.isalive():
                 await self._wait_for_persistence_capacity()
-                if not session.winpty.isalive() and drain_idle_deadline is None:
-                    drain_idle_deadline = (
-                        loop.time() + WINDOWS_POST_EXIT_DRAIN_IDLE_SECONDS
+                try:
+                    text = await asyncio.to_thread(session.winpty.read, 4096)
+                except EOFError:
+                    reached_eof = True
+                    break
+                if text:
+                    self._append_output(
+                        session, str(text).encode("utf-8", errors="replace")
                     )
+
+            loop = asyncio.get_running_loop()
+            drain_idle_deadline = (
+                loop.time() + WINDOWS_POST_EXIT_DRAIN_IDLE_SECONDS
+            )
+            while not reached_eof and loop.time() < drain_idle_deadline:
+                await self._wait_for_persistence_capacity()
                 ready = await asyncio.to_thread(
                     _winpty_output_ready,
                     session.winpty,
                     WINDOWS_POST_EXIT_DRAIN_POLL_SECONDS,
                 )
                 if not ready:
-                    if (
-                        drain_idle_deadline is not None
-                        and loop.time() >= drain_idle_deadline
-                    ):
-                        break
                     continue
                 try:
                     text = await asyncio.to_thread(session.winpty.read, 4096)
@@ -3174,11 +3180,9 @@ class TerminalManager:
                     break
                 if text:
                     self._append_output(session, str(text).encode("utf-8", errors="replace"))
-                    if drain_idle_deadline is not None:
-                        drain_idle_deadline = (
-                            loop.time() + WINDOWS_POST_EXIT_DRAIN_IDLE_SECONDS
-                        )
-                    continue
+                    drain_idle_deadline = (
+                        loop.time() + WINDOWS_POST_EXIT_DRAIN_IDLE_SECONDS
+                    )
             exit_code = await asyncio.to_thread(session.winpty.wait)
         except asyncio.CancelledError:
             raise
