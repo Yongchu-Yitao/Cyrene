@@ -65,6 +65,8 @@ stream.write(b"__CYRENE_BENCHMARK_COMPLETE__")
 stream.flush()
 while release and not os.path.exists(release):
     time.sleep(0.001)
+stream.write(b"__CYRENE_BENCHMARK_RELEASED__")
+stream.flush()
 """
 
 _INTERACTIVE_CHILD_PROGRAM = r"""
