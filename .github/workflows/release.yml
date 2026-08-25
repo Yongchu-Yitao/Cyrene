@@ -615,7 +615,7 @@ jobs:
           test "$version" = "$changelog_version"
 
           git fetch --deepen=20 origin main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD
 
           ci_runs="$(
             gh api --method GET \
