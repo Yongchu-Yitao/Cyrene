@@ -47,9 +47,12 @@ def test_windows_release_installs_required_native_runtime_packages():
     assert "Install native ARM64 VC runtime" in arm_job
     assert "vc_redist.arm64.exe" in arm_job
     assert "$PSNativeCommandUseErrorActionPreference = $true" in arm_job
-    assert 'platforms:' in workflow
-    assert 'inputs.platforms != \'windows\'' in workflow
-    assert workflow.count("inputs.platforms != 'windows'") == 2
+    assert "platforms:" in workflow
+    assert "- windows-x64" in workflow
+    assert "- windows-arm64" in workflow
+    assert workflow.count("inputs.platforms == '' || inputs.platforms == 'all'") == 2
+    assert "inputs.platforms != 'windows-arm64'" in workflow
+    assert workflow.count("inputs.platforms != 'windows-x64'") == 2
 
     build = (ROOT / "build" / "build.py").read_text(encoding="utf-8")
     assert 'os.environ["CYRENE_WOA_NATIVE_CORE"] = "1"' in build
