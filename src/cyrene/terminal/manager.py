@@ -50,6 +50,40 @@ WINDOWS_PTY_READ_FAILURE_LIMIT = 20
 SCROLLBACK_SEGMENT_SIZE = 4 * 1024 * 1024
 SSH_RECONNECT_DELAYS = (1.0, 2.0, 5.0, 10.0, 30.0)
 _DEFAULT_TITLE_RE = re.compile(r"^Terminal\s+(\d+)$", re.IGNORECASE)
+_WINDOWS_CONSOLE_LOCK = threading.Lock()
+_WINDOWS_CONSOLE_READY = False
+
+
+def _ensure_windows_console_for_conpty() -> None:
+    """Attach one hidden console before winpty-rs initializes ConPTY.
+
+    winpty-rs 1.0.6 allocates and immediately hides a console for every
+    detached GUI process, but incorrectly unwraps ShowWindow's zero return
+    value. Zero is a valid "previously hidden" result and panics the native
+    extension with a stale Windows error. Owning one process-level console
+    makes its AllocConsole call take the safe already-attached path and also
+    avoids repeatedly creating and freeing console state between terminals.
+    """
+    global _WINDOWS_CONSOLE_READY
+    if sys.platform != "win32" or _WINDOWS_CONSOLE_READY:
+        return
+    with _WINDOWS_CONSOLE_LOCK:
+        if _WINDOWS_CONSOLE_READY:
+            return
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        kernel32.AllocConsole.restype = wintypes.BOOL
+        kernel32.GetConsoleWindow.restype = wintypes.HWND
+        user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.ShowWindow.restype = wintypes.BOOL
+        if kernel32.AllocConsole():
+            window = kernel32.GetConsoleWindow()
+            if window:
+                user32.ShowWindow(window, 0)
+        _WINDOWS_CONSOLE_READY = True
 
 
 class _WindowsPtyProcess:
@@ -91,6 +125,7 @@ def _spawn_winpty_process(
     env: dict[str, str],
     dimensions: tuple[int, int],
 ) -> _WindowsPtyProcess:
+    _ensure_windows_console_for_conpty()
     from winpty import PTY
 
     if not isinstance(argv, (list, tuple)) or not argv:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ctypes
 import sys
 from pathlib import Path
 
@@ -11,9 +12,54 @@ from cyrene.terminal.manager import (
     TerminalManager,
     TerminalSession,
     _WindowsPtyProcess,
+    _ensure_windows_console_for_conpty,
     _terminate_winpty_process,
     _write_winpty_input,
 )
+
+
+def test_windows_conpty_uses_one_hidden_process_console(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import cyrene.terminal.manager as manager_module
+
+    calls: list[tuple[str, object]] = []
+
+    class NativeCall:
+        def __init__(self, name: str, result: object) -> None:
+            self.name = name
+            self.result = result
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *args: object) -> object:
+            calls.append((self.name, args))
+            return self.result
+
+    class Kernel32:
+        AllocConsole = NativeCall("AllocConsole", 1)
+        GetConsoleWindow = NativeCall("GetConsoleWindow", 2468)
+
+    class User32:
+        ShowWindow = NativeCall("ShowWindow", 0)
+
+    monkeypatch.setattr(manager_module.sys, "platform", "win32")
+    monkeypatch.setattr(manager_module, "_WINDOWS_CONSOLE_READY", False)
+    monkeypatch.setattr(
+        ctypes,
+        "WinDLL",
+        lambda name, **_kwargs: Kernel32() if name == "kernel32" else User32(),
+        raising=False,
+    )
+
+    _ensure_windows_console_for_conpty()
+    _ensure_windows_console_for_conpty()
+
+    assert calls == [
+        ("AllocConsole", ()),
+        ("GetConsoleWindow", ()),
+        ("ShowWindow", (2468, 0)),
+    ]
 
 
 def test_windows_process_uses_low_level_background_io() -> None:

@@ -78,7 +78,7 @@ The Chinese edition remains the most detailed record for older releases.
 - When the Agent reads a terminal, it can use detected commands and their matching output instead of repeatedly scanning unrelated parts of a very large scrollback.
 - When a split terminal is already open beside the conversation, the Agent can identify its visible name, position, and connection state. References such as “the current terminal,” “the left terminal,” or “the right terminal” can resolve directly to the matching session, including an SSH terminal that is not bound to the current chat.
 - Installed and portable Electron builds now settle terminal processes more completely during quit, restart, terminal deletion, and session recovery, reducing orphaned processes, stale state, and incorrect recovery on the next launch.
-- Windows terminals now recover from temporary background read interruptions instead of treating a live CMD or PowerShell session as exited. Terminal creation failures also report the actual cause instead of only saying that the connection closed unexpectedly.
+- Windows terminals now recover from temporary background read interruptions instead of treating a live CMD or PowerShell session as exited. Consecutive background terminal creation no longer stops because of invalid system-console state, and genuine creation failures report their actual cause.
 
 ### PowerPoint creation improvements
 
