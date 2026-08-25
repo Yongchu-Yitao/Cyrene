@@ -190,8 +190,9 @@ def test_frozen_terminal_smoke_sends_command_through_daemon_input():
     )[0]
 
     assert 'argv = [command, "/d", "/q", "/k"]' in terminal_smoke
-    assert 'f"echo {marker}\\r\\n"' in terminal_smoke
+    assert 'f"echo {marker}\\rexit\\r"' in terminal_smoke
     assert 'actor="user"' in terminal_smoke
+    assert 'terminals[0].get("status") != "exited"' in terminal_smoke
     assert '"/k", f"echo {marker}"' not in terminal_smoke
 
 

@@ -201,7 +201,7 @@ def _run_terminal_smoke_test() -> None:
             daemon_pid = int(before.get("pid") or 0)
             await client.input(
                 terminal_id,
-                f"echo {marker}\r\n",
+                f"echo {marker}\rexit\r",
                 actor="user",
             )
             deadline = time.monotonic() + 30
@@ -220,15 +220,30 @@ def _run_terminal_smoke_test() -> None:
                 await asyncio.sleep(0.05)
             if marker.encode() not in output:
                 raise RuntimeError("ConPTY output did not reach durable scrollback")
+            # On some headless x64 runners winpty releases the final CMD output
+            # only as the process exits. Confirm the one-shot session reaches a
+            # clean terminal state as well as persisting all of that tail data.
+            exit_deadline = time.monotonic() + 5
             listed = await client.list("release-smoke")
-            after = client._connection_info() or {}
             terminals = list(listed.get("terminals") or [])
+            while (
+                terminals
+                and terminals[0].get("status") == "running"
+                and time.monotonic() < exit_deadline
+            ):
+                await asyncio.sleep(0.05)
+                listed = await client.list("release-smoke")
+                terminals = list(listed.get("terminals") or [])
+            after = client._connection_info() or {}
             if (
                 int(after.get("pid") or 0) != daemon_pid
                 or not terminals
-                or terminals[0].get("status") != "running"
+                or terminals[0].get("status") != "exited"
+                or terminals[0].get("exitCode") != 0
             ):
-                raise RuntimeError("terminal daemon restarted during ConPTY smoke test")
+                raise RuntimeError(
+                    "terminal daemon or one-shot session ended unexpectedly during ConPTY smoke test"
+                )
             print("CYRENE_WINDOWS_TERMINAL_SMOKE=ok")
         except Exception:
             daemon_log = state_dir / "daemon.log"
