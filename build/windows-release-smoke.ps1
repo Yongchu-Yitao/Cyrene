@@ -296,6 +296,7 @@ if ($installedSmoke.Output -notmatch '(?m)^numpy=') {
     throw "Installed frozen backend did not confirm NumPy import"
 }
 
+$env:SHELL = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 $terminalSmoke = Invoke-CapturedProcess `
     -Path $installedBackend `
     -Arguments @("--terminal-smoke-test") `

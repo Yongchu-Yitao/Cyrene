@@ -92,6 +92,17 @@ def resolve_shell(unix_fallback: str = "/bin/sh") -> tuple[str, str]:
     if sys.platform != "win32":
         return "bash", os.environ.get("SHELL") or unix_fallback
 
+    configured = os.environ.get("SHELL", "").strip().strip('"')
+    configured_name = ntpath.basename(configured).lower()
+    if configured_name in {"pwsh", "pwsh.exe", "powershell", "powershell.exe"}:
+        executable = _existing_file(configured) or _which(configured)
+        if executable:
+            return "powershell", executable
+    if configured_name in {"cmd", "cmd.exe"}:
+        executable = _existing_file(configured) or _which(configured)
+        if executable:
+            return "cmd", executable
+
     for candidate in _windows_bash_candidates():
         executable = _existing_file(candidate)
         # Probe each candidate so a broken entry falls through to the next one
