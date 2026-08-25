@@ -7,7 +7,30 @@ from pathlib import Path
 
 import pytest
 
-from cyrene.terminal.manager import TerminalManager, TerminalSession
+from cyrene.terminal.manager import (
+    TerminalManager,
+    TerminalSession,
+    _write_winpty_input,
+)
+
+
+def test_windows_input_bypasses_a_stale_high_level_alive_check() -> None:
+    writes: list[str] = []
+
+    class LowLevelPty:
+        def write(self, text: str) -> None:
+            writes.append(text)
+
+    class WinPty:
+        flag_eof = False
+        pty = LowLevelPty()
+
+        def write(self, _text: str) -> None:
+            raise EOFError("stale alive check")
+
+    _write_winpty_input(WinPty(), "echo ready\r")
+
+    assert writes == ["echo ready\r"]
 
 
 @pytest.mark.asyncio
@@ -51,6 +74,56 @@ async def test_windows_reader_drains_buffered_output_after_process_exit(
     try:
         await manager._read_windows(session.id)
         assert b"".join(chunk.data for chunk in session.output) == b"first-tail"
+        assert session.status == "exited"
+        assert session.exit_code == 0
+    finally:
+        manager.close_store()
+
+
+@pytest.mark.asyncio
+async def test_windows_interactive_reader_waits_for_eof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InteractiveWinPty:
+        def __init__(self) -> None:
+            self.chunks = iter(("prompt",))
+
+        def isalive(self) -> bool:
+            return False
+
+        def read(self, _size: int) -> str:
+            try:
+                return next(self.chunks)
+            except StopIteration as exc:
+                raise EOFError from exc
+
+        def wait(self) -> int:
+            return 0
+
+    manager = TerminalManager()
+    monkeypatch.setattr(
+        "cyrene.terminal.manager._winpty_output_ready",
+        lambda _process, _timeout: (_ for _ in ()).throw(
+            AssertionError("interactive reader must wait for EOF directly")
+        ),
+    )
+    session = TerminalSession(
+        id="windows-interactive",
+        project_id="project-1",
+        title="Windows interactive",
+        cwd=".",
+        shell="powershell",
+        argv=[],
+        created_at="2026-08-25T00:00:00+00:00",
+        updated_at="2026-08-25T00:00:00+00:00",
+        status="running",
+        launch_mode="interactive",
+        winpty=InteractiveWinPty(),
+    )
+    manager._sessions[session.id] = session
+    try:
+        await manager._read_windows(session.id)
+        assert b"".join(chunk.data for chunk in session.output) == b"prompt"
         assert session.status == "exited"
         assert session.exit_code == 0
     finally:

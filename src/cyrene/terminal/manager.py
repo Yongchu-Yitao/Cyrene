@@ -55,6 +55,19 @@ def _winpty_output_ready(process: Any, timeout: float) -> bool:
     return bool(select.select([process.fileobj], [], [], timeout)[0])
 
 
+def _write_winpty_input(process: Any, text: str) -> None:
+    try:
+        process.write(text)
+        return
+    except EOFError as exc:
+        if bool(getattr(process, "flag_eof", False)):
+            raise RuntimeError("terminal is not running") from exc
+    try:
+        process.pty.write(text)
+    except Exception as exc:
+        raise RuntimeError("terminal is not running") from exc
+
+
 _SESSION_UPSERT_SQL = """
     INSERT INTO terminal_sessions (
         id, project_id, title, cwd, shell, argv_json, created_at,
@@ -3149,7 +3162,10 @@ class TerminalManager:
             return
         try:
             reached_eof = False
-            while session.winpty.isalive():
+            while (
+                session.launch_mode == "interactive"
+                or session.winpty.isalive()
+            ):
                 await self._wait_for_persistence_capacity()
                 try:
                     text = await asyncio.to_thread(session.winpty.read, 4096)
@@ -3652,7 +3668,7 @@ class TerminalManager:
                 session.last_user_input_at = now
             if sys.platform == "win32":  # pragma: no cover - Windows only
                 text = encoded.decode("latin-1" if binary else "utf-8", errors="replace")
-                await asyncio.to_thread(session.winpty.write, text)
+                await asyncio.to_thread(_write_winpty_input, session.winpty, text)
             else:
                 if session.master_fd is None:
                     raise RuntimeError("terminal is unavailable")
