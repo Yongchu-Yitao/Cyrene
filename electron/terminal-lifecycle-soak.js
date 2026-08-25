@@ -103,7 +103,7 @@ async function waitForBackendRestart(
   projectId,
   getBackendPid,
   requestBackendJson,
-  timeoutMs = 45000,
+  timeoutMs = 120000,
 ) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
@@ -111,6 +111,11 @@ async function waitForBackendRestart(
     const currentPid = Number(getBackendPid() || 0);
     if (currentPid > 0 && currentPid !== previousPid) {
       try {
+        // A replacement process exists before FastAPI has completed startup,
+        // especially on native Windows ARM64 while terminal state is being
+        // recovered. Require the new backend's health route to be ready before
+        // checking that its terminal API reattaches to the existing daemon.
+        await requestBackendJson('GET', '/api/status');
         const listed = await requestBackendJson(
           'GET',
           `/api/terminals?projectId=${encodeURIComponent(projectId)}`,
