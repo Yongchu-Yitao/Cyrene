@@ -176,10 +176,7 @@ class TerminalDaemon:
                 requested_cursor = request.get("cursor")
                 payload = await self.manager.scrollback_snapshot_async(
                     str(request.get("terminalId") or ""),
-                    cursor=(
-                        int(requested_cursor)
-                        if requested_cursor is not None else None
-                    ),
+                    cursor=int(requested_cursor) if requested_cursor is not None else None,
                     max_bytes=int(request.get("maxBytes") or 64 * 1024),
                 )
             elif action == "historySearch":
