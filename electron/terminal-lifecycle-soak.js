@@ -81,6 +81,23 @@ async function waitForDaemon(userDataDir, timeoutMs = 15000) {
   throw lastError || new Error('Terminal Daemon did not become ready');
 }
 
+async function waitForBackendReady(getBackendPid, requestBackendJson, timeoutMs = 60000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    if (Number(getBackendPid() || 0) > 0) {
+      try {
+        await requestBackendJson('GET', '/api/status');
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw lastError || new Error('Backend did not become ready');
+}
+
 async function waitForBackendRestart(
   previousPid,
   projectId,
@@ -157,6 +174,7 @@ async function runTerminalLifecycleSoak(options) {
   let connection = null;
   let successMessage = '';
   try {
+    await waitForBackendReady(getBackendPid, requestBackendJson);
     const createdProject = await requestBackendJson('POST', '/api/projects', {
       name: 'Windows terminal lifecycle soak',
       workspacePath: workspace,
