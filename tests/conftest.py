@@ -24,8 +24,11 @@ every test so one test can never poison the next.
 """
 
 import asyncio
+import gc
 import importlib
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -412,3 +415,25 @@ def pytest_runtest_call(item):
     pending = {task for task in asyncio.all_tasks(loop) if not task.done()}
     if pending:
         loop.run_until_complete(cancel_and_wait(pending, timeout=5.0))
+
+    # aiosqlite resolves queued operations from a native worker thread.  An
+    # awaited close can therefore finish on the event loop a few instructions
+    # before that worker has consumed its stop sentinel.  Keep the loop alive
+    # until every such worker has exited, so a late completion can never target
+    # the closed per-test loop and get attributed to an unrelated later test.
+    workers = [
+        thread
+        for thread in threading.enumerate()
+        if "(_connection_worker_thread)" in thread.name
+    ]
+    if workers:
+        gc.collect()
+        deadline = time.monotonic() + 5.0
+        while workers and time.monotonic() < deadline:
+            loop.run_until_complete(asyncio.sleep(0))
+            for worker in workers:
+                worker.join(timeout=0.01)
+            workers = [worker for worker in workers if worker.is_alive()]
+        if workers:
+            names = ", ".join(worker.name for worker in workers)
+            raise RuntimeError(f"aiosqlite workers did not stop during test teardown: {names}")
