@@ -10,6 +10,7 @@ import pytest
 from cyrene.terminal.manager import (
     TerminalManager,
     TerminalSession,
+    _terminate_winpty_process,
     _write_winpty_input,
 )
 
@@ -31,6 +32,35 @@ def test_windows_input_bypasses_a_stale_high_level_alive_check() -> None:
     _write_winpty_input(WinPty(), "echo ready\r")
 
     assert writes == ["echo ready\r"]
+
+
+@pytest.mark.asyncio
+async def test_windows_termination_falls_back_to_taskkill_on_permission_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[tuple[object, ...]] = []
+
+    class WinPty:
+        def terminate(self, _force: bool) -> None:
+            raise PermissionError("access denied")
+
+    class Taskkill:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def create_subprocess_exec(
+        *command: object, **_kwargs: object
+    ) -> Taskkill:
+        commands.append(command)
+        return Taskkill()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess_exec)
+
+    await _terminate_winpty_process(WinPty(), 2468)
+
+    assert commands == [("taskkill.exe", "/PID", "2468", "/T", "/F")]
 
 
 @pytest.mark.asyncio

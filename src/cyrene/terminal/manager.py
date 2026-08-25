@@ -17,6 +17,7 @@ import shutil
 import socket
 import sqlite3
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -66,6 +67,38 @@ def _write_winpty_input(process: Any, text: str) -> None:
         process.pty.write(text)
     except Exception as exc:
         raise RuntimeError("terminal is not running") from exc
+
+
+async def _terminate_winpty_process(process: Any, pid: int | None) -> None:
+    termination_error: PermissionError | None = None
+    try:
+        await asyncio.to_thread(process.terminate, True)
+        return
+    except PermissionError as permission_error:
+        if not pid:
+            raise
+        termination_error = permission_error
+    taskkill = await asyncio.create_subprocess_exec(
+        "taskkill.exe",
+        "/PID",
+        str(pid),
+        "/T",
+        "/F",
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    _stdout, stderr = await taskkill.communicate()
+    if taskkill.returncode == 0:
+        return
+    try:
+        alive = await asyncio.to_thread(process.isalive)
+    except Exception:
+        alive = False
+    if alive:
+        detail = stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"could not terminate Windows terminal process {pid}: {detail}"
+        ) from termination_error
 
 
 _SESSION_UPSERT_SQL = """
@@ -3835,7 +3868,7 @@ class TerminalManager:
         if session.status == "running":
             if sys.platform == "win32":  # pragma: no cover - Windows only
                 if session.winpty is not None:
-                    await asyncio.to_thread(session.winpty.terminate, True)
+                    await _terminate_winpty_process(session.winpty, session.pid)
             elif session.pid:
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(session.pid, signal.SIGHUP)
