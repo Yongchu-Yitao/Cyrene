@@ -621,10 +621,7 @@ jobs:
 
           ci_runs="$(
             gh api --method GET \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
-              -f branch=main \
-              -f event=push \
-              -f per_page=50
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?per_page=100"
           )"
           ci_sha="$(
             git log -20 --format='%H %s' \
