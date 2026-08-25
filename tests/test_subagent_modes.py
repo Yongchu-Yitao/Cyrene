@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -29,6 +30,10 @@ def _patch_runtime(monkeypatch, responses, *, tool_result="ok"):
         calls.append({
             "messages": json.loads(json.dumps(messages, ensure_ascii=False)),
             "tools": json.loads(json.dumps(tools, ensure_ascii=False)),
+            "tool_choice": json.loads(json.dumps(
+                kwargs.get("tool_choice"),
+                ensure_ascii=False,
+            )),
         })
         return next(response_iter)
 
@@ -143,6 +148,51 @@ async def test_execution_checkpoint_rechecks_success_without_stopping(monkeypatc
         str(message.get("content") or "").startswith("[Execution Checkpoint]")
         for message in calls[2]["messages"]
     )
+    assert calls[3]["messages"][:len(calls[2]["messages"])] == calls[2]["messages"]
+
+
+@pytest.mark.asyncio
+async def test_execution_inbox_context_is_versioned_and_append_only(monkeypatch):
+    from cyrene import subagent
+    from cyrene.runtime import inbox
+
+    responses = [
+        {"content": "", "tool_calls": [_tool_call("r1", "Read", {"path": "a.txt"})]},
+        {"content": "done", "tool_calls": [_tool_call("q1", "quit", {})]},
+    ]
+    calls = _patch_runtime(monkeypatch, responses, tool_result="contents")
+    inbox_reads = 0
+
+    def fake_inbox(_agent_id, *, session_id=""):
+        nonlocal inbox_reads
+        inbox_reads += 1
+        return "new guidance" if inbox_reads == 1 else ""
+
+    monkeypatch.setattr(inbox, "get_inbox_context", fake_inbox)
+    monkeypatch.setattr(inbox, "mark_all_read", AsyncMock())
+
+    await subagent.clear()
+    await subagent.register("worker", "inspect file", mode="execution")
+    assert await subagent._run_subagent(
+        "worker",
+        "inspect file",
+        None,
+        0,
+        "db.sqlite3",
+    ) == "done"
+
+    inbox_messages = [
+        message
+        for message in calls[0]["messages"]
+        if (message.get("subagent_runtime_context") or {}).get("kind") == "inbox"
+    ]
+    assert len(inbox_messages) == 1
+    assert inbox_messages[0]["subagent_runtime_context"] == {
+        "kind": "inbox",
+        "version": 1,
+    }
+    assert "[Runtime context version: inbox:1]" in inbox_messages[0]["content"]
+    assert calls[1]["messages"][:len(calls[0]["messages"])] == calls[0]["messages"]
 
 
 @pytest.mark.asyncio
@@ -185,7 +235,11 @@ async def test_execution_mode_stops_after_repeated_no_progress(monkeypatch):
     assert snapshot["worker"]["outcome"] == "partial"
     assert snapshot["worker"]["stop_reason"] == "execution_no_progress"
     assert snapshot["worker"]["metrics"]["no_progress_turns"] == 2
-    assert [item["function"]["name"] for item in calls[-1]["tools"]] == ["quit"]
+    assert calls[-1]["tools"] == calls[-2]["tools"]
+    assert calls[-1]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "quit"},
+    }
 
 
 @pytest.mark.asyncio
@@ -223,7 +277,11 @@ async def test_execution_absolute_safety_fuse_is_resource_exhausted(monkeypatch)
     assert snapshot["worker"]["status"] == "incomplete"
     assert snapshot["worker"]["outcome"] == "resource_exhausted"
     assert snapshot["worker"]["stop_reason"] == "execution_tool_call_safety_limit"
-    assert [item["function"]["name"] for item in calls[-1]["tools"]] == ["quit"]
+    assert calls[-1]["tools"] == calls[-2]["tools"]
+    assert calls[-1]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "quit"},
+    }
 
 
 @pytest.mark.asyncio
@@ -293,7 +351,12 @@ async def test_discussion_mode_enforces_message_limit_and_then_summarizes(monkey
         "[活跃子 agent]" in str(message.get("content") or "")
         for message in calls[0]["messages"]
     )
-    assert [item["function"]["name"] for item in calls[-1]["tools"]] == ["quit"]
+    assert calls[1]["messages"][:len(calls[0]["messages"])] == calls[0]["messages"]
+    assert calls[-1]["tools"] == calls[-2]["tools"]
+    assert calls[-1]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "quit"},
+    }
 
 
 @pytest.mark.asyncio
@@ -707,4 +770,8 @@ async def test_execution_cost_fuse_requests_finalization(monkeypatch):
     assert snapshot["outcome"] == "resource_exhausted"
     assert snapshot["stop_reason"] == "execution_cost_safety_limit"
     assert snapshot["metrics"]["estimated_cost_usd"] > 0.001
-    assert [item["function"]["name"] for item in calls[-1]["tools"]] == ["quit"]
+    assert calls[-1]["tools"] == calls[-2]["tools"]
+    assert calls[-1]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "quit"},
+    }

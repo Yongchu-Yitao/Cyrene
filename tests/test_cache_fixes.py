@@ -1038,8 +1038,8 @@ async def test_subagent_empty_quit_exits_without_feedback_retry():
     print("PASS: test_subagent_empty_quit_exits_without_feedback_retry")
 
 
-async def test_subagent_resume_strips_old_context():
-    """Resumed subagent strips old context messages from previous run."""
+async def test_subagent_resume_preserves_old_context_as_append_only_history():
+    """Resumed subagent never rewrites context that reached an earlier request."""
     from cyrene import subagent
     from cyrene.runtime import inbox
     import cyrene.tooling as tools
@@ -1096,12 +1096,12 @@ async def test_subagent_resume_strips_old_context():
 
     call_msgs = llm_inputs[0]
     context_msgs = [m for m in call_msgs if "[活跃子 agent]" in str(m.get("content", ""))]
-    assert context_msgs == [], (
-        "Execution-mode resume should remove stale coordination context and "
-        "should not inject fresh discussion context."
-    )
+    assert context_msgs == [{
+        "role": "user",
+        "content": "[活跃子 agent]\n  alice: task [工作中]",
+    }], "Previously observed context must remain in the append-only prefix."
 
-    print("PASS: test_subagent_resume_strips_old_context")
+    print("PASS: test_subagent_resume_preserves_old_context_as_append_only_history")
 
 
 async def main():
@@ -1111,7 +1111,7 @@ async def main():
     await test_fixed_ephemeral_stays_before_user_across_tool_rounds()
     await test_subagent_stable_system_prompt()
     await test_subagent_empty_quit_exits_without_feedback_retry()
-    await test_subagent_resume_strips_old_context()
+    await test_subagent_resume_preserves_old_context_as_append_only_history()
     print("\nAll 5 cache-fix verification tests passed.")
 
 

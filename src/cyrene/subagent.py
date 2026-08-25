@@ -2340,11 +2340,54 @@ You are a **participant** in this discussion. Rules:
     seen_result_fingerprints: set[str] = set()
     force_finalize_reason = ""
     finalization_requested = False
-    quit_tool_defs = [
-        tool_def
-        for tool_def in wire_tool_defs
-        if str((tool_def.get("function") or {}).get("name") or "") == "quit"
-    ]
+    finalization_tool_choice = {
+        "type": "function",
+        "function": {"name": "quit"},
+    }
+    runtime_context_versions: dict[str, int] = {}
+    last_runtime_context: dict[str, str] = {}
+    for existing_message in messages:
+        runtime_meta = existing_message.get("subagent_runtime_context")
+        if not isinstance(runtime_meta, dict):
+            continue
+        runtime_kind = str(runtime_meta.get("kind") or "").strip()
+        try:
+            runtime_version = max(0, int(runtime_meta.get("version") or 0))
+        except (TypeError, ValueError):
+            continue
+        if runtime_kind:
+            runtime_context_versions[runtime_kind] = max(
+                runtime_context_versions.get(runtime_kind, 0),
+                runtime_version,
+            )
+
+    def _append_runtime_context(
+        kind: str,
+        content: str,
+        *,
+        deduplicate: bool = False,
+    ) -> bool:
+        """Append one immutable, versioned runtime-context observation."""
+        normalized = str(content or "").strip()
+        if not normalized:
+            return False
+        if deduplicate and last_runtime_context.get(kind) == normalized:
+            return False
+        version = runtime_context_versions.get(kind, 0) + 1
+        runtime_context_versions[kind] = version
+        last_runtime_context[kind] = normalized
+        messages.append({
+            "role": "user",
+            "content": (
+                f"{normalized}\n"
+                f"[Runtime context version: {kind}:{version}]"
+            ),
+            "subagent_runtime_context": {
+                "kind": kind,
+                "version": version,
+            },
+        })
+        return True
 
     def _resolved_subagent_call(
         name: str,
@@ -2411,7 +2454,10 @@ You are a **participant** in this discussion. Rules:
                 ):
                     force_finalize_reason = "discussion_no_new_information"
 
-            # 每次 LLM 调用前注入注册表和 inbox 作为独立消息，保持 messages[0] 稳定
+            # Runtime observations are immutable prompt records. Append a new
+            # version only when the observation changes; never delete or move a
+            # version that has already entered a provider request, otherwise the
+            # next request can no longer reuse the previous prompt as a prefix.
             registry_ctx = (
                 await get_context(
                     exclude=agent_id,
@@ -2424,25 +2470,25 @@ You are a **participant** in this discussion. Rules:
             )
             inbox_text = _get_inbox(agent_id)
 
-            # 移除上一轮的旧上下文消息（以特定前缀开头的用户消息）
-            messages = [m for m in messages if not (
-                m.get("role") == "user" and (
-                    str(m.get("content", "")).startswith("[活跃子 agent]") or
-                    str(m.get("content", "")).startswith("[收件箱]") or
-                    str(m.get("content", "")).startswith("[Execution Checkpoint]") or
-                    str(m.get("content", "")).startswith("[Runtime Finalization]")
-                )
-            )]
-            # 注入新上下文
             if registry_ctx:
-                messages.append({"role": "user", "content": registry_ctx})
+                _append_runtime_context(
+                    "registry",
+                    registry_ctx,
+                    deduplicate=True,
+                )
             if inbox_text:
                 if _direct_message_mode.get():
                     # 正在处理用户引导：丢弃所有 inbox 消息（含 agent 间通信），
                     # 让 subagent 专注执行用户指令不被干扰。
                     await _mark_inbox_read(agent_id)
                 else:
-                    messages.append({"role": "user", "content": f"[收件箱]\n{inbox_text}"})
+                    _append_runtime_context(
+                        "inbox",
+                        (
+                            "[收件箱]\n"
+                            f"{inbox_text}"
+                        ),
+                    )
                     # 注入后立即标记为已读 —— 避免下一轮重复展示同一批消息
                     await _mark_inbox_read(agent_id)
                     _direct_message_mode.set("[DIRECT_MESSAGE]" in inbox_text)
@@ -2453,38 +2499,35 @@ You are a **participant** in this discussion. Rules:
                 and tool_calls_used >= next_checkpoint
                 and not force_finalize_reason
             ):
-                messages.append({
-                    "role": "user",
-                    "content": (
+                _append_runtime_context(
+                    "checkpoint",
+                    (
                         "[Execution Checkpoint]\n"
                         f"You have executed {tool_calls_used} tools. Re-check the success criteria now. "
                         "Continue only if a concrete criterion remains unmet and the next action can produce new evidence or state change. "
                         "Otherwise call quit with the result."
                     ),
-                })
+                )
                 next_checkpoint += limits["checkpoint_calls"]
 
             if force_finalize_reason and not finalization_requested:
                 finalization_requested = True
-                messages.append({
-                    "role": "user",
-                    "content": (
+                _append_runtime_context(
+                    "finalization",
+                    (
                         "[Runtime Finalization]\n"
                         f"Stop reason: {force_finalize_reason}. Do not call additional work tools. "
                         "Write the best available result in normal assistant content, then call quit only as the terminal signal. "
                         "State what is complete, what remains, and any blocker."
                     ),
-                })
+                )
 
             if effective_mode == EXECUTION_MODE and context_limit > 0:
                 from cyrene.model_runtime.client import approx_token_count
 
-                active_tool_defs = (
-                    quit_tool_defs if finalization_requested else wire_tool_defs
-                )
                 reserved_tool_tokens = approx_token_count(
                     json.dumps(
-                        active_tool_defs,
+                        wire_tool_defs,
                         ensure_ascii=False,
                         sort_keys=True,
                         default=str,
@@ -2519,7 +2562,12 @@ You are a **participant** in this discussion. Rules:
 
             response = await call_agent_model(
                 messages,
-                tools=quit_tool_defs if finalization_requested else wire_tool_defs,
+                tools=wire_tool_defs,
+                tool_choice=(
+                    finalization_tool_choice
+                    if finalization_requested
+                    else None
+                ),
                 max_tokens=None,
                 secondary=use_secondary,
             )
@@ -2682,9 +2730,10 @@ You are a **participant** in this discussion. Rules:
                     await _save_if_registered()
                     continue
             if finalization_requested:
-                # A provider should only return quit when quit is the sole visible
-                # tool. Preserve protocol pairing even if it hallucinates another
-                # call, then settle without granting another work turn.
+                # The full schema remains visible for prefix-cache stability, but
+                # named tool_choice restricts the provider to quit. Preserve
+                # protocol pairing if a provider ignores that constraint, then
+                # settle without granting another work turn.
                 for tc in tcs:
                     messages.append({
                         "role": "tool",
