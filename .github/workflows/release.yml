@@ -624,18 +624,16 @@ jobs:
               -f event=push \
               -f per_page=50
           )"
-          candidate_sha="$GITHUB_SHA"
-          ci_conclusion=""
-          for _ in $(seq 1 20); do
-            ci_conclusion="$(
-              jq -r --arg sha "$candidate_sha" \
-                '[.workflow_runs[] | select(.head_sha == $sha)] | first | .conclusion // ""'
-                <<<"$ci_runs"
-            )"
-            test "$ci_conclusion" = "success" && break
-            test -z "$ci_conclusion" || test "$ci_conclusion" = "skipped" || break
-            candidate_sha="$(git rev-parse "$candidate_sha^")"
-          done
+          ci_sha="$(
+            git log -20 --format='%H %s' \
+            | awk '!found && $0 !~ /\[skip ci\]/{print $1; found=1}'
+          )"
+          test -n "$ci_sha"
+          ci_conclusion="$(
+            jq -r --arg sha "$ci_sha" \
+              '[.workflow_runs[] | select(.head_sha == $sha)] | first | .conclusion // ""'
+              <<<"$ci_runs"
+          )"
           test "$ci_conclusion" = "success"
 
       - name: Detect pre-release
