@@ -575,6 +575,36 @@ def _annotate_history_context(history: list) -> list[dict[str, Any]]:
     return annotated
 
 
+def _project_main_tool_result_batch(
+    records: list[tuple[dict[str, Any], object, str, str]],
+) -> None:
+    projected_batch = project_tool_result_batch_for_model([
+        (result, tool_name, tool_call_id)
+        for _entry, result, tool_name, tool_call_id in records
+    ])
+    for (entry, _result, tool_name, tool_call_id), projected in zip(
+        records, projected_batch
+    ):
+        entry["content"] = projected.content
+        annotated = attach_context(entry, context_block(
+            f"tool.result.{tool_name}.{tool_call_id}",
+            "tool_result",
+            source=f"tool:{tool_name}",
+            reason="tool output returned to LLM",
+            transforms=["tool_result_projection"] if projected.truncated else [],
+            content=projected.content,
+            metadata={
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "original_tokens": projected.original_tokens,
+                "original_bytes": projected.original_bytes,
+                "content_ref": projected.content_ref,
+            },
+        ))
+        entry.clear()
+        entry.update(annotated)
+
+
 async def _run_main_agent_impl(
     user_message: str,
     history: list,
@@ -2035,38 +2065,7 @@ async def _run_main_agent_impl(
                         awaiting_user = True
                     if capability_id == "subagent.spawn" and _wire_result_succeeded(result):
                         spawned = True
-                projected_batch = project_tool_result_batch_for_model([
-                    (result, tool_name, tool_call_id)
-                    for _entry, result, tool_name, tool_call_id
-                    in batch_projection_records
-                ])
-                for (
-                    tool_entry,
-                    _result,
-                    tool_name,
-                    tool_call_id,
-                ), projected_result in zip(
-                    batch_projection_records,
-                    projected_batch,
-                ):
-                    tool_entry["content"] = projected_result.content
-                    projected_entry = attach_context(tool_entry, context_block(
-                        f"tool.result.{tool_name}.{tool_call_id}",
-                        "tool_result",
-                        source=f"tool:{tool_name}",
-                        reason="tool output returned to LLM",
-                        transforms=["tool_result_projection"] if projected_result.truncated else [],
-                        content=projected_result.content,
-                        metadata={
-                            "tool_name": tool_name,
-                            "tool_call_id": tool_call_id,
-                            "original_tokens": projected_result.original_tokens,
-                            "original_bytes": projected_result.original_bytes,
-                            "content_ref": projected_result.content_ref,
-                        },
-                    ))
-                    tool_entry.clear()
-                    tool_entry.update(projected_entry)
+                _project_main_tool_result_batch(batch_projection_records)
                 # Keep the assistant -> N tool-results protocol sequence contiguous.
                 # Multimodal observations follow the complete tool batch as a
                 # model-only user message and are omitted from persisted history.

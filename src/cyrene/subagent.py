@@ -2021,6 +2021,38 @@ def _log_task_exception(task: asyncio.Task, agent_id: str) -> None:
         logger.exception("Sub-agent %s task crashed before internal try/except", agent_id)
 
 
+def _project_subagent_tool_result_batch(
+    records: list[tuple[dict[str, Any], object, str, str]],
+    *,
+    context_limit_tokens: int,
+) -> None:
+    from cyrene.tooling.result_store import project_tool_result_batch_for_model
+
+    projected = project_tool_result_batch_for_model(
+        [(result, name, call_id) for _entry, result, name, call_id in records],
+        context_limit_tokens=context_limit_tokens,
+    )
+    for (entry, _result, _name, _call_id), result in zip(records, projected):
+        entry["content"] = result.content
+
+
+def _record_subagent_tool_result(
+    messages: list[dict[str, Any]],
+    records: list[tuple[dict[str, Any], object, str, str]],
+    *,
+    result: object,
+    tool_name: str,
+    tool_call_id: str,
+) -> None:
+    entry = {
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "content": str(result),
+    }
+    messages.append(entry)
+    records.append((entry, result, tool_name, tool_call_id))
+
+
 async def _run_subagent(
     agent_id: str,
     task: str,
@@ -2049,7 +2081,6 @@ async def _run_subagent(
     )
     from cyrene.agent.model_service import call_agent_model
     from cyrene.model_runtime.messages import assistant_text
-    from cyrene.tooling.result_store import project_tool_result_batch_for_model
     from cyrene.tooling import (
         execute_wire_tool,
         get_subagent_wire_tool_defs,
@@ -2650,7 +2681,6 @@ You are a **participant** in this discussion. Rules:
                     _direct_message_mode.set("[DIRECT_MESSAGE]" in str(inbox_msg))
                     await _save_if_registered()
                     continue
-
             if finalization_requested:
                 # A provider should only return quit when quit is the sole visible
                 # tool. Preserve protocol pairing even if it hallucinates another
@@ -2667,14 +2697,11 @@ You are a **participant** in this discussion. Rules:
                 stop_reason = force_finalize_reason or "runtime_finalization"
                 await _save_if_registered()
                 break
-
             fresh_inbox = False
             cancel_remaining_batch = False
             round_had_execution_work = False
             round_made_progress = False
-            batch_projection_records: list[
-                tuple[dict[str, Any], object, str, str]
-            ] = []
+            batch_projection_records: list[tuple[dict[str, Any], object, str, str]] = []
             for tc in tcs:
                 name = tc["function"]["name"]
                 discussion_slot_claimed = False
@@ -2818,37 +2845,23 @@ You are a **participant** in this discussion. Rules:
                     capability_id = str(name or "")
                     if effective_mode == EXECUTION_MODE:
                         round_had_execution_work = True
-                tool_entry = {
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": str(result),
-                }
-                messages.append(tool_entry)
-                batch_projection_records.append((
-                    tool_entry,
-                    result,
-                    str(name or ""),
-                    tc["id"],
-                ))
+                _record_subagent_tool_result(
+                    messages,
+                    batch_projection_records,
+                    result=result,
+                    tool_name=str(name or ""),
+                    tool_call_id=tc["id"],
+                )
                 # 每执行完一个工具检查 inbox，用户引导时能更快响应
                 inbox_text = _get_inbox(agent_id)
                 if inbox_text:
                     fresh_inbox = True
                     cancel_remaining_batch = True
 
-            projected_batch = project_tool_result_batch_for_model(
-                [
-                    (result, tool_name, tool_call_id)
-                    for _entry, result, tool_name, tool_call_id
-                    in batch_projection_records
-                ],
+            _project_subagent_tool_result_batch(
+                batch_projection_records,
                 context_limit_tokens=context_limit,
             )
-            for (entry, _result, _name, _call_id), projected in zip(
-                batch_projection_records,
-                projected_batch,
-            ):
-                entry["content"] = projected.content
 
             if effective_mode == EXECUTION_MODE and round_had_execution_work:
                 no_progress_turns = 0 if round_made_progress else no_progress_turns + 1

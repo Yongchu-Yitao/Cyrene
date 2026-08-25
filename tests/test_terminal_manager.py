@@ -39,6 +39,7 @@ def test_windows_conpty_keeps_hidden_console_for_daemon_lifetime(
     class Kernel32:
         AllocConsole = NativeCall("AllocConsole", 1)
         GetConsoleWindow = NativeCall("GetConsoleWindow", 2468)
+        GetConsoleCP = NativeCall("GetConsoleCP", 65001)
 
     class User32:
         ShowWindow = NativeCall("ShowWindow", 0)

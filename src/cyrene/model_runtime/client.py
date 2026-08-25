@@ -1646,9 +1646,8 @@ def _build_payload(
 ) -> dict[str, Any]:
     provider_model = str(model or "").strip().lower().rsplit("/", 1)[-1]
     preset = str(provider_preset or "").strip().lower()
-    # Aggregators expose a provider-neutral parameter surface. Do not leak an
-    # upstream vendor's private extensions merely because its id appears after
-    # the catalog namespace (for example ``moonshotai/kimi-k2.5``).
+    # Do not leak upstream extensions through provider-neutral aggregators just
+    # because a vendor id appears after the namespace (for example, kimi-k2.5).
     use_upstream_extensions = preset not in {"openrouter", "amd_gpu_cloud"}
     is_deepseek = use_upstream_extensions and "deepseek" in provider_model
     is_minimax = use_upstream_extensions and _is_minimax_model(model)
@@ -2673,11 +2672,9 @@ async def call_llm(
         httpx.HTTPError: When all candidates and endpoints fail.
     """
     global _secondary_in_flight
-
     _t0 = _time.monotonic()
     call_id = f"llm_{uuid.uuid4().hex}"
     latency_enabled = record_usage if record_latency is None else bool(record_latency)
-
     expected_family = getattr(candidate_lease, "provider_family", None)
     resolved = candidates if candidates is not None else _resolve_candidates(model_type)
     if not resolved and expected_family is not None:
@@ -2706,7 +2703,6 @@ async def call_llm(
         expected=expected_family,
         context=f"{model_type} model route",
     )
-
     # Context capacity belongs to the candidate that will receive the request,
     # not only to the configured primary.  Reject undersized candidates locally
     # and continue down the chain without cooling them: they are healthy, merely
@@ -2739,7 +2735,6 @@ async def call_llm(
             f"candidate context windows ({limits})"
         )
     resolved = context_eligible
-
     # ctx_limit check for secondary model: if messages exceed the limit,
     # skip secondary and fall through to primary candidates
     if resolved and resolved[0].get("route_role") == "secondary":
@@ -2753,7 +2748,6 @@ async def call_llm(
                     expected=active_family,
                     context=f"{model_type} model fallback route",
                 )
-
     # Always evaluate candidates in the saved primary-route order.  Cooldown
     # state remains useful for diagnostics, but skipping a configured entry on
     # a later call makes actual model use diverge from the Settings ordering.
@@ -3668,6 +3662,38 @@ def _finalize_tool_call_fragments(
     return calls
 
 
+def _snapshot_delta(previous: str, current: str) -> tuple[str, str]:
+    """Accept cumulative snapshots or ordinary deltas without duplication."""
+    if not current:
+        return "", previous
+    if current.startswith(previous):
+        return current[len(previous):], current
+    if previous.startswith(current):
+        return "", previous
+    return current, previous + current
+
+
+def _reasoning_stream_updates(
+    *,
+    is_minimax: bool,
+    snapshot: str,
+    reasoning_content: object,
+    reasoning_details_text: str,
+) -> tuple[list[str], str, bool]:
+    """Choose MiniMax's canonical reasoning alias and normalize its snapshots."""
+    if is_minimax:
+        logical_update = reasoning_details_text or (
+            reasoning_content if isinstance(reasoning_content, str) else ""
+        )
+        delta, snapshot = _snapshot_delta(snapshot, logical_update)
+        return [delta], snapshot, bool(logical_update)
+    updates = [reasoning_content] if isinstance(reasoning_content, str) else []
+    if not reasoning_details_text:
+        return updates, snapshot, False
+    delta, snapshot = _snapshot_delta(snapshot, reasoning_details_text)
+    return [*updates, delta], snapshot, True
+
+
 async def _handle_stream(
     client: httpx.AsyncClient,
     endpoint: str,
@@ -3722,17 +3748,6 @@ async def _handle_stream(
         if stream_callback:
             await stream_callback({"type": "reasoning_delta", "delta": text})
 
-    def _snapshot_delta(previous: str, current: str) -> tuple[str, str]:
-        if not current:
-            return "", previous
-        if current.startswith(previous):
-            return current[len(previous):], current
-        if previous.startswith(current):
-            return "", previous
-        # Some OpenAI-compatible gateways convert MiniMax snapshots back to
-        # ordinary deltas. Accept both forms without duplicating snapshots.
-        return current, previous + current
-
     try:
         async with asyncio.timeout(first_event_timeout) as first_event_guard:
             async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
@@ -3785,38 +3800,17 @@ async def _handle_stream(
                         if details:
                             reasoning_details = details
                             current_reasoning = _reasoning_details_text(details)
-                        if is_minimax:
-                            # MiniMax gateways can expose the same logical update
-                            # through both aliases. Depending on the model/version,
-                            # each alias may be a cumulative snapshot or a token
-                            # delta. Forwarding both corrupts the shared snapshot as
-                            # soon as their whitespace or chunk boundaries differ.
-                            # ``reasoning_split`` makes reasoning_details canonical;
-                            # use reasoning_content only when no text-bearing detail
-                            # is available in this event.
-                            if current_reasoning:
-                                minimax_reasoning = current_reasoning
-                            elif isinstance(rc, str):
-                                minimax_reasoning = rc
-                            else:
-                                minimax_reasoning = ""
-                            reasoning_delta, reasoning_snapshot = _snapshot_delta(
-                                reasoning_snapshot,
-                                minimax_reasoning,
+                        reasoning_updates, reasoning_snapshot, saw_split = (
+                            _reasoning_stream_updates(
+                                is_minimax=is_minimax,
+                                snapshot=reasoning_snapshot,
+                                reasoning_content=rc,
+                                reasoning_details_text=current_reasoning,
                             )
-                            if minimax_reasoning:
-                                saw_split_reasoning = True
+                        )
+                        saw_split_reasoning = saw_split_reasoning or saw_split
+                        for reasoning_delta in reasoning_updates:
                             await _forward_reasoning(reasoning_delta)
-                        else:
-                            if isinstance(rc, str):
-                                await _forward_reasoning(rc)
-                            if current_reasoning:
-                                reasoning_delta, reasoning_snapshot = _snapshot_delta(
-                                    reasoning_snapshot,
-                                    current_reasoning,
-                                )
-                                saw_split_reasoning = True
-                                await _forward_reasoning(reasoning_delta)
                         delta_calls = delta.get("tool_calls")
                         if delta_calls is None:
                             legacy_function = delta.get("function_call")
