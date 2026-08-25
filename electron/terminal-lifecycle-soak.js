@@ -172,10 +172,11 @@ async function runTerminalLifecycleSoak(options) {
     requestBackendJson,
     restartBackend,
     terminalArgv,
-    tempDir,
     userDataDir,
   } = options;
-  const workspace = path.join(tempDir, 'terminal-lifecycle-workspace');
+  // Packaged backends allow project workspaces under their managed workspace
+  // root. CYRENE_TEMP_DIR is intentionally not an allowed project root.
+  const workspace = path.join(userDataDir, 'workspace', 'terminal-lifecycle-workspace');
   fs.mkdirSync(workspace, { recursive: true });
   let projectId = '';
   let terminalId = '';

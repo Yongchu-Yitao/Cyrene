@@ -7052,7 +7052,6 @@ async function startTerminalLifecycleSoakTest() {
         process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe',
         '/d', '/q', '/k',
       ],
-      tempDir: getCyreneTempDir(),
       userDataDir: getCyreneUserDataDir(),
     });
     isQuitting = true;
