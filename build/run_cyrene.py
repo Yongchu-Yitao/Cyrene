@@ -147,7 +147,12 @@ def _run_terminal_smoke_test() -> None:
             shell = "cmd"
             command = os.environ.get("COMSPEC") or r"C:\Windows\System32\cmd.exe"
             marker = "CYRENE_WINDOWS_TERMINAL_SMOKE_OUTPUT"
-            argv = [command, "/d", "/q", "/k", f"echo {marker}"]
+            # Keep the shell startup independent from the command under test.
+            # Passing the command through cmd.exe's /k launch argument does not
+            # reliably expose its output through ConPTY in a headless installed
+            # app. Real Cyrene terminals start the shell first and send commands
+            # through the daemon input path, so exercise that exact path here.
+            argv = [command, "/d", "/q", "/k"]
             created = None
             for attempt in range(3):
                 try:
@@ -194,6 +199,11 @@ def _run_terminal_smoke_test() -> None:
                 raise RuntimeError(f"ConPTY session did not stay running: {terminal!r}")
             before = client._connection_info() or {}
             daemon_pid = int(before.get("pid") or 0)
+            await client.input(
+                terminal_id,
+                f"echo {marker}\r\n",
+                actor="user",
+            )
             deadline = time.monotonic() + 30
             output = b""
             while time.monotonic() < deadline:

@@ -178,6 +178,18 @@ def test_frozen_smoke_imports_numpy_native_extension():
     assert '"numpy._core._multiarray_umath": None' in entrypoint
 
 
+def test_frozen_terminal_smoke_sends_command_through_daemon_input():
+    entrypoint = (ROOT / "build" / "run_cyrene.py").read_text(encoding="utf-8")
+    terminal_smoke = entrypoint.split("def _run_terminal_smoke_test()", 1)[1].split(
+        "def _main()", 1
+    )[0]
+
+    assert 'argv = [command, "/d", "/q", "/k"]' in terminal_smoke
+    assert 'f"echo {marker}\\r\\n"' in terminal_smoke
+    assert 'actor="user"' in terminal_smoke
+    assert '"/k", f"echo {marker}"' not in terminal_smoke
+
+
 def test_woa_core_excludes_x64_only_features_and_packages_sidecars():
     spec = (ROOT / "build" / "cyrene.spec").read_text(encoding="utf-8")
     package = (ROOT / "electron" / "package.json").read_text(encoding="utf-8")
