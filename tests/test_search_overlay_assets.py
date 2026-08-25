@@ -31,7 +31,7 @@ def test_built_search_overlay_assets_match_the_frontend_sources():
     revisions = set(re.findall(r"\?v=([A-Za-z0-9.+-]+)", built_index))
     assert len(revisions) == 1
     revision = revisions.pop()
-    assert re.fullmatch(r"0\.8\.0-beta2-[0-9a-f]{10}", revision)
+    assert re.fullmatch(r"0\.8\.0-beta3-[0-9a-f]{10}", revision)
     normalized_built_index = re.sub(
         r'<script>window\.CyreneIconAssets=Object\.freeze\(.*?\);</script>',
         "<!-- CYRENE_ICON_ASSETS -->",

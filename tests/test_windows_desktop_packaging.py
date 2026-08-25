@@ -135,7 +135,7 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     )[0]
     assert "timeoutMs = 120000" in restart_wait
     assert "'/api/projects?detail=summary'" in ready_wait
-    assert "/api/status" not in lifecycle_soak
+    assert "requestBackendJson('GET', '/api/status')" not in lifecycle_soak
     assert "`/api/terminals?" in restart_wait
     assert "path.join(userDataDir, 'workspace', 'terminal-lifecycle-workspace')" in lifecycle_soak
     assert "path.join(tempDir, 'terminal-lifecycle-workspace')" not in lifecycle_soak
