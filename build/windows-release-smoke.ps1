@@ -166,6 +166,24 @@ function Assert-SmokeSucceeded {
     }
 }
 
+$validationFailures = [Collections.Generic.List[string]]::new()
+
+function Invoke-ReleaseValidation {
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][scriptblock]$Action
+    )
+    try {
+        & $Action
+        Write-Host "WINDOWS_VALIDATION_RESULT=ok label=$Label"
+    } catch {
+        $detail = ($_ | Out-String).Trim()
+        $script:validationFailures.Add("${Label}: ${detail}")
+        Write-Host "WINDOWS_VALIDATION_RESULT=failed label=$Label"
+        Write-Host $detail
+    }
+}
+
 function Get-PeArchitecture {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -234,16 +252,18 @@ if (-not (Test-Path $numpyDir)) { throw "NumPy package missing from frozen backe
 $numpyCore = @(Get-ChildItem -Path $numpyDir -Recurse -Filter "_multiarray_umath*.pyd")
 if ($numpyCore.Count -lt 1) { throw "NumPy _multiarray_umath extension missing from frozen backend" }
 
-$portableSmoke = Invoke-CapturedProcess `
-    -Path $frozenExe `
-    -Arguments @("--smoke-test") `
-    -Label "windows-$Arch-portable-python"
-Assert-SmokeSucceeded `
-    -Result $portableSmoke `
-    -SuccessMarker "Cyrene smoke test OK:" `
-    -Label "Portable frozen backend smoke test"
-if ($portableSmoke.Output -notmatch '(?m)^numpy=') {
-    throw "Portable frozen backend did not confirm NumPy import"
+Invoke-ReleaseValidation -Label "Portable frozen backend smoke test" -Action {
+    $portableSmoke = Invoke-CapturedProcess `
+        -Path $frozenExe `
+        -Arguments @("--smoke-test") `
+        -Label "windows-$Arch-portable-python"
+    Assert-SmokeSucceeded `
+        -Result $portableSmoke `
+        -SuccessMarker "Cyrene smoke test OK:" `
+        -Label "Portable frozen backend smoke test"
+    if ($portableSmoke.Output -notmatch '(?m)^numpy=') {
+        throw "Portable frozen backend did not confirm NumPy import"
+    }
 }
 
 $installers = @(Get-ChildItem -Path $electronDist -Filter "Cyrene-*-win-$Arch.exe")
@@ -278,66 +298,78 @@ if ($Arch -eq "arm64") {
     if (-not (Test-Path $searchSidecar)) { throw "WoA SimpleXNG sidecar missing: $searchSidecar" }
     Assert-PeArchitecture -Path $ocrSidecar -Expected "x64" -Label "WoA OCR sidecar"
     Assert-PeArchitecture -Path $searchSidecar -Expected "x64" -Label "WoA SimpleXNG sidecar"
-    $ocrSmoke = Invoke-CapturedProcess -Path $ocrSidecar -Arguments @("--smoke-test") -Label "woa-ocr-sidecar"
-    Assert-SmokeSucceeded -Result $ocrSmoke -SuccessMarker "CYRENE_OCR_SIDECAR_SMOKE=ok" -Label "WoA OCR sidecar smoke test"
-    $searchSmoke = Invoke-CapturedProcess -Path $searchSidecar -Arguments @("--smoke-test") -Label "woa-simplexng-sidecar"
-    Assert-SmokeSucceeded -Result $searchSmoke -SuccessMarker "CYRENE_SIMPLEXNG_SIDECAR_SMOKE=ok" -Label "WoA SimpleXNG sidecar smoke test"
+    Invoke-ReleaseValidation -Label "WoA OCR sidecar smoke test" -Action {
+        $ocrSmoke = Invoke-CapturedProcess -Path $ocrSidecar -Arguments @("--smoke-test") -Label "woa-ocr-sidecar"
+        Assert-SmokeSucceeded -Result $ocrSmoke -SuccessMarker "CYRENE_OCR_SIDECAR_SMOKE=ok" -Label "WoA OCR sidecar smoke test"
+    }
+    Invoke-ReleaseValidation -Label "WoA SimpleXNG sidecar smoke test" -Action {
+        $searchSmoke = Invoke-CapturedProcess -Path $searchSidecar -Arguments @("--smoke-test") -Label "woa-simplexng-sidecar"
+        Assert-SmokeSucceeded -Result $searchSmoke -SuccessMarker "CYRENE_SIMPLEXNG_SIDECAR_SMOKE=ok" -Label "WoA SimpleXNG sidecar smoke test"
+    }
 }
 
-$installedSmoke = Invoke-CapturedProcess `
-    -Path $installedBackend `
-    -Arguments @("--smoke-test") `
-    -Label "windows-$Arch-installed-python"
-Assert-SmokeSucceeded `
-    -Result $installedSmoke `
-    -SuccessMarker "Cyrene smoke test OK:" `
-    -Label "Installed frozen backend smoke test"
-if ($installedSmoke.Output -notmatch '(?m)^numpy=') {
-    throw "Installed frozen backend did not confirm NumPy import"
+Invoke-ReleaseValidation -Label "Installed frozen backend smoke test" -Action {
+    $installedSmoke = Invoke-CapturedProcess `
+        -Path $installedBackend `
+        -Arguments @("--smoke-test") `
+        -Label "windows-$Arch-installed-python"
+    Assert-SmokeSucceeded `
+        -Result $installedSmoke `
+        -SuccessMarker "Cyrene smoke test OK:" `
+        -Label "Installed frozen backend smoke test"
+    if ($installedSmoke.Output -notmatch '(?m)^numpy=') {
+        throw "Installed frozen backend did not confirm NumPy import"
+    }
 }
 
 # GitHub's headless Windows session can close PowerShell after its startup file
 # completes even when -NoExit is present. cmd.exe /k provides the same real
 # ConPTY input/output coverage without depending on that host-only behavior.
 $env:SHELL = Join-Path $env:SystemRoot "System32\cmd.exe"
-$terminalSmoke = Invoke-CapturedProcess `
-    -Path $installedBackend `
-    -Arguments @("--terminal-smoke-test") `
-    -Label "windows-$Arch-installed-terminal"
-Assert-SmokeSucceeded `
-    -Result $terminalSmoke `
-    -SuccessMarker "CYRENE_WINDOWS_TERMINAL_SMOKE=ok" `
-    -Label "Installed ConPTY terminal smoke test"
+Invoke-ReleaseValidation -Label "Installed ConPTY terminal smoke test" -Action {
+    $terminalSmoke = Invoke-CapturedProcess `
+        -Path $installedBackend `
+        -Arguments @("--terminal-smoke-test") `
+        -Label "windows-$Arch-installed-terminal"
+    Assert-SmokeSucceeded `
+        -Result $terminalSmoke `
+        -SuccessMarker "CYRENE_WINDOWS_TERMINAL_SMOKE=ok" `
+        -Label "Installed ConPTY terminal smoke test"
+}
 
 $env:CYRENE_USER_DATA_DIR = Join-Path $smokeRoot "data"
 $env:CYRENE_CACHE_DIR = Join-Path $smokeRoot "cache"
 $env:CYRENE_TEMP_DIR = Join-Path $smokeRoot "tmp"
 $installedResultPath = Join-Path $smokeRoot "installed-desktop-result.log"
-$desktopSmoke = Invoke-DesktopSmokeProcess `
-    -Path $installedApp `
-    -Arguments @("--desktop-smoke-test") `
-    -Label "windows-$Arch-installed-desktop" `
-    -ResultPath $installedResultPath
-Assert-SmokeSucceeded `
-    -Result $desktopSmoke `
-    -SuccessMarker "DESKTOP_SMOKE_TEST=ok" `
-    -Label "Installed Electron desktop smoke test"
+Invoke-ReleaseValidation -Label "Installed Electron desktop smoke test" -Action {
+    $desktopSmoke = Invoke-DesktopSmokeProcess `
+        -Path $installedApp `
+        -Arguments @("--desktop-smoke-test") `
+        -Label "windows-$Arch-installed-desktop" `
+        -ResultPath $installedResultPath
+    Assert-SmokeSucceeded `
+        -Result $desktopSmoke `
+        -SuccessMarker "DESKTOP_SMOKE_TEST=ok" `
+        -Label "Installed Electron desktop smoke test"
+}
 
 $env:CYRENE_USER_DATA_DIR = Join-Path $smokeRoot "installed-lifecycle-data"
 $env:CYRENE_CACHE_DIR = Join-Path $smokeRoot "installed-lifecycle-cache"
 $env:CYRENE_TEMP_DIR = Join-Path $smokeRoot "installed-lifecycle-tmp"
 $env:CYRENE_TERMINAL_SOAK_CYCLES = "20"
 $installedLifecycleResultPath = Join-Path $smokeRoot "installed-terminal-lifecycle-result.log"
-$installedLifecycleSoak = Invoke-DesktopSmokeProcess `
-    -Path $installedApp `
-    -Arguments @("--terminal-lifecycle-soak-test") `
-    -Label "windows-$Arch-installed-terminal-lifecycle" `
-    -ResultPath $installedLifecycleResultPath `
-    -TimeoutSeconds 900
-Assert-SmokeSucceeded `
-    -Result $installedLifecycleSoak `
-    -SuccessMarker "CYRENE_WINDOWS_TERMINAL_LIFECYCLE_SOAK=ok cycles=20" `
-    -Label "Installed Electron terminal lifecycle soak test"
+Invoke-ReleaseValidation -Label "Installed Electron terminal lifecycle soak test" -Action {
+    $installedLifecycleSoak = Invoke-DesktopSmokeProcess `
+        -Path $installedApp `
+        -Arguments @("--terminal-lifecycle-soak-test") `
+        -Label "windows-$Arch-installed-terminal-lifecycle" `
+        -ResultPath $installedLifecycleResultPath `
+        -TimeoutSeconds 900
+    Assert-SmokeSucceeded `
+        -Result $installedLifecycleSoak `
+        -SuccessMarker "CYRENE_WINDOWS_TERMINAL_LIFECYCLE_SOAK=ok cycles=20" `
+        -Label "Installed Electron terminal lifecycle soak test"
+}
 Remove-Item Env:CYRENE_TERMINAL_SOAK_CYCLES -ErrorAction SilentlyContinue
 
 $portableApps = @(Get-ChildItem -Path $electronDist -Filter "Cyrene-*-win-$Arch-portable.exe")
@@ -360,31 +392,40 @@ $env:CYRENE_TEMP_DIR = Join-Path $smokeRoot "portable-tmp"
 $portableResultPath = Join-Path $smokeRoot "portable-desktop-result.log"
 Remove-Item -Force -ErrorAction SilentlyContinue $portableResultPath
 $env:CYRENE_DESKTOP_SMOKE_RESULT = $portableResultPath
-$portableDesktopSmoke = Invoke-DesktopSmokeProcess `
-    -Path $portableApp `
-    -Arguments @("--desktop-smoke-test") `
-    -Label "windows-$Arch-portable-desktop" `
-    -ResultPath $portableResultPath
-Assert-SmokeSucceeded `
-    -Result $portableDesktopSmoke `
-    -SuccessMarker "DESKTOP_SMOKE_TEST=ok" `
-    -Label "Portable Electron desktop smoke test"
+Invoke-ReleaseValidation -Label "Portable Electron desktop smoke test" -Action {
+    $portableDesktopSmoke = Invoke-DesktopSmokeProcess `
+        -Path $portableApp `
+        -Arguments @("--desktop-smoke-test") `
+        -Label "windows-$Arch-portable-desktop" `
+        -ResultPath $portableResultPath
+    Assert-SmokeSucceeded `
+        -Result $portableDesktopSmoke `
+        -SuccessMarker "DESKTOP_SMOKE_TEST=ok" `
+        -Label "Portable Electron desktop smoke test"
+}
 
 $env:CYRENE_USER_DATA_DIR = Join-Path $smokeRoot "portable-lifecycle-data"
 $env:CYRENE_CACHE_DIR = Join-Path $smokeRoot "portable-lifecycle-cache"
 $env:CYRENE_TEMP_DIR = Join-Path $smokeRoot "portable-lifecycle-tmp"
 $env:CYRENE_TERMINAL_SOAK_CYCLES = "5"
 $portableLifecycleResultPath = Join-Path $smokeRoot "portable-terminal-lifecycle-result.log"
-$portableLifecycleSoak = Invoke-DesktopSmokeProcess `
-    -Path $portableApp `
-    -Arguments @("--terminal-lifecycle-soak-test") `
-    -Label "windows-$Arch-portable-terminal-lifecycle" `
-    -ResultPath $portableLifecycleResultPath `
-    -TimeoutSeconds 600
-Assert-SmokeSucceeded `
-    -Result $portableLifecycleSoak `
-    -SuccessMarker "CYRENE_WINDOWS_TERMINAL_LIFECYCLE_SOAK=ok cycles=5" `
-    -Label "Portable Electron terminal lifecycle soak test"
+Invoke-ReleaseValidation -Label "Portable Electron terminal lifecycle soak test" -Action {
+    $portableLifecycleSoak = Invoke-DesktopSmokeProcess `
+        -Path $portableApp `
+        -Arguments @("--terminal-lifecycle-soak-test") `
+        -Label "windows-$Arch-portable-terminal-lifecycle" `
+        -ResultPath $portableLifecycleResultPath `
+        -TimeoutSeconds 600
+    Assert-SmokeSucceeded `
+        -Result $portableLifecycleSoak `
+        -SuccessMarker "CYRENE_WINDOWS_TERMINAL_LIFECYCLE_SOAK=ok cycles=5" `
+        -Label "Portable Electron terminal lifecycle soak test"
+}
 Remove-Item Env:CYRENE_TERMINAL_SOAK_CYCLES -ErrorAction SilentlyContinue
+
+if ($validationFailures.Count -gt 0) {
+    $summary = $validationFailures -join "`n`n"
+    throw "Windows $Arch release validation reported $($validationFailures.Count) failure(s):`n`n$summary"
+}
 
 Write-Host "WINDOWS_INSTALL_SMOKE_TEST=ok arch=$Arch installDir=$installDir portable=$portableApp"

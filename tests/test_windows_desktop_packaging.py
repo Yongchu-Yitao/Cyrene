@@ -116,6 +116,10 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert "installed-terminal-lifecycle-result.log" in smoke
     assert "portable-terminal-lifecycle-result.log" in smoke
     assert "TERMINAL_LIFECYCLE_SOAK=failed" in smoke
+    assert "$validationFailures = [Collections.Generic.List[string]]::new()" in smoke
+    assert smoke.count("Invoke-ReleaseValidation -Label") >= 8
+    assert "WINDOWS_VALIDATION_RESULT=failed" in smoke
+    assert "release validation reported $($validationFailures.Count) failure(s)" in smoke
     assert "still running (${elapsed}s elapsed)" in smoke
     assert "before writing its result" in smoke
     assert "--terminal-lifecycle-soak-test" in main
@@ -198,7 +202,10 @@ def test_frozen_terminal_smoke_sends_command_through_daemon_input():
     assert 'argv = [command, "/d", "/q", "/k"]' in terminal_smoke
     assert 'f"echo {marker}\\rexit\\r"' in terminal_smoke
     assert 'actor="user"' in terminal_smoke
-    assert 'terminals[0].get("status") != "exited"' in terminal_smoke
+    assert "exit_deadline = time.monotonic() + 20" in terminal_smoke
+    assert 'str(item.get("id") or "") == terminal_id' in terminal_smoke
+    assert 'terminal_state.get("status") != "exited"' in terminal_smoke
+    assert "daemonPidBefore={daemon_pid}" in terminal_smoke
     assert '"/k", f"echo {marker}"' not in terminal_smoke
 
 

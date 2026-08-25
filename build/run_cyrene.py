@@ -223,26 +223,39 @@ def _run_terminal_smoke_test() -> None:
             # On some headless x64 runners winpty releases the final CMD output
             # only as the process exits. Confirm the one-shot session reaches a
             # clean terminal state as well as persisting all of that tail data.
-            exit_deadline = time.monotonic() + 5
+            # The Windows reader deliberately allows five idle seconds to drain
+            # ConPTY's final output before it persists exit metadata. Give that
+            # drain a separate margin instead of racing it at the same deadline.
+            exit_deadline = time.monotonic() + 20
             listed = await client.list("release-smoke")
             terminals = list(listed.get("terminals") or [])
+            terminal_state = next(
+                (item for item in terminals if str(item.get("id") or "") == terminal_id),
+                None,
+            )
             while (
-                terminals
-                and terminals[0].get("status") == "running"
+                terminal_state
+                and terminal_state.get("status") == "running"
                 and time.monotonic() < exit_deadline
             ):
                 await asyncio.sleep(0.05)
                 listed = await client.list("release-smoke")
                 terminals = list(listed.get("terminals") or [])
+                terminal_state = next(
+                    (item for item in terminals if str(item.get("id") or "") == terminal_id),
+                    None,
+                )
             after = client._connection_info() or {}
             if (
                 int(after.get("pid") or 0) != daemon_pid
-                or not terminals
-                or terminals[0].get("status") != "exited"
-                or terminals[0].get("exitCode") != 0
+                or not terminal_state
+                or terminal_state.get("status") != "exited"
+                or terminal_state.get("exitCode") != 0
             ):
                 raise RuntimeError(
-                    "terminal daemon or one-shot session ended unexpectedly during ConPTY smoke test"
+                    "terminal daemon or one-shot session ended unexpectedly during ConPTY smoke test: "
+                    f"daemonPidBefore={daemon_pid}, daemonPidAfter={after.get('pid')!r}, "
+                    f"terminal={terminal_state!r}"
                 )
             print("CYRENE_WINDOWS_TERMINAL_SMOKE=ok")
         except Exception:
