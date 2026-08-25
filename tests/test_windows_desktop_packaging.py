@@ -219,6 +219,7 @@ def test_woa_core_excludes_x64_only_features_and_packages_sidecars():
     ).read_text(encoding="utf-8")
 
     assert '"simplexng", "rapidocr", "pyclipper", "cv2", "brotli", "fasttext"' in spec
+    assert 'if _IS_WIN:\n    # pywinpty' in spec
     assert '_collect_package("winpty")' in spec
     assert '"openconsole.exe", "conpty.dll"' in spec
     assert "_missing_winpty_runtime" in spec

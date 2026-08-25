@@ -214,10 +214,10 @@ for _package in (
 ):
     _collect_package(_package)
 
-if _WOA_NATIVE_CORE:
+if _IS_WIN:
     # pywinpty's Windows wheels carry ConPTY runtime files beside the Python
-    # extension. A hidden import alone omits OpenConsole.exe on native ARM64,
-    # leaving source terminals healthy but frozen terminals unable to emit.
+    # extension. A hidden import alone can omit OpenConsole.exe and conpty.dll,
+    # leaving source terminals healthy while frozen terminals cannot emit.
     _collect_package("winpty")
     _winpty_runtime_files = {
         Path(str(item[0])).name.lower()
@@ -228,7 +228,7 @@ if _WOA_NATIVE_CORE:
     } - _winpty_runtime_files
     if _missing_winpty_runtime:
         raise SystemExit(
-            "[fatal] native Windows ARM64 bundle is missing pywinpty runtime files: "
+            "[fatal] Windows bundle is missing pywinpty runtime files: "
             + ", ".join(sorted(_missing_winpty_runtime))
         )
 
