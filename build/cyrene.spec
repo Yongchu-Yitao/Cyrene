@@ -112,8 +112,6 @@ if _WOA_NATIVE_CORE:
 # pwd stub (exists only in CI; safe to skip on local builds)
 if _IS_WIN:
     _hidden.append("winloop")
-    # Terminal PTYs import pywinpty dynamically so its compiled `winpty`
-    # package must be explicit in frozen Windows builds.
     _hidden.append("winpty")
     try:
         import pwd  # noqa: F401
@@ -215,6 +213,24 @@ for _package in (
     "openai_codex",
 ):
     _collect_package(_package)
+
+if _WOA_NATIVE_CORE:
+    # pywinpty's Windows wheels carry ConPTY runtime files beside the Python
+    # extension. A hidden import alone omits OpenConsole.exe on native ARM64,
+    # leaving source terminals healthy but frozen terminals unable to emit.
+    _collect_package("winpty")
+    _winpty_runtime_files = {
+        Path(str(item[0])).name.lower()
+        for item in (*_datas, *_binaries)
+    }
+    _missing_winpty_runtime = {
+        "openconsole.exe", "conpty.dll"
+    } - _winpty_runtime_files
+    if _missing_winpty_runtime:
+        raise SystemExit(
+            "[fatal] native Windows ARM64 bundle is missing pywinpty runtime files: "
+            + ", ".join(sorted(_missing_winpty_runtime))
+        )
 
 # ``google.genai`` is a namespace package whose distribution name differs
 # from its import name.  Some SDK paths query their own package metadata at
