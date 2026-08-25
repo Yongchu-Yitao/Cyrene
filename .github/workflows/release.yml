@@ -614,30 +614,28 @@ jobs:
           test "$version" = "$electron_version"
           test "$version" = "$changelog_version"
 
-          git fetch origin main
+          git fetch --deepen=20 origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
-          ci_conclusion="$(
+          ci_runs="$(
             gh api --method GET \
               "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
               -f branch=main \
               -f event=push \
-              -f per_page=50 \
-            | jq -r --arg sha "$GITHUB_SHA" \
-              '[.workflow_runs[] | select(.head_sha == $sha)] | first | .conclusion // ""'
+              -f per_page=50
           )"
-          if [ -z "$ci_conclusion" ]; then
-            parent_sha="$(git rev-parse "$GITHUB_SHA^")"
+          candidate_sha="$GITHUB_SHA"
+          ci_conclusion=""
+          for _ in $(seq 1 20); do
             ci_conclusion="$(
-              gh api --method GET \
-                "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
-                -f branch=main \
-                -f event=push \
-                -f per_page=50 \
-              | jq -r --arg sha "$parent_sha" \
+              jq -r --arg sha "$candidate_sha" \
                 '[.workflow_runs[] | select(.head_sha == $sha)] | first | .conclusion // ""'
+                <<<"$ci_runs"
             )"
-          fi
+            test "$ci_conclusion" = "success" && break
+            test -z "$ci_conclusion" || test "$ci_conclusion" = "skipped" || break
+            candidate_sha="$(git rev-parse "$candidate_sha^")"
+          done
           test "$ci_conclusion" = "success"
 
       - name: Detect pre-release
