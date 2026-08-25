@@ -145,20 +145,46 @@ def _run_terminal_smoke_test() -> None:
         terminal_id = ""
         try:
             shell = os.environ.get("COMSPEC") or r"C:\Windows\System32\cmd.exe"
-            created = await client._request(
-                "create",
-                projectId="release-smoke",
-                cwd=str(state_dir),
-                defaultCwd=str(state_dir),
-                shell="cmd",
-                argv=[shell, "/d", "/q"],
-                title="ConPTY smoke",
-                cols=100,
-                rows=30,
-                createdBy="release-smoke",
-                launchMode="interactive",
-                activate=True,
-            )
+            created = None
+            for attempt in range(3):
+                try:
+                    created = await client._request(
+                        "create",
+                        projectId="release-smoke",
+                        cwd=str(state_dir),
+                        defaultCwd=str(state_dir),
+                        shell="cmd",
+                        argv=[shell, "/d", "/q"],
+                        title="ConPTY smoke",
+                        cols=100,
+                        rows=30,
+                        createdBy="release-smoke",
+                        launchMode="interactive",
+                        activate=True,
+                    )
+                    break
+                except ConnectionError:
+                    # The daemon may finish a request just as the short-lived
+                    # smoke client connection is being replaced. Recover the
+                    # created session before deciding whether to retry.
+                    await asyncio.sleep(0.25)
+                    with contextlib.suppress(Exception):
+                        listed = await client.list("release-smoke")
+                        recovered = next(
+                            (
+                                item
+                                for item in list(listed.get("terminals") or [])
+                                if item.get("title") == "ConPTY smoke"
+                            ),
+                            None,
+                        )
+                        if recovered:
+                            created = {"terminal": recovered}
+                            break
+                    if attempt == 2:
+                        raise
+            if created is None:
+                raise RuntimeError("ConPTY session was not created")
             terminal = dict(created.get("terminal") or {})
             terminal_id = str(terminal.get("id") or "")
             if not terminal_id or terminal.get("status") != "running":
@@ -171,14 +197,18 @@ def _run_terminal_smoke_test() -> None:
             output = b""
             while time.monotonic() < deadline:
                 now = time.monotonic()
-                if now >= next_probe:
-                    await client.input(
-                        terminal_id, f"echo {marker}\r\n", actor="user"
+                try:
+                    if now >= next_probe:
+                        await client.input(
+                            terminal_id, f"echo {marker}\r\n", actor="user"
+                        )
+                        next_probe = now + 2
+                    snapshot = await client.scrollback(
+                        terminal_id, cursor=0, max_bytes=512 * 1024
                     )
-                    next_probe = now + 2
-                snapshot = await client.scrollback(
-                    terminal_id, cursor=0, max_bytes=512 * 1024
-                )
+                except ConnectionError:
+                    await asyncio.sleep(0.1)
+                    continue
                 output = base64.b64decode(str(snapshot.get("data") or ""))
                 if marker.encode() in output:
                     break
@@ -195,6 +225,15 @@ def _run_terminal_smoke_test() -> None:
             ):
                 raise RuntimeError("terminal daemon restarted during ConPTY smoke test")
             print("CYRENE_WINDOWS_TERMINAL_SMOKE=ok")
+        except Exception:
+            daemon_log = state_dir / "daemon.log"
+            with contextlib.suppress(OSError):
+                diagnostics = daemon_log.read_text(
+                    encoding="utf-8", errors="replace"
+                )[-16_384:]
+                if diagnostics.strip():
+                    print(f"TERMINAL DAEMON LOG:\n{diagnostics}", file=sys.stderr)
+            raise
         finally:
             if terminal_id:
                 with contextlib.suppress(Exception):
