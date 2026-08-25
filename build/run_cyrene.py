@@ -144,7 +144,9 @@ def _run_terminal_smoke_test() -> None:
         client = TerminalDaemonClient(state_dir=state_dir)
         terminal_id = ""
         try:
-            shell = os.environ.get("COMSPEC") or r"C:\Windows\System32\cmd.exe"
+            from cyrene.tooling.backends.shell_runtime import interactive_argv
+
+            shell, argv = interactive_argv()
             created = None
             for attempt in range(3):
                 try:
@@ -153,8 +155,8 @@ def _run_terminal_smoke_test() -> None:
                         projectId="release-smoke",
                         cwd=str(state_dir),
                         defaultCwd=str(state_dir),
-                        shell="cmd",
-                        argv=[shell, "/d", "/q"],
+                        shell=shell,
+                        argv=argv,
                         title="ConPTY smoke",
                         cols=100,
                         rows=30,
