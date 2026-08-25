@@ -298,8 +298,6 @@ async def _websocket_relay(
                     if relayed_frames.complete and not released:
                         released = True
                         release.touch()
-                        if sys.platform == "win32":
-                            await manager.close(terminal_id)
                 elif event.get("type") == "resync_required":
                     resyncs += 1
                 elif (
@@ -375,8 +373,6 @@ async def _run_case(
                 while not source_frames.complete:
                     await asyncio.sleep(0.005)
             release.touch()
-            if sys.platform == "win32":
-                await manager.close(terminal_id)
         await _wait_for_exit(manager, terminal_id)
         manager.flush()
         screen = await manager.screen_snapshot_async(terminal_id)
