@@ -281,6 +281,7 @@ async def _recover_final_reply(
     max_tokens: int | None = None,
     *,
     completion_packet: dict[str, Any] | None = None,
+    tools: list[dict[str, Any]] | None = None,
     call_llm: Any = None,
     call_llm_stream: Any = None,
     streaming_reply_requested: Any = None,
@@ -306,6 +307,7 @@ async def _recover_final_reply(
                 },
             ],
             max_tokens=max_tokens,
+            tools=tools,
             call_llm=call_llm,
             call_llm_stream=call_llm_stream,
             streaming_reply_requested=streaming_reply_requested,
@@ -337,6 +339,7 @@ async def _recover_final_reply(
     return await _validated_final_no_tool_reply(
         [*messages, {"role": "user", "content": instruction}],
         max_tokens=max_tokens,
+        tools=tools,
         call_llm=call_llm,
         call_llm_stream=call_llm_stream,
         streaming_reply_requested=streaming_reply_requested,
@@ -409,6 +412,7 @@ async def _validated_final_no_tool_reply(
     messages: list[dict],
     max_tokens: int | None = None,
     *,
+    tools: list[dict[str, Any]] | None = None,
     call_llm: Any = None,
     call_llm_stream: Any = None,
     streaming_reply_requested: Any = None,
@@ -424,13 +428,18 @@ async def _validated_final_no_tool_reply(
         else streaming_reply_requested
     )
     if streaming_reply_requested():
-        response = await call_llm_stream(messages, max_tokens=max_tokens)
+        stream_options: dict[str, Any] = {"max_tokens": max_tokens}
+        if tools:
+            stream_options.update({"tools": tools, "tool_choice": "none"})
+        response = await call_llm_stream(messages, **stream_options)
     else:
-        response = await call_llm(
-            messages,
-            tools=None,
-            max_tokens=max_tokens,
-        )
+        call_options: dict[str, Any] = {
+            "tools": tools,
+            "max_tokens": max_tokens,
+        }
+        if tools:
+            call_options["tool_choice"] = "none"
+        response = await call_llm(messages, **call_options)
     _record_final_reply_usage(response)
     text = assistant_text(response).strip()
     if (
@@ -455,8 +464,7 @@ async def _validated_final_no_tool_reply(
         ]
         corrected_response = await call_llm(
             correction_messages,
-            tools=None,
-            max_tokens=max_tokens,
+            **call_options,
         )
         _record_final_reply_usage(response, corrected_response)
         corrected = assistant_text(corrected_response).strip()

@@ -391,10 +391,12 @@ async def test_execution_rejects_unsafe_plain_text_before_empty_quit(monkeypatch
         {"content": "安全的广州天气答复。"},
     ])
     calls = []
+    call_options = []
     saved_messages = []
 
     async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         calls.append(tools)
+        call_options.append(kwargs.get("tool_choice"))
         return next(responses)
 
     async def fake_save(messages, **kwargs):
@@ -415,7 +417,8 @@ async def test_execution_rejects_unsafe_plain_text_before_empty_quit(monkeypatch
 
     assert result == "安全的广州天气答复。"
     assert len(calls) == 4
-    assert calls[-1] is None
+    assert calls[-1] == calls[-2]
+    assert call_options[-1] == "none"
     assert all(
         "DSML" not in str(message.get("content") or "")
         for message in saved_messages[-1]

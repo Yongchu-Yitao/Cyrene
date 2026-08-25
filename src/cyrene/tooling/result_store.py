@@ -19,6 +19,7 @@ _RESULT_ROOT = TEMP_DIR / "tool-results"
 _RESULT_TTL_SECONDS = 24 * 60 * 60
 _UNKNOWN_CONTEXT_FALLBACK_TOKENS = 128_000
 _MAX_READ_CHARS = 100_000
+_MAX_TOOL_RESULT_BATCH_TOKENS = 20_000
 _REF_RE = re.compile(r"^tool-result://([0-9a-f]{24})/([0-9a-f]{32})$")
 _POWERPOINT_ARGUMENT_REFS_KEY = "_externalized_powerpoint_arguments"
 _POWERPOINT_ARGUMENT_MIN_BYTES = 0
@@ -672,14 +673,19 @@ def project_tool_result_for_model(
     session_id: str = "",
     context_limit_tokens: int | None = None,
     secondary: bool = False,
+    token_limit_tokens: int | None = None,
 ) -> ProjectedToolResult:
     """Return the exact small result or a bounded, recoverable model projection."""
     text = str(result)
     original_tokens = _token_count(text)
     original_bytes = len(text.encode("utf-8"))
-    token_limit = tool_result_token_limit(
-        context_limit_tokens=context_limit_tokens,
-        secondary=secondary,
+    token_limit = (
+        max(1, int(token_limit_tokens))
+        if token_limit_tokens is not None
+        else tool_result_token_limit(
+            context_limit_tokens=context_limit_tokens,
+            secondary=secondary,
+        )
     )
     powerpoint_ref: str | None = None
     if str(tool_name or "") in _POWERPOINT_MUTATION_TOOLS:
@@ -699,7 +705,10 @@ def project_tool_result_for_model(
                 tool_name=str(tool_name or ""),
                 content_ref=powerpoint_ref,
             )
-            if powerpoint_projection is not None:
+            if (
+                powerpoint_projection is not None
+                and _token_count(powerpoint_projection) <= token_limit
+            ):
                 return ProjectedToolResult(
                     powerpoint_projection,
                     True,
@@ -744,12 +753,81 @@ def project_tool_result_for_model(
     )
 
 
+def _shared_token_budgets(token_counts: list[int], token_limit: int) -> list[int]:
+    """Water-fill one batch budget while preserving small results exactly."""
+    budgets = [0] * len(token_counts)
+    remaining = max(0, int(token_limit))
+    active = {index for index, count in enumerate(token_counts) if count > 0}
+    while active and remaining > 0:
+        share = remaining // len(active)
+        if share <= 0:
+            for index in sorted(active)[:remaining]:
+                budgets[index] = 1
+            break
+        completed = {
+            index for index in active if token_counts[index] <= share
+        }
+        if completed:
+            for index in completed:
+                budgets[index] = token_counts[index]
+                remaining -= token_counts[index]
+            active.difference_update(completed)
+            continue
+        ordered = sorted(active)
+        base, extra = divmod(remaining, len(ordered))
+        for position, index in enumerate(ordered):
+            budgets[index] = base + (1 if position < extra else 0)
+        break
+    return budgets
+
+
+def project_tool_result_batch_for_model(
+    results: list[tuple[object, str, str]],
+    *,
+    session_id: str = "",
+    context_limit_tokens: int | None = None,
+    secondary: bool = False,
+) -> list[ProjectedToolResult]:
+    """Project one tool-call batch into a single shared context fraction.
+
+    Small results are kept intact first. Larger results fairly share whatever
+    remains, so no early result can consume the entire batch allowance.
+    """
+    if not results:
+        return []
+    token_limit = min(
+        _MAX_TOOL_RESULT_BATCH_TOKENS,
+        tool_result_token_limit(
+            context_limit_tokens=context_limit_tokens,
+            secondary=secondary,
+        ),
+    )
+    token_counts = [_token_count(str(result)) for result, _name, _call_id in results]
+    if sum(token_counts) <= token_limit:
+        budgets = token_counts
+    else:
+        budgets = _shared_token_budgets(token_counts, token_limit)
+    return [
+        project_tool_result_for_model(
+            result,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            session_id=session_id,
+            context_limit_tokens=context_limit_tokens,
+            secondary=secondary,
+            token_limit_tokens=max(1, budget),
+        )
+        for (result, tool_name, tool_call_id), budget in zip(results, budgets)
+    ]
+
+
 __all__ = [
     "ProjectedToolResult",
     "ToolResultReferenceError",
     "compact_powerpoint_tool_episodes_for_epoch",
     "externalize_powerpoint_tool_arguments",
     "project_tool_result_for_model",
+    "project_tool_result_batch_for_model",
     "read_tool_result",
     "store_tool_result",
     "tool_result_token_limit",

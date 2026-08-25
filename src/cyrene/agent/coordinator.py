@@ -82,7 +82,7 @@ from cyrene.model_runtime.messages import (
     assistant_text,
     parse_tool_arguments,
 )
-from cyrene.tooling.result_store import project_tool_result_for_model
+from cyrene.tooling.result_store import project_tool_result_batch_for_model
 from cyrene.memory import get_memory_context
 from cyrene.runtime.memory.short_term import get_context
 from cyrene.learning.skills import build_skill_prompt_block
@@ -236,6 +236,7 @@ async def _run_execution_agent_locked(task: str, bot: Any, chat_id: int, db_path
             return assistant_text(response) or "Done."
 
         mcp_observations: list[dict[str, Any]] = []
+        batch_results: list[tuple[dict[str, Any], object, str, str]] = []
         for tc in tool_calls:
             call_id = tc["id"]
             fn = tc["function"]
@@ -253,18 +254,28 @@ async def _run_execution_agent_locked(task: str, bot: Any, chat_id: int, db_path
                 )
             except Exception as e:
                 result = f"Tool {name} failed: {e}"
-            projected = project_tool_result_for_model(
-                result,
-                tool_name=str(name or ""),
-                tool_call_id=call_id,
-            )
-            messages.append({"role": "tool", "tool_call_id": call_id, "content": projected.content})
+            tool_entry = {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": str(result),
+            }
+            messages.append(tool_entry)
+            batch_results.append((tool_entry, result, str(name or ""), call_id))
             observation = build_mcp_observation_message(
                 result,
                 tool_name=str(name or ""),
             )
             if observation is not None:
                 mcp_observations.append(observation)
+        projected_batch = project_tool_result_batch_for_model([
+            (result, tool_name, tool_call_id)
+            for _entry, result, tool_name, tool_call_id in batch_results
+        ])
+        for (entry, _result, _name, _call_id), projected in zip(
+            batch_results,
+            projected_batch,
+        ):
+            entry["content"] = projected.content
         messages.extend(mcp_observations)
 
     return final_text

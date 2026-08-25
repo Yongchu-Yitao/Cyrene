@@ -45,6 +45,30 @@ def test_deepseek_legacy_disabled_request_keeps_thinking_enabled():
     assert payload["reasoning_effort"] == "high"
 
 
+def test_payload_can_disable_tool_selection_without_removing_schema():
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "lookup",
+            "description": "Look up a value",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }]
+
+    payload = cl._build_payload(
+        [{"role": "user", "content": "summarize"}],
+        tools=tools,
+        max_tokens=24,
+        stream=False,
+        model="MiniMax-M3",
+        thinking="auto",
+        tool_choice="none",
+    )
+
+    assert payload["tools"] == tools
+    assert payload["tool_choice"] == "none"
+
+
 def test_reused_tool_call_ids_have_a_stable_wire_projection():
     messages = [
         {
@@ -653,6 +677,50 @@ async def test_minimax_stream_separates_cumulative_reasoning_and_content():
     assert [event["delta"] for event in events if event["type"] == "reply_delta"] == [
         "An", "swer"
     ]
+
+
+async def test_minimax_stream_deduplicates_both_reasoning_fields():
+    events = []
+
+    class FakeResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def aiter_lines(self):
+            yield 'data: {"choices":[{"delta":{"reasoning_content":"plan"}}]}'
+            yield 'data: {"choices":[{"delta":{"reasoning_content":"plan more"}}]}'
+            yield 'data: {"choices":[{"delta":{"reasoning_content":"plan more","reasoning_details":[{"type":"reasoning.text","text":"plan more"}]}}]}'
+            yield 'data: {"choices":[{"delta":{"reasoning_content":" continued"}}]}'
+            yield 'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"plan more continued"}]}}]}'
+            yield 'data: {"choices":[{"delta":{"content":"Done"}}]}'
+            yield "data: [DONE]"
+
+    class FakeClient:
+        def stream(self, *args, **kwargs):
+            return FakeResponse()
+
+    async def capture(event):
+        events.append(event)
+
+    message = await cl._handle_stream(
+        FakeClient(),
+        "https://api.minimax.io/v1/chat/completions",
+        {"model": "MiniMax-M3", "messages": []},
+        {},
+        capture,
+    )
+
+    assert message["reasoning_content"] == "plan more continued"
+    assert [
+        event["delta"]
+        for event in events
+        if event["type"] == "reasoning_delta"
+    ] == ["plan", " more", " continued"]
 
 
 async def test_minimax_stream_filters_legacy_think_tags_across_chunks():

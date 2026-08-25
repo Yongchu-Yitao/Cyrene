@@ -63,6 +63,60 @@ def test_large_result_is_bounded_and_recoverable(isolated_result_store):
     assert page["has_more"] is True
 
 
+def test_tool_batch_shares_one_context_fraction(isolated_result_store):
+    small = "short evidence"
+    large_a = "甲" * 4_000
+    large_b = "乙" * 4_000
+    token_limit = result_store.tool_result_token_limit(
+        context_limit_tokens=100_000,
+    )
+
+    projected = result_store.project_tool_result_batch_for_model(
+        [
+            (small, "WebSearch", "search-1"),
+            (large_a, "WebFetch", "fetch-1"),
+            (large_b, "WebFetch", "fetch-2"),
+        ],
+        session_id="session-a",
+        context_limit_tokens=100_000,
+    )
+
+    assert projected[0].content == small
+    assert projected[0].truncated is False
+    assert projected[1].truncated is True
+    assert projected[2].truncated is True
+    assert sum(
+        result_store._token_count(item.content) for item in projected
+    ) <= token_limit
+    large_projection_tokens = [
+        result_store._token_count(item.content) for item in projected[1:]
+    ]
+    assert abs(large_projection_tokens[0] - large_projection_tokens[1]) <= 1
+
+
+def test_main_and_subagent_batches_have_independent_limits(isolated_result_store):
+    raw = "证" * 30_000
+
+    main_batch = result_store.project_tool_result_batch_for_model(
+        [(raw, "WebFetch", "main-fetch")],
+        session_id="session-a",
+        context_limit_tokens=1_000_000,
+    )
+    subagent_batch = result_store.project_tool_result_batch_for_model(
+        [(raw, "WebFetch", "subagent-fetch")],
+        session_id="session-a",
+        context_limit_tokens=1_000_000,
+    )
+
+    main_tokens = sum(result_store._token_count(item.content) for item in main_batch)
+    subagent_tokens = sum(
+        result_store._token_count(item.content) for item in subagent_batch
+    )
+    assert main_tokens <= 20_000
+    assert subagent_tokens <= 20_000
+    assert main_tokens + subagent_tokens > 20_000
+
+
 def _large_powerpoint_arguments(slide_count: int = 2) -> str:
     return json.dumps({
         "operation": "invoke",

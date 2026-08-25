@@ -1642,6 +1642,7 @@ def _build_payload(
     response_format: dict[str, Any] | None = None,
     reasoning_effort: str = "",
     provider_preset: str = "",
+    tool_choice: str | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     provider_model = str(model or "").strip().lower().rsplit("/", 1)[-1]
     preset = str(provider_preset or "").strip().lower()
@@ -1694,7 +1695,7 @@ def _build_payload(
         payload["max_tokens"] = max_tokens
     if tools:
         payload["tools"] = tools
-        payload["tool_choice"] = "auto"
+        payload["tool_choice"] = tool_choice if tool_choice is not None else "auto"
     # Constrained JSON mode (OpenAI/DeepSeek `response_format`). Only meaningful
     # without tools — providers reject/ignore it alongside function calling — so
     # callers pass it on tool-less "just emit JSON" rounds.
@@ -2610,6 +2611,7 @@ async def call_llm(
     messages: list[dict],
     *,
     tools: list | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
     model_type: str = "primary",
     candidates: list[dict] | None = None,
     candidate_lease: Any = None,
@@ -2634,7 +2636,9 @@ async def call_llm(
 
     Args:
         messages: The conversation history.
-        tools: Optional tool definitions (triggers ``tool_choice="auto"``).
+        tools: Optional tool definitions.
+        tool_choice: Optional provider tool-selection policy. When omitted,
+            requests carrying tools use ``"auto"``.
         model_type: ``"primary"``, ``"secondary"``, or ``"vision"``.
         candidates: Explicit candidate list (overrides ``model_type``).
         candidate_lease: Optional run-owned lease used to retain candidate
@@ -2862,6 +2866,7 @@ async def call_llm(
                         stream=stream,
                         response_format=response_format,
                         reasoning_effort=str(candidate.get("reasoning_effort") or ""),
+                        tool_choice=tool_choice,
                     )
                     payload = native_request.payload
                 else:
@@ -2875,6 +2880,7 @@ async def call_llm(
                         response_format,
                         reasoning_effort=str(candidate.get("reasoning_effort") or ""),
                         provider_preset=_candidate_provider_preset(candidate),
+                        tool_choice=tool_choice,
                     )
 
                 provider_message_units = (
@@ -3775,7 +3781,16 @@ async def _handle_stream(
                             saw_reasoning_content = True
                             rc = delta.get("reasoning_content")
                             if isinstance(rc, str):
-                                await _forward_reasoning(rc)
+                                if is_minimax:
+                                    reasoning_delta, reasoning_snapshot = _snapshot_delta(
+                                        reasoning_snapshot,
+                                        rc,
+                                    )
+                                    if rc:
+                                        saw_split_reasoning = True
+                                    await _forward_reasoning(reasoning_delta)
+                                else:
+                                    await _forward_reasoning(rc)
                         details = delta.get("reasoning_details")
                         if details:
                             reasoning_details = details

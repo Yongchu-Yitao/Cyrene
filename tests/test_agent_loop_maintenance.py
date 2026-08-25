@@ -639,8 +639,12 @@ async def test_dual_lane_protocol_repair_forces_structured_self_contained_finali
     lane_records = []
     saved_records = []
 
-    async def fake_llm(messages, tools=None, **_kwargs):
-        model_calls.append((copy.deepcopy(messages), copy.deepcopy(tools)))
+    async def fake_llm(messages, tools=None, **kwargs):
+        model_calls.append((
+            copy.deepcopy(messages),
+            copy.deepcopy(tools),
+            kwargs.get("tool_choice"),
+        ))
         return next(responses)
 
     async def capture_lane_record(message, session_id=None):
@@ -672,9 +676,10 @@ async def test_dual_lane_protocol_repair_forces_structured_self_contained_finali
 
     assert result == final_reply
     assert len(model_calls) == 4
-    repaired_execution_messages, _ = model_calls[2]
-    finalization_messages, finalization_tools = model_calls[3]
-    assert finalization_tools is None
+    repaired_execution_messages, repaired_execution_tools, _ = model_calls[2]
+    finalization_messages, finalization_tools, finalization_choice = model_calls[3]
+    assert finalization_tools == repaired_execution_tools
+    assert finalization_choice == "none"
     assert finalization_messages[:len(repaired_execution_messages)] == (
         repaired_execution_messages
     )

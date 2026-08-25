@@ -415,6 +415,7 @@ def prepare_request(
     stream: bool,
     response_format: dict[str, Any] | None,
     reasoning_effort: str = "",
+    tool_choice: str | dict[str, Any] | None = None,
 ) -> PreparedRequest:
     adapter = str(adapter_id or "").strip().lower()
     tool_defs = _tool_definitions(tools)
@@ -433,7 +434,14 @@ def prepare_request(
                 {"name": item["name"], "description": item["description"], "input_schema": item["parameters"]}
                 for item in tool_defs
             ]
-            payload["tool_choice"] = {"type": "auto"}
+            # Anthropic's native Messages API has no schema-preserving "none"
+            # mode. Keep the definitions stable and rely on the explicit final
+            # synthesis instruction when callers disable tool selection.
+            payload["tool_choice"] = (
+                tool_choice
+                if isinstance(tool_choice, dict)
+                else {"type": "auto"}
+            )
         if response_format is not None:
             raise ValueError("Anthropic adapter does not yet support response_format")
         return PreparedRequest(payload, {
@@ -450,7 +458,7 @@ def prepare_request(
                 {"type": "function", "name": item["name"], "description": item["description"], "parameters": item["parameters"]}
                 for item in tool_defs
             ]
-            payload["tool_choice"] = "auto"
+            payload["tool_choice"] = tool_choice if tool_choice is not None else "auto"
         if response_format is not None:
             canonical_format = dict(response_format)
             if canonical_format.get("type") == "json_schema":
@@ -483,7 +491,12 @@ def prepare_request(
             payload["generationConfig"] = generation
         if tool_defs:
             payload["tools"] = [{"functionDeclarations": tool_defs}]
-            payload["toolConfig"] = {"functionCallingConfig": {"mode": "AUTO"}}
+            mode = (
+                "NONE"
+                if str(tool_choice or "").strip().lower() == "none"
+                else "AUTO"
+            )
+            payload["toolConfig"] = {"functionCallingConfig": {"mode": mode}}
         return PreparedRequest(payload, {
             "Content-Type": "application/json",
             "x-goog-api-key": api_key,

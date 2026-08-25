@@ -18,6 +18,7 @@ async def call_agent_model(
     secondary: bool = False,
     thinking: str = "auto",
     response_format: dict[str, Any] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Call the configured model with agent trace context attached."""
     binding = bind_run_context(caller=caller) if caller is not None else None
@@ -31,6 +32,8 @@ async def call_agent_model(
             optional["thinking"] = thinking
         if response_format is not None:
             optional["response_format"] = response_format
+        if tool_choice is not None:
+            optional["tool_choice"] = tool_choice
         return await _state._call_llm(
             messages,
             tools=tools,
@@ -49,15 +52,20 @@ async def stream_agent_model(
     caller: str | None = None,
     secondary: bool = False,
     tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Stream a model response through the active reply writer."""
     binding = bind_run_context(caller=caller) if caller is not None else None
     try:
+        optional: dict[str, Any] = {}
+        if tool_choice is not None:
+            optional["tool_choice"] = tool_choice
         return await _state._call_llm_stream(
             messages,
             max_tokens=max_tokens,
             secondary=secondary,
             tools=tools,
+            **optional,
         )
     finally:
         if binding is not None:

@@ -768,6 +768,7 @@ async def _call_llm(
     tools: list | None = None,
     max_tokens: int | None = None,
     *,
+    tool_choice: str | dict | None = None,
     candidates: list[dict] | None = None,
     secondary: bool = False,
     thinking: str = "auto",
@@ -798,6 +799,7 @@ async def _call_llm(
     response = await _unified_call_llm(
         messages,
         tools=tools,
+        tool_choice=tool_choice,
         max_tokens=max_tokens,
         candidates=effective_candidates,
         candidate_lease=lease,
@@ -828,6 +830,7 @@ async def _call_llm_stream(
     *,
     secondary: bool = False,
     tools: list | None = None,
+    tool_choice: str | dict | None = None,
     cache_lane: TranscriptLane | str = "",
 ) -> dict[str, Any]:
     from cyrene.call_llm import call_llm as _unified_call_llm
@@ -850,6 +853,7 @@ async def _call_llm_stream(
         stream=True,
         stream_callback=_reply_stream_writer.get(),
         tools=tools,
+        tool_choice=tool_choice,
         caller=_caller_type.get(),
         phase=_llm_phase_name(tools),
         round_id=_current_round_id.get(),

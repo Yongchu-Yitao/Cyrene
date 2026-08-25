@@ -420,7 +420,7 @@ async def test_tool_loop_continues_until_completion_and_persists_final_message(t
     calls = []
 
     async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
-        if tools is None:
+        if kwargs.get("tool_choice") == "none":
             return {"content": "final answer from gathered tool results"}
         calls.append(tools)
         if len(calls) == 1:
@@ -3874,7 +3874,7 @@ async def test_streaming_phase2_delivers_valid_assistant_content_on_quit(
     assert saved["messages"][-1]["usage"]["prompt_tokens"] == 1200
 
 
-async def test_streaming_phase2_dsml_assistant_content_uses_no_tool_wrapup(
+async def test_streaming_phase2_dsml_assistant_content_preserves_tool_schema(
     tmp_path, monkeypatch
 ):
     """Tool markup on a quit turn is repaired without reopening tools."""
@@ -3895,7 +3895,7 @@ async def test_streaming_phase2_dsml_assistant_content_uses_no_tool_wrapup(
         '</｜｜DSML｜｜tool_calls>'
     )
     calls = []
-    wrap_tools = []
+    wrap_requests = []
     saved = {}
     streamed = []
     responses = iter([
@@ -3925,8 +3925,13 @@ async def test_streaming_phase2_dsml_assistant_content_uses_no_tool_wrapup(
         calls.append(json.dumps(tools, sort_keys=True))
         return next(responses)
 
-    async def fake_call_llm_stream(_messages, max_tokens=None, tools=None):
-        wrap_tools.append(json.dumps(tools, sort_keys=True))
+    async def fake_call_llm_stream(
+        _messages,
+        max_tokens=None,
+        tools=None,
+        tool_choice=None,
+    ):
+        wrap_requests.append((json.dumps(tools, sort_keys=True), tool_choice))
         await _agent_core._emit_reply_stream_event({"type": "reply_start"})
         await _agent_core._emit_reply_stream_event({
             "type": "reply_delta", "delta": "安全的最终答复。",
@@ -3965,8 +3970,9 @@ async def test_streaming_phase2_dsml_assistant_content_uses_no_tool_wrapup(
         _agent_state._reply_stream_writer.reset(writer_token)
 
     assert result == "安全的最终答复。"
-    assert len(wrap_tools) == 1
-    assert wrap_tools[0] == "null"
+    assert len(wrap_requests) == 1
+    assert wrap_requests[0][0] == calls[1]
+    assert wrap_requests[0][1] == "none"
     assert calls[0] == calls[1]
     assert all("DSML" not in str(event) for event in streamed)
     assert all(
@@ -3976,7 +3982,7 @@ async def test_streaming_phase2_dsml_assistant_content_uses_no_tool_wrapup(
 
 
 async def test_quit_wrap_up_never_reenters_tool_loop(tmp_path, monkeypatch):
-    """Once quit is observed, recovery is no-tool and cannot revive execution."""
+    """Disabled selection preserves schemas without reviving execution."""
     from cyrene.agent import agent as _agent_core
     from cyrene.agent import state as _agent_state
 
@@ -4006,9 +4012,15 @@ async def test_quit_wrap_up_never_reenters_tool_loop(tmp_path, monkeypatch):
             ],
         }
 
-    async def fake_call_llm_stream(messages, max_tokens=32000, tools=None):
+    async def fake_call_llm_stream(
+        messages,
+        max_tokens=32000,
+        tools=None,
+        tool_choice=None,
+    ):
         stream_calls["n"] += 1
-        assert tools is None
+        assert tools == llm_calls[-1]
+        assert tool_choice == "none"
         await _agent_core._emit_reply_stream_event({"type": "reply_start"})
         await _agent_core._emit_reply_stream_event({"type": "reply_delta", "delta": "已对比完成"})
         await _agent_core._emit_reply_stream_event({"type": "reply_done", "response": "已对比完成"})
@@ -6303,10 +6315,12 @@ async def test_phase2_rejected_plain_text_is_not_committed_by_empty_quit(monkeyp
         {"content": "self-contained execution answer", "tool_calls": []},
     ])
     calls = []
+    call_options = []
     saved = []
 
     async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         calls.append(messages)
+        call_options.append((tools, kwargs.get("tool_choice")))
         return next(responses)
 
     async def fake_save(messages, **_kwargs):
@@ -6327,6 +6341,8 @@ async def test_phase2_rejected_plain_text_is_not_committed_by_empty_quit(monkeyp
 
     assert result == "self-contained execution answer"
     assert len(calls) == 4
+    assert call_options[3][0] == call_options[2][0]
+    assert call_options[3][1] == "none"
     assert saved[-1][-1]["content"] == "self-contained execution answer"
     assert saved[-1][-1]["client_request_id"] == "req_phase2_fallback"
 

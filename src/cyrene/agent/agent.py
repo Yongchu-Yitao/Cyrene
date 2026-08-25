@@ -100,7 +100,10 @@ from cyrene.tooling import (
     resolve_wire_call,
 )
 from cyrene.tooling.mcp_content import build_mcp_observation_message
-from cyrene.tooling.result_store import project_tool_result_for_model
+from cyrene.tooling.result_store import (
+    project_tool_result_batch_for_model,
+    project_tool_result_for_model,
+)
 from cyrene.workbench.inbox import current_workbench_inbox
 
 _PHASE1_DECISION_PROMPT = PHASE1_DECISION_PROMPT
@@ -962,6 +965,7 @@ async def _run_main_agent_impl(
         fallback: str = "Done.",
         execution_completion: bool = False,
         force_completion_packet: bool = False,
+        recovery_tools: list[dict[str, Any]] | None = None,
     ) -> str:
         # A valid terminal answer has already paid for the main model call.
         # Deliver it directly instead of rebuilding the full history. Tool-markup
@@ -995,6 +999,7 @@ async def _run_main_agent_impl(
                 project_history_for_llm(base_messages),
                 max_tokens=None,
                 completion_packet=completion_packet,
+                tools=recovery_tools,
                 call_llm=_call_llm,
                 streaming_reply_requested=_streaming_reply_requested,
             )
@@ -1825,6 +1830,7 @@ async def _run_main_agent_impl(
                         messages,
                         execution_completion=dual_lane,
                         force_completion_packet=execution_finalization_required,
+                        recovery_tools=execution_wire_tool_defs,
                     )
                     # Preserve a valid assistant(tool_calls) -> tool-results
                     # sequence, then store the user-visible answer after it.
@@ -1874,6 +1880,9 @@ async def _run_main_agent_impl(
                 pending_reflection_tool_calls: list[tuple[dict[str, Any], dict[str, Any]]] = []
                 inbox_batch_args: dict[str, dict[str, Any]] = {}
                 mcp_observations: list[dict[str, Any]] = []
+                batch_projection_records: list[
+                    tuple[dict[str, Any], object, str, str]
+                ] = []
                 tool_batch_id = f"batch_{uuid4().hex}"
                 if runtime_inbox is not None and not guidance_supersedes_batch:
                     inbox_calls: list[tuple[Any, ...]] = []
@@ -2000,30 +2009,20 @@ async def _run_main_agent_impl(
                             "Tool %r failed: %s", tool_name, e, exc_info=True
                         )
                         result = f"Tool failed: {e}"
-                    projected_result = project_tool_result_for_model(
-                        result,
-                        tool_name=str(tool_name or ""),
-                        tool_call_id=t["id"],
-                    )
-                    tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": t["id"], "content": projected_result.content}
-                    tool_entry = attach_context(tool_entry, context_block(
-                        f"tool.result.{tool_name}.{t['id']}",
-                        "tool_result",
-                        source=f"tool:{tool_name}",
-                        reason="tool output returned to LLM",
-                        transforms=["tool_result_projection"] if projected_result.truncated else [],
-                        content=projected_result.content,
-                        metadata={
-                            "tool_name": tool_name,
-                            "tool_call_id": t["id"],
-                            "original_tokens": projected_result.original_tokens,
-                            "original_bytes": projected_result.original_bytes,
-                            "content_ref": projected_result.content_ref,
-                        },
-                    ))
+                    tool_entry: dict[str, Any] = {
+                        "role": "tool",
+                        "tool_call_id": t["id"],
+                        "content": str(result),
+                    }
                     if round_id:
                         tool_entry["round_id"] = round_id
                     messages.append(tool_entry)
+                    batch_projection_records.append((
+                        tool_entry,
+                        result,
+                        str(tool_name or ""),
+                        t["id"],
+                    ))
                     observation = build_mcp_observation_message(
                         result,
                         tool_name=str(tool_name or ""),
@@ -2036,6 +2035,38 @@ async def _run_main_agent_impl(
                         awaiting_user = True
                     if capability_id == "subagent.spawn" and _wire_result_succeeded(result):
                         spawned = True
+                projected_batch = project_tool_result_batch_for_model([
+                    (result, tool_name, tool_call_id)
+                    for _entry, result, tool_name, tool_call_id
+                    in batch_projection_records
+                ])
+                for (
+                    tool_entry,
+                    _result,
+                    tool_name,
+                    tool_call_id,
+                ), projected_result in zip(
+                    batch_projection_records,
+                    projected_batch,
+                ):
+                    tool_entry["content"] = projected_result.content
+                    projected_entry = attach_context(tool_entry, context_block(
+                        f"tool.result.{tool_name}.{tool_call_id}",
+                        "tool_result",
+                        source=f"tool:{tool_name}",
+                        reason="tool output returned to LLM",
+                        transforms=["tool_result_projection"] if projected_result.truncated else [],
+                        content=projected_result.content,
+                        metadata={
+                            "tool_name": tool_name,
+                            "tool_call_id": tool_call_id,
+                            "original_tokens": projected_result.original_tokens,
+                            "original_bytes": projected_result.original_bytes,
+                            "content_ref": projected_result.content_ref,
+                        },
+                    ))
+                    tool_entry.clear()
+                    tool_entry.update(projected_entry)
                 # Keep the assistant -> N tool-results protocol sequence contiguous.
                 # Multimodal observations follow the complete tool batch as a
                 # model-only user message and are omitted from persisted history.
@@ -2082,6 +2113,7 @@ async def _run_main_agent_impl(
                         messages,
                         execution_completion=dual_lane,
                         force_completion_packet=execution_finalization_required,
+                        recovery_tools=execution_wire_tool_defs,
                     )
                     boundary_guidance = (
                         await runtime_inbox.collect_guidance_or_seal()
