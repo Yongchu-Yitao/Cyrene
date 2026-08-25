@@ -65,4 +65,7 @@ def test_release_publishes_each_verified_platform_independently():
         "\n  build-linux:\n", 1
     )[0]
     assert "needs: [release, build-windows-arm-sidecars]" in windows_arm_job
-    assert "continue-on-error: true" not in windows_arm_job
+    assert "continue-on-error: true" in windows_arm_job
+    assert "Report all Windows ARM64 validation failures" in windows_arm_job
+    assert "pre-release-summary:" in workflow
+    assert "Report every platform result" in workflow
