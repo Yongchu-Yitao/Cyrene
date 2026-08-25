@@ -26,6 +26,7 @@ on:
 
 permissions:
   actions: read
+  checks: read
   contents: write
 
 env:
@@ -619,10 +620,6 @@ jobs:
 
           echo "release ancestry verified"
 
-          ci_runs="$(
-            gh api --method GET \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?per_page=100"
-          )"
           ci_sha="$(
             git log -20 --format='%H %s' \
             | awk '!found && $0 !~ /\[skip ci\]/{print $1; found=1}'
@@ -630,12 +627,18 @@ jobs:
           test -n "$ci_sha"
           echo "CI candidate: $ci_sha"
           ci_conclusion="$(
-            jq -r --arg sha "$ci_sha" \
-              '[.workflow_runs[] | select(.head_sha == $sha)] | first | .conclusion // ""'
-              <<<"$ci_runs"
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/commits/${ci_sha}/check-runs?per_page=100" \
+            | jq -r '
+                [.check_runs[] | select(
+                  .name == "Python / locked contracts"
+                  or .name == "WebUI build / Electron tests"
+                )]
+                | (length == 2 and all(.[]; .conclusion == "success"))
+              '
           )"
           echo "CI conclusion: ${ci_conclusion:-missing}"
-          test "$ci_conclusion" = "success"
+          test "$ci_conclusion" = "true"
 
       - name: Detect pre-release
         if: startsWith(github.ref, 'refs/tags/')
