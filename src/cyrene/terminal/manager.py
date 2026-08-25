@@ -46,17 +46,24 @@ DEFAULT_PERSISTENCE_BACKLOG_LIMIT = 8 * 1024 * 1024
 PERSISTENCE_BACKLOG_POLL_SECONDS = 0.01
 WINDOWS_POST_EXIT_DRAIN_IDLE_SECONDS = 5.0
 WINDOWS_POST_EXIT_DRAIN_POLL_SECONDS = 0.05
+WINDOWS_PTY_READ_FAILURE_LIMIT = 20
 SCROLLBACK_SEGMENT_SIZE = 4 * 1024 * 1024
 SSH_RECONNECT_DELAYS = (1.0, 2.0, 5.0, 10.0, 30.0)
 _DEFAULT_TITLE_RE = re.compile(r"^Terminal\s+(\d+)$", re.IGNORECASE)
 
 
 class _WindowsPtyProcess:
-    """Small adapter around pywinpty's low-level, non-blocking PTY API."""
+    """Small adapter around pywinpty's low-level PTY API."""
 
     def __init__(self, pty: Any) -> None:
         self.pty = pty
         self.pid = pty.pid
+
+    def read_output(self) -> str:
+        # Keep the daemon responsive while interactive shells are idle. A
+        # transient ConPTY read failure is handled by the bounded retry loop in
+        # _read_windows instead of incorrectly marking a live shell as exited.
+        return self.pty.read(False)
 
     def read_nonblocking(self) -> str:
         return self.pty.read(False)
@@ -3257,11 +3264,13 @@ class TerminalManager:
             return
         try:
             reached_eof = False
+            consecutive_read_failures = 0
             while True:
                 await self._wait_for_persistence_capacity()
                 try:
-                    text = await asyncio.to_thread(session.winpty.read_nonblocking)
+                    text = await asyncio.to_thread(session.winpty.read_output)
                     reached_eof = await asyncio.to_thread(session.winpty.iseof)
+                    consecutive_read_failures = 0
                 except Exception:
                     try:
                         alive = await asyncio.to_thread(session.winpty.isalive)
@@ -3269,7 +3278,11 @@ class TerminalManager:
                         alive = False
                     if not alive:
                         break
-                    raise
+                    consecutive_read_failures += 1
+                    if consecutive_read_failures >= WINDOWS_PTY_READ_FAILURE_LIMIT:
+                        raise
+                    await asyncio.sleep(WINDOWS_POST_EXIT_DRAIN_POLL_SECONDS)
+                    continue
                 if text:
                     self._append_output(
                         session, str(text).encode("utf-8", errors="replace")

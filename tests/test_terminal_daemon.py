@@ -17,6 +17,35 @@ from cyrene.terminal.client import (
     TerminalDaemonClient,
     TerminalRequestError,
 )
+from cyrene.terminal.daemon import TerminalDaemon
+
+
+@pytest.mark.asyncio
+async def test_terminal_daemon_returns_unexpected_operation_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    daemon = TerminalDaemon(tmp_path / "daemon")
+    messages: list[dict[str, object]] = []
+
+    async def capture(_writer, message):
+        messages.append(message)
+
+    def fail_list(*_args, **_kwargs):
+        raise OSError("synthetic terminal failure")
+
+    monkeypatch.setattr(daemon, "_send", capture)
+    monkeypatch.setattr(daemon.manager, "list", fail_list)
+    try:
+        await daemon._dispatch(object(), {"action": "list", "projectId": "p1"})
+    finally:
+        daemon.manager.close_store()
+
+    assert messages == [{
+        "ok": False,
+        "code": "operation_failed",
+        "error": "OSError: synthetic terminal failure",
+    }]
 
 
 @pytest.mark.asyncio

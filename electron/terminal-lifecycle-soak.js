@@ -17,6 +17,16 @@ function readConnection(userDataDir) {
   return connection;
 }
 
+function readDaemonDiagnostics(userDataDir) {
+  const daemonLog = path.join(userDataDir, 'terminal-daemon', 'daemon.log');
+  try {
+    const contents = fs.readFileSync(daemonLog, 'utf8');
+    return contents.slice(-16384).trim();
+  } catch (_) {
+    return '';
+  }
+}
+
 function daemonRequest(connection, action, payload = {}, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -266,6 +276,11 @@ async function runTerminalLifecycleSoak(options) {
       console.log(`TERMINAL_LIFECYCLE_SOAK=progress cycle=${cycle}/${cycles} backendPid=${restarted.backendPid}`);
     }
     successMessage = `CYRENE_WINDOWS_TERMINAL_LIFECYCLE_SOAK=ok cycles=${cycles} daemonPid=${daemonPid} terminalPid=${terminalPid}`;
+  } catch (error) {
+    const diagnostics = readDaemonDiagnostics(userDataDir);
+    if (!diagnostics) throw error;
+    const message = String(error && error.message ? error.message : error || 'unknown failure');
+    throw new Error(`${message}\nTerminal Daemon log:\n${diagnostics}`, { cause: error });
   } finally {
     let cleanupConnection = connection;
     try {

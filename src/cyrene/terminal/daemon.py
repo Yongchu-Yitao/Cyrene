@@ -10,6 +10,8 @@ import json
 import os
 import secrets
 import signal
+import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +103,18 @@ class TerminalDaemon:
         writer.write(json.dumps(message, separators=(",", ":")).encode() + b"\n")
         await writer.drain()
 
+    async def _send_operation_failure(
+        self, writer: asyncio.StreamWriter, exc: Exception
+    ) -> None:
+        traceback.print_exception(type(exc), exc, exc.__traceback__)
+        with contextlib.suppress(Exception):
+            sys.stderr.flush()
+        await self._send(writer, {
+            "ok": False,
+            "code": "operation_failed",
+            "error": f"{type(exc).__name__}: {exc}",
+        })
+
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         self.connections.add(writer)
         try:
@@ -120,6 +134,13 @@ class TerminalDaemon:
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             with contextlib.suppress(Exception):
                 await self._send(writer, {"ok": False, "code": "bad_request", "error": str(exc)})
+        except Exception as exc:
+            # A daemon operation must never turn into an unexplained socket
+            # close.  Preserve the traceback in daemon.log and return a stable
+            # protocol error so packaged Windows diagnostics (and users) see
+            # the actual failing operation.
+            with contextlib.suppress(Exception):
+                await self._send_operation_failure(writer, exc)
         finally:
             self.connections.discard(writer)
             writer.close()
@@ -266,10 +287,11 @@ class TerminalDaemon:
         except LookupError as exc:
             await self._send(writer, {"ok": False, "code": "not_found", "error": str(exc)})
             return
-        except RuntimeError as exc:
-            await self._send(writer, {
-                "ok": False, "code": "operation_failed", "error": str(exc),
-            })
+        except (ValueError, TypeError) as exc:
+            await self._send(writer, {"ok": False, "code": "bad_request", "error": str(exc)})
+            return
+        except Exception as exc:
+            await self._send_operation_failure(writer, exc)
             return
         await self._send(writer, {"ok": True, **payload})
         if action == "shutdown" and self.stop_event is not None:

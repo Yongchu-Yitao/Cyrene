@@ -16,7 +16,7 @@ from cyrene.terminal.manager import (
 )
 
 
-def test_windows_process_uses_low_level_nonblocking_io() -> None:
+def test_windows_process_uses_low_level_background_io() -> None:
     writes: list[str] = []
 
     class LowLevelPty:
@@ -35,7 +35,7 @@ def test_windows_process_uses_low_level_nonblocking_io() -> None:
     _write_winpty_input(process, "echo ready\r")
 
     assert process.pid == 1357
-    assert process.read_nonblocking() == "ready"
+    assert process.read_output() == "ready"
     assert writes == ["echo ready\r"]
 
 
@@ -78,7 +78,7 @@ async def test_windows_reader_drains_buffered_output_after_process_exit() -> Non
         def isalive(self) -> bool:
             return False
 
-        def read_nonblocking(self) -> str:
+        def read_output(self) -> str:
             text = next(self.chunks)
             self.eof = not text
             return text
@@ -122,7 +122,7 @@ async def test_windows_interactive_reader_waits_for_eof() -> None:
         def isalive(self) -> bool:
             return False
 
-        def read_nonblocking(self) -> str:
+        def read_output(self) -> str:
             text = next(self.chunks)
             self.eof = not text
             return text
@@ -151,6 +151,52 @@ async def test_windows_interactive_reader_waits_for_eof() -> None:
     try:
         await manager._read_windows(session.id)
         assert b"".join(chunk.data for chunk in session.output) == b"prompt"
+        assert session.status == "exited"
+        assert session.exit_code == 0
+    finally:
+        manager.close_store()
+
+
+@pytest.mark.asyncio
+async def test_windows_reader_recovers_from_transient_live_pty_failure() -> None:
+    class RecoveringWinPty:
+        def __init__(self) -> None:
+            self.reads = 0
+            self.eof = False
+
+        def isalive(self) -> bool:
+            return True
+
+        def read_output(self) -> str:
+            self.reads += 1
+            if self.reads == 1:
+                raise OSError("transient ConPTY read failure")
+            self.eof = True
+            return "recovered"
+
+        def iseof(self) -> bool:
+            return self.eof
+
+        def get_exitstatus(self) -> int:
+            return 0
+
+    manager = TerminalManager()
+    session = TerminalSession(
+        id="windows-recovery",
+        project_id="project-1",
+        title="Windows recovery",
+        cwd=".",
+        shell="cmd",
+        argv=[],
+        created_at="2026-08-25T00:00:00+00:00",
+        updated_at="2026-08-25T00:00:00+00:00",
+        status="running",
+        winpty=RecoveringWinPty(),
+    )
+    manager._sessions[session.id] = session
+    try:
+        await manager._read_windows(session.id)
+        assert b"".join(chunk.data for chunk in session.output) == b"recovered"
         assert session.status == "exited"
         assert session.exit_code == 0
     finally:
