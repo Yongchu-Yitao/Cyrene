@@ -2553,11 +2553,7 @@ You are a **participant** in this discussion. Rules:
             response = await call_agent_model(
                 messages,
                 tools=wire_tool_defs,
-                tool_choice=(
-                    _FINALIZATION_TOOL_CHOICE
-                    if finalization_requested
-                    else None
-                ),
+                tool_choice=_FINALIZATION_TOOL_CHOICE if finalization_requested else None,
                 max_tokens=None,
                 secondary=use_secondary,
             )
