@@ -130,7 +130,9 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
         "async function runTerminalLifecycleSoak", 1
     )[0]
     assert "timeoutMs = 120000" in restart_wait
-    assert restart_wait.index("'/api/status'") < restart_wait.index("`/api/terminals?")
+    assert "'/api/projects?detail=summary'" in ready_wait
+    assert "/api/status" not in lifecycle_soak
+    assert "`/api/terminals?" in restart_wait
     assert "CYRENE_TERMINAL_SOAK_BURST_COMPLETE" in lifecycle_soak
     assert "await daemonRequest(cleanupConnection, 'shutdown'" in lifecycle_soak
     assert '"terminal-lifecycle-soak.js"' in electron_package

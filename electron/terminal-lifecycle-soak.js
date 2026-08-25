@@ -87,7 +87,10 @@ async function waitForBackendReady(getBackendPid, requestBackendJson, timeoutMs 
   while (Date.now() < deadline) {
     if (Number(getBackendPid() || 0) > 0) {
       try {
-        await requestBackendJson('GET', '/api/status');
+        // Probe a real, read-only Workbench route. Cyrene intentionally has no
+        // generic /api/status endpoint, so using it here made every packaged
+        // Windows lifecycle run wait until timeout and fail with HTTP 404.
+        await requestBackendJson('GET', '/api/projects?detail=summary');
         return;
       } catch (error) {
         lastError = error;
@@ -113,9 +116,8 @@ async function waitForBackendRestart(
       try {
         // A replacement process exists before FastAPI has completed startup,
         // especially on native Windows ARM64 while terminal state is being
-        // recovered. Require the new backend's health route to be ready before
-        // checking that its terminal API reattaches to the existing daemon.
-        await requestBackendJson('GET', '/api/status');
+        // recovered. Poll the terminal API itself so readiness also proves that
+        // the replacement backend has reattached to the existing daemon.
         const listed = await requestBackendJson(
           'GET',
           `/api/terminals?projectId=${encodeURIComponent(projectId)}`,
