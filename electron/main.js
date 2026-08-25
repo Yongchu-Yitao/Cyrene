@@ -7048,6 +7048,7 @@ async function startTerminalLifecycleSoakTest() {
       getBackendPid: () => Number(pythonProcess && pythonProcess.pid || 0),
       requestBackendJson,
       restartBackend: restartPythonBackend,
+      terminalArgv: [getPythonBinaryPath(), '--terminal-smoke-child'],
       tempDir: getCyreneTempDir(),
       userDataDir: getCyreneUserDataDir(),
     });

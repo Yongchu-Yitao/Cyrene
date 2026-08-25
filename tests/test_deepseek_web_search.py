@@ -67,6 +67,7 @@ def test_candidate_requires_exact_official_endpoint_and_supported_v4_model():
         _official_model(base_url="https://user@api.deepseek.com/v1"),
         _official_model(model="deepseek-chat"),
         _official_model(provider="codex_oauth"),
+        _official_model(adapter="anthropic"),
         _official_model(api_key=""),
     ]
 
@@ -79,6 +80,18 @@ def test_candidate_requires_exact_official_endpoint_and_supported_v4_model():
     assert selected is not None
     assert selected.configured_model == "deepseek-v4-flash"
     assert selected.search_model == "deepseek-v4-flash"
+
+
+def test_candidate_accepts_model_graph_openai_adapter_projection():
+    from cyrene.tooling.backends import deepseek_web_search as dws
+
+    selected = dws.find_official_deepseek_search_candidate([
+        _official_model(provider="openai", adapter="openai")
+    ])
+
+    assert selected is not None
+    assert selected.candidate_id == "deepseek-official"
+    assert selected.configured_model == "deepseek-v4-flash"
 
 
 def test_candidate_uses_flash_search_worker_for_official_pro_and_inherits_key():

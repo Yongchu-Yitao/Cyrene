@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 _OFFICIAL_HOST = "api.deepseek.com"
 _OFFICIAL_PATHS = {"", "/", "/v1", "/v1/"}
 _CONFIGURED_MODEL_IDS = {"deepseek-v4-flash", "deepseek-v4-pro"}
+_OPENAI_CHAT_ADAPTERS = {"openai", "openai_compatible"}
 _SEARCH_MODEL = "deepseek-v4-flash"
 _RESPONSES_ENDPOINT = "https://api.deepseek.com/responses"
 _TIMEOUT_SECONDS = 120.0
@@ -78,6 +79,13 @@ def _configured_model_id(raw: dict[str, Any]) -> str:
     return model.split("[", 1)[0].strip().lower()
 
 
+def _uses_openai_chat_adapter(raw: dict[str, Any]) -> bool:
+    """Accept both legacy and model-graph OpenAI chat adapter names."""
+    provider = str(raw.get("provider") or "openai_compatible").strip().lower()
+    adapter = str(raw.get("adapter") or provider).strip().lower()
+    return provider in _OPENAI_CHAT_ADAPTERS and adapter in _OPENAI_CHAT_ADAPTERS
+
+
 def find_official_deepseek_search_candidate(
     models: list[dict[str, Any]] | None = None,
 ) -> DeepSeekSearchCandidate | None:
@@ -103,10 +111,9 @@ def find_official_deepseek_search_candidate(
     for index, item in enumerate(configured):
         if not isinstance(item, dict):
             continue
-        provider = str(item.get("provider") or "openai_compatible").strip().lower()
         configured_model = _configured_model_id(item)
         if (
-            provider != "openai_compatible"
+            not _uses_openai_chat_adapter(item)
             or configured_model not in _CONFIGURED_MODEL_IDS
             or not _is_official_deepseek_url(str(item.get("base_url") or ""))
         ):

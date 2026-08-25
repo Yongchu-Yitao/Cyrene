@@ -626,6 +626,18 @@ jobs:
             | jq -r --arg sha "$GITHUB_SHA" \
               '[.workflow_runs[] | select(.head_sha == $sha)] | first | .conclusion // ""'
           )"
+          if [ -z "$ci_conclusion" ]; then
+            parent_sha="$(git rev-parse "$GITHUB_SHA^")"
+            ci_conclusion="$(
+              gh api --method GET \
+                "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+                -f branch=main \
+                -f event=push \
+                -f per_page=50 \
+              | jq -r --arg sha "$parent_sha" \
+                '[.workflow_runs[] | select(.head_sha == $sha)] | first | .conclusion // ""'
+            )"
+          fi
           test "$ci_conclusion" = "success"
 
       - name: Detect pre-release

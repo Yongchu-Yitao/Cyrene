@@ -39,6 +39,7 @@ The Chinese edition remains the most detailed record for older releases.
 - Model lists are fetched dynamically from providers whenever possible instead of relying on fixed built-in names. OpenRouter uses catalog metadata to present more accurate choices.
 - OpenCode Go automatically selects the appropriate Chat, Responses, or Anthropic Messages connection style for the chosen model, reducing manual protocol decisions.
 - Thinking models from Kimi, GLM, DeepSeek, and MiniMax keep context more reliably across multi-step tool work, while aggregating services that do not support private model fields no longer receive incompatible requests.
+- Official DeepSeek models continue to enable web search automatically with the newer model-service configuration, without requiring users to recreate existing connections.
 - Each model connection now has its own proxy switch, allowing selected services to use the proxy without affecting other model connections.
 - Settings now provides one Network Proxy area for a local or remote HTTP proxy, with separate scopes for external Agents, Cyrene search, the in-app browser, and extension downloads.
 - Turning off the proxy master switch pauses every scope and per-model proxy choice. Local Cyrene services and loopback traffic always remain direct so a proxy cannot disrupt internal app communication.

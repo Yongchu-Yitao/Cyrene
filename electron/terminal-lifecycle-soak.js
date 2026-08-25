@@ -164,6 +164,7 @@ async function runTerminalLifecycleSoak(options) {
     getBackendPid,
     requestBackendJson,
     restartBackend,
+    terminalArgv,
     tempDir,
     userDataDir,
   } = options;
@@ -182,12 +183,19 @@ async function runTerminalLifecycleSoak(options) {
     projectId = String(createdProject.project && createdProject.project.id || '');
     if (!projectId) throw new Error('Lifecycle soak project creation returned no project ID');
 
-    const createdTerminal = await requestBackendJson('POST', '/api/terminals', {
+    connection = await waitForDaemon(userDataDir);
+    const createdTerminal = await daemonRequest(connection, 'create', {
       projectId,
       title: 'Lifecycle soak',
-      cwd: '',
+      cwd: workspace,
+      defaultCwd: workspace,
+      shell: 'cyrene-terminal-smoke',
+      argv: terminalArgv,
       cols: 100,
       rows: 30,
+      createdBy: 'release-smoke',
+      launchMode: 'one_shot',
+      activate: true,
     });
     const terminal = createdTerminal.terminal || {};
     terminalId = String(terminal.id || '');
@@ -196,7 +204,6 @@ async function runTerminalLifecycleSoak(options) {
       throw new Error(`Lifecycle soak terminal did not start: ${JSON.stringify(terminal)}`);
     }
 
-    connection = await waitForDaemon(userDataDir);
     const daemonPid = Number(connection.pid);
     const daemonPort = Number(connection.port);
     const daemonToken = String(connection.token);

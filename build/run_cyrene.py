@@ -124,7 +124,7 @@ def _run_smoke_test() -> None:
 
 
 def _run_terminal_smoke_test() -> None:
-    """Exercise the frozen daemon and a real ConPTY-backed cmd session."""
+    """Exercise the frozen daemon and a controlled ConPTY-backed child."""
     import asyncio
     import base64
     import contextlib
@@ -144,9 +144,8 @@ def _run_terminal_smoke_test() -> None:
         client = TerminalDaemonClient(state_dir=state_dir)
         terminal_id = ""
         try:
-            from cyrene.tooling.backends.shell_runtime import interactive_argv
-
-            shell, argv = interactive_argv()
+            shell = "cyrene-terminal-smoke"
+            argv = [sys.executable, "--terminal-smoke-child"]
             created = None
             for attempt in range(3):
                 try:
@@ -161,7 +160,7 @@ def _run_terminal_smoke_test() -> None:
                         cols=100,
                         rows=30,
                         createdBy="release-smoke",
-                        launchMode="interactive",
+                        launchMode="one_shot",
                         activate=True,
                     )
                     break
@@ -195,16 +194,9 @@ def _run_terminal_smoke_test() -> None:
             daemon_pid = int(before.get("pid") or 0)
             marker = "CYRENE_WINDOWS_TERMINAL_SMOKE_OUTPUT"
             deadline = time.monotonic() + 30
-            next_probe = 0.0
             output = b""
             while time.monotonic() < deadline:
-                now = time.monotonic()
                 try:
-                    if now >= next_probe:
-                        await client.input(
-                            terminal_id, f"echo {marker}\r\n", actor="user"
-                        )
-                        next_probe = now + 2
                     snapshot = await client.scrollback(
                         terminal_id, cursor=0, max_bytes=512 * 1024
                     )
@@ -253,6 +245,33 @@ def _run_terminal_smoke_test() -> None:
     asyncio.run(run())
 
 
+def _run_terminal_smoke_child() -> None:
+    """Provide deterministic bidirectional I/O inside a Windows ConPTY."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.GetStdHandle.restype = wintypes.HANDLE
+    stdin_handle = kernel32.GetStdHandle(-10)
+    stdout_handle = kernel32.GetStdHandle(-11)
+    buffer = ctypes.create_string_buffer(4096)
+    count = wintypes.DWORD()
+
+    def write(payload: bytes) -> None:
+        written = wintypes.DWORD()
+        if not kernel32.WriteFile(
+            stdout_handle, payload, len(payload), ctypes.byref(written), None
+        ):
+            raise OSError(ctypes.get_last_error(), "WriteFile failed")
+
+    write(b"CYRENE_WINDOWS_TERMINAL_SMOKE_OUTPUT\r\n")
+    while kernel32.ReadFile(
+        stdin_handle, buffer, len(buffer), ctypes.byref(count), None
+    ):
+        if count.value:
+            write(buffer.raw[: count.value])
+
+
 def _write_crash_log(exc: BaseException) -> None:
     """Write traceback to cyrene_error.log in the OS temp dir.
 
@@ -292,6 +311,10 @@ def _setup_playwright_browsers_path() -> None:
 
 if __name__ == "__main__":
     _setup_playwright_browsers_path()
+
+    if "--terminal-smoke-child" in sys.argv:
+        _run_terminal_smoke_child()
+        raise SystemExit(0)
 
     if "--smoke-test" in sys.argv:
         try:
