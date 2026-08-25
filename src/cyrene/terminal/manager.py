@@ -81,7 +81,7 @@ def _persistent_windows_console_for_conpty():
             user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
             user32.ShowWindow.restype = wintypes.BOOL
             allocated = bool(kernel32.AllocConsole())
-            allocation_error = ctypes.get_last_error()
+            allocation_error = 0 if allocated else ctypes.get_last_error()
             window = kernel32.GetConsoleWindow()
             if allocated:
                 if window:
