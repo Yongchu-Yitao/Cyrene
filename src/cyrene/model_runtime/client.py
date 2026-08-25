@@ -3777,31 +3777,46 @@ async def _handle_stream(
                         if finish:
                             finished_reason = str(finish)
                         delta = choice.get("delta") or {}
+                        rc = delta.get("reasoning_content")
                         if "reasoning_content" in delta:
                             saw_reasoning_content = True
-                            rc = delta.get("reasoning_content")
-                            if isinstance(rc, str):
-                                if is_minimax:
-                                    reasoning_delta, reasoning_snapshot = _snapshot_delta(
-                                        reasoning_snapshot,
-                                        rc,
-                                    )
-                                    if rc:
-                                        saw_split_reasoning = True
-                                    await _forward_reasoning(reasoning_delta)
-                                else:
-                                    await _forward_reasoning(rc)
                         details = delta.get("reasoning_details")
+                        current_reasoning = ""
                         if details:
                             reasoning_details = details
                             current_reasoning = _reasoning_details_text(details)
+                        if is_minimax:
+                            # MiniMax gateways can expose the same logical update
+                            # through both aliases. Depending on the model/version,
+                            # each alias may be a cumulative snapshot or a token
+                            # delta. Forwarding both corrupts the shared snapshot as
+                            # soon as their whitespace or chunk boundaries differ.
+                            # ``reasoning_split`` makes reasoning_details canonical;
+                            # use reasoning_content only when no text-bearing detail
+                            # is available in this event.
+                            if current_reasoning:
+                                minimax_reasoning = current_reasoning
+                            elif isinstance(rc, str):
+                                minimax_reasoning = rc
+                            else:
+                                minimax_reasoning = ""
                             reasoning_delta, reasoning_snapshot = _snapshot_delta(
                                 reasoning_snapshot,
-                                current_reasoning,
+                                minimax_reasoning,
                             )
-                            if current_reasoning:
+                            if minimax_reasoning:
                                 saw_split_reasoning = True
                             await _forward_reasoning(reasoning_delta)
+                        else:
+                            if isinstance(rc, str):
+                                await _forward_reasoning(rc)
+                            if current_reasoning:
+                                reasoning_delta, reasoning_snapshot = _snapshot_delta(
+                                    reasoning_snapshot,
+                                    current_reasoning,
+                                )
+                                saw_split_reasoning = True
+                                await _forward_reasoning(reasoning_delta)
                         delta_calls = delta.get("tool_calls")
                         if delta_calls is None:
                             legacy_function = delta.get("function_call")

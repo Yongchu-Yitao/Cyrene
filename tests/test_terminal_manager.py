@@ -66,6 +66,99 @@ def test_windows_conpty_keeps_hidden_console_for_daemon_lifetime(
     ]
 
 
+def test_windows_conpty_accepts_attached_headless_console(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import cyrene.terminal.manager as manager_module
+
+    calls: list[tuple[str, object]] = []
+
+    class NativeCall:
+        def __init__(self, name: str, result: object) -> None:
+            self.name = name
+            self.result = result
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *args: object) -> object:
+            calls.append((self.name, args))
+            return self.result
+
+    class Kernel32:
+        AllocConsole = NativeCall("AllocConsole", 0)
+        GetConsoleWindow = NativeCall("GetConsoleWindow", 0)
+        GetConsoleCP = NativeCall("GetConsoleCP", 65001)
+
+    class User32:
+        ShowWindow = NativeCall("ShowWindow", 0)
+
+    monkeypatch.setattr(manager_module.sys, "platform", "win32")
+    monkeypatch.setattr(manager_module, "_WINDOWS_CONSOLE_READY", False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+    monkeypatch.setattr(
+        ctypes,
+        "WinDLL",
+        lambda name, **_kwargs: Kernel32() if name == "kernel32" else User32(),
+        raising=False,
+    )
+
+    with _persistent_windows_console_for_conpty():
+        calls.append(("spawn", ()))
+    with _persistent_windows_console_for_conpty():
+        calls.append(("spawn-again", ()))
+
+    assert calls == [
+        ("AllocConsole", ()),
+        ("GetConsoleWindow", ()),
+        ("GetConsoleCP", ()),
+        ("spawn", ()),
+        ("spawn-again", ()),
+    ]
+
+
+def test_windows_conpty_reports_original_allocation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import cyrene.terminal.manager as manager_module
+
+    class NativeCall:
+        def __init__(self, result: object) -> None:
+            self.result = result
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *_args: object) -> object:
+            return self.result
+
+    class Kernel32:
+        AllocConsole = NativeCall(0)
+        GetConsoleWindow = NativeCall(0)
+        GetConsoleCP = NativeCall(0)
+
+    class User32:
+        ShowWindow = NativeCall(0)
+
+    monkeypatch.setattr(manager_module.sys, "platform", "win32")
+    monkeypatch.setattr(manager_module, "_WINDOWS_CONSOLE_READY", False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 1234, raising=False)
+    monkeypatch.setattr(
+        ctypes,
+        "WinError",
+        lambda code: OSError(f"Windows allocation error {code}"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ctypes,
+        "WinDLL",
+        lambda name, **_kwargs: Kernel32() if name == "kernel32" else User32(),
+        raising=False,
+    )
+
+    with pytest.raises(OSError, match="Windows allocation error 1234"):
+        with _persistent_windows_console_for_conpty():
+            pass
+
+
 def test_windows_process_uses_low_level_background_io() -> None:
     writes: list[str] = []
 

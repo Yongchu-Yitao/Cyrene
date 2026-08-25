@@ -382,12 +382,6 @@ function BudgetPanel(p) {
   };
   var providerUsageItems = providerUsage.slice();
   if (codexQuota.connected === true) providerUsageItems.push(codexUsageItem);
-  var minimaxUsageItems = providerUsageItems.filter(function (item) {
-    return item.provider === "minimax";
-  });
-  var compactProviderUsageItems = providerUsageItems.filter(function (item) {
-    return item.provider !== "minimax";
-  });
 
   function formatCost(val) {
     return currencySymbol + val.toFixed(2);
@@ -688,12 +682,7 @@ function BudgetPanel(p) {
 
     mode === "usage" && SectionBlock(t("settings.providerUsage"), t("settings.providerUsageHint"),
       providerUsageItems.length > 0 && React.createElement("div", { className: "wb-provider-usage-grid" },
-        React.createElement("div", { className: "wb-provider-usage-column is-compact" },
-          compactProviderUsageItems.map(providerUsageCard),
-        ),
-        React.createElement("div", { className: "wb-provider-usage-column is-minimax" },
-          minimaxUsageItems.map(providerUsageCard),
-        ),
+        providerUsageItems.map(providerUsageCard),
       ),
       !providerUsageLoading && !providerUsageItems.length && React.createElement("div", { className: "wb-budget-model-empty" },
         t("settings.providerUsageEmpty")

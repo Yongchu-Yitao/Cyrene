@@ -518,8 +518,8 @@ def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
     assert '!providerUsageLoading && !providerUsageItems.length' in panel
     assert 'item.refreshing === true' in panel
     assert 'fetchProviderUsage(false, true)' in panel
-    assert 'className: "wb-provider-usage-column is-compact"' in panel
-    assert 'className: "wb-provider-usage-column is-minimax"' in panel
+    assert 'providerUsageItems.map(providerUsageCard)' in panel
+    assert 'wb-provider-usage-column' not in panel
     assert 'onClick: function () { fetchProviderUsage(true' not in panel
 
     for key in (
@@ -558,10 +558,9 @@ def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
     assert '--wb-chart-cost: #e77bd5' in styles
     assert '--wb-chart-grid: rgba(194, 195, 202, 0.16)' in styles
     provider_grid_rule = styles.split(".wb-provider-usage-grid {", 1)[1].split("}", 1)[0]
-    provider_card_rule = styles.split(".wb-provider-usage-column > .wb-provider-usage-card {", 1)[1].split("}", 1)[0]
     assert "align-items: start" in provider_grid_rule
     assert "align-items: stretch" not in provider_grid_rule
-    assert "flex: 0 0 auto" in provider_card_rule
+    assert ".wb-provider-usage-column" not in styles
     assert "min-height: 72px" in styles
     assert ".settings-overlay .wb-usage-settings > .wb-section-block" in styles
     assert ".settings-overlay .wb-usage-settings .wb-budget-summary" in styles

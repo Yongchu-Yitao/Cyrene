@@ -723,6 +723,57 @@ async def test_minimax_stream_deduplicates_both_reasoning_fields():
     ] == ["plan", " more", " continued"]
 
 
+async def test_minimax_stream_forwards_only_one_reasoning_alias_per_event():
+    events = []
+
+    class FakeResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def aiter_lines(self):
+            # MiniMax-M3 can duplicate token deltas across both aliases rather
+            # than returning identical cumulative snapshots. Consuming both
+            # used to produce "about the about the" in persisted reasoning.
+            yield 'data: {"choices":[{"delta":{"reasoning_content":"The user is asking","reasoning_details":[{"type":"reasoning.text","text":"The user is asking"}]}}]}'
+            yield 'data: {"choices":[{"delta":{"reasoning_content":" about the","reasoning_details":[{"type":"reasoning.text","text":" about the"}]}}]}'
+            yield 'data: {"choices":[{"delta":{"reasoning_content":" current weather","reasoning_details":[{"type":"reasoning.text","text":" current weather"}]}}]}'
+            yield 'data: {"choices":[{"delta":{"content":"Done"}}]}'
+            yield "data: [DONE]"
+
+    class FakeClient:
+        def stream(self, *args, **kwargs):
+            return FakeResponse()
+
+    async def capture(event):
+        events.append(event)
+
+    message = await cl._handle_stream(
+        FakeClient(),
+        "https://api.minimax.io/v1/chat/completions",
+        {"model": "MiniMax-M3", "messages": []},
+        {},
+        capture,
+    )
+
+    assert message["reasoning_content"] == (
+        "The user is asking about the current weather"
+    )
+    assert message["reasoning_details"] == [{
+        "type": "reasoning.text",
+        "text": "The user is asking about the current weather",
+    }]
+    assert [
+        event["delta"]
+        for event in events
+        if event["type"] == "reasoning_delta"
+    ] == ["The user is asking", " about the", " current weather"]
+
+
 async def test_minimax_stream_filters_legacy_think_tags_across_chunks():
     events = []
 

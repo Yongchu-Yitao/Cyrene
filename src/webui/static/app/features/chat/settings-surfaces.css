@@ -359,17 +359,6 @@
   align-items: start;
 }
 
-.wb-provider-usage-column {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.wb-provider-usage-column > .wb-provider-usage-card {
-  flex: 0 0 auto;
-}
-
 .wb-provider-usage-card {
   min-width: 0;
   padding: 16px;
