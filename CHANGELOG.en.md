@@ -5,9 +5,9 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
-## [0.8.0-beta2] - 2026-08-25
+## [0.8.0-beta3] - 2026-08-25
 
-`0.8.0-beta2` brings together every feature and interface change since `0.8.0-beta1`, led by independent image, video, and music generation, reference media and rich media messages, per-chat context capabilities and slash commands, unified proxy controls, and managed remote terminals. It also improves model services, continuous Agent execution, PowerPoint, search, terminal performance, Settings, and desktop startup. This section contains user-visible capabilities and experience changes only.
+`0.8.0-beta3` brings together every feature and interface change since `0.8.0-beta1`, led by independent image, video, and music generation, reference media and rich media messages, per-chat context capabilities and slash commands, unified proxy controls, and managed remote terminals. It also improves model services, continuous Agent execution, PowerPoint, search, terminal performance, Settings, and desktop startup. This section contains user-visible capabilities and experience changes only.
 
 ### Image, video, and music generation
 
@@ -101,7 +101,7 @@ The Chinese edition remains the most detailed record for older releases.
 - Removed the old Welcome/Get Started page and its automatic startup entry. Cyrene now opens directly into the unified Workbench, while required first-use model and personality setup remains in the supported onboarding flow.
 - Completing first-use setup now creates and opens the first conversation immediately, so users can begin typing instead of landing on an empty page without an active chat.
 - Settings further unifies cards, fields, dropdowns, status labels, autosave feedback, keyboard focus, and narrow-window layouts so model, proxy, and media configuration behave consistently.
-- Current version presentation across the README, application, web assets, and desktop packages is unified as `0.8.0-beta2`.
+- Current version presentation across the README, application, web assets, and desktop packages is unified as `0.8.0-beta3`.
 
 ## [0.8.0-beta1] - 2026-08-24
 
