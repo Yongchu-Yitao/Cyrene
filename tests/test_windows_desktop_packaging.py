@@ -122,10 +122,14 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert "runTerminalLifecycleSoak" in main
     assert "Terminal Daemon was replaced during lifecycle cycle" in lifecycle_soak
     assert "Terminal process did not survive lifecycle cycle" in lifecycle_soak
-    assert "timeoutMs = 120000" in lifecycle_soak
+    ready_wait = lifecycle_soak.split("async function waitForBackendReady", 1)[1].split(
+        "async function waitForBackendRestart", 1
+    )[0]
+    assert "timeoutMs = 120000" in ready_wait
     restart_wait = lifecycle_soak.split("async function waitForBackendRestart", 1)[1].split(
         "async function runTerminalLifecycleSoak", 1
     )[0]
+    assert "timeoutMs = 120000" in restart_wait
     assert restart_wait.index("'/api/status'") < restart_wait.index("`/api/terminals?")
     assert "CYRENE_TERMINAL_SOAK_BURST_COMPLETE" in lifecycle_soak
     assert "await daemonRequest(cleanupConnection, 'shutdown'" in lifecycle_soak

@@ -81,7 +81,7 @@ async function waitForDaemon(userDataDir, timeoutMs = 15000) {
   throw lastError || new Error('Terminal Daemon did not become ready');
 }
 
-async function waitForBackendReady(getBackendPid, requestBackendJson, timeoutMs = 60000) {
+async function waitForBackendReady(getBackendPid, requestBackendJson, timeoutMs = 120000) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
   while (Date.now() < deadline) {
