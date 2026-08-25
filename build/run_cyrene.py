@@ -144,8 +144,10 @@ def _run_terminal_smoke_test() -> None:
         client = TerminalDaemonClient(state_dir=state_dir)
         terminal_id = ""
         try:
-            shell = "cyrene-terminal-smoke"
-            argv = [sys.executable, "--terminal-smoke-child"]
+            shell = "cmd"
+            command = os.environ.get("COMSPEC") or r"C:\Windows\System32\cmd.exe"
+            marker = "CYRENE_WINDOWS_TERMINAL_SMOKE_OUTPUT"
+            argv = [command, "/d", "/q", "/k", f"echo {marker}"]
             created = None
             for attempt in range(3):
                 try:
@@ -192,7 +194,6 @@ def _run_terminal_smoke_test() -> None:
                 raise RuntimeError(f"ConPTY session did not stay running: {terminal!r}")
             before = client._connection_info() or {}
             daemon_pid = int(before.get("pid") or 0)
-            marker = "CYRENE_WINDOWS_TERMINAL_SMOKE_OUTPUT"
             deadline = time.monotonic() + 30
             output = b""
             while time.monotonic() < deadline:
@@ -245,33 +246,6 @@ def _run_terminal_smoke_test() -> None:
     asyncio.run(run())
 
 
-def _run_terminal_smoke_child() -> None:
-    """Provide deterministic bidirectional I/O inside a Windows ConPTY."""
-    import ctypes
-    from ctypes import wintypes
-
-    kernel32 = ctypes.windll.kernel32
-    kernel32.GetStdHandle.restype = wintypes.HANDLE
-    stdin_handle = kernel32.GetStdHandle(-10)
-    stdout_handle = kernel32.GetStdHandle(-11)
-    buffer = ctypes.create_string_buffer(4096)
-    count = wintypes.DWORD()
-
-    def write(payload: bytes) -> None:
-        written = wintypes.DWORD()
-        if not kernel32.WriteFile(
-            stdout_handle, payload, len(payload), ctypes.byref(written), None
-        ):
-            raise OSError(ctypes.get_last_error(), "WriteFile failed")
-
-    write(b"CYRENE_WINDOWS_TERMINAL_SMOKE_OUTPUT\r\n")
-    while kernel32.ReadFile(
-        stdin_handle, buffer, len(buffer), ctypes.byref(count), None
-    ):
-        if count.value:
-            write(buffer.raw[: count.value])
-
-
 def _write_crash_log(exc: BaseException) -> None:
     """Write traceback to cyrene_error.log in the OS temp dir.
 
@@ -311,10 +285,6 @@ def _setup_playwright_browsers_path() -> None:
 
 if __name__ == "__main__":
     _setup_playwright_browsers_path()
-
-    if "--terminal-smoke-child" in sys.argv:
-        _run_terminal_smoke_child()
-        raise SystemExit(0)
 
     if "--smoke-test" in sys.argv:
         try:

@@ -189,7 +189,7 @@ async function runTerminalLifecycleSoak(options) {
       title: 'Lifecycle soak',
       cwd: workspace,
       defaultCwd: workspace,
-      shell: 'cyrene-terminal-smoke',
+      shell: 'cmd',
       argv: terminalArgv,
       cols: 100,
       rows: 30,
