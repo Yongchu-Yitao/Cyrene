@@ -13,6 +13,8 @@ on:
         options:
           - all
           - windows
+          - windows-x64
+          - windows-arm64
       ui_mode:
         description: "Compatibility build mode (agent is normalized to the sole Workbench UI)"
         required: false
@@ -36,7 +38,7 @@ jobs:
   # ==========================================================================
   build-macos:
     needs: [release]
-    if: ${{ inputs.platforms != 'windows' }}
+    if: ${{ inputs.platforms == '' || inputs.platforms == 'all' }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -104,6 +106,7 @@ jobs:
   # ==========================================================================
   build-windows:
     needs: [release]
+    if: ${{ inputs.platforms != 'windows-arm64' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -291,6 +294,7 @@ jobs:
   # Windows on ARM Build
   # ==========================================================================
   build-windows-arm-sidecars:
+    if: ${{ inputs.platforms != 'windows-x64' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -322,6 +326,7 @@ jobs:
 
   build-windows-arm:
     needs: [release, build-windows-arm-sidecars]
+    if: ${{ inputs.platforms != 'windows-x64' }}
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@v7
@@ -464,7 +469,7 @@ jobs:
   # ==========================================================================
   build-linux:
     needs: [release]
-    if: ${{ inputs.platforms != 'windows' }}
+    if: ${{ inputs.platforms == '' || inputs.platforms == 'all' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

@@ -296,7 +296,10 @@ if ($installedSmoke.Output -notmatch '(?m)^numpy=') {
     throw "Installed frozen backend did not confirm NumPy import"
 }
 
-$env:SHELL = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+# GitHub's headless Windows session can close PowerShell after its startup file
+# completes even when -NoExit is present. cmd.exe /k provides the same real
+# ConPTY input/output coverage without depending on that host-only behavior.
+$env:SHELL = Join-Path $env:SystemRoot "System32\cmd.exe"
 $terminalSmoke = Invoke-CapturedProcess `
     -Path $installedBackend `
     -Arguments @("--terminal-smoke-test") `
