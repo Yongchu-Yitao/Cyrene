@@ -74,9 +74,8 @@ def test_windows_process_uses_low_level_background_io() -> None:
             assert blocking is False
             return "ready"
 
-        def write(self, text: str) -> int:
+        def write(self, text: str) -> None:
             writes.append(text)
-            return len(text)
 
     process = _WindowsPtyProcess(LowLevelPty())
 

@@ -109,10 +109,8 @@ class _WindowsPtyProcess:
         written = 0
         for offset in range(0, len(text), 8192):
             chunk = text[offset : offset + 8192]
-            count = self.pty.write(chunk)
-            if not isinstance(count, int) or count <= 0:
-                raise RuntimeError("terminal input was not accepted")
-            written += count
+            self.pty.write(chunk)
+            written += len(chunk)
         return written
 
     def isalive(self) -> bool:
