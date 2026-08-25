@@ -2053,6 +2053,43 @@ def _record_subagent_tool_result(
     records.append((entry, result, tool_name, tool_call_id))
 
 
+class _RuntimeContextLedger:
+    """Append immutable, versioned runtime observations to a prompt."""
+
+    def __init__(self, messages: list[dict[str, Any]]) -> None:
+        self._messages = messages
+        self._versions: dict[str, int] = {}
+        self._last: dict[str, str] = {}
+        for message in messages:
+            metadata = message.get("subagent_runtime_context")
+            if not isinstance(metadata, dict):
+                continue
+            kind = str(metadata.get("kind") or "").strip()
+            try:
+                version = max(0, int(metadata.get("version") or 0))
+            except (TypeError, ValueError):
+                continue
+            if kind:
+                self._versions[kind] = max(self._versions.get(kind, 0), version)
+
+    def append(self, kind: str, content: str, *, deduplicate: bool = False) -> bool:
+        normalized = str(content or "").strip()
+        if not normalized or (deduplicate and self._last.get(kind) == normalized):
+            return False
+        version = self._versions.get(kind, 0) + 1
+        self._versions[kind] = version
+        self._last[kind] = normalized
+        self._messages.append({
+            "role": "user",
+            "content": f"{normalized}\n[Runtime context version: {kind}:{version}]",
+            "subagent_runtime_context": {"kind": kind, "version": version},
+        })
+        return True
+
+
+_FINALIZATION_TOOL_CHOICE = {"type": "function", "function": {"name": "quit"}}
+
+
 async def _run_subagent(
     agent_id: str,
     task: str,
@@ -2340,54 +2377,7 @@ You are a **participant** in this discussion. Rules:
     seen_result_fingerprints: set[str] = set()
     force_finalize_reason = ""
     finalization_requested = False
-    finalization_tool_choice = {
-        "type": "function",
-        "function": {"name": "quit"},
-    }
-    runtime_context_versions: dict[str, int] = {}
-    last_runtime_context: dict[str, str] = {}
-    for existing_message in messages:
-        runtime_meta = existing_message.get("subagent_runtime_context")
-        if not isinstance(runtime_meta, dict):
-            continue
-        runtime_kind = str(runtime_meta.get("kind") or "").strip()
-        try:
-            runtime_version = max(0, int(runtime_meta.get("version") or 0))
-        except (TypeError, ValueError):
-            continue
-        if runtime_kind:
-            runtime_context_versions[runtime_kind] = max(
-                runtime_context_versions.get(runtime_kind, 0),
-                runtime_version,
-            )
-
-    def _append_runtime_context(
-        kind: str,
-        content: str,
-        *,
-        deduplicate: bool = False,
-    ) -> bool:
-        """Append one immutable, versioned runtime-context observation."""
-        normalized = str(content or "").strip()
-        if not normalized:
-            return False
-        if deduplicate and last_runtime_context.get(kind) == normalized:
-            return False
-        version = runtime_context_versions.get(kind, 0) + 1
-        runtime_context_versions[kind] = version
-        last_runtime_context[kind] = normalized
-        messages.append({
-            "role": "user",
-            "content": (
-                f"{normalized}\n"
-                f"[Runtime context version: {kind}:{version}]"
-            ),
-            "subagent_runtime_context": {
-                "kind": kind,
-                "version": version,
-            },
-        })
-        return True
+    runtime_context = _RuntimeContextLedger(messages)
 
     def _resolved_subagent_call(
         name: str,
@@ -2471,7 +2461,7 @@ You are a **participant** in this discussion. Rules:
             inbox_text = _get_inbox(agent_id)
 
             if registry_ctx:
-                _append_runtime_context(
+                runtime_context.append(
                     "registry",
                     registry_ctx,
                     deduplicate=True,
@@ -2482,7 +2472,7 @@ You are a **participant** in this discussion. Rules:
                     # 让 subagent 专注执行用户指令不被干扰。
                     await _mark_inbox_read(agent_id)
                 else:
-                    _append_runtime_context(
+                    runtime_context.append(
                         "inbox",
                         (
                             "[收件箱]\n"
@@ -2499,7 +2489,7 @@ You are a **participant** in this discussion. Rules:
                 and tool_calls_used >= next_checkpoint
                 and not force_finalize_reason
             ):
-                _append_runtime_context(
+                runtime_context.append(
                     "checkpoint",
                     (
                         "[Execution Checkpoint]\n"
@@ -2512,7 +2502,7 @@ You are a **participant** in this discussion. Rules:
 
             if force_finalize_reason and not finalization_requested:
                 finalization_requested = True
-                _append_runtime_context(
+                runtime_context.append(
                     "finalization",
                     (
                         "[Runtime Finalization]\n"
@@ -2564,7 +2554,7 @@ You are a **participant** in this discussion. Rules:
                 messages,
                 tools=wire_tool_defs,
                 tool_choice=(
-                    finalization_tool_choice
+                    _FINALIZATION_TOOL_CHOICE
                     if finalization_requested
                     else None
                 ),
