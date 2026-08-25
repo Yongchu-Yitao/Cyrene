@@ -12,13 +12,13 @@ from cyrene.terminal.manager import (
     TerminalManager,
     TerminalSession,
     _WindowsPtyProcess,
-    _temporary_windows_console_for_conpty,
+    _persistent_windows_console_for_conpty,
     _terminate_winpty_process,
     _write_winpty_input,
 )
 
 
-def test_windows_conpty_uses_temporary_hidden_console(
+def test_windows_conpty_keeps_hidden_console_for_daemon_lifetime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import cyrene.terminal.manager as manager_module
@@ -38,13 +38,13 @@ def test_windows_conpty_uses_temporary_hidden_console(
 
     class Kernel32:
         AllocConsole = NativeCall("AllocConsole", 1)
-        FreeConsole = NativeCall("FreeConsole", 1)
         GetConsoleWindow = NativeCall("GetConsoleWindow", 2468)
 
     class User32:
         ShowWindow = NativeCall("ShowWindow", 0)
 
     monkeypatch.setattr(manager_module.sys, "platform", "win32")
+    monkeypatch.setattr(manager_module, "_WINDOWS_CONSOLE_READY", False)
     monkeypatch.setattr(
         ctypes,
         "WinDLL",
@@ -52,15 +52,17 @@ def test_windows_conpty_uses_temporary_hidden_console(
         raising=False,
     )
 
-    with _temporary_windows_console_for_conpty():
+    with _persistent_windows_console_for_conpty():
         calls.append(("spawn", ()))
+    with _persistent_windows_console_for_conpty():
+        calls.append(("spawn-again", ()))
 
     assert calls == [
         ("AllocConsole", ()),
         ("GetConsoleWindow", ()),
         ("ShowWindow", (2468, 0)),
         ("spawn", ()),
-        ("FreeConsole", ()),
+        ("spawn-again", ()),
     ]
 
 
