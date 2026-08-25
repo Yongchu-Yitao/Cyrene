@@ -4292,6 +4292,7 @@ async def test_main_inbox_guidance_relays_to_subagents_and_inserts_reply(monkeyp
     from cyrene import agent
     from cyrene.agent import coordinator as _agent_coordinator
     from cyrene.agent import guidance as _agent_guidance
+    from cyrene.agent import state as _agent_state
     from cyrene.observability import debug
     from cyrene.runtime import inbox
     from cyrene import subagent
@@ -4350,7 +4351,9 @@ async def test_main_inbox_guidance_relays_to_subagents_and_inserts_reply(monkeyp
     monkeypatch.setattr(debug, "publish_event", lambda event: events.append(event) or asyncio.sleep(0))
 
     item = await agent.queue_round_guidance("round_1", "please expand section B", None, 0, "db.sqlite3", client_request_id="req_sub")
-    await asyncio.sleep(0.05)
+    worker = _agent_state._ensure_session("").main_inbox_worker
+    assert worker is not None
+    await worker
     saved = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))["messages"]
 
     assert item["target_round_id"] == "round_1"
