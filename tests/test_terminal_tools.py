@@ -85,6 +85,40 @@ async def test_visible_split_terminal_is_discoverable_without_conversation_bindi
 
 
 @pytest.mark.asyncio
+async def test_visible_terminal_context_identifies_split_and_requires_terminal_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cyrene.tooling.backends import terminals
+
+    async def one_visible_terminal():
+        return [{
+            "id": "term_remote",
+            "title": "Terminal 1",
+            "displayTitle": "syw@ubuntu",
+            "visibleSide": "right",
+            "status": "running",
+            "shellTitle": "syw@ubuntu: ~",
+            "connectionKind": "ssh",
+            "sshTarget": "syw@100.100.10.2",
+            "remoteCwd": "/home/syw",
+            "cwd": "/Users/syw/Documents/playground/Cyrene",
+        }]
+
+    monkeypatch.setattr(terminals, "list_visible_terminals", one_visible_terminal)
+
+    block = await terminals.visible_terminal_context_block()
+
+    assert "<visible_terminal_context>" in block
+    assert "id=term_remote" in block
+    assert "title=syw@ubuntu" in block
+    assert "side=right" in block
+    assert "ssh_target=syw@100.100.10.2" in block
+    assert "remote_cwd=/home/syw" in block
+    assert "code.shell.read" in block
+    assert "Do not use Bash" in block
+
+
+@pytest.mark.asyncio
 async def test_list_shells_includes_visible_unbound_terminal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

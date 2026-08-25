@@ -388,12 +388,23 @@ async def run_agent(
     ))
     try:
         async def run_chat() -> str:
+            effective_ephemeral_system = ephemeral_system
+            if ui_instance_id:
+                from cyrene.tooling.backends.terminals import (
+                    visible_terminal_context_block,
+                )
+
+                terminal_context = await visible_terminal_context_block()
+                if terminal_context:
+                    effective_ephemeral_system = "\n\n".join(
+                        part for part in (ephemeral_system, terminal_context) if part
+                    )
             return await _run_chat_agent(
                 user_message, bot, chat_id, db_path,
                 client_request_id=client_request_id, lang=lang, command=command,
                 public_user_message=public_user_message, public_attachments=public_attachments,
                 llm_user_content=llm_user_content,
-                permission_mode=permission_mode, ephemeral_system=ephemeral_system,
+                permission_mode=permission_mode, ephemeral_system=effective_ephemeral_system,
                 fixed_ephemeral_system=fixed_ephemeral_system,
                 volatile_ephemeral_system=volatile_ephemeral_system,
                 static_system_extra=static_system_extra,

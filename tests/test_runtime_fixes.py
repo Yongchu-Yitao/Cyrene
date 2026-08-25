@@ -5949,6 +5949,42 @@ async def test_run_agent_clears_stale_interrupt_before_starting(monkeypatch):
     assert seen["interrupt_before_start"] is False
 
 
+async def test_run_agent_injects_visible_terminal_context(monkeypatch):
+    from cyrene import agent
+    from cyrene.agent import coordinator as _agent_coordinator
+    from cyrene.tooling.backends import terminals
+
+    seen = {}
+
+    async def fake_visible_terminal_context_block():
+        return "<visible_terminal_context>right terminal</visible_terminal_context>"
+
+    async def fake_run_chat_agent(user_message, bot, chat_id, db_path, **kwargs):
+        seen["ephemeral_system"] = kwargs.get("ephemeral_system")
+        return "ok"
+
+    monkeypatch.setattr(
+        terminals, "visible_terminal_context_block", fake_visible_terminal_context_block
+    )
+    monkeypatch.setattr(_agent_coordinator, "_run_chat_agent", fake_run_chat_agent)
+
+    result = await agent.run_agent(
+        "查看打开的终端",
+        None,
+        0,
+        "db.sqlite3",
+        session_id="terminal-context-test",
+        ui_instance_id="surface-1",
+        ephemeral_system="existing context",
+    )
+
+    assert result == "ok"
+    assert seen["ephemeral_system"] == (
+        "existing context\n\n"
+        "<visible_terminal_context>right terminal</visible_terminal_context>"
+    )
+
+
 async def test_run_main_agent_summarizes_and_cancels_subagents_when_monitoring_is_interrupted(monkeypatch):
     # New behavior (主代理活动检测): when the user interrupts while the main agent
     # is monitoring subagents, the agent cancels the running subagents immediately

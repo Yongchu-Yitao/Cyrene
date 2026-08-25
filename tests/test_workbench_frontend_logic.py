@@ -3195,15 +3195,50 @@ def test_workbench_chat_interrupt_waits_for_server_and_uses_live_status_everywhe
         "function wbcBlockLabel", 1
     )[0]
 
-    assert "Promise.resolve(request)" in runtime_interrupt
+    assert "Promise.resolve(model.interrupt(chatId))" in runtime_interrupt
     assert ".then(function (result)" in runtime_interrupt
     assert ".finally(function () {" not in runtime_interrupt
     assert "abort(chatId);" in runtime_interrupt
+    assert 'publishLifecycle(chatId, "cancelled", {});' in runtime_interrupt
+    assert "clear(chatId);" in runtime_interrupt
+    assert 'fire("onInterrupted", chatId);' in runtime_interrupt
     assert 'fire("onInterrupted", chatId);' in source
     assert 'return !previous || previous.id !== chatId ? previous : { ...previous, status: "idle" };' in runtime_hooks
     assert "runtime ?" in side_status
     assert 'className={"wbc-overview-status" + (runtime ? " live" : "")}' in side_status
     assert 'chat.status === "running"' not in side_status
+
+
+def test_workbench_chat_interrupt_settles_runtime_during_reconnect_gap():
+    result = _run_workbench_runtime_js(
+        """
+(async () => {
+  let interrupted = 0;
+  const model = {
+    sendMessage: () => Promise.resolve(),
+    reconnectRun: () => new Promise(() => {}),
+    interrupt: () => Promise.resolve({ ok: true })
+  };
+  WorkbenchChatRuntimes.setHooks({
+    onInterrupted: () => { interrupted += 1; }
+  });
+  await WorkbenchChatRuntimes.start("chat-stop", { message: "hello" }, model);
+  const before = WorkbenchChatRuntimes.get("chat-stop");
+  await WorkbenchChatRuntimes.interrupt("chat-stop", model);
+  return {
+    wasReconnecting: !!(before && before.reconnecting),
+    runningAfterInterrupt: WorkbenchChatRuntimes.isRunning("chat-stop"),
+    interrupted
+  };
+})()
+"""
+    )
+
+    assert result == {
+        "wasReconnecting": True,
+        "runningAfterInterrupt": False,
+        "interrupted": 1,
+    }
 
 
 def test_workbench_chat_restores_project_cache_before_background_refresh():
@@ -3595,7 +3630,12 @@ eval({json.dumps(args_preview_source)});
 eval({json.dumps(timeline_source)});
 eval({json.dumps(runtime_source)});
 const result = ({expression});
-process.stdout.write(JSON.stringify(result));
+Promise.resolve(result).then(function (value) {{
+  process.stdout.write(JSON.stringify(value));
+}}).catch(function (error) {{
+  console.error(error && error.stack || error);
+  process.exitCode = 1;
+}});
 """
     completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
     return json.loads(completed.stdout)

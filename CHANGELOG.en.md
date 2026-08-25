@@ -76,6 +76,7 @@ The Chinese edition remains the most detailed record for older releases.
 - Large plain-text streams, colored build logs, and continuously repainting terminal interfaces are handled more smoothly. One noisy terminal is less likely to slow another interactive terminal or the overall Workbench, and Windows continues draining buffered ConPTY output after a command exits so the end of a log is not lost.
 - Long terminal history uses continuous searchable segments that preserve order and recovery when retention limits are crossed, multiple viewers are attached, background storage is slow, or the app restarts.
 - When the Agent reads a terminal, it can use detected commands and their matching output instead of repeatedly scanning unrelated parts of a very large scrollback.
+- When a split terminal is already open beside the conversation, the Agent can identify its visible name, position, and connection state. References such as “the current terminal,” “the left terminal,” or “the right terminal” can resolve directly to the matching session, including an SSH terminal that is not bound to the current chat.
 - Installed and portable Electron builds now settle terminal processes more completely during quit, restart, terminal deletion, and session recovery, reducing orphaned processes, stale state, and incorrect recovery on the next launch.
 
 ### PowerPoint creation improvements
@@ -94,6 +95,7 @@ The Chinese edition remains the most detailed record for older releases.
 - Chat text, tool calls, and completion states connect more reliably. After a reply has been saved, a late terminal cleanup event or status update cannot revoke it or contaminate the next turn.
 - Historical reasoning and tool activity continue to appear as activity cards after reloading a conversation, through control clients, and in split chats, side Agents, and quick views. Empty messages without text, attachments, or meaningful activity are hidden instead of appearing as blank or footer-only assistant messages.
 - User-input prompts are deduplicated between live events and page hydration. Stop, reconnect, and background completion are owned by one task state, reducing repeated questions, duplicate completion, and stuck replies.
+- Stopping a reply during a network reconnect gap now restores the conversation to an interactive state immediately, so retry, edit, and send actions are no longer disabled by a stale generating state.
 - Notifications, message attachments, and background media results remain consistent across several windows and rapid navigation. Slow background storage no longer blocks visible replies or live terminal output.
 - HTML previews can now run single-file apps and small games that depend on browser local or session storage while remaining sandboxed. Preview data stays within that preview and cannot access Cyrene's own stored data.
 - Removed the old Welcome/Get Started page and its automatic startup entry. Cyrene now opens directly into the unified Workbench, while required first-use model and personality setup remains in the supported onboarding flow.

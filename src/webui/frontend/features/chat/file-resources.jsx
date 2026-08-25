@@ -428,16 +428,21 @@ var WorkbenchChatRuntimes = (function () {
   }
 
   function interrupt(chatId, model) {
-    if (!chatId) return Promise.resolve(null);
-    var request = runtimes[chatId] && model && model.interrupt
-      ? model.interrupt(chatId)
-      : Promise.resolve(null);
+    if (!chatId || !runtimes[chatId] || !model || !model.interrupt) {
+      return Promise.resolve(null);
+    }
     // Keep the live stream attached until the server has accepted the
-    // interruption and repaired the persisted chat status. If the interrupted
-    // event wins the race it clears the runtime directly; otherwise aborting
-    // here makes ownStream perform one authoritative re-pull.
-    return Promise.resolve(request).then(function (result) {
+    // interruption and repaired the persisted chat status. Then settle the
+    // local runtime directly. During a reconnect gap there is no AbortController
+    // and no pending ownStream.finally to clear it, which previously left
+    // retry/edit actions disabled after a successful stop.
+    return Promise.resolve(model.interrupt(chatId)).then(function (result) {
       abort(chatId);
+      if (runtimes[chatId]) {
+        publishLifecycle(chatId, "cancelled", {});
+        clear(chatId);
+        fire("onInterrupted", chatId);
+      }
       return result;
     }).catch(function (err) {
       fire("onError", chatId, err);
