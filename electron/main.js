@@ -7073,7 +7073,7 @@ async function createMainWindow() {
 
   let port;
   try {
-    port = await waitForPort();
+    port = await waitForPort(isTerminalLifecycleSoakTest ? 120000 : 30000);
   } catch (err) {
     if (isTerminalLifecycleSoakTest) {
       terminalLifecycleSoakFailure(err);

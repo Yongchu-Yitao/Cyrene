@@ -12,13 +12,13 @@ from cyrene.terminal.manager import (
     TerminalManager,
     TerminalSession,
     _WindowsPtyProcess,
-    _ensure_windows_console_for_conpty,
+    _temporary_windows_console_for_conpty,
     _terminate_winpty_process,
     _write_winpty_input,
 )
 
 
-def test_windows_conpty_uses_one_hidden_process_console(
+def test_windows_conpty_uses_temporary_hidden_console(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import cyrene.terminal.manager as manager_module
@@ -38,13 +38,13 @@ def test_windows_conpty_uses_one_hidden_process_console(
 
     class Kernel32:
         AllocConsole = NativeCall("AllocConsole", 1)
+        FreeConsole = NativeCall("FreeConsole", 1)
         GetConsoleWindow = NativeCall("GetConsoleWindow", 2468)
 
     class User32:
         ShowWindow = NativeCall("ShowWindow", 0)
 
     monkeypatch.setattr(manager_module.sys, "platform", "win32")
-    monkeypatch.setattr(manager_module, "_WINDOWS_CONSOLE_READY", False)
     monkeypatch.setattr(
         ctypes,
         "WinDLL",
@@ -52,13 +52,15 @@ def test_windows_conpty_uses_one_hidden_process_console(
         raising=False,
     )
 
-    _ensure_windows_console_for_conpty()
-    _ensure_windows_console_for_conpty()
+    with _temporary_windows_console_for_conpty():
+        calls.append(("spawn", ()))
 
     assert calls == [
         ("AllocConsole", ()),
         ("GetConsoleWindow", ()),
         ("ShowWindow", (2468, 0)),
+        ("spawn", ()),
+        ("FreeConsole", ()),
     ]
 
 
@@ -83,6 +85,23 @@ def test_windows_process_uses_low_level_background_io() -> None:
     assert process.pid == 1357
     assert process.read_output() == "ready"
     assert writes == ["echo ready\r"]
+
+
+def test_windows_process_chunks_large_writes() -> None:
+    writes: list[str] = []
+
+    class LowLevelPty:
+        pid = 1357
+
+        def write(self, text: str) -> int:
+            writes.append(text)
+            return len(text)
+
+    process = _WindowsPtyProcess(LowLevelPty())
+    payload = "x" * 20_000
+
+    assert process.write(payload) == len(payload)
+    assert writes == [payload[:8192], payload[8192:16384], payload[16384:]]
 
 
 @pytest.mark.asyncio
