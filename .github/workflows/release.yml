@@ -86,9 +86,14 @@ jobs:
         run: python build/build.py --ui-mode ${{ env.UI_MODE }}
 
       - name: Install and smoke test macOS package
+        id: macos_package_smoke
+        continue-on-error: true
         run: build/macos-release-smoke.sh
 
       - name: Upload macOS DMG
+        id: macos_package_artifact
+        continue-on-error: true
+        if: ${{ steps.macos_package_smoke.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: macos-dmg
@@ -97,10 +102,30 @@ jobs:
           compression-level: 0
 
       - name: Publish macOS DMG
-        if: startsWith(github.ref, 'refs/tags/')
+        id: macos_package_publish
+        continue-on-error: true
+        if: ${{ startsWith(github.ref, 'refs/tags/') && steps.macos_package_smoke.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" dist-electron/Cyrene-*-mac.dmg --clobber
+
+      - name: Report all macOS validation failures
+        if: always()
+        shell: bash
+        env:
+          PACKAGE_SMOKE_OUTCOME: ${{ steps.macos_package_smoke.outcome }}
+          ARTIFACT_OUTCOME: ${{ steps.macos_package_artifact.outcome }}
+          PUBLISH_OUTCOME: ${{ steps.macos_package_publish.outcome }}
+        run: |
+          failures=()
+          test "$PACKAGE_SMOKE_OUTCOME" = success || failures+=("package smoke: $PACKAGE_SMOKE_OUTCOME")
+          test "$ARTIFACT_OUTCOME" = success || test "$ARTIFACT_OUTCOME" = skipped || failures+=("DMG artifact upload: $ARTIFACT_OUTCOME")
+          test "$PUBLISH_OUTCOME" = success || test "$PUBLISH_OUTCOME" = skipped || failures+=("GitHub release upload: $PUBLISH_OUTCOME")
+          if ((${#failures[@]})); then
+            printf 'macOS pre-release validation failures (%s):\n' "${#failures[@]}"
+            printf ' - %s\n' "${failures[@]}"
+            exit 1
+          fi
 
   # ==========================================================================
   # Windows Build
@@ -160,6 +185,8 @@ jobs:
         run: cd electron && npm ci --prefer-offline --no-audit --no-fund
 
       - name: Test Windows App Use provider
+        id: windows_app_use
+        continue-on-error: true
         shell: powershell
         run: |
           node --test electron/app-use.test.js
@@ -251,6 +278,8 @@ jobs:
           python -c "from typing_extensions import Sentinel; from pydantic_core import core_schema; import anyio, httpx, httpcore, sniffio, aiosqlite, apscheduler, croniter, jinja2, websockets, simplexng, mcp, google.genai, numpy, numpy._core._multiarray_umath, openai_codex; print('imports-ok')"
 
       - name: Benchmark sustained Windows ConPTY output
+        id: windows_conpty_benchmark
+        continue-on-error: true
         shell: powershell
         run: |
           $report = "output/performance/terminal-real-windows-x64.json"
@@ -261,6 +290,7 @@ jobs:
             --fail-on-quality
 
       - name: Upload Windows ConPTY benchmark
+        if: ${{ always() && steps.windows_conpty_benchmark.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: terminal-performance-windows-x64
@@ -271,10 +301,14 @@ jobs:
         run: python build/build.py --ui-mode ${{ env.UI_MODE }}
 
       - name: Install and smoke test Windows package
+        id: windows_package_smoke
+        continue-on-error: true
         shell: powershell
         run: build\windows-release-smoke.ps1 -Arch x64
 
       - name: Upload Windows packages
+        id: windows_package_artifact
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: windows-installer
@@ -285,11 +319,35 @@ jobs:
           compression-level: 0
 
       - name: Publish Windows x64 packages
-        if: startsWith(github.ref, 'refs/tags/')
+        id: windows_package_publish
+        continue-on-error: true
+        if: ${{ startsWith(github.ref, 'refs/tags/') && steps.windows_package_smoke.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: gh release upload "$GITHUB_REF_NAME" dist-electron/Cyrene-*-win-x64.exe dist-electron/Cyrene-*-win-x64-portable.exe --clobber
+
+      - name: Report all Windows x64 validation failures
+        if: always()
+        shell: bash
+        env:
+          APP_USE_OUTCOME: ${{ steps.windows_app_use.outcome }}
+          BENCHMARK_OUTCOME: ${{ steps.windows_conpty_benchmark.outcome }}
+          PACKAGE_SMOKE_OUTCOME: ${{ steps.windows_package_smoke.outcome }}
+          ARTIFACT_OUTCOME: ${{ steps.windows_package_artifact.outcome }}
+          PUBLISH_OUTCOME: ${{ steps.windows_package_publish.outcome }}
+        run: |
+          failures=()
+          test "$APP_USE_OUTCOME" = success || failures+=("Windows App Use: $APP_USE_OUTCOME")
+          test "$BENCHMARK_OUTCOME" = success || failures+=("ConPTY benchmark: $BENCHMARK_OUTCOME")
+          test "$PACKAGE_SMOKE_OUTCOME" = success || failures+=("package smoke matrix: $PACKAGE_SMOKE_OUTCOME")
+          test "$ARTIFACT_OUTCOME" = success || failures+=("package artifact upload: $ARTIFACT_OUTCOME")
+          test "$PUBLISH_OUTCOME" = success || test "$PUBLISH_OUTCOME" = skipped || failures+=("GitHub release upload: $PUBLISH_OUTCOME")
+          if ((${#failures[@]})); then
+            printf 'Windows x64 pre-release validation failures (%s):\n' "${#failures[@]}"
+            printf ' - %s\n' "${failures[@]}"
+            exit 1
+          fi
 
   # ==========================================================================
   # Windows on ARM Build
@@ -314,10 +372,18 @@ jobs:
       - name: Smoke test x64 compatibility sidecars
         shell: powershell
         run: |
-          $ocr = & dist\x64-sidecars\ocr\CyreneOcr.exe --smoke-test
-          if ($ocr -notmatch "CYRENE_OCR_SIDECAR_SMOKE=ok") { throw "OCR sidecar smoke test failed: $ocr" }
-          $search = & dist\x64-sidecars\simplexng\CyreneSimpleXNG.exe --smoke-test
-          if ($search -notmatch "CYRENE_SIMPLEXNG_SIDECAR_SMOKE=ok") { throw "SimpleXNG sidecar smoke test failed: $search" }
+          $failures = [Collections.Generic.List[string]]::new()
+          try {
+            $ocr = & dist\x64-sidecars\ocr\CyreneOcr.exe --smoke-test
+            if ($ocr -notmatch "CYRENE_OCR_SIDECAR_SMOKE=ok") { throw "unexpected output: $ocr" }
+          } catch { $failures.Add("OCR sidecar: $($_ | Out-String)") }
+          try {
+            $search = & dist\x64-sidecars\simplexng\CyreneSimpleXNG.exe --smoke-test
+            if ($search -notmatch "CYRENE_SIMPLEXNG_SIDECAR_SMOKE=ok") { throw "unexpected output: $search" }
+          } catch { $failures.Add("SimpleXNG sidecar: $($_ | Out-String)") }
+          if ($failures.Count -gt 0) {
+            throw "WoA sidecar validation failures ($($failures.Count)):`n$($failures -join "`n")"
+          }
       - name: Upload WoA x64 sidecars
         uses: actions/upload-artifact@v7
         with:
@@ -408,6 +474,8 @@ jobs:
         run: cd electron && npm ci --prefer-offline --no-audit --no-fund
 
       - name: Test Windows App Use provider
+        id: windows_arm_app_use
+        continue-on-error: true
         shell: powershell
         run: |
           node --test electron/app-use.test.js
@@ -425,6 +493,8 @@ jobs:
           python -c "import platform; from typing_extensions import Sentinel; from pydantic_core import core_schema; import anyio, httpx, httpcore, sniffio, aiosqlite, apscheduler, croniter, jinja2, websockets, mcp, google.genai, numpy, numpy._core._multiarray_umath, onnxruntime, onnxruntime_qnn, openai_codex; assert platform.machine().lower() in {'arm64','aarch64'}; print('arm64-imports-ok')"
 
       - name: Benchmark sustained Windows ConPTY output
+        id: windows_arm_conpty_benchmark
+        continue-on-error: true
         shell: powershell
         run: |
           $report = "output/performance/terminal-real-windows-arm64.json"
@@ -435,6 +505,7 @@ jobs:
             --fail-on-quality
 
       - name: Upload Windows ARM64 ConPTY benchmark
+        if: ${{ always() && steps.windows_arm_conpty_benchmark.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: terminal-performance-windows-arm64
@@ -445,10 +516,14 @@ jobs:
         run: python build/build.py --ui-mode ${{ env.UI_MODE }} --arch arm64
 
       - name: Install and smoke test Windows package
+        id: windows_arm_package_smoke
+        continue-on-error: true
         shell: powershell
         run: build\windows-release-smoke.ps1 -Arch arm64
 
       - name: Upload Windows packages
+        id: windows_arm_package_artifact
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: windows-installer-arm
@@ -459,11 +534,35 @@ jobs:
           compression-level: 0
 
       - name: Publish Windows ARM64 packages
-        if: startsWith(github.ref, 'refs/tags/')
+        id: windows_arm_package_publish
+        continue-on-error: true
+        if: ${{ startsWith(github.ref, 'refs/tags/') && steps.windows_arm_package_smoke.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: gh release upload "$GITHUB_REF_NAME" dist-electron/Cyrene-*-win-arm64.exe dist-electron/Cyrene-*-win-arm64-portable.exe --clobber
+
+      - name: Report all Windows ARM64 validation failures
+        if: always()
+        shell: bash
+        env:
+          APP_USE_OUTCOME: ${{ steps.windows_arm_app_use.outcome }}
+          BENCHMARK_OUTCOME: ${{ steps.windows_arm_conpty_benchmark.outcome }}
+          PACKAGE_SMOKE_OUTCOME: ${{ steps.windows_arm_package_smoke.outcome }}
+          ARTIFACT_OUTCOME: ${{ steps.windows_arm_package_artifact.outcome }}
+          PUBLISH_OUTCOME: ${{ steps.windows_arm_package_publish.outcome }}
+        run: |
+          failures=()
+          test "$APP_USE_OUTCOME" = success || failures+=("Windows App Use: $APP_USE_OUTCOME")
+          test "$BENCHMARK_OUTCOME" = success || failures+=("ConPTY benchmark: $BENCHMARK_OUTCOME")
+          test "$PACKAGE_SMOKE_OUTCOME" = success || failures+=("package smoke matrix: $PACKAGE_SMOKE_OUTCOME")
+          test "$ARTIFACT_OUTCOME" = success || failures+=("package artifact upload: $ARTIFACT_OUTCOME")
+          test "$PUBLISH_OUTCOME" = success || test "$PUBLISH_OUTCOME" = skipped || failures+=("GitHub release upload: $PUBLISH_OUTCOME")
+          if ((${#failures[@]})); then
+            printf 'Windows ARM64 pre-release validation failures (%s):\n' "${#failures[@]}"
+            printf ' - %s\n' "${failures[@]}"
+            exit 1
+          fi
 
   # ==========================================================================
   # Linux Build
@@ -521,9 +620,13 @@ jobs:
         run: python build/build.py --ui-mode ${{ env.UI_MODE }}
 
       - name: Smoke test packaged Python app
+        id: linux_python_smoke
+        continue-on-error: true
         run: ./dist/Cyrene/Cyrene --smoke-test
 
       - name: Smoke test packaged AppImage UI
+        id: linux_appimage_smoke
+        continue-on-error: true
         env:
           CYRENE_USER_DATA_DIR: ${{ runner.temp }}/cyrene-desktop-smoke/data
           CYRENE_CACHE_DIR: ${{ runner.temp }}/cyrene-desktop-smoke/cache
@@ -536,12 +639,16 @@ jobs:
             --desktop-smoke-test
 
       - name: Publish Linux AppImage
-        if: startsWith(github.ref, 'refs/tags/')
+        id: linux_appimage_publish
+        continue-on-error: true
+        if: ${{ startsWith(github.ref, 'refs/tags/') && steps.linux_appimage_smoke.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" dist-electron/Cyrene-*-x64.AppImage --clobber
 
       - name: Install and smoke test Debian package
+        id: linux_deb_smoke
+        continue-on-error: true
         env:
           CYRENE_USER_DATA_DIR: ${{ runner.temp }}/cyrene-deb-smoke/data
           CYRENE_CACHE_DIR: ${{ runner.temp }}/cyrene-deb-smoke/cache
@@ -559,12 +666,16 @@ jobs:
           test -f "$CYRENE_USER_DATA_DIR/data/.config_key"
 
       - name: Publish Linux Debian package
-        if: startsWith(github.ref, 'refs/tags/')
+        id: linux_deb_publish
+        continue-on-error: true
+        if: ${{ startsWith(github.ref, 'refs/tags/') && steps.linux_deb_smoke.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" dist-electron/Cyrene-*-x64.deb --clobber
 
       - name: Install and smoke test RPM package
+        id: linux_rpm_smoke
+        continue-on-error: true
         run: |
           docker run --rm \
             --shm-size=1g \
@@ -573,12 +684,17 @@ jobs:
             bash /workspace/build/linux-rpm-release-smoke.sh
 
       - name: Publish Linux RPM package
-        if: startsWith(github.ref, 'refs/tags/')
+        id: linux_rpm_publish
+        continue-on-error: true
+        if: ${{ startsWith(github.ref, 'refs/tags/') && steps.linux_rpm_smoke.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" dist-electron/Cyrene-*-x64.rpm --clobber
 
       - name: Upload Linux packages
+        id: linux_package_artifact
+        continue-on-error: true
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: linux-packages
@@ -588,6 +704,34 @@ jobs:
             dist-electron/Cyrene-*-x64.rpm
           if-no-files-found: error
           compression-level: 0
+
+      - name: Report all Linux validation failures
+        if: always()
+        shell: bash
+        env:
+          PYTHON_SMOKE_OUTCOME: ${{ steps.linux_python_smoke.outcome }}
+          APPIMAGE_SMOKE_OUTCOME: ${{ steps.linux_appimage_smoke.outcome }}
+          DEB_SMOKE_OUTCOME: ${{ steps.linux_deb_smoke.outcome }}
+          RPM_SMOKE_OUTCOME: ${{ steps.linux_rpm_smoke.outcome }}
+          APPIMAGE_PUBLISH_OUTCOME: ${{ steps.linux_appimage_publish.outcome }}
+          DEB_PUBLISH_OUTCOME: ${{ steps.linux_deb_publish.outcome }}
+          RPM_PUBLISH_OUTCOME: ${{ steps.linux_rpm_publish.outcome }}
+          ARTIFACT_OUTCOME: ${{ steps.linux_package_artifact.outcome }}
+        run: |
+          failures=()
+          test "$PYTHON_SMOKE_OUTCOME" = success || failures+=("packaged Python: $PYTHON_SMOKE_OUTCOME")
+          test "$APPIMAGE_SMOKE_OUTCOME" = success || failures+=("AppImage UI: $APPIMAGE_SMOKE_OUTCOME")
+          test "$DEB_SMOKE_OUTCOME" = success || failures+=("Debian package: $DEB_SMOKE_OUTCOME")
+          test "$RPM_SMOKE_OUTCOME" = success || failures+=("RPM package: $RPM_SMOKE_OUTCOME")
+          test "$APPIMAGE_PUBLISH_OUTCOME" = success || test "$APPIMAGE_PUBLISH_OUTCOME" = skipped || failures+=("AppImage release upload: $APPIMAGE_PUBLISH_OUTCOME")
+          test "$DEB_PUBLISH_OUTCOME" = success || test "$DEB_PUBLISH_OUTCOME" = skipped || failures+=("Debian release upload: $DEB_PUBLISH_OUTCOME")
+          test "$RPM_PUBLISH_OUTCOME" = success || test "$RPM_PUBLISH_OUTCOME" = skipped || failures+=("RPM release upload: $RPM_PUBLISH_OUTCOME")
+          test "$ARTIFACT_OUTCOME" = success || failures+=("Linux artifact upload: $ARTIFACT_OUTCOME")
+          if ((${#failures[@]})); then
+            printf 'Linux pre-release validation failures (%s):\n' "${#failures[@]}"
+            printf ' - %s\n' "${failures[@]}"
+            exit 1
+          fi
 
   # ==========================================================================
   # Create the release before builds begin. Each platform publishes its own
@@ -668,3 +812,45 @@ jobs:
           body: ${{ steps.notes.outputs.body }}
           draft: false
           prerelease: ${{ steps.pre.outputs.is_pre == 'true' }}
+
+  pre-release-summary:
+    needs:
+      - release
+      - build-macos
+      - build-windows
+      - build-windows-arm-sidecars
+      - build-windows-arm
+      - build-linux
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report every platform result
+        shell: bash
+        env:
+          RELEASE_RESULT: ${{ needs.release.result }}
+          MACOS_RESULT: ${{ needs.build-macos.result }}
+          WINDOWS_X64_RESULT: ${{ needs.build-windows.result }}
+          WINDOWS_SIDECARS_RESULT: ${{ needs.build-windows-arm-sidecars.result }}
+          WINDOWS_ARM64_RESULT: ${{ needs.build-windows-arm.result }}
+          LINUX_RESULT: ${{ needs.build-linux.result }}
+        run: |
+          failures=()
+          for entry in \
+            "release gate:$RELEASE_RESULT" \
+            "macOS:$MACOS_RESULT" \
+            "Windows x64:$WINDOWS_X64_RESULT" \
+            "Windows ARM64 sidecars:$WINDOWS_SIDECARS_RESULT" \
+            "Windows ARM64:$WINDOWS_ARM64_RESULT" \
+            "Linux:$LINUX_RESULT"
+          do
+            label="${entry%%:*}"
+            result="${entry#*:}"
+            printf '%-26s %s\n' "$label" "$result"
+            test "$result" = failure || test "$result" = cancelled || continue
+            failures+=("$label: $result")
+          done
+          if ((${#failures[@]})); then
+            printf 'Pre-release failures across all platforms (%s):\n' "${#failures[@]}"
+            printf ' - %s\n' "${failures[@]}"
+            exit 1
+          fi
