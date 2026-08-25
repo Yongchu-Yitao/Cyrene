@@ -4,6 +4,7 @@ Regression tests for the 2026-06-11 latency incident: a dead LAN endpoint in the
 model list added ~120s to every LLM call.  The normalized primary route is the
 sole ordered source of truth, with no phantom env candidate prepended.
 """
+import asyncio
 import json
 import socket
 import sqlite3
@@ -122,7 +123,34 @@ def test_deepseek_tool_turn_replays_reasoning_content_only_when_required():
     assert all("reasoning_content" not in message for message in generic_payload["messages"])
 
 
-def test_deepseek_tool_turn_without_reasoning_becomes_recovery_receipt():
+def test_deepseek_tool_turn_replays_present_empty_reasoning_content():
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+    ]
+
+    payload = cl._build_payload(
+        messages,
+        tools=None,
+        max_tokens=24,
+        stream=False,
+        model="deepseek-v4-flash",
+        thinking="auto",
+    )
+
+    assert payload["messages"] == messages
+
+
+def test_deepseek_tool_turn_without_reasoning_is_repaired_with_empty_string():
     messages = [
         {
             "role": "assistant",
@@ -145,20 +173,16 @@ def test_deepseek_tool_turn_without_reasoning_becomes_recovery_receipt():
         thinking="auto",
     )
 
-    assert len(payload["messages"]) == 1
-    receipt = json.loads(payload["messages"][0]["content"])
-    assert payload["messages"][0]["role"] == "system"
-    assert receipt["type"] == "deepseek_tool_episode_recovery"
-    assert receipt["reason"] == "missing_or_empty_reasoning_content"
-    assert receipt["calls"] == [{
-        "tool": "lookup",
+    assert payload["messages"][0]["role"] == "assistant"
+    assert payload["messages"][0]["reasoning_content"] == ""
+    assert payload["messages"][1] == {
+        "role": "tool",
         "tool_call_id": "call_1",
-        "result_available": True,
-        "result": "result",
-    }]
+        "content": "result",
+    }
 
 
-def test_deepseek_tool_turn_with_null_reasoning_becomes_recovery_receipt():
+def test_deepseek_tool_turn_with_null_reasoning_is_repaired_with_empty_string():
     messages = [
         {
             "role": "assistant",
@@ -182,10 +206,8 @@ def test_deepseek_tool_turn_with_null_reasoning_becomes_recovery_receipt():
         thinking="auto",
     )
 
-    assert len(payload["messages"]) == 1
-    receipt = json.loads(payload["messages"][0]["content"])
-    assert receipt["type"] == "deepseek_tool_episode_recovery"
-    assert receipt["reason"] == "missing_or_empty_reasoning_content"
+    assert payload["messages"][0]["reasoning_content"] == ""
+    assert payload["messages"][1]["tool_call_id"] == "call_1"
 
 
 def test_deepseek_hidden_phase1_and_multitool_phase2_replay_reasoning_exactly():
@@ -468,6 +490,128 @@ def test_minimax_legacy_think_wrapper_is_removed_from_visible_content():
     assert message["reasoning_details"] == [
         {"type": "reasoning.text", "text": "private analysis"}
     ]
+
+
+def test_minimax_stream_timeout_profile_extends_only_post_start_idle_window():
+    assert cl._stream_timeout_profile("MiniMax-M3", 120, stream=True) == (
+        240.0,
+        120.0,
+    )
+    assert cl._stream_timeout_profile("MiniMax-M3", 300, stream=True) == (
+        300.0,
+        300.0,
+    )
+    assert cl._stream_timeout_profile("MiniMax-M3", 120, stream=False) == (
+        120.0,
+        None,
+    )
+    assert cl._stream_timeout_profile("deepseek-chat", 120, stream=True) == (
+        120.0,
+        None,
+    )
+
+
+async def test_minimax_stream_keeps_initial_timeout_until_upstream_data_arrives():
+    class FakeResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def aiter_lines(self):
+            await asyncio.sleep(0.02)
+            yield "data: [DONE]"
+
+    class FakeClient:
+        def stream(self, *args, **kwargs):
+            return FakeResponse()
+
+    with pytest.raises(httpx.ReadTimeout, match="initial 0.005-second timeout"):
+        await cl._handle_stream(
+            FakeClient(),
+            "https://api.minimaxi.com/v1/chat/completions",
+            {"model": "MiniMax-M3", "messages": []},
+            {},
+            None,
+            first_event_timeout=0.005,
+        )
+
+
+async def test_minimax_stream_releases_initial_timeout_after_first_upstream_line():
+    class FakeResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def aiter_lines(self):
+            yield 'data: {"choices":[{"delta":{"content":"still "}}]}'
+            await asyncio.sleep(0.02)
+            yield 'data: {"choices":[{"delta":{"content":"working"}}]}'
+            yield "data: [DONE]"
+
+    class FakeClient:
+        def stream(self, *args, **kwargs):
+            return FakeResponse()
+
+    message = await cl._handle_stream(
+        FakeClient(),
+        "https://api.minimaxi.com/v1/chat/completions",
+        {"model": "MiniMax-M3", "messages": []},
+        {},
+        None,
+        first_event_timeout=0.005,
+    )
+
+    assert message["content"] == "still working"
+
+
+async def test_deepseek_stream_preserves_empty_reasoning_content_on_tool_turn():
+    class FakeResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def aiter_lines(self):
+            yield 'data: {"choices":[{"delta":{"reasoning_content":""}}]}'
+            yield (
+                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+                '"id":"call_1","type":"function","function":{"name":'
+                '"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}'
+            )
+            yield "data: [DONE]"
+
+    class FakeClient:
+        def stream(self, *args, **kwargs):
+            return FakeResponse()
+
+    message = await cl._handle_stream(
+        FakeClient(),
+        "https://api.deepseek.com/v1/chat/completions",
+        {"model": "deepseek-v4-flash", "messages": []},
+        {},
+        None,
+    )
+
+    assert "reasoning_content" in message
+    assert message["reasoning_content"] == ""
+    assert message["finish_reason"] == "tool_calls"
+    assert message["tool_calls"] == [{
+        "index": 0,
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "lookup", "arguments": "{}"},
+    }]
 
 
 async def test_minimax_stream_separates_cumulative_reasoning_and_content():

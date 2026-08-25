@@ -70,6 +70,7 @@ _http_clients: weakref.WeakKeyDictionary[
 ] = weakref.WeakKeyDictionary()
 _HTTP_MAX_CONNECTIONS = 40
 _HTTP_MAX_KEEPALIVE_CONNECTIONS = 20
+_MINIMAX_STREAM_IDLE_TIMEOUT_SECONDS = 240.0
 _LAST_SUCCESS_SETTING = "llm_last_success_endpoints"
 _SESSION_MODEL_PREFERENCE_SETTING = "llm_session_model_preferences"
 _SESSION_AFFINITY_PREFIX = "session:"
@@ -1208,11 +1209,10 @@ def _deepseek_tool_recovery_receipt(
 ) -> dict[str, Any]:
     """Convert an unreplayable provider tool episode into ordinary context.
 
-    DeepSeek requires the original, complete ``reasoning_content`` for every
-    thinking-mode assistant tool turn.  Missing reasoning cannot be recreated
-    safely.  Keeping the assistant/tool protocol and fabricating an empty value
-    produces a provider 400, so preserve the useful evidence in a system
-    receipt and remove the invalid protocol markers as one atomic unit.
+    DeepSeek requires ``reasoning_content`` to be present on every replayed
+    thinking-mode assistant tool turn, but accepts an empty string.  This
+    receipt is therefore reserved for structurally incomplete episodes whose
+    assistant/tool protocol cannot be replayed as one contiguous unit.
     """
     result_by_id = {
         str(result.get("tool_call_id") or ""): result for result in results
@@ -1255,11 +1255,12 @@ def _deepseek_tool_recovery_receipt(
 def _repair_deepseek_tool_history(messages: list[dict]) -> list[dict]:
     """Make DeepSeek thinking-mode tool history structurally replay-safe.
 
-    Valid completed episodes retain their original non-empty reasoning byte for
-    byte.  Episodes whose reasoning is absent/empty, whose results are missing,
-    or whose assistant/tool messages are no longer contiguous are collapsed as
-    a whole into a recovery receipt.  This avoids both a provider 400 and
-    orphaned tool messages while retaining bounded tool evidence.
+    Completed episodes retain string reasoning byte for byte.  Older Cyrene
+    builds could drop a present-but-empty stream field, so absent/null values
+    are restored to the provider-valid empty string.  Episodes whose results
+    are missing or no longer contiguous are collapsed as a whole into a
+    recovery receipt, avoiding orphaned tool messages while retaining bounded
+    tool evidence.
     """
     source = [message for message in messages if isinstance(message, dict)]
     projected: list[dict] = []
@@ -1305,33 +1306,30 @@ def _repair_deepseek_tool_history(messages: list[dict]) -> list[dict]:
             results.append(result)
             cursor += 1
 
-        reasoning = message.get("reasoning_content")
-        reasoning_complete = isinstance(reasoning, str) and bool(reasoning)
-        if complete and reasoning_complete:
-            projected.append(message)
+        if complete:
+            replayable_message = message
+            if not isinstance(message.get("reasoning_content"), str):
+                replayable_message = dict(message)
+                replayable_message["reasoning_content"] = ""
+            projected.append(replayable_message)
             projected.extend(results)
             index = cursor
             continue
 
-        reason = (
-            "missing_or_empty_reasoning_content"
-            if not reasoning_complete
-            else "incomplete_or_noncontiguous_tool_results"
-        )
-        if not complete:
-            # Collect only immediately adjacent matching tool results.  Any
-            # later orphan with the same id is suppressed below rather than
-            # reordered across an intervening semantic message.
-            results = []
-            cursor = index + 1
-            expected_ids = set(call_ids)
-            while cursor < len(source):
-                result = source[cursor]
-                result_id = str(result.get("tool_call_id") or "")
-                if result.get("role") != "tool" or result_id not in expected_ids:
-                    break
-                results.append(result)
-                cursor += 1
+        reason = "incomplete_or_noncontiguous_tool_results"
+        # Collect only immediately adjacent matching tool results.  Any later
+        # orphan with the same id is suppressed below rather than reordered
+        # across an intervening semantic message.
+        results = []
+        cursor = index + 1
+        expected_ids = set(call_ids)
+        while cursor < len(source):
+            result = source[cursor]
+            result_id = str(result.get("tool_call_id") or "")
+            if result.get("role") != "tool" or result_id not in expected_ids:
+                break
+            results.append(result)
+            cursor += 1
         recovered_call_ids.update(call_ids)
         logger.warning(
             "Recovered unreplayable DeepSeek tool episode [reason=%s calls=%s]",
@@ -1472,6 +1470,27 @@ _sanitize_messages_for_llm = sanitize_messages_for_llm
 def _is_minimax_model(model: str) -> bool:
     normalized = str(model or "").strip().lower()
     return "minimax" in normalized or normalized == "m2-her"
+
+
+def _stream_timeout_profile(
+    model: str,
+    timeout: float,
+    *,
+    stream: bool,
+) -> tuple[float, float | None]:
+    """Return the transport and first-event timeouts for one request.
+
+    MiniMax can keep a healthy streaming request open without emitting bytes
+    for close to two minutes while it finishes a long reasoning/tool turn.  A
+    single 120-second HTTP read timeout therefore races normal provider work.
+    Keep the existing timeout for response headers and the first stream event,
+    then let HTTPX enforce a longer per-read idle window after streaming has
+    demonstrably started.
+    """
+    requested = float(timeout)
+    if stream and _is_minimax_model(model):
+        return max(requested, _MINIMAX_STREAM_IDLE_TIMEOUT_SECONDS), requested
+    return requested, None
 
 
 def _scan_approx_token_count(source: str) -> int:
@@ -2774,6 +2793,12 @@ async def call_llm(
             max_conc = int(candidate.get("max_concurrency") or 0)
             provider = str(candidate.get("provider") or "openai_compatible")
             adapter = str(candidate.get("adapter") or provider).strip().lower()
+            candidate_model = str(candidate.get("model") or "").strip()
+            transport_timeout, first_event_timeout = _stream_timeout_profile(
+                candidate_model,
+                timeout,
+                stream=stream,
+            )
             from cyrene.runtime.network_proxy import configured_proxy_url
 
             candidate_proxy_url = configured_proxy_url(
@@ -2781,13 +2806,15 @@ async def call_llm(
             )
             if candidate_proxy_url:
                 client, connection_pool_key, client_pool_reused = _get_http_client(
-                    timeout,
+                    transport_timeout,
                     candidate_proxy_url,
                 )
             else:
                 # Preserve the one-argument call for direct connections and
                 # test doubles written against the original client factory.
-                client, connection_pool_key, client_pool_reused = _get_http_client(timeout)
+                client, connection_pool_key, client_pool_reused = _get_http_client(
+                    transport_timeout
+                )
 
             # Concurrency guard for secondary model
             if is_secondary and max_conc > 0 and _secondary_in_flight >= max_conc:
@@ -2816,7 +2843,7 @@ async def call_llm(
                     fallback_notice_sent = True
                 if is_secondary and max_conc > 0:
                     _secondary_in_flight += 1
-                model = str(candidate.get("model") or "").strip()
+                model = candidate_model
                 from cyrene.model_runtime.protocol_adapters import (
                     NATIVE_PROTOCOL_ADAPTERS,
                     prepare_request as prepare_protocol_request,
@@ -3073,6 +3100,7 @@ async def call_llm(
                                         headers,
                                         _tracked_stream_callback,
                                         stream_timing,
+                                        first_event_timeout=first_event_timeout,
                                     )
                                 else:
                                     resp = await client.post(endpoint, json=payload, headers=headers)
@@ -3641,9 +3669,12 @@ async def _handle_stream(
     headers: dict[str, str],
     stream_callback: Callable[[dict[str, Any]], Awaitable[None]] | None,
     timing: dict[str, float] | None = None,
+    *,
+    first_event_timeout: float | None = None,
 ) -> dict[str, Any]:
     accumulated: list[str] = []  # visible content, before DSML normalization
     reasoning_parts: list[str] = []
+    saw_reasoning_content = False
     tool_call_fragments: dict[int, dict[str, Any]] = {}
     usage: dict[str, Any] = {}
     finished_reason: str | None = None
@@ -3657,6 +3688,7 @@ async def _handle_stream(
     dsml_filter = _DsmlStreamFilter()
     think_filter = _ThinkTagStreamFilter()
     request_started = _time.monotonic()
+    first_upstream_line_seen = False
 
     async def _forward(text: str) -> None:
         nonlocal started
@@ -3695,91 +3727,108 @@ async def _handle_stream(
         # ordinary deltas. Accept both forms without duplicating snapshots.
         return current, previous + current
 
-    async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
-        if timing is not None:
-            timing["response_headers_ms"] = (_time.monotonic() - request_started) * 1000
-        if resp.status_code != 200:
-            # ``httpx`` does not expose ``response.text`` for a streaming
-            # response until the body has been consumed.  Preserve provider
-            # validation details (for example DeepSeek's tool-continuation
-            # reason) before raising so shared diagnostics can report the real
-            # 4xx/5xx cause instead of only "Bad Request".
-            try:
-                await resp.aread()
-            except httpx.HTTPError:
-                pass
-            resp.raise_for_status()
-        async for raw_line in resp.aiter_lines():
-            line = str(raw_line or "").strip()
-            if not line:
-                continue
-            if line.startswith("data:"):
-                line = line[5:].strip()
-            if not line:
-                continue
-            if line == "[DONE]":
-                break
-            if timing is not None and "ttft_ms" not in timing:
-                timing["ttft_ms"] = (_time.monotonic() - request_started) * 1000
-            try:
-                data = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(data.get("usage"), dict):
-                usage = data["usage"]
-            for choice in data.get("choices") or []:
-                finish = choice.get("finish_reason")
-                if finish:
-                    finished_reason = str(finish)
-                delta = choice.get("delta") or {}
-                rc = delta.get("reasoning_content")
-                if isinstance(rc, str) and rc.strip():
-                    await _forward_reasoning(rc)
-                details = delta.get("reasoning_details")
-                if details:
-                    reasoning_details = details
-                    current_reasoning = _reasoning_details_text(details)
-                    reasoning_delta, reasoning_snapshot = _snapshot_delta(
-                        reasoning_snapshot,
-                        current_reasoning,
-                    )
-                    if current_reasoning:
-                        saw_split_reasoning = True
-                    await _forward_reasoning(reasoning_delta)
-                delta_calls = delta.get("tool_calls")
-                if delta_calls is None:
-                    legacy_function = delta.get("function_call")
-                    singular_call = delta.get("tool_call")
-                    if isinstance(legacy_function, dict):
-                        delta_calls = {
-                            "index": 0,
-                            "function": legacy_function,
-                        }
-                    elif isinstance(singular_call, dict):
-                        delta_calls = (
-                            singular_call
-                            if isinstance(singular_call.get("function"), dict)
-                            else {
-                                "index": singular_call.get("index", 0),
-                                "id": singular_call.get("id"),
-                                "function": singular_call,
-                            }
+    try:
+        async with asyncio.timeout(first_event_timeout) as first_event_guard:
+            async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
+                if timing is not None:
+                    timing["response_headers_ms"] = (_time.monotonic() - request_started) * 1000
+                if resp.status_code != 200:
+                    # ``httpx`` does not expose ``response.text`` for a streaming
+                    # response until the body has been consumed.  Preserve provider
+                    # validation details (for example DeepSeek's tool-continuation
+                    # reason) before raising so shared diagnostics can report the real
+                    # 4xx/5xx cause instead of only "Bad Request".
+                    try:
+                        await resp.aread()
+                    except httpx.HTTPError:
+                        pass
+                    resp.raise_for_status()
+                async for raw_line in resp.aiter_lines():
+                    if not first_upstream_line_seen:
+                        first_upstream_line_seen = True
+                        # HTTPX now owns the longer per-read idle deadline.  The
+                        # initial watchdog must not cap the rest of the stream.
+                        first_event_guard.reschedule(None)
+                    line = str(raw_line or "").strip()
+                    if not line:
+                        continue
+                    if line.startswith("data:"):
+                        line = line[5:].strip()
+                    if not line:
+                        continue
+                    if line == "[DONE]":
+                        break
+                    if timing is not None and "ttft_ms" not in timing:
+                        timing["ttft_ms"] = (_time.monotonic() - request_started) * 1000
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(data.get("usage"), dict):
+                        usage = data["usage"]
+                    for choice in data.get("choices") or []:
+                        finish = choice.get("finish_reason")
+                        if finish:
+                            finished_reason = str(finish)
+                        delta = choice.get("delta") or {}
+                        if "reasoning_content" in delta:
+                            saw_reasoning_content = True
+                            rc = delta.get("reasoning_content")
+                            if isinstance(rc, str):
+                                await _forward_reasoning(rc)
+                        details = delta.get("reasoning_details")
+                        if details:
+                            reasoning_details = details
+                            current_reasoning = _reasoning_details_text(details)
+                            reasoning_delta, reasoning_snapshot = _snapshot_delta(
+                                reasoning_snapshot,
+                                current_reasoning,
+                            )
+                            if current_reasoning:
+                                saw_split_reasoning = True
+                            await _forward_reasoning(reasoning_delta)
+                        delta_calls = delta.get("tool_calls")
+                        if delta_calls is None:
+                            legacy_function = delta.get("function_call")
+                            singular_call = delta.get("tool_call")
+                            if isinstance(legacy_function, dict):
+                                delta_calls = {
+                                    "index": 0,
+                                    "function": legacy_function,
+                                }
+                            elif isinstance(singular_call, dict):
+                                delta_calls = (
+                                    singular_call
+                                    if isinstance(singular_call.get("function"), dict)
+                                    else {
+                                        "index": singular_call.get("index", 0),
+                                        "id": singular_call.get("id"),
+                                        "function": singular_call,
+                                    }
+                                )
+                        _accumulate_tool_call_deltas(
+                            delta_calls,
+                            tool_call_fragments,
                         )
-                _accumulate_tool_call_deltas(
-                    delta_calls,
-                    tool_call_fragments,
-                )
-                text = _extract_stream_delta_text(delta)
-                if not text:
-                    continue
-                if is_minimax:
-                    text, content_snapshot = _snapshot_delta(content_snapshot, text)
-                    visible, embedded_reasoning = think_filter.feed(text)
-                    if embedded_reasoning and not saw_split_reasoning:
-                        await _forward_reasoning(embedded_reasoning)
-                    await _forward(visible)
-                else:
-                    await _forward(text)
+                        text = _extract_stream_delta_text(delta)
+                        if not text:
+                            continue
+                        if is_minimax:
+                            text, content_snapshot = _snapshot_delta(content_snapshot, text)
+                            visible, embedded_reasoning = think_filter.feed(text)
+                            if embedded_reasoning and not saw_split_reasoning:
+                                await _forward_reasoning(embedded_reasoning)
+                            await _forward(visible)
+                        else:
+                            await _forward(text)
+    except TimeoutError as exc:
+        if first_event_timeout is None or first_upstream_line_seen:
+            raise
+        raise httpx.ReadTimeout(
+            "MiniMax stream produced no upstream data before the initial "
+            f"{float(first_event_timeout):g}-second timeout",
+            request=httpx.Request("POST", endpoint),
+        ) from exc
     if is_minimax:
         visible_tail, reasoning_tail = think_filter.flush()
         if reasoning_tail and not saw_split_reasoning:
@@ -3804,7 +3853,7 @@ async def _handle_stream(
         await stream_callback({"type": "reply_done", "response": dsml_filter.emitted()})
 
     msg: dict[str, Any] = {"role": "assistant", "content": full_text}
-    if reasoning_parts:
+    if saw_reasoning_content or reasoning_parts:
         msg["reasoning_content"] = "".join(reasoning_parts)
         if is_minimax:
             complete_reasoning = msg["reasoning_content"]
