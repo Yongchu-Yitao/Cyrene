@@ -11,7 +11,6 @@ import json
 import os
 import queue
 import re
-import select
 import signal
 import shutil
 import socket
@@ -52,8 +51,65 @@ SSH_RECONNECT_DELAYS = (1.0, 2.0, 5.0, 10.0, 30.0)
 _DEFAULT_TITLE_RE = re.compile(r"^Terminal\s+(\d+)$", re.IGNORECASE)
 
 
-def _winpty_output_ready(process: Any, timeout: float) -> bool:
-    return bool(select.select([process.fileobj], [], [], timeout)[0])
+class _WindowsPtyProcess:
+    """Small adapter around pywinpty's low-level, non-blocking PTY API."""
+
+    def __init__(self, pty: Any) -> None:
+        self.pty = pty
+        self.pid = pty.pid
+
+    def read_nonblocking(self) -> str:
+        return self.pty.read(False)
+
+    def write(self, text: str) -> int:
+        return self.pty.write(text)
+
+    def isalive(self) -> bool:
+        return self.pty.isalive()
+
+    def iseof(self) -> bool:
+        return self.pty.iseof()
+
+    def get_exitstatus(self) -> int | None:
+        return self.pty.get_exitstatus()
+
+    def setwinsize(self, rows: int, cols: int) -> None:
+        self.pty.set_size(cols, rows)
+
+
+def _spawn_winpty_process(
+    argv: list[str] | tuple[str, ...],
+    *,
+    cwd: str,
+    env: dict[str, str],
+    dimensions: tuple[int, int],
+) -> _WindowsPtyProcess:
+    from winpty import PTY
+
+    if not isinstance(argv, (list, tuple)) or not argv:
+        raise TypeError("expected a non-empty list or tuple for Windows terminal argv")
+    command_argv = [str(part) for part in argv]
+    command = shutil.which(command_argv[0], path=env.get("PATH", os.defpath))
+    if command is None:
+        raise FileNotFoundError(
+            f"the Windows terminal command was not found: {command_argv[0]}"
+        )
+    command_argv[0] = command
+    backend_value = os.environ.get("PYWINPTY_BACKEND")
+    backend = int(backend_value) if backend_value is not None else None
+    rows, cols = dimensions
+    pty = PTY(cols, rows, backend=backend)
+    environment = "\0".join(f"{key}={value}" for key, value in env.items()) + "\0"
+    if len(command_argv) == 1:
+        pty.spawn(command, cwd=cwd or os.getcwd(), env=environment)
+    else:
+        pty.spawn(
+            command,
+            cmdline=" " + subprocess.list2cmdline(command_argv[1:]),
+            cwd=cwd or os.getcwd(),
+            env=environment,
+        )
+    return _WindowsPtyProcess(pty)
 
 
 def _write_winpty_input(process: Any, text: str) -> None:
@@ -63,6 +119,8 @@ def _write_winpty_input(process: Any, text: str) -> None:
     except EOFError as exc:
         if bool(getattr(process, "flag_eof", False)):
             raise RuntimeError("terminal is not running") from exc
+    except Exception as exc:
+        raise RuntimeError("terminal is not running") from exc
     try:
         process.pty.write(text)
     except Exception as exc:
@@ -71,13 +129,17 @@ def _write_winpty_input(process: Any, text: str) -> None:
 
 async def _terminate_winpty_process(process: Any, pid: int | None) -> None:
     termination_error: PermissionError | None = None
-    try:
-        await asyncio.to_thread(process.terminate, True)
-        return
-    except PermissionError as permission_error:
-        if not pid:
-            raise
-        termination_error = permission_error
+    terminate = getattr(process, "terminate", None)
+    if terminate is not None:
+        try:
+            await asyncio.to_thread(terminate, True)
+            return
+        except PermissionError as permission_error:
+            if not pid:
+                raise
+            termination_error = permission_error
+    if not pid:
+        raise RuntimeError("could not terminate Windows terminal process without a PID")
     taskkill = await asyncio.create_subprocess_exec(
         "taskkill.exe",
         "/PID",
@@ -3121,7 +3183,7 @@ class TerminalManager:
 
     async def _spawn_windows(self, session: TerminalSession) -> None:
         try:
-            from winpty import PtyProcess
+            from winpty import PTY  # noqa: F401
         except ImportError as exc:  # pragma: no cover - Windows packaging guard
             raise RuntimeError("pywinpty is required for terminal support on Windows") from exc
 
@@ -3159,7 +3221,7 @@ class TerminalManager:
             await self._worker_call("reset_metadata", session.id)
         session.command_state = ""
         process = await asyncio.to_thread(
-            PtyProcess.spawn,
+            _spawn_winpty_process,
             command,
             cwd=session.cwd,
             env=env,
@@ -3195,20 +3257,30 @@ class TerminalManager:
             return
         try:
             reached_eof = False
-            while (
-                session.launch_mode == "interactive"
-                or session.winpty.isalive()
-            ):
+            while True:
                 await self._wait_for_persistence_capacity()
                 try:
-                    text = await asyncio.to_thread(session.winpty.read, 4096)
-                except EOFError:
-                    reached_eof = True
-                    break
+                    text = await asyncio.to_thread(session.winpty.read_nonblocking)
+                    reached_eof = await asyncio.to_thread(session.winpty.iseof)
+                except Exception:
+                    try:
+                        alive = await asyncio.to_thread(session.winpty.isalive)
+                    except Exception:
+                        alive = False
+                    if not alive:
+                        break
+                    raise
                 if text:
                     self._append_output(
                         session, str(text).encode("utf-8", errors="replace")
                     )
+                if reached_eof:
+                    break
+                alive = await asyncio.to_thread(session.winpty.isalive)
+                if not alive and session.launch_mode != "interactive":
+                    break
+                if not text:
+                    await asyncio.sleep(WINDOWS_POST_EXIT_DRAIN_POLL_SECONDS)
 
             loop = asyncio.get_running_loop()
             drain_idle_deadline = (
@@ -3216,27 +3288,27 @@ class TerminalManager:
             )
             while not reached_eof and loop.time() < drain_idle_deadline:
                 await self._wait_for_persistence_capacity()
-                ready = await asyncio.to_thread(
-                    _winpty_output_ready,
-                    session.winpty,
-                    WINDOWS_POST_EXIT_DRAIN_POLL_SECONDS,
-                )
-                if not ready:
-                    continue
                 try:
-                    text = await asyncio.to_thread(session.winpty.read, 4096)
-                except EOFError:
+                    text = await asyncio.to_thread(session.winpty.read_nonblocking)
+                    reached_eof = await asyncio.to_thread(session.winpty.iseof)
+                except Exception:
                     break
                 if text:
-                    self._append_output(session, str(text).encode("utf-8", errors="replace"))
+                    self._append_output(
+                        session, str(text).encode("utf-8", errors="replace")
+                    )
                     drain_idle_deadline = (
                         loop.time() + WINDOWS_POST_EXIT_DRAIN_IDLE_SECONDS
                     )
-            exit_code = await asyncio.to_thread(session.winpty.wait)
+                elif not reached_eof:
+                    await asyncio.sleep(WINDOWS_POST_EXIT_DRAIN_POLL_SECONDS)
+            exit_code = await asyncio.to_thread(session.winpty.get_exitstatus)
         except asyncio.CancelledError:
             raise
         except Exception:
             exit_code = None
+            with contextlib.suppress(Exception):
+                exit_code = await asyncio.to_thread(session.winpty.get_exitstatus)
         await self._synchronize_exit_metadata(session)
         self._mark_exited(session, exit_code)
 

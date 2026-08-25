@@ -10,39 +10,44 @@ import pytest
 from cyrene.terminal.manager import (
     TerminalManager,
     TerminalSession,
+    _WindowsPtyProcess,
     _terminate_winpty_process,
     _write_winpty_input,
 )
 
 
-def test_windows_input_bypasses_a_stale_high_level_alive_check() -> None:
+def test_windows_process_uses_low_level_nonblocking_io() -> None:
     writes: list[str] = []
 
     class LowLevelPty:
-        def write(self, text: str) -> None:
+        pid = 1357
+
+        def read(self, blocking: bool) -> str:
+            assert blocking is False
+            return "ready"
+
+        def write(self, text: str) -> int:
             writes.append(text)
+            return len(text)
 
-    class WinPty:
-        flag_eof = False
-        pty = LowLevelPty()
+    process = _WindowsPtyProcess(LowLevelPty())
 
-        def write(self, _text: str) -> None:
-            raise EOFError("stale alive check")
+    _write_winpty_input(process, "echo ready\r")
 
-    _write_winpty_input(WinPty(), "echo ready\r")
-
+    assert process.pid == 1357
+    assert process.read_nonblocking() == "ready"
     assert writes == ["echo ready\r"]
 
 
 @pytest.mark.asyncio
-async def test_windows_termination_falls_back_to_taskkill_on_permission_error(
+async def test_windows_low_level_process_termination_uses_taskkill(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     commands: list[tuple[object, ...]] = []
 
     class WinPty:
-        def terminate(self, _force: bool) -> None:
-            raise PermissionError("access denied")
+        def isalive(self) -> bool:
+            return False
 
     class Taskkill:
         returncode = 0
@@ -64,30 +69,27 @@ async def test_windows_termination_falls_back_to_taskkill_on_permission_error(
 
 
 @pytest.mark.asyncio
-async def test_windows_reader_drains_buffered_output_after_process_exit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_windows_reader_drains_buffered_output_after_process_exit() -> None:
     class FinishedWinPty:
         def __init__(self) -> None:
-            self.chunks = iter(("first", "-tail"))
+            self.chunks = iter(("first", "-tail", ""))
+            self.eof = False
 
         def isalive(self) -> bool:
             return False
 
-        def read(self, _size: int) -> str:
-            try:
-                return next(self.chunks)
-            except StopIteration as exc:
-                raise EOFError from exc
+        def read_nonblocking(self) -> str:
+            text = next(self.chunks)
+            self.eof = not text
+            return text
 
-        def wait(self) -> int:
+        def iseof(self) -> bool:
+            return self.eof
+
+        def get_exitstatus(self) -> int:
             return 0
 
     manager = TerminalManager()
-    monkeypatch.setattr(
-        "cyrene.terminal.manager._winpty_output_ready",
-        lambda _process, _timeout: True,
-    )
     session = TerminalSession(
         id="windows-drain",
         project_id="project-1",
@@ -111,32 +113,27 @@ async def test_windows_reader_drains_buffered_output_after_process_exit(
 
 
 @pytest.mark.asyncio
-async def test_windows_interactive_reader_waits_for_eof(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_windows_interactive_reader_waits_for_eof() -> None:
     class InteractiveWinPty:
         def __init__(self) -> None:
-            self.chunks = iter(("prompt",))
+            self.chunks = iter(("prompt", ""))
+            self.eof = False
 
         def isalive(self) -> bool:
             return False
 
-        def read(self, _size: int) -> str:
-            try:
-                return next(self.chunks)
-            except StopIteration as exc:
-                raise EOFError from exc
+        def read_nonblocking(self) -> str:
+            text = next(self.chunks)
+            self.eof = not text
+            return text
 
-        def wait(self) -> int:
+        def iseof(self) -> bool:
+            return self.eof
+
+        def get_exitstatus(self) -> int:
             return 0
 
     manager = TerminalManager()
-    monkeypatch.setattr(
-        "cyrene.terminal.manager._winpty_output_ready",
-        lambda _process, _timeout: (_ for _ in ()).throw(
-            AssertionError("interactive reader must wait for EOF directly")
-        ),
-    )
     session = TerminalSession(
         id="windows-interactive",
         project_id="project-1",
