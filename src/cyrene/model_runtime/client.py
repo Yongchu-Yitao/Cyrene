@@ -1800,6 +1800,36 @@ def _prepare_request_fingerprints(
     )
 
 
+def _request_fingerprint_inputs(
+    codex_material: dict[str, Any] | None,
+    *,
+    payload: dict[str, Any],
+    message_units: Sequence[Any],
+    tools_material: Any,
+    cache_route_key: str,
+) -> tuple[Sequence[Any], Any, Any, Any]:
+    """Project provider-specific request material into cache inputs."""
+    request_material = (
+        {
+            "thread_params": codex_material["thread_params"],
+            "turn_params": codex_material["turn_params"],
+        }
+        if codex_material is not None
+        else payload
+    )
+    fingerprint_material = (
+        {"provider_request": request_material, "cache_route_key": cache_route_key}
+        if cache_route_key
+        else request_material
+    )
+    return (
+        codex_material["message_units"] if codex_material is not None else message_units,
+        codex_material["action_tools"] if codex_material is not None else tools_material,
+        payload.get("tool_choice"),
+        fingerprint_material,
+    )
+
+
 def _request_cache_diagnostics(
     candidate_lease: Any,
     *,
@@ -2919,41 +2949,23 @@ async def call_llm(
                         ),
                     )
 
-                request_material = (
-                    {
-                        "thread_params": codex_request_material["thread_params"],
-                        "turn_params": codex_request_material["turn_params"],
-                    }
-                    if codex_request_material is not None
-                    else payload
-                )
-                request_message_units = (
-                    codex_request_material["message_units"]
-                    if codex_request_material is not None
-                    else provider_message_units
-                )
-                request_tools_material = (
-                    codex_request_material["action_tools"]
-                    if codex_request_material is not None
-                    else provider_tools_material
-                )
-                request_fingerprint_material = (
-                    {
-                        "provider_request": request_material,
-                        "cache_route_key": provider_cache_route_key,
-                    }
-                    if provider_cache_route_key
-                    else request_material
+                (
+                    request_message_units,
+                    request_tools_material,
+                    request_tool_choice_material,
+                    request_fingerprint_material,
+                ) = _request_fingerprint_inputs(
+                    codex_request_material,
+                    payload=payload,
+                    message_units=provider_message_units,
+                    tools_material=provider_tools_material,
+                    cache_route_key=provider_cache_route_key,
                 )
                 request_fingerprints = _prepare_request_fingerprints(
                     candidate_lease,
                     message_units=request_message_units,
                     tools_material=request_tools_material,
-                    tool_choice_material=(
-                        payload.get("tool_choice")
-                        if "tool_choice" in payload
-                        else None
-                    ),
+                    tool_choice_material=request_tool_choice_material,
                     payload_material=request_fingerprint_material,
                 )
 

@@ -488,6 +488,30 @@ def _safe_terminal_reply_from_response(
     return text
 
 
+def _terminal_reply_from_response(
+    response_obj: dict[str, Any],
+    base_messages: list[dict[str, Any]],
+    *,
+    execution_completion: bool,
+    force_completion_packet: bool,
+) -> str:
+    """Choose the accepted structured or compatible assistant reply."""
+    direct_text = _safe_terminal_reply_from_response(response_obj, base_messages)
+    structured_text = ""
+    if execution_completion:
+        public_reply = str(
+            execution_outcome_arguments(response_obj).get("public_reply") or ""
+        ).strip()
+        if public_reply:
+            structured_text = _safe_terminal_reply_from_response(
+                {**response_obj, "content": public_reply},
+                base_messages,
+            )
+    if execution_completion and force_completion_packet:
+        return structured_text
+    return structured_text or direct_text
+
+
 def _annotate_history_context(history: list) -> list[dict[str, Any]]:
     annotated: list[dict[str, Any]] = []
     for index, raw in enumerate(history or []):
@@ -1005,25 +1029,12 @@ async def _run_main_agent_impl(
         # A valid terminal answer has already paid for the main model call.
         # Deliver it directly instead of rebuilding the full history. Tool-markup
         # or placeholder replies deliberately fall through to no-tool recovery.
-        direct_text = _safe_terminal_reply_from_response(response_obj, base_messages)
-        structured_text = ""
-        if execution_completion:
-            public_reply = str(
-                execution_outcome_arguments(response_obj).get("public_reply") or ""
-            ).strip()
-            if public_reply:
-                structured_text = _safe_terminal_reply_from_response(
-                    {**response_obj, "content": public_reply},
-                    base_messages,
-                )
-        # After a rejected plain-text turn, only the accepted structured reply
-        # can become public. On ordinary terminal turns, retain compatibility
-        # with providers that return the answer in assistant content while also
-        # accepting the new structured form when content is empty.
-        text = (
-            structured_text
-            if execution_completion and force_completion_packet
-            else structured_text or direct_text
+        # Rejected plain text requires the structured reply; ordinary terminal
+        # turns retain compatibility with assistant content.
+        text = _terminal_reply_from_response(
+            response_obj, base_messages,
+            execution_completion=execution_completion,
+            force_completion_packet=force_completion_packet,
         )
         if text:
             if _streaming_reply_requested():
