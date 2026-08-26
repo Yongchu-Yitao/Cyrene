@@ -5327,7 +5327,17 @@ function registerQuickChatShortcut(accelerator) {
 
 function getPythonBinaryPath() {
   if (isDev) {
-    return null; // use system python
+    if (isWindows) {
+      const checkoutPython = path.join(
+        __dirname,
+        '..',
+        '.venv',
+        'Scripts',
+        'python.exe',
+      );
+      return fs.existsSync(checkoutPython) ? checkoutPython : 'python';
+    }
+    return null; // use system python3
   }
   // In a packaged Electron app, extraResources are in process.resourcesPath
   const base = process.resourcesPath;
@@ -5404,6 +5414,7 @@ function spawnPython() {
   if (binaryPath) {
     pythonProcess = spawn(binaryPath, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: cwd,
       windowsHide: true,
       env: childEnv,
     });
@@ -5450,7 +5461,7 @@ function spawnPython() {
       'Cyrene - Startup Error',
       `Failed to start the Python backend.\n\n${err.message}\n\n`
         + (isDev
-          ? 'Make sure Python 3 is installed and accessible as "python3".'
+          ? `Make sure Python 3 is installed and accessible as "${isWindows ? 'python' : 'python3'}".`
           : 'The application may be corrupted. Please reinstall.')
     );
     if (pendingPortResolve) {

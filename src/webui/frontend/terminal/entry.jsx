@@ -629,7 +629,6 @@ function TerminalPane({ terminalId, onState }) {
         setReconnectAttempt(0);
         inputReadyRef.current = interactive;
         setConnection(interactive ? "connected" : "exited");
-        if (interactive) terminal.focus();
       });
     }
 
@@ -716,7 +715,6 @@ function TerminalPane({ terminalId, onState }) {
               setConnection("connected");
               terminal.scrollToBottom();
               terminal.write("\u001b[?25h");
-              terminal.focus();
             } else if (message.type === "state" && statusRef.current === "exited") {
               setConnection("exited");
             }
@@ -906,7 +904,6 @@ function TerminalPane({ terminalId, onState }) {
       setConnection(statusRef.current === "running" ? "connected" : "exited");
       if (terminalRef.current) {
         terminalRef.current.scrollToBottom();
-        terminalRef.current.focus();
       }
     }).catch(function (error) {
       setRestartError(String(error && error.message || "终端重启失败"));

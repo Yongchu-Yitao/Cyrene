@@ -1,7 +1,26 @@
+import json
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_electron_dev_launcher_is_cross_platform_and_prefers_windows_venv():
+    package = json.loads(
+        (ROOT / "electron" / "package.json").read_text(encoding="utf-8")
+    )
+    launcher = (ROOT / "electron" / "dev-launcher.js").read_text(
+        encoding="utf-8"
+    )
+    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+
+    assert package["scripts"]["dev"] == "node dev-launcher.js"
+    assert "ELECTRON_DEV: '1'" in launcher
+    assert "spawn(electronPath, ['.']" in launcher
+    assert "'.venv'," in main
+    assert "'Scripts'," in main
+    assert "'python.exe'," in main
+    assert "fs.existsSync(checkoutPython) ? checkoutPython : 'python'" in main
 
 
 def test_windows_arm_keeps_electron_hardware_acceleration_enabled():
