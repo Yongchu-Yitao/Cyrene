@@ -196,13 +196,18 @@ def execution_outcome_tool_defs(
             "function": {
                 **function,
                 "description": (
-                    "Terminal execution signal. Write the complete public answer "
-                    "in assistant content, then provide a concise state summary, "
-                    "artifacts, and unresolved items here for the decision lane."
+                    "Terminal execution signal. Submit the complete self-contained "
+                    "public reply together with a concise state summary, artifacts, "
+                    "and unresolved items. The coordinator publishes public_reply "
+                    "directly without another model call."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "public_reply": {
+                            "type": "string",
+                            "maxLength": 32000,
+                        },
                         "state_summary": {"type": "string", "maxLength": 1200},
                         "artifacts": {
                             "type": "array",
@@ -215,7 +220,12 @@ def execution_outcome_tool_defs(
                             "maxItems": 32,
                         },
                     },
-                    "required": ["state_summary", "artifacts", "unresolved"],
+                    "required": [
+                        "public_reply",
+                        "state_summary",
+                        "artifacts",
+                        "unresolved",
+                    ],
                     "additionalProperties": False,
                 },
             },
@@ -228,10 +238,9 @@ def execution_outcome_arguments(
 ) -> dict[str, Any]:
     """Return the structured metadata from an Execution-lane ``quit``.
 
-    ``quit`` remains only the terminal control signal: its arguments contain
-    durable completion metadata, not the public answer.  Keeping this parser in
-    the protocol module gives Outcome persistence and empty-body finalization a
-    single interpretation of that metadata.
+    Dual-lane ``quit`` carries both the public reply and durable completion
+    metadata. Keeping this parser in the protocol module gives Outcome
+    persistence and terminal delivery a single interpretation of that record.
     """
 
     for tool_call in (response or {}).get("tool_calls") or []:

@@ -91,7 +91,8 @@ async def test_phase1_plain_text_requires_explicit_quit_after_one_control_repair
         },
     ])
 
-    async def fake_llm(messages, tools=None, **_kwargs):
+    async def fake_llm(messages, tools=None, **kwargs):
+        assert kwargs.get("tool_choice") == "required"
         model_calls.append(messages)
         return next(responses)
 
@@ -626,6 +627,7 @@ async def test_dual_lane_protocol_repair_forces_structured_self_contained_finali
                 "function": {
                     "name": "quit",
                     "arguments": json.dumps({
+                        "public_reply": final_reply,
                         "state_summary": "广州今天有阵雨，气温 29–33℃。",
                         "artifacts": [],
                         "unresolved": [],
@@ -633,7 +635,6 @@ async def test_dual_lane_protocol_repair_forces_structured_self_contained_finali
                 },
             }],
         },
-        {"content": final_reply, "tool_calls": []},
     ])
     model_calls = []
     lane_records = []
@@ -675,27 +676,18 @@ async def test_dual_lane_protocol_repair_forces_structured_self_contained_finali
     )
 
     assert result == final_reply
-    assert len(model_calls) == 4
+    assert len(model_calls) == 3
     repaired_execution_messages, repaired_execution_tools, _ = model_calls[2]
-    finalization_messages, finalization_tools, finalization_choice = model_calls[3]
-    assert finalization_tools == repaired_execution_tools
-    assert finalization_choice == "none"
-    assert finalization_messages[:len(repaired_execution_messages)] == (
-        repaired_execution_messages
+    quit_def = next(
+        item for item in repaired_execution_tools
+        if item["function"]["name"] == "quit"
     )
+    quit_params = quit_def["function"]["parameters"]
+    assert "public_reply" in quit_params["properties"]
+    assert "public_reply" in quit_params["required"]
     repair_error = str(repaired_execution_messages[-1].get("content") or "")
     assert "was not published to the user" in repair_error
     assert "cannot be referenced as an earlier answer" in repair_error
-    packet = json.loads(finalization_messages[-1]["content"])
-    assert packet["type"] == "execution_finalization_request"
-    assert packet["request"] == "广州天气"
-    assert packet["state_summary"] == "广州今天有阵雨，气温 29–33℃。"
-    assert packet["reply_contract"] == {
-        "self_contained": True,
-        "prior_public_reply_available": False,
-        "include_unresolved_items": True,
-        "language": "match_request",
-    }
     outcome_message = next(
         message for message in lane_records
         if message.get("record_kind") == "execution_outcome"

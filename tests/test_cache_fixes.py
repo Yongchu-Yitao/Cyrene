@@ -160,6 +160,7 @@ def test_run_model_lease_reports_strict_prefix_and_invalidation_reasons():
         identity=identity,
         message_fingerprints=["system", "user", "decision"],
         tools_fingerprint="tools-a",
+        tool_choice_fingerprint="auto",
         payload_fingerprint="payload-a",
     )
     second = lease.observe_request(
@@ -167,6 +168,7 @@ def test_run_model_lease_reports_strict_prefix_and_invalidation_reasons():
         identity=identity,
         message_fingerprints=["system", "user", "decision", "assistant", "tool"],
         tools_fingerprint="tools-a",
+        tool_choice_fingerprint="auto",
         payload_fingerprint="payload-b",
     )
     invalidated = lease.observe_request(
@@ -174,6 +176,7 @@ def test_run_model_lease_reports_strict_prefix_and_invalidation_reasons():
         identity={**identity, "endpoint": "https://other.example/v1"},
         message_fingerprints=["changed"],
         tools_fingerprint="tools-b",
+        tool_choice_fingerprint="none",
         payload_fingerprint="payload-c",
     )
 
@@ -184,8 +187,42 @@ def test_run_model_lease_reports_strict_prefix_and_invalidation_reasons():
     assert set(invalidated["cache_invalidation_reason"].split(",")) == {
         "endpoint_changed",
         "tools_changed",
+        "tool_choice_changed",
         "message_prefix_changed",
     }
+
+
+def test_run_model_lease_reports_tool_choice_change_with_stable_prefix():
+    lease = _agent_state.RunModelLease("lease-tool-choice", {"primary": ()})
+    identity = {
+        "candidateId": "primary",
+        "provider": "openai_compatible",
+        "model": "model",
+        "endpoint": "https://model.example/v1",
+        "reasoningEffort": "high",
+    }
+    request = {
+        "identity": identity,
+        "message_fingerprints": ["system", "user"],
+        "tools_fingerprint": "tools-a",
+    }
+
+    lease.observe_request(
+        "primary",
+        **request,
+        tool_choice_fingerprint="auto",
+        payload_fingerprint="payload-auto",
+    )
+    changed = lease.observe_request(
+        "primary",
+        **request,
+        tool_choice_fingerprint="none",
+        payload_fingerprint="payload-none",
+    )
+
+    assert changed["cache_prefix_status"] == "invalidated"
+    assert changed["cache_invalidation_reason"] == "tool_choice_changed"
+    assert changed["cache_prefix_message_count"] == 2
 
 
 def test_run_model_lease_can_partition_diagnostics_without_changing_default_scope():
@@ -317,7 +354,7 @@ async def test_phase1_retry_with_unified_system_prompt():
         },
     ])
 
-    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         calls.append((messages, tools))
         return next(responses)
 

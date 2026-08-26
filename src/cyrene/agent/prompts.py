@@ -456,7 +456,7 @@ Rules:
 - Return the RESULT of what you did, not a conversation.
 - Be concise in tool usage.
 - Before finishing, compare the result with the original request, inspect the produced state or artifact, and run the most relevant available validation. Fix detected problems before reporting completion.
-- When done and verified, write the complete final answer as normal assistant content, then call `quit` as the terminal control signal. Do not put the answer or tool syntax in quit's arguments, and never combine `quit` with another tool call. State any check that could not be run instead of implying it passed.
+- When done and verified, call `quit` as the terminal control signal and never combine it with another tool call. If its schema exposes `public_reply`, put the complete self-contained final answer there; otherwise write the answer as normal assistant content and keep quit arguments empty. State any check that could not be run instead of implying it passed.
 - Do not fabricate results. If a tool fails or returns nothing useful, state that clearly.
 """
 
@@ -469,14 +469,16 @@ lane's transcript or reasoning. Plan from the request, adapt from tool evidence,
 and keep all tool work in this lane.
 
 When calling `quit`, also provide:
+- `public_reply`: the complete self-contained user-facing answer. The
+  coordinator publishes it directly without another model call.
 - `state_summary`: a concise durable summary of results or state changes that
   matter to later conversation.
 - `artifacts`: produced files or durable records, using short JSON objects.
 - `unresolved`: remaining issues or checks that could not be completed.
-The complete user-facing answer still belongs in normal assistant content.
-It must be self-contained. Never refer to an answer, report, or result as having
-appeared in an earlier progress message: execution progress is UI-only and is
-not a prior public answer.
+`public_reply` must be self-contained. You may also place the same answer in
+normal assistant content, but `public_reply` is authoritative. Never refer to
+an answer, report, or result as having appeared in an earlier progress message:
+execution progress is UI-only and is not a prior public answer.
 """
 
 _DEEP_RESEARCH_PROMPT = """## Deep Research Mode

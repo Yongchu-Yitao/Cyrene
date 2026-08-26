@@ -1766,6 +1766,7 @@ class _RequestFingerprintSnapshot:
     message_fingerprints: tuple[str, ...]
     messages_fingerprint: str
     tools_fingerprint: str
+    tool_choice_fingerprint: str
     payload_fingerprint: str
 
 
@@ -1774,6 +1775,7 @@ def _prepare_request_fingerprints(
     *,
     message_units: Sequence[Any],
     tools_material: Any,
+    tool_choice_material: Any,
     payload_material: Any,
 ) -> _RequestFingerprintSnapshot | None:
     """Hash immutable request material once per candidate payload.
@@ -1793,6 +1795,7 @@ def _prepare_request_fingerprints(
             "\n".join(message_fingerprints).encode("utf-8")
         ).hexdigest()[:24],
         tools_fingerprint=_stable_request_fingerprint(tools_material or []),
+        tool_choice_fingerprint=_stable_request_fingerprint(tool_choice_material),
         payload_fingerprint=_stable_request_fingerprint(payload_material),
     )
 
@@ -1818,6 +1821,7 @@ def _request_cache_diagnostics(
         message_fingerprints=fingerprints.message_fingerprints,
         messages_fingerprint=fingerprints.messages_fingerprint,
         tools_fingerprint=fingerprints.tools_fingerprint,
+        tool_choice_fingerprint=fingerprints.tool_choice_fingerprint,
         payload_fingerprint=fingerprints.payload_fingerprint,
         cache_scope=cache_scope,
     )
@@ -2945,6 +2949,11 @@ async def call_llm(
                     candidate_lease,
                     message_units=request_message_units,
                     tools_material=request_tools_material,
+                    tool_choice_material=(
+                        payload.get("tool_choice")
+                        if "tool_choice" in payload
+                        else None
+                    ),
                     payload_material=request_fingerprint_material,
                 )
 
