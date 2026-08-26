@@ -2760,6 +2760,68 @@ button.wbc-attach-file:focus-visible {
   cursor: pointer;
 }
 
+.wbc-trace.live[aria-busy="true"] .wbc-trace-summary b {
+  --wbc-trace-flow-base: var(--wb-faint);
+}
+
+.wbc-trace.live[aria-busy="true"] .wbc-trace-list li.active .wbc-trace-label {
+  --wbc-trace-flow-base: var(--wb-muted);
+}
+
+.wbc-trace.live[aria-busy="true"] :is(
+  .wbc-trace-summary b,
+  .wbc-trace-list li.active .wbc-trace-label
+) {
+  color: transparent;
+  background-color: var(--wbc-trace-flow-base);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, .16) 24%,
+    #fff 50%,
+    rgba(255, 255, 255, .16) 76%,
+    transparent 100%
+  );
+  background-size: 45% 100%;
+  background-repeat: no-repeat;
+  background-position: -80% 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: wbc-trace-text-flow 2.4s ease-in-out infinite;
+}
+
+.wbc-trace.live[aria-busy="true"] .wbc-trace-summary-icon {
+  --wbc-trace-icon-base: var(--wb-faint);
+}
+
+.wbc-trace.live[aria-busy="true"] .wbc-trace-list li.active .wbc-trace-mark:not(:empty) {
+  --wbc-trace-icon-base: var(--wb-green);
+}
+
+.wbc-trace.live[aria-busy="true"] :is(
+  .wbc-trace-summary-icon,
+  .wbc-trace-list li.active .wbc-trace-mark
+) {
+  animation: wbc-trace-icon-flow 2.4s ease-in-out infinite;
+}
+
+@keyframes wbc-trace-text-flow {
+  0%, 8% { background-position: -80% 0; }
+  72%, 100% { background-position: 180% 0; }
+}
+
+@keyframes wbc-trace-icon-flow {
+  0%, 34%, 100% {
+    color: var(--wbc-trace-icon-base);
+    filter: none;
+  }
+  12% {
+    color: #fff;
+    filter: drop-shadow(0 0 3px rgba(255, 255, 255, .92));
+  }
+}
+
 .wbc-trace-summary:hover:not(:disabled) {
   color: var(--wb-text-strong, var(--wb-text));
 }
@@ -2879,6 +2941,25 @@ button.wbc-attach-file:focus-visible {
   .wbc-trace-collapse,
   .wbc-trace-summary-chevron {
     transition: none;
+  }
+
+  .wbc-trace.live[aria-busy="true"] :is(
+    .wbc-trace-summary b,
+    .wbc-trace-list li.active .wbc-trace-label
+  ) {
+    animation: none;
+    color: var(--wbc-trace-flow-base);
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
+
+  .wbc-trace.live[aria-busy="true"] :is(
+    .wbc-trace-summary-icon,
+    .wbc-trace-list li.active .wbc-trace-mark
+  ) {
+    animation: none;
+    color: var(--wbc-trace-icon-base);
+    filter: none;
   }
 
   .wbc-trace-collapse {

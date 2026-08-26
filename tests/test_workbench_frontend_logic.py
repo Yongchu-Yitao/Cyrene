@@ -7554,6 +7554,7 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
     assert len(mapped_icons) == len(set(mapped_icons))
     assert 'className="wbc-trace-entry-icon" aria-hidden="true">{WBC_ICONS.brain}' in source
     assert '{failed ? <span className="wbc-trace-entry-icon" aria-hidden="true">{wbcTraceActionIcon(entry)}</span> : null}' in source
+    assert "isRunning ? wbcTraceActionIcon(entry) : WBC_ICONS.check" in source
     reasoning_icon_rule = styles.split(
         ".wbc-trace-timeline-reasoning > .wbc-trace-entry-icon {", 1
     )[1].split("}", 1)[0]
@@ -8005,11 +8006,30 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert "useWbcState(0)" not in live_message
     assert "trace: hasLiveActivities ? []" in chat
     assert 'summaryRunning ? <span className="wb-spinner small" aria-hidden="true" /> : null' in trace_card
-    assert 'isRunning ? <span className="wb-spinner small" /> : WBC_ICONS.check' in trace_card
+    assert "isRunning ? wbcTraceActionIcon(entry) : WBC_ICONS.check" in trace_card
+    assert 'isRunning ? <span className="wb-spinner small" /> : WBC_ICONS.check' not in trace_card
     assert 'var hasRunningEntries = live && entries.some(function (entry)' in trace_card
     assert 'var summaryRunning = hasRunningEntries || (activityRunning && entries.length === 0);' in trace_card
     assert 'var isRunning = live && entryStatus === "running";' in trace_card
     assert 'aria-busy={summaryRunning ? "true" : undefined}' in trace_card
+    assert '.wbc-trace.live[aria-busy="true"] .wbc-trace-summary b' in css
+    assert "background-clip: text;" in css
+    assert "background-color: var(--wbc-trace-flow-base);" in css
+    assert "background-size: 45% 100%;" in css
+    assert "background-repeat: no-repeat;" in css
+    assert "-webkit-text-fill-color: transparent;" in css
+    assert "@keyframes wbc-trace-text-flow" in css
+    assert "@keyframes wbc-trace-icon-flow" in css
+    assert "wbc-trace-text-flow 2.4s ease-in-out infinite;" in css
+    assert "wbc-trace-icon-flow 2.4s ease-in-out infinite;" in css
+    assert "wbc-trace-text-flow 2.4s ease-in-out infinite alternate" not in css
+    assert "wbc-trace-icon-flow 2.4s ease-in-out infinite alternate" not in css
+    assert 'className="wbc-trace-label"' in trace_card
+    assert ".wbc-trace-list li.active .wbc-trace-label" in css
+    assert ".wbc-trace-list li.active .wbc-trace-mark" in css
+    assert "#fff 50%" in css
+    assert "0%, 8% { background-position: -80% 0; }" in css
+    assert "72%, 100% { background-position: 180% 0; }" in css
     assert 'live={!!msg.runtimeActivity}' in chat
     assert 'live={true}' in live_message
     assert 'className="wbc-thinking-detail-text"' in trace_card

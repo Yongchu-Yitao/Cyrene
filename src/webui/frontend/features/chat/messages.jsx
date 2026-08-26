@@ -1091,16 +1091,18 @@ function WbcTraceCard({ trace, live, running, label, reasoning }) {
                 var previewText = wbcToolPreviewText(entry.preview);
                 return (
                   <li key={(entry.toolCallId || "trace") + ":" + i} className={(failed ? "failed" : (isRunning ? "active" : "done")) + " presentation-" + presentationKind}>
-                    <span className="wbc-trace-mark">{failed ? WBC_ICONS.x : (isRunning ? <span className="wb-spinner small" /> : WBC_ICONS.check)}</span>
+                    <span className="wbc-trace-mark">{failed ? WBC_ICONS.x : (isRunning ? wbcTraceActionIcon(entry) : WBC_ICONS.check)}</span>
                     {failed ? <span className="wbc-trace-entry-icon" aria-hidden="true">{wbcTraceActionIcon(entry)}</span> : null}
                     <span className="wbc-trace-text">
-                      {(function () {
-                        var toolKey = entry.text || entry.tool || "";
-                        var isToolEntry = entry.kind === "tool" || !!entry.tool;
-                        if (isToolEntry) return wbcLocalizedToolName(toolKey);
-                        if (entry.detailKey) return wbcT(entry.detailKey, toolKey, entry.detailParams);
-                        return toolKey;
-                      })()}
+                      <span className="wbc-trace-label">
+                        {(function () {
+                          var toolKey = entry.text || entry.tool || "";
+                          var isToolEntry = entry.kind === "tool" || !!entry.tool;
+                          if (isToolEntry) return wbcLocalizedToolName(toolKey);
+                          if (entry.detailKey) return wbcT(entry.detailKey, toolKey, entry.detailParams);
+                          return toolKey;
+                        })()}
+                      </span>
                       {previewText ? <small>（{previewText}）</small> : null}
                       {presentationKind !== "generic" ? <em className="wbc-tool-presentation-kind">{wbcT("workbenchChat.toolPresentation." + presentationKind, presentationKind)}</em> : null}
                       {isRunning && Number(entry.progressTotal) > 0 ? (
