@@ -79,7 +79,7 @@ def _patch_runtime_context(monkeypatch, *, get_context=None, get_memory_context=
 async def test_execution_agent_returns_quit_text(monkeypatch):
     from cyrene import agent
 
-    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         return {
             "content": "scheduled task completed",
             "tool_calls": [{"id": "q1", "function": {"name": "quit", "arguments": "{}"}}],
@@ -1491,7 +1491,7 @@ async def test_proactive_round_hides_internal_prompt_and_initial_detail(tmp_path
 
     calls = 0
 
-    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         nonlocal calls
         calls += 1
         response = {
@@ -1750,7 +1750,7 @@ async def test_system_initiated_silent_quit_yields_no_message(tmp_path, monkeypa
     async def fake_publish_event(event):
         return None
 
-    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         # Decision phase (and any later synthesis) silently quits, no text.
         return {
             "content": "",
@@ -1792,7 +1792,7 @@ async def test_system_initiated_round_cannot_use_ask_user(tmp_path, monkeypatch)
     async def fake_publish_event(event):
         return None
 
-    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         tool_names = {
             str(tool.get("function", {}).get("name") or "")
             for tool in (tools or [])
@@ -2031,7 +2031,7 @@ async def test_system_initiated_quit_does_not_leak_reasoning(tmp_path, monkeypat
     async def fake_publish_event(event):
         return None
 
-    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         return {
             "content": "",
             "reasoning_content": (
@@ -2673,7 +2673,7 @@ async def test_ask_user_wait_state_preserves_control_protocol_and_ui_projection(
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
-    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         names = {item.get("function", {}).get("name") for item in (tools or [])}
         if "use_tools" in names:
             return {
@@ -3738,7 +3738,7 @@ async def test_run_main_agent_chat_only_streams_final_reply(monkeypatch):
     saved = {}
     streamed = []
 
-    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         return {
             "content": "internal draft",
             "tool_calls": [{
@@ -4484,7 +4484,7 @@ async def test_main_inbox_guidance_continuation_keeps_ack_before_final_reply(mon
         lambda: [{"id": "round_1", "status": "running", "title": "round one", "pendingGuidance": 0, "runningSubagents": 0, "subagentCount": 0}],
     )
 
-    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         return {
             "content": "adjusted final reply",
             "reasoning_content": "guided reasoning",
@@ -5038,7 +5038,7 @@ async def test_compress_old_messages_labels_llm_as_compactor(monkeypatch):
 
     callers = []
 
-    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         callers.append(_agent_state._caller_type.get())
         return {"content": ""}
 
@@ -6029,7 +6029,7 @@ async def test_run_main_agent_summarizes_and_cancels_subagents_when_monitoring_i
     saved = []
     cancelled = []
 
-    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         return next(responses)
 
     async def fake_execute_tool(name, args, bot, chat_id, db_path, notify_state):
@@ -6102,7 +6102,7 @@ async def test_run_main_agent_retries_invalid_phase1_tool_and_returns_model_expl
     ])
     saved = []
 
-    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         calls.append(tools)
         return next(responses)
 
@@ -6296,8 +6296,9 @@ async def test_phase1_repeated_plain_text_fails_after_one_control_repair(monkeyp
     assert len(calls) == 2
 
 
-async def test_phase2_rejected_plain_text_is_not_committed_by_empty_quit(monkeypatch):
+async def test_phase2_rejected_plain_text_uses_structured_quit_reply(monkeypatch):
     from cyrene.agent import agent as _agent_core
+    from cyrene.agent.transcript_policy import TranscriptPolicy
 
     responses = iter([
         {
@@ -6312,10 +6313,17 @@ async def test_phase2_rejected_plain_text_is_not_committed_by_empty_quit(monkeyp
             "content": "",
             "tool_calls": [{
                 "id": "quit-phase2",
-                "function": {"name": "quit", "arguments": "{}"},
+                "function": {
+                    "name": "quit",
+                    "arguments": json.dumps({
+                        "public_reply": "self-contained execution answer",
+                        "state_summary": "Inspection completed.",
+                        "artifacts": [],
+                        "unresolved": [],
+                    }),
+                },
             }],
         },
-        {"content": "self-contained execution answer", "tool_calls": []},
     ])
     calls = []
     call_options = []
@@ -6332,6 +6340,12 @@ async def test_phase2_rejected_plain_text_is_not_committed_by_empty_quit(monkeyp
     _patch_call_llm(monkeypatch, fake_call_llm)
     _patch_append_session(monkeypatch, AsyncMock())
     _patch_save_session(monkeypatch, fake_save)
+    monkeypatch.setattr(
+        _agent_core,
+        "current_run_transcript_policy",
+        lambda: TranscriptPolicy.DUAL_LANE,
+    )
+    monkeypatch.setattr(_agent_core, "has_active_run_model_lease", lambda: True)
 
     result = await _agent_core._run_main_agent(
         "inspect first",
@@ -6343,9 +6357,8 @@ async def test_phase2_rejected_plain_text_is_not_committed_by_empty_quit(monkeyp
     )
 
     assert result == "self-contained execution answer"
-    assert len(calls) == 4
-    assert call_options[3][0] == call_options[2][0]
-    assert call_options[3][1] == "none"
+    assert len(calls) == 3
+    assert call_options[2][1] is None
     assert saved[-1][-1]["content"] == "self-contained execution answer"
     assert saved[-1][-1]["client_request_id"] == "req_phase2_fallback"
 

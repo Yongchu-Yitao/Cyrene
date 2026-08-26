@@ -437,11 +437,12 @@ def prepare_request(
             # Anthropic's native Messages API has no schema-preserving "none"
             # mode. Keep the definitions stable and rely on the explicit final
             # synthesis instruction when callers disable tool selection.
-            payload["tool_choice"] = (
-                tool_choice
-                if isinstance(tool_choice, dict)
-                else {"type": "auto"}
-            )
+            if isinstance(tool_choice, dict):
+                payload["tool_choice"] = tool_choice
+            elif str(tool_choice or "").strip().lower() == "required":
+                payload["tool_choice"] = {"type": "any"}
+            else:
+                payload["tool_choice"] = {"type": "auto"}
         if response_format is not None:
             raise ValueError("Anthropic adapter does not yet support response_format")
         return PreparedRequest(payload, {
@@ -491,11 +492,13 @@ def prepare_request(
             payload["generationConfig"] = generation
         if tool_defs:
             payload["tools"] = [{"functionDeclarations": tool_defs}]
-            mode = (
-                "NONE"
-                if str(tool_choice or "").strip().lower() == "none"
-                else "AUTO"
-            )
+            normalized_choice = str(tool_choice or "").strip().lower()
+            if normalized_choice == "none":
+                mode = "NONE"
+            elif normalized_choice == "required":
+                mode = "ANY"
+            else:
+                mode = "AUTO"
             payload["toolConfig"] = {"functionCallingConfig": {"mode": mode}}
         return PreparedRequest(payload, {
             "Content-Type": "application/json",

@@ -69,6 +69,30 @@ def test_payload_can_disable_tool_selection_without_removing_schema():
     assert payload["tool_choice"] == "none"
 
 
+def test_payload_can_require_tool_selection_without_changing_schema():
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "quit",
+            "description": "Finish",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }]
+
+    payload = cl._build_payload(
+        [{"role": "user", "content": "answer"}],
+        tools=tools,
+        max_tokens=24,
+        stream=False,
+        model="MiniMax-M3",
+        thinking="auto",
+        tool_choice="required",
+    )
+
+    assert payload["tools"] == tools
+    assert payload["tool_choice"] == "required"
+
+
 def test_reused_tool_call_ids_have_a_stable_wire_projection():
     messages = [
         {
@@ -997,6 +1021,7 @@ async def test_final_http_request_is_observed_by_run_cache_diagnostics(
     assert request["identity"]["endpoint"] == candidate["endpoints"][0]
     assert request["message_fingerprints"]
     assert request["tools_fingerprint"]
+    assert request["tool_choice_fingerprint"]
     assert request["payload_fingerprint"]
 
 
@@ -1057,7 +1082,7 @@ async def test_retry_reuses_precomputed_request_fingerprints(
 
     assert result["content"] == "pong"
     assert server.hits == cl.SERVER_ERROR_RETRY_LIMIT + 1
-    assert fingerprint_calls == 3  # one message, tools, and final payload
+    assert fingerprint_calls == 4  # one message, tools, tool choice, and payload
     assert len(lease.observed) == server.hits
     assert len({id(item[1]["message_fingerprints"]) for item in lease.observed}) == 1
 

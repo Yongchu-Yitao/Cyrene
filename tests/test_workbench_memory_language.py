@@ -97,6 +97,12 @@ async def test_agent_memory_is_translated_to_configured_language(monkeypatch, tm
     assert saved is not None
     assert saved["content"] == "用户偏好简洁、结构化的回答。"
     assert len(calls) == 1
+    assert calls[0][1]["secondary"] is True
+    assert calls[0][1]["tools"][0]["function"]["name"] == "submit_memory_result"
+    assert calls[0][1]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "submit_memory_result"},
+    }
 
 
 def test_save_project_memory_tool_suggests_but_does_not_require_user_language():
@@ -174,13 +180,21 @@ async def test_background_extractor_accepts_verified_tool_facts(monkeypatch, tmp
         captured["messages"] = messages
         captured["kwargs"] = kwargs
         return {
-            "content": json.dumps({
-                "memories": [{
-                    "content": "远程设备配备16GB内存。",
-                    "category": "fact",
-                    "confidence": "high",
-                }]
-            }, ensure_ascii=False)
+            "content": "",
+            "tool_calls": [{
+                "id": "memory-result-1",
+                "type": "function",
+                "function": {
+                    "name": "submit_memory_result",
+                    "arguments": json.dumps({
+                        "memories": [{
+                            "content": "远程设备配备16GB内存。",
+                            "category": "fact",
+                            "confidence": "high",
+                        }]
+                    }, ensure_ascii=False),
+                },
+            }],
         }
 
     monkeypatch.setattr(agent_state, "_call_llm", fake_call_llm)
@@ -199,7 +213,14 @@ async def test_background_extractor_accepts_verified_tool_facts(monkeypatch, tmp
     assert captured["messages"][0]["role"] == "system"
     assert "成功工具结果直接验证" in captured["messages"][0]["content"]
     assert "Memory: 16GB" in captured["messages"][1]["content"]
-    assert captured["kwargs"]["response_format"] == {"type": "json_object"}
+    assert captured["kwargs"]["secondary"] is True
+    assert captured["kwargs"]["thinking"] == "disabled"
+    assert captured["kwargs"]["tools"][0]["function"]["name"] == "submit_memory_result"
+    assert captured["kwargs"]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "submit_memory_result"},
+    }
+    assert "response_format" not in captured["kwargs"]
     stored = json.loads(
         (tmp_path / "wb_memory_project-test.json").read_text(encoding="utf-8")
     )

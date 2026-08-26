@@ -111,6 +111,7 @@ _PHASE1_DECISION_PROMPT = PHASE1_DECISION_PROMPT
 logger = logging.getLogger(__name__)
 
 _MAX_MISSING_CONTROL_REPAIRS = 1
+_PHASE1_TOOL_CHOICE = "required"
 
 
 class AgentControlProtocolError(RuntimeError):
@@ -122,10 +123,14 @@ async def _call_phase1_llm(
     *,
     tools: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Tag Phase-1 telemetry without changing its cache-stable tool array."""
+    """Require one cache-stable Decision control signal from every provider."""
     token = _llm_phase_override.set("phase1")
     try:
-        return await _call_llm(messages, tools=tools)
+        return await _call_llm(
+            messages,
+            tools=tools,
+            tool_choice=_PHASE1_TOOL_CHOICE,
+        )
     finally:
         _llm_phase_override.reset(token)
 
@@ -396,9 +401,9 @@ def _missing_completion_signal_entry(
     """Return the protocol correction for a response without a tool signal."""
     next_action = (
         "If work remains, call the next required real tool now. If the task is "
-        "complete, call `quit` with a complete `state_summary`, `artifacts`, and "
-        "`unresolved` record; the coordinator will construct the public reply "
-        "from that accepted state. Do not repeat or refer to the rejected text."
+        "complete, call `quit` with a complete self-contained `public_reply`, "
+        "`state_summary`, `artifacts`, and `unresolved` record; the coordinator "
+        "will publish `public_reply` directly. Do not refer to the rejected text."
         if structured_execution_finalize
         else
         "If work remains, call the next required real tool now. If the task is "
@@ -1000,10 +1005,25 @@ async def _run_main_agent_impl(
         # A valid terminal answer has already paid for the main model call.
         # Deliver it directly instead of rebuilding the full history. Tool-markup
         # or placeholder replies deliberately fall through to no-tool recovery.
+        direct_text = _safe_terminal_reply_from_response(response_obj, base_messages)
+        structured_text = ""
+        if execution_completion:
+            public_reply = str(
+                execution_outcome_arguments(response_obj).get("public_reply") or ""
+            ).strip()
+            if public_reply:
+                structured_text = _safe_terminal_reply_from_response(
+                    {**response_obj, "content": public_reply},
+                    base_messages,
+                )
+        # After a rejected plain-text turn, only the accepted structured reply
+        # can become public. On ordinary terminal turns, retain compatibility
+        # with providers that return the answer in assistant content while also
+        # accepting the new structured form when content is empty.
         text = (
-            ""
+            structured_text
             if execution_completion and force_completion_packet
-            else _safe_terminal_reply_from_response(response_obj, base_messages)
+            else structured_text or direct_text
         )
         if text:
             if _streaming_reply_requested():

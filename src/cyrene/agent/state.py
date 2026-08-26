@@ -167,6 +167,7 @@ class RunModelLease:
         messages_fingerprint: str = "",
         tools_fingerprint: str,
         payload_fingerprint: str,
+        tool_choice_fingerprint: str = "",
         cache_scope: str = "",
     ) -> dict[str, Any]:
         """Describe whether one final provider request can reuse its predecessor."""
@@ -186,6 +187,7 @@ class RunModelLease:
             "message_fingerprints": normalized_message_fingerprints,
             "messages_fingerprint": normalized_messages_fingerprint,
             "tools_fingerprint": str(tools_fingerprint),
+            "tool_choice_fingerprint": str(tool_choice_fingerprint),
             "payload_fingerprint": str(payload_fingerprint),
         }
         normalized_scope = str(cache_scope or "").strip()
@@ -207,6 +209,7 @@ class RunModelLease:
                 ("reasoning_effort", "reasoning_effort_changed"),
                 ("cache_route_key", "cache_epoch_changed"),
                 ("tools_fingerprint", "tools_changed"),
+                ("tool_choice_fingerprint", "tool_choice_changed"),
             ):
                 if current[key] != previous.get(key):
                     reasons.append(reason)

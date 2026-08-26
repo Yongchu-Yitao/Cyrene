@@ -402,6 +402,34 @@ def test_prepare_gemini_request_converts_roles_images_tools_and_schema() -> None
 
 
 @pytest.mark.parametrize(
+    ("adapter", "expected"),
+    [
+        ("anthropic", {"type": "any"}),
+        ("openai_responses", "required"),
+        ("gemini", "ANY"),
+    ],
+)
+def test_native_adapters_map_required_tool_choice(adapter, expected) -> None:
+    request = prepare_request(
+        adapter,
+        api_key="key",
+        model="model",
+        messages=[{"role": "user", "content": "Choose one control action."}],
+        tools=TOOLS,
+        max_tokens=64,
+        stream=False,
+        response_format=None,
+        tool_choice="required",
+    )
+
+    if adapter == "gemini":
+        actual = request.payload["toolConfig"]["functionCallingConfig"]["mode"]
+    else:
+        actual = request.payload["tool_choice"]
+    assert actual == expected
+
+
+@pytest.mark.parametrize(
     ("adapter", "wire", "expected"),
     [
         (
