@@ -9,11 +9,18 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from .execution import bind_plugin_execution
 from .plugin import Plugin, PluginCall, PluginCallResult, PluginContext
 from .registry import PluginRegistry
 from .validation import validate_plugin_arguments
 
 logger = logging.getLogger(__name__)
+
+
+def _dispatches_own_tool_hooks(plugin: Plugin) -> bool:
+    """The toolbox gateway delegates Hook dispatch to its invoked target."""
+
+    return plugin.kind == "tool" and plugin.name != "toolbox"
 
 
 def _utc_now() -> datetime:
@@ -81,7 +88,7 @@ class PluginRuntime:
                 continue
             item = PreparedPluginCall(call, plugin, arguments)
             prepared.append(item)
-            if plugin.kind == "tool" and context.hooks is not None:
+            if _dispatches_own_tool_hooks(plugin) and context.hooks is not None:
                 review_positions.append(len(prepared) - 1)
                 review_calls.append((call.name, dict(call.arguments)))
 
@@ -151,28 +158,29 @@ class PluginRuntime:
                 _utc_now(),
             )
         try:
-            if plugin.timeout_seconds is not None and not inspect.iscoroutinefunction(
-                plugin.handler
-            ):
-                value = await asyncio.wait_for(
-                    asyncio.to_thread(plugin.handler, arguments, context),
-                    timeout=plugin.timeout_seconds,
-                )
-            else:
-                value = plugin.handler(arguments, context)
+            with bind_plugin_execution(self, call, context):
+                if plugin.timeout_seconds is not None and not inspect.iscoroutinefunction(
+                    plugin.handler
+                ):
+                    value = await asyncio.wait_for(
+                        asyncio.to_thread(plugin.handler, arguments, context),
+                        timeout=plugin.timeout_seconds,
+                    )
+                else:
+                    value = plugin.handler(arguments, context)
+                    if inspect.isawaitable(value):
+                        if plugin.timeout_seconds is None:
+                            value = await value
+                        else:
+                            value = await asyncio.wait_for(
+                                value,
+                                timeout=plugin.timeout_seconds,
+                            )
                 if inspect.isawaitable(value):
-                    if plugin.timeout_seconds is None:
-                        value = await value
-                    else:
-                        value = await asyncio.wait_for(
-                            value,
-                            timeout=plugin.timeout_seconds,
-                        )
-            if inspect.isawaitable(value):
-                value = await value
+                    value = await value
         except asyncio.TimeoutError:
             error = f"Plugin timed out after {plugin.timeout_seconds:g} seconds"
-            if plugin.kind == "tool":
+            if _dispatches_own_tool_hooks(plugin):
                 await self._post(context, call.name, arguments, None, False, error)
             return PluginCallResult(
                 call.id,
@@ -185,7 +193,7 @@ class PluginRuntime:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            if plugin.kind == "tool":
+            if _dispatches_own_tool_hooks(plugin):
                 await self._post(context, call.name, arguments, None, False, str(exc))
             return PluginCallResult(
                 call.id,
@@ -196,7 +204,7 @@ class PluginRuntime:
                 _utc_now(),
             )
 
-        if plugin.kind == "tool":
+        if _dispatches_own_tool_hooks(plugin):
             await self._post(context, call.name, arguments, value, True, "")
         return PluginCallResult(call.id, call.name, True, value, "", _utc_now())
 

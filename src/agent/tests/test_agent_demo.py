@@ -4,7 +4,7 @@ import asyncio
 
 from agent.demo import AgentTreeSession
 from agent.hook import CONTEXT_CHANGE
-from agent.plugin import Plugin, PluginPack, PluginRegistry
+from agent.plugin import Plugin, PluginContext, PluginPack, PluginRegistry
 
 
 def run(coroutine):
@@ -137,6 +137,61 @@ def test_context_updates_drive_model_tool_model_without_agent_loop(tmp_path):
     ]
     assert snapshot["status"] == "idle"
     assert snapshot["leaf_id"] == snapshot["nodes"][-1]["id"]
+    session.close()
+
+
+def test_session_keeps_working_when_an_optional_plugin_pack_is_broken(tmp_path):
+    async def fake_model(_arguments, _context):
+        return {
+            "content": "done",
+            "reasoning": "",
+            "tool_calls": [],
+            "model": "fake",
+        }
+
+    plugin_directory = tmp_path / "plugin_impl"
+    broken = plugin_directory / "broken"
+    broken.mkdir(parents=True)
+    (broken / "__init__.py").write_text("plugin_pack = None\n", encoding="utf-8")
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "model",
+            (
+                Plugin(
+                    "MiniMax",
+                    "fake",
+                    {"type": "object"},
+                    fake_model,
+                    kind="model",
+                ),
+            ),
+        ),
+        source="test",
+    )
+
+    session = AgentTreeSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        registry=registry,
+    )
+    listing = run(
+        session.runtime.call(
+            "toolbox",
+            {"operation": "list"},
+            PluginContext(workspace=tmp_path / "workspace"),
+        )
+    )
+
+    assert listing.success is True
+    assert listing.value["refresh_errors"] == [
+        {
+            "path": str(broken),
+            "error": "tool pack __init__.py must export PluginPack as plugin_pack",
+        }
+    ]
     session.close()
 
 

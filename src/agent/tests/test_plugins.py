@@ -22,6 +22,9 @@ from agent.plugin import (
 from agent.plugin.core_impl import PermissionReviewPlugin
 
 
+CANONICAL_PLUGIN_DIRECTORY = Path(__file__).parents[1] / "plugin" / "plugin_impl"
+
+
 def run(coroutine):
     return asyncio.run(coroutine)
 
@@ -251,6 +254,23 @@ plugin = Plugin(
         assert failed_update.success is True
         assert failed_update.value["standalone_tools"][0]["name"] == "RenamedTool"
         assert failed_update.value["refresh_errors"][0]["path"] == str(standalone)
+
+        stale_description = await runtime.call(
+            "toolbox",
+            {"operation": "describe", "name": "RenamedTool"},
+        )
+        assert stale_description.success is False
+        assert "refusing to use the stale loaded version" in stale_description.error
+        stale_call = await runtime.call(
+            "toolbox",
+            {
+                "operation": "invoke",
+                "name": "RenamedTool",
+                "arguments": {"value": "must-not-run"},
+            },
+        )
+        assert stale_call.success is False
+        assert "refusing to use the stale loaded version" in stale_call.error
 
         standalone.unlink()
         removed = await runtime.call("toolbox", {"operation": "list"})
@@ -581,6 +601,64 @@ def test_runtime_uses_tree_permission_and_post_tool_hooks(tmp_path):
     run(scenario())
 
 
+def test_toolbox_dispatches_hooks_once_for_the_actual_target(tmp_path):
+    async def scenario():
+        reviewed = []
+        posted = []
+
+        async def permission_model(_system, request):
+            reviewed.append(request)
+            return {"approve": True, "rationale": "allowed"}
+
+        reviewer = PermissionReviewPlugin(permission_model)
+        store = ContextStoreRouter(tmp_path / "toolbox-context")
+        tree = store.create_tree(
+            tree_id="tree",
+            root_id="root",
+            initial_hooks=(reviewer.registration(),),
+        )
+        hooks = store.hooks_for(tree.id)
+        hooks.register(POST_TOOL_USE, lambda event: posted.append(event.payload))
+        registry = PluginRegistry()
+        registry.register_plugin(
+            Plugin(
+                "DeferredEcho",
+                "Echo a deferred value",
+                {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                    "additionalProperties": False,
+                },
+                lambda arguments, _context: arguments["value"],
+            ),
+            source="test",
+        )
+
+        result = await PluginRuntime(registry).call(
+            "toolbox",
+            {
+                "operation": "invoke",
+                "name": "DeferredEcho",
+                "arguments": {"value": "hello"},
+            },
+            PluginContext(
+                tree=store,
+                tree_id=tree.id,
+                node_id=tree.root_id,
+                hooks=hooks,
+            ),
+        )
+
+        assert result.success is True
+        assert result.value["result"] == "hello"
+        assert [item["tool"]["name"] for item in reviewed] == ["DeferredEcho"]
+        assert [item["tool"]["name"] for item in posted] == ["DeferredEcho"]
+        store.close()
+
+    run(scenario())
+
+
 def test_batch_runs_concurrently_but_returns_model_call_order():
     async def scenario():
         active = 0
@@ -829,7 +907,10 @@ def test_filesystem_plugins_follow_toolbox_list_describe_invoke_chain(tmp_path):
         (source / "notes.txt").write_text("hello from notes\n", encoding="utf-8")
 
         registry = PluginRegistry()
-        plugin_directory = Path(__file__).parents[3] / "plugin_impl"
+        plugin_directory = tmp_path / "standalone_plugins"
+        plugin_directory.mkdir()
+        for name in ("edit.py", "glob.py", "grep.py"):
+            shutil.copy2(CANONICAL_PLUGIN_DIRECTORY / name, plugin_directory / name)
         assert registry.load_directory(plugin_directory) == ()
         assert {
             definition["function"]["name"]
@@ -971,7 +1052,13 @@ def test_minimax_model_pack_uses_openai_tool_call_shape(tmp_path, monkeypatch):
         monkeypatch.setenv("MINIMAX_API_KEY", "test-key")
         monkeypatch.setenv("MINIMAX_BASE_URL", "https://minimax.test/v1")
         registry = PluginRegistry(include_core=False)
-        failures = registry.load_directory(Path(__file__).parents[3] / "plugin_impl")
+        plugin_directory = tmp_path / "model_plugins"
+        plugin_directory.mkdir()
+        model_pack = Path(__file__).parents[3] / "plugin_impl" / "model"
+        shutil.copytree(model_pack, plugin_directory / model_pack.name)
+        for name in ("edit.py", "glob.py", "grep.py"):
+            shutil.copy2(CANONICAL_PLUGIN_DIRECTORY / name, plugin_directory / name)
+        failures = registry.load_directory(plugin_directory)
         assert failures == ()
         assert registry.resolve("MiniMax").kind == "model"
         assert {

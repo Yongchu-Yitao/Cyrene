@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from ..execution import invoke_plugin
 from ..plugin import Plugin, PluginContext
 
 if TYPE_CHECKING:
@@ -55,10 +55,27 @@ class _ToolboxHandler:
             for failure in failures
         ]
 
-    def _deferred(self, name: str) -> RegisteredPlugin:
+    def _deferred(
+        self,
+        name: str,
+        failures: tuple[PluginLoadFailure, ...] = (),
+    ) -> RegisteredPlugin:
         registered = self._registry.registered(name)
         if registered.plugin.kind != "tool" or registered.source == "core":
             raise ValueError(f"Plugin is not available through toolbox: {name}")
+        failed_source = next(
+            (
+                failure
+                for failure in failures
+                if str(failure.path) == registered.source
+            ),
+            None,
+        )
+        if failed_source is not None:
+            raise RuntimeError(
+                f"Plugin source failed to refresh for {name!r}; refusing to use "
+                f"the stale loaded version: {failed_source.error}"
+            )
         return registered
 
     @staticmethod
@@ -99,7 +116,11 @@ class _ToolboxHandler:
             standalone_tools.append(self._tool_summary(plugin))
         return packs, standalone_tools
 
-    def _describe(self, arguments: dict[str, Any]) -> list[dict[str, Any]]:
+    def _describe(
+        self,
+        arguments: dict[str, Any],
+        failures: tuple[PluginLoadFailure, ...],
+    ) -> list[dict[str, Any]]:
         requested: list[str] = []
         name = str(arguments.get("name") or "").strip()
         if name:
@@ -113,7 +134,7 @@ class _ToolboxHandler:
 
         descriptions: list[dict[str, Any]] = []
         for plugin_name in requested:
-            registered = self._deferred(plugin_name)
+            registered = self._deferred(plugin_name, failures)
             plugin = registered.plugin
             descriptions.append(
                 {
@@ -144,32 +165,26 @@ class _ToolboxHandler:
         elif operation == "describe":
             result = {
                 "operation": "describe",
-                "plugins": self._describe(arguments),
+                "plugins": self._describe(arguments, failures),
             }
         elif operation == "invoke":
             name = str(arguments.get("name") or "").strip()
             if not name:
                 raise ValueError("toolbox invoke requires name")
-            self._deferred(name)
+            self._deferred(name, failures)
             nested_arguments = arguments.get("arguments") or {}
             if not isinstance(nested_arguments, Mapping):
                 raise TypeError("toolbox invoke arguments must be an object")
 
-            # Resolve again inside Runtime so validation always uses the Plugin
-            # and input_schema that are current for this invocation.
-            from ..runtime import PluginRuntime
-
-            nested = await PluginRuntime(self._registry).call(
+            nested_value = await invoke_plugin(
                 name,
                 dict(nested_arguments),
-                replace(context, hooks=None),
+                review=True,
             )
-            if not nested.success:
-                raise RuntimeError(nested.error)
             result = {
                 "operation": "invoke",
                 "name": name,
-                "result": nested.value,
+                "result": nested_value,
             }
         else:  # The Runtime schema normally rejects this before execution.
             raise ValueError(f"unsupported toolbox operation: {operation}")

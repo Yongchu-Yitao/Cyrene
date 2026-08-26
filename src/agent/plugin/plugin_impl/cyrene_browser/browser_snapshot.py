@@ -1,0 +1,111 @@
+"""Tool implementation for browser_snapshot."""
+
+from __future__ import annotations
+
+from typing import Any
+
+TOOL_NAME = "browser_snapshot"
+TOOL_DEF = {
+    "type": "function",
+    "function": {
+        "name": TOOL_NAME,
+        "description": "Inspect the current browser page and return visible actionable elements with refs, text, hrefs, selectors, and bounding boxes. Use this before clicking complex SPA pages instead of guessing CSS selectors.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "max_elements": {"type": "integer", "description": "Maximum number of visible elements to return. Default 80, max 200."},
+                "resource_id": {
+                    "type": "string",
+                    "description": "Optional pinned topbar browser resource id. This is a strictly read-only snapshot when the browser belongs to another session.",
+                },
+            },
+        },
+    },
+}
+
+
+def _format_element(el: dict[str, Any]) -> str:
+    ref = str(el.get("ref") or "?")
+    tag = str(el.get("tag") or "")
+    role = str(el.get("role") or "")
+    input_type = str(el.get("inputType") or "")
+    label = str(el.get("text") or el.get("ariaLabel") or el.get("placeholder") or el.get("alt") or "").strip()
+    href = str(el.get("href") or "").strip()
+    selector = str(el.get("selector") or "").strip()
+    rect = el.get("rect") if isinstance(el.get("rect"), dict) else {}
+    bits = [f"[{ref}]", tag]
+    if role:
+        bits.append(f"role={role}")
+    if input_type:
+        bits.append(f"type={input_type}")
+    if input_type == "file":
+        bits.append(f"accept={str(el.get('accept') or '(not declared)')}")
+        bits.append(f"multiple={bool(el.get('multiple'))}")
+    if label:
+        bits.append(f"text={label!r}")
+    if href:
+        bits.append(f"href={href}")
+    if selector:
+        bits.append(f"selector={selector}")
+    if rect:
+        bits.append(f"box={rect.get('x', 0)},{rect.get('y', 0)},{rect.get('w', 0)}x{rect.get('h', 0)}")
+    return " ".join(bits)
+
+
+async def _tool_browser_snapshot(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+    from cyrene.browser import inspect_page
+
+    try:
+        max_elements = int(args.get("max_elements") or 80)
+    except (TypeError, ValueError):
+        max_elements = 80
+    resource_id = str(args.get("resource_id") or "").strip()
+    if resource_id:
+        from cyrene.agent.context import current_session_id
+        from cyrene.workbench.pinned_resources import browser_snapshot_target
+        try:
+            target = browser_snapshot_target(resource_id, current_session_id())
+        except ValueError as exc:
+            return f"Browser snapshot failed: {exc}"
+        result = await inspect_page(
+            max_elements=max_elements,
+            session_id=str(target.get("ownerSessionId") or ""),
+            read_only=True,
+        )
+        if isinstance(result, dict):
+            result["resource_id"] = resource_id
+            result["read_only"] = bool(target.get("readOnly"))
+    else:
+        result = await inspect_page(max_elements=max_elements)
+    if result.get("ok") is False:
+        return f"Browser snapshot failed: {result.get('error', 'unknown error')}"
+    parts = [
+        f"Title: {result.get('title', '—')}",
+        f"URL: {result.get('url', '—')}",
+    ]
+    if result.get("read_only"):
+        parts.append("Access: read-only pinned browser snapshot; interactions are not permitted.")
+    snapshot_token = str(result.get("snapshot_token") or "").strip()
+    if snapshot_token:
+        parts.append(
+            "Snapshot credential: " + snapshot_token
+            + "\nUse this once as browser_navigate.snapshot_token only with reason=ui_unreachable. "
+            "It expires after 2 minutes or any browser interaction/new snapshot."
+        )
+    from .browser_output import page_observation_lines
+    parts.extend(page_observation_lines(result))
+    elements = result.get("elements") if isinstance(result.get("elements"), list) else []
+    if not elements:
+        parts.append("No visible actionable elements found.")
+    else:
+        parts.append("Visible elements:")
+        parts.extend(_format_element(el) for el in elements if isinstance(el, dict))
+    text = str(result.get("text") or "").strip()
+    if text:
+        parts.append("\nPage text preview:\n" + text[:2000])
+    return "\n".join(parts)
+
+
+handler = _tool_browser_snapshot
+
+__all__ = ["TOOL_NAME", "TOOL_DEF", "handler", "_tool_browser_snapshot"]

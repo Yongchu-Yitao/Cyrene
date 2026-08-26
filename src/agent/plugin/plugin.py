@@ -49,6 +49,7 @@ class Plugin:
     kind: Literal["tool", "model"] = "tool"
     allow_parallel: bool = False
     timeout_seconds: float | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         name = str(self.name).strip()
@@ -68,12 +69,16 @@ class Plugin:
             if float(self.timeout_seconds) <= 0:
                 raise ValueError("Plugin timeout_seconds must be greater than zero")
         schema = deepcopy(dict(self.input_schema))
+        if not isinstance(self.metadata, Mapping):
+            raise TypeError("Plugin metadata must be a mapping")
+        metadata = deepcopy(dict(self.metadata))
         if schema.get("type", "object") != "object":
             raise ValueError("Plugin input_schema must describe an object")
         check_input_schema(schema)
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "description", str(self.description).strip())
         object.__setattr__(self, "input_schema", schema)
+        object.__setattr__(self, "metadata", metadata)
         if self.timeout_seconds is not None:
             object.__setattr__(self, "timeout_seconds", float(self.timeout_seconds))
 

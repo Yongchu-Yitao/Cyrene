@@ -104,8 +104,13 @@ class AgentSession:
         self.registry = registry or PluginRegistry()
         failures = self.registry.load_directory(plugin_directory)
         if failures:
-            detail = "; ".join(f"{failure.path.name}: {failure.error}" for failure in failures)
-            raise RuntimeError(f"failed to load Plugin packs: {detail}")
+            logger.warning(
+                "Some optional Plugin contributions failed to load: %s",
+                "; ".join(
+                    f"{failure.path.name}: {failure.error}" for failure in failures
+                ),
+            )
+        self._initial_plugin_load_failures = failures
         self._model_tools = self.registry.direct_tool_definitions()
         model = self.registry.resolve(model_plugin)
         if model.kind != "model":

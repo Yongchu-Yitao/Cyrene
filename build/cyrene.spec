@@ -46,6 +46,28 @@ if _office_static_dir.is_dir():
             dest = str(f.relative_to(_SRC).parent)
             _datas.append((str(f), dest))
 
+# Keep the canonical editable Plugin tree as real source in frozen bundles.
+# Modules in PyInstaller's PYZ archive are importable but do not provide a
+# reliable filesystem tree for seeding into the user's plugin_impl directory.
+_plugin_source_dir = _SRC / "agent" / "plugin" / "plugin_impl"
+_plugin_source_dest = (
+    Path("builtin_plugin_sources") / "agent" / "plugin" / "plugin_impl"
+)
+if not _plugin_source_dir.is_dir():
+    raise SystemExit(
+        f"[fatal] canonical Plugin source directory is missing: {_plugin_source_dir}"
+    )
+for f in sorted(_plugin_source_dir.rglob("*")):
+    if (
+        not f.is_file()
+        or "__pycache__" in f.parts
+        or f.suffix in {".pyc", ".pyo"}
+    ):
+        continue
+    relative = f.relative_to(_plugin_source_dir)
+    dest = _plugin_source_dest / relative.parent
+    _datas.append((str(f), str(dest)))
+
 # .env 模板（打包模式首次启动时复制到用户数据目录）
 _env_tpl = _PROJECT_ROOT / ".env.example"
 if _env_tpl.exists():
