@@ -62,6 +62,9 @@ def test_windows_release_installs_required_native_runtime_packages():
     assert "--force-reinstall --no-deps --no-binary cryptography" in arm_job
     assert "--force-reinstall --no-deps --no-binary cffi" in arm_job
     assert "import _cffi_backend" in arm_job
+    assert arm_job.index("arm64-cryptography-ok") < arm_job.index(
+        "requirements-windows-release.txt"
+    )
     assert arm_job.index("Build native ARM64 cryptography runtime") < arm_job.index(
         "Install MCP runtime"
     )
