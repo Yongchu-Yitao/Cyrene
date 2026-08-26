@@ -36,6 +36,7 @@ from .hook import (
     HookSet,
     PluginRegistry,
 )
+from .session import AgentEventListener, AgentSession, AgentSessionEvent
 
 __all__ = [
     "ContextChange",
@@ -55,6 +56,9 @@ __all__ = [
     "HookRegistration",
     "HookSet",
     "PluginRegistry",
+    "AgentEventListener",
+    "AgentSession",
+    "AgentSessionEvent",
     "ContextUsed",
     "NodeHasChildrenError",
     "NodeNotFoundError",

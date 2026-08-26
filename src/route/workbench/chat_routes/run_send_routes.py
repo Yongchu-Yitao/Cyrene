@@ -653,6 +653,37 @@ class _SendOperation:
         ]
 
         source = "side_agent" if self.is_side_agent else await resolve_conversation_source(self.ui_instance_id)
+        from agent.workbench.chat_runtime import (
+            run_workbench_chat,
+            workbench_chat_kernel_enabled,
+        )
+
+        if workbench_chat_kernel_enabled():
+            return await run_workbench_chat(
+                run=run,
+                user_message=(
+                    self.agent_message
+                    or self.public_message
+                    or (f"/{self.command}" if self.command else "")
+                ),
+                bot=self.context.bot,
+                legacy_chat_id=self.routes.chat_id,
+                db_path=self.context.db_path,
+                session_id=self.chat_id,
+                workspace_dir=self.workspace_dir,
+                client_request_id=self.client_request_id,
+                permission_mode=self.mode,
+                command=self.command,
+                public_user_message=self.public_message or None,
+                public_attachments=self.public_attachments or None,
+                attachment_paths=self._attachment_path_map(),
+                soul_enabled=self.service.chat_soul_active(self.chat),
+                workspace_enabled=self.service.chat_workspace_active(self.chat),
+                system_extra="\n\n".join(part for part in system_extras if part),
+                response_capabilities=("interactive_blocks",),
+                ui_instance_id=self.ui_instance_id,
+                conversation_source=source,
+            )
         return await self.run_agent(
             user_message=self.agent_message,
             bot=self.context.bot,

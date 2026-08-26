@@ -9,7 +9,7 @@ import logging
 import queue
 import threading
 from collections.abc import Callable, Mapping
-from concurrent.futures import Future
+from concurrent.futures import Future, InvalidStateError
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -33,6 +33,26 @@ from .plugin import PluginRegistry
 from .storage import HookPersistence, validate_hook_config
 
 logger = logging.getLogger(__name__)
+
+
+def _settle_future(
+    future: Future[Any],
+    *,
+    result: Any = None,
+    error: BaseException | None = None,
+) -> None:
+    """Deliver a worker result unless its asyncio waiter was cancelled."""
+
+    if future.done():
+        return
+    try:
+        if error is None:
+            future.set_result(result)
+        else:
+            future.set_exception(error)
+    except InvalidStateError:
+        # Cancellation can race the check above from another event loop.
+        pass
 
 
 def _utc_now() -> datetime:
@@ -377,30 +397,30 @@ class HookSet:
                             self._dispatch_snapshot(self._snapshot(item.event), item.event)
                         )
                     except BaseException as exc:
-                        item.future.set_exception(exc)
+                        _settle_future(item.future, error=exc)
                     else:
-                        item.future.set_result(result)
+                        _settle_future(item.future, result=result)
                 elif isinstance(item, _PreToolRequest):
                     try:
                         result = loop.run_until_complete(
                             self._run_pre_tool(item.name, item.arguments, item.time)
                         )
                     except BaseException as exc:
-                        item.future.set_exception(exc)
+                        _settle_future(item.future, error=exc)
                     else:
-                        item.future.set_result(result)
+                        _settle_future(item.future, result=result)
                 elif isinstance(item, _PreToolBatchRequest):
                     try:
                         result = loop.run_until_complete(
                             self._run_pre_tool_batch(item.calls)
                         )
                     except BaseException as exc:
-                        item.future.set_exception(exc)
+                        _settle_future(item.future, error=exc)
                     else:
-                        item.future.set_result(result)
+                        _settle_future(item.future, result=result)
                 elif isinstance(item, _Barrier):
                     loop.run_until_complete(self._drain_persisted())
-                    item.future.set_result(None)
+                    _settle_future(item.future)
         finally:
             loop.close()
 

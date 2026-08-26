@@ -57,8 +57,8 @@ if _pyproject.exists():
     _datas.append((str(_pyproject), "."))
 
 # ---- 本地包模块自动枚举 ----
-# cyrene/webui/route 大量使用 importlib.import_module() 动态加载（tool_impl、agent
-# 子包等），PyInstaller 静态分析无法追踪。直接扫描 src/ 下所有 .py 文件生成
+# agent/cyrene/webui/route 大量使用 importlib.import_module() 动态加载（tool_impl、
+# Plugin 子包等），PyInstaller 静态分析无法追踪。直接扫描 src/ 下所有 .py 文件生成
 # 完整列表，避免手动维护漏项。
 def _enumerate_local_package(src: Path, pkg: str) -> list:
     root = src / pkg
@@ -77,7 +77,8 @@ def _enumerate_local_package(src: Path, pkg: str) -> list:
 
 # ---- 隐藏导入 ----
 _hidden = (
-    _enumerate_local_package(_SRC, "cyrene")
+    _enumerate_local_package(_SRC, "agent")
+    + _enumerate_local_package(_SRC, "cyrene")
     + _enumerate_local_package(_SRC, "webui")
     + _enumerate_local_package(_SRC, "route")
 )
