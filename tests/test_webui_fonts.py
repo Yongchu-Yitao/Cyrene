@@ -43,7 +43,7 @@ def test_font_assets_are_preloaded_hashed_and_copied_to_static_output():
 
     assert 'href="assets/fonts/manrope-variable.woff2" as="font"' in index
     assert 'href="assets/fonts/noto-sans-sc-variable.woff2" as="font"' in index
-    assert 'href="fonts.css?v=0.8.0-beta3"' in index
+    assert 'href="fonts.css?v=0.8.0-beta4"' in index
     assert "document.fonts.load('560 16px \"Manrope\"'" in index
     assert "document.fonts.load('560 16px \"Noto Sans SC\"'" in index
     assert "font-size: 34px" in index

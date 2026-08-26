@@ -404,6 +404,18 @@ def _gemini_messages(messages: list[dict[str, Any]]) -> tuple[list[dict[str, Any
     return system_parts, contents
 
 
+def _anthropic_tool_choice(tool_choice: str | dict[str, Any] | None) -> dict[str, Any]:
+    if isinstance(tool_choice, dict):
+        return tool_choice
+    choice_type = "any" if str(tool_choice or "").strip().lower() == "required" else "auto"
+    return {"type": choice_type}
+
+
+def _gemini_tool_choice_mode(tool_choice: str | dict[str, Any] | None) -> str:
+    normalized = str(tool_choice or "").strip().lower()
+    return {"none": "NONE", "required": "ANY"}.get(normalized, "AUTO")
+
+
 def prepare_request(
     adapter_id: str,
     *,
@@ -437,12 +449,7 @@ def prepare_request(
             # Anthropic's native Messages API has no schema-preserving "none"
             # mode. Keep the definitions stable and rely on the explicit final
             # synthesis instruction when callers disable tool selection.
-            if isinstance(tool_choice, dict):
-                payload["tool_choice"] = tool_choice
-            elif str(tool_choice or "").strip().lower() == "required":
-                payload["tool_choice"] = {"type": "any"}
-            else:
-                payload["tool_choice"] = {"type": "auto"}
+            payload["tool_choice"] = _anthropic_tool_choice(tool_choice)
         if response_format is not None:
             raise ValueError("Anthropic adapter does not yet support response_format")
         return PreparedRequest(payload, {
@@ -492,14 +499,9 @@ def prepare_request(
             payload["generationConfig"] = generation
         if tool_defs:
             payload["tools"] = [{"functionDeclarations": tool_defs}]
-            normalized_choice = str(tool_choice or "").strip().lower()
-            if normalized_choice == "none":
-                mode = "NONE"
-            elif normalized_choice == "required":
-                mode = "ANY"
-            else:
-                mode = "AUTO"
-            payload["toolConfig"] = {"functionCallingConfig": {"mode": mode}}
+            payload["toolConfig"] = {
+                "functionCallingConfig": {"mode": _gemini_tool_choice_mode(tool_choice)}
+            }
         return PreparedRequest(payload, {
             "Content-Type": "application/json",
             "x-goog-api-key": api_key,
