@@ -446,6 +446,8 @@ jobs:
           vcpkg install openssl:arm64-windows-static-md
           $env:OPENSSL_DIR = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed\arm64-windows-static-md"
           $env:OPENSSL_STATIC = "1"
+          python -m pip install --force-reinstall --no-deps --no-binary cffi cffi
+          python -c "import _cffi_backend; print('arm64-cffi-ok')"
           python -m pip install --force-reinstall --no-deps --no-binary cryptography cryptography
           python -c "import platform; from cryptography.fernet import Fernet; assert platform.machine().lower() in {'arm64','aarch64'}; Fernet(Fernet.generate_key()); print('arm64-cryptography-ok')"
 

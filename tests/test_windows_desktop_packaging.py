@@ -60,6 +60,8 @@ def test_windows_release_installs_required_native_runtime_packages():
     assert "onnxruntime_qnn" in arm_job
     assert "vcpkg install openssl:arm64-windows-static-md" in arm_job
     assert "--force-reinstall --no-deps --no-binary cryptography" in arm_job
+    assert "--force-reinstall --no-deps --no-binary cffi" in arm_job
+    assert "import _cffi_backend" in arm_job
     assert arm_job.index("Build native ARM64 cryptography runtime") < arm_job.index(
         "Install MCP runtime"
     )
@@ -159,6 +161,7 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert "path.join(userDataDir, 'workspace', 'terminal-lifecycle-workspace')" in lifecycle_soak
     assert "path.join(tempDir, 'terminal-lifecycle-workspace')" not in lifecycle_soak
     assert "CYRENE_TERMINAL_SOAK_BURST_COMPLETE" in lifecycle_soak
+    assert "120000" in lifecycle_soak
     assert "await daemonRequest(cleanupConnection, 'shutdown'" in lifecycle_soak
     assert '"terminal-lifecycle-soak.js"' in electron_package
     client = (ROOT / "src" / "cyrene" / "terminal" / "client.py").read_text(
