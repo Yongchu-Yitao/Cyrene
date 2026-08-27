@@ -25,7 +25,7 @@ from cyrene.workbench.persistence.document_merge import (
 from cyrene.workbench.persistence.chat_repository import ChatPorts, ChatRepository
 from cyrene.workbench.persistence.project_repository import ProjectPorts, ProjectRepository
 from cyrene.workbench.persistence.document_repository import DocumentPorts, DocumentRepository
-from cyrene.workbench.persistence.schema import ensure_schema
+from cyrene.workbench.persistence.schema import ensure_schema as ensure_schema
 
 logger = logging.getLogger(__name__)
 
