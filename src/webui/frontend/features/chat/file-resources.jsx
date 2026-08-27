@@ -523,34 +523,40 @@ var WorkbenchChatRuntimes = (function () {
     return { ...cur, activitySeq: nextSeq, activities: activities };
   }
 
+  function intermediateMessageDedupeKeys(message) {
+    var item = message && typeof message === "object" ? message : {};
+    var keys = [];
+    var explicitKey = String(item.liveDedupeKey || "").trim();
+    if (explicitKey) keys.push(explicitKey);
+    var files = Array.isArray(item.attachments) ? item.attachments : [];
+    if (files.length === 0) {
+      var normalizedContent = String(item.content || "").replace(/\s+/g, " ").trim();
+      if (normalizedContent) keys.push("content:" + normalizedContent);
+    }
+    return keys;
+  }
+
+  function intermediateMessagesMatch(left, right) {
+    var leftId = String(left && left.id || "");
+    var rightId = String(right && right.id || "");
+    if (leftId && rightId && leftId === rightId) return true;
+    var leftKeys = intermediateMessageDedupeKeys(left);
+    var rightKeys = new Set(intermediateMessageDedupeKeys(right));
+    return leftKeys.some(function (key) { return rightKeys.has(key); });
+  }
+
   function appendIntermediate(chatId, message) {
     if (!chatId || !message || !message.id) return;
     fire("onIntermediateMessage", chatId, message);
     update(chatId, function (cur) {
       if (!cur) return null;
       var segments = Array.isArray(cur.segments) ? cur.segments : [];
-      var messageFiles = Array.isArray(message.attachments) ? message.attachments : [];
-      var messageKey = String(message.liveDedupeKey || "").trim();
-      if (!messageKey && messageFiles.length === 0) {
-        var normalizedMessageContent = String(message.content || "").replace(/\s+/g, " ").trim();
-        if (normalizedMessageContent) messageKey = "content:" + normalizedMessageContent;
-      }
       var existingIndex = -1;
       for (var si = 0; si < segments.length; si++) {
         var segment = segments[si];
         var segmentMsg = segment && segment.message;
         if (!segmentMsg) continue;
-        if (String(segmentMsg.id || "") === String(message.id || "")) {
-          existingIndex = si;
-          break;
-        }
-        var segmentFiles = Array.isArray(segmentMsg.attachments) ? segmentMsg.attachments : [];
-        var segmentKey = String(segmentMsg.liveDedupeKey || "").trim();
-        if (!segmentKey && segmentFiles.length === 0) {
-          var normalizedSegmentContent = String(segmentMsg.content || "").replace(/\s+/g, " ").trim();
-          if (normalizedSegmentContent) segmentKey = "content:" + normalizedSegmentContent;
-        }
-        if (messageKey && segmentKey && messageKey === segmentKey) {
+        if (intermediateMessagesMatch(segmentMsg, message)) {
           existingIndex = si;
           break;
         }

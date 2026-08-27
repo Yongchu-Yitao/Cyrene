@@ -7747,8 +7747,9 @@ def test_workbench_chat_splits_live_tools_around_intermediate_messages():
 
     assert 'type === "intermediate_message"' in source
     assert "function appendIntermediate(chatId, message)" in source
-    assert "message.liveDedupeKey" in append_block
-    assert "messageKey === segmentKey" in append_block
+    assert "function intermediateMessageDedupeKeys(message)" in source
+    assert "intermediateMessagesMatch(segmentMsg, message)" in append_block
+    assert 'keys.push("content:" + normalizedContent)' in source
     assert "existingIndex >= 0" in append_block
     assert "segments: segments.concat" in source
     assert "progress: Array.isArray(message.trace) ? message.trace" in source
@@ -7757,6 +7758,41 @@ def test_workbench_chat_splits_live_tools_around_intermediate_messages():
     assert "<WbcAssistantMessage" in source
     assert "event.assistantMessages" in source
     assert 'event.type === "assistant_message" && event.intermediate && event.message' in source
+
+
+def test_workbench_intermediate_message_dedupe_matches_explicit_and_content_keys():
+    source = frontend_module_source("features/chat/file-resources.jsx")
+    helpers = "function intermediateMessageDedupeKeys" + source.split(
+        "function intermediateMessageDedupeKeys", 1
+    )[1].split("function appendIntermediate", 1)[0]
+    script = f"""
+eval({json.dumps(helpers)});
+const text = "我先确认工作区结构，再开始处理。";
+const result = {{
+  explicitVsContent: intermediateMessagesMatch(
+    {{ id: "direct", content: text }},
+    {{ id: "preamble", content: text, liveDedupeKey: "msg_sem_example" }}
+  ),
+  differentContent: intermediateMessagesMatch(
+    {{ id: "direct", content: text }},
+    {{ id: "preamble", content: "另一条消息", liveDedupeKey: "msg_sem_example" }}
+  ),
+  attachmentMessages: intermediateMessagesMatch(
+    {{ id: "file-1", content: text, attachments: [{{ name: "one.txt" }}] }},
+    {{ id: "file-2", content: text, attachments: [{{ name: "two.txt" }}] }}
+  )
+}};
+process.stdout.write(JSON.stringify(result));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+
+    assert json.loads(completed.stdout) == {
+        "explicitVsContent": True,
+        "differentContent": False,
+        "attachmentMessages": False,
+    }
 
 
 def test_workbench_chat_retry_clears_model_output_before_start_and_reconciles_terminal_event():
