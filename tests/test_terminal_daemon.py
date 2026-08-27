@@ -379,6 +379,9 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert 'terminal.element.classList.contains("focus")' in source
     assert 'core.coreService.isCursorHidden' in source
     assert 'cursorMove = terminal.onCursorMove(scheduleInputCursorUpdate)' in source
+    assert source.count("terminalRef.current.focus();") == 1
+    assert 'if (interactive) terminal.focus();' not in source
+    assert 'terminal.write("\\u001b[?25h");\n              terminal.focus();' not in source
     assert 'bufferChange = terminal.buffer.onBufferChange(handleBufferChange)' in source
     assert 'buffer.type === "alternate"' in source
     assert 'tailSpacer.classList.add("is-alternate-buffer")' in source
