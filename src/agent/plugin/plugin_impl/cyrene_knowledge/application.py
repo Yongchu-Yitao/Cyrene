@@ -10,7 +10,10 @@ from .service import create_knowledge_service
 def setup_application(context: PluginApplicationContext) -> None:
     from .routes import register_routes
 
-    service = create_knowledge_service(context.data_directory / "plugin_data" / "cyrene_knowledge")
+    service = create_knowledge_service(
+        context.data_directory / "plugin_data" / "cyrene_knowledge",
+        legacy_store_directory=context.data_directory.parent / "store",
+    )
     register_routes(context.router, service)
     context.provide("knowledge", service)
     context.provide_search("knowledge", service.search_workbench)

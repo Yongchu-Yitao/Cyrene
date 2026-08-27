@@ -220,6 +220,17 @@ CREATE TABLE IF NOT EXISTS sync_state (
     updated_at TEXT NOT NULL,
     PRIMARY KEY(workspace, provider, provider_library_id, collection_key)
 );
+
+CREATE TABLE IF NOT EXISTS legacy_imports (
+    source_path TEXT NOT NULL,
+    workspace TEXT NOT NULL,
+    migration_version INTEGER NOT NULL,
+    source_size INTEGER NOT NULL,
+    source_mtime_ns INTEGER NOT NULL,
+    imported_at TEXT NOT NULL,
+    report_json TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY(source_path, workspace, migration_version)
+);
 """
 
 

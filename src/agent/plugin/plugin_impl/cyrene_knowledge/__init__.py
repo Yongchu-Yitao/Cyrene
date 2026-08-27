@@ -21,7 +21,10 @@ def setup(context: PluginSetupContext) -> None:
     if context.services.get("knowledge") is None:
         context.provide(
             "knowledge",
-            create_knowledge_service(context.data_directory / "plugin_data" / "cyrene_knowledge"),
+            create_knowledge_service(
+                context.data_directory / "plugin_data" / "cyrene_knowledge",
+                legacy_store_directory=context.data_directory.parent / "store",
+            ),
         )
 
 

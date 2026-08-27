@@ -141,6 +141,8 @@ class KnowledgeService:
         *,
         workspace_resolver: Callable[[str], str] | None = None,
         zotero_settings: Callable[[], Mapping[str, Any]] | None = None,
+        legacy_store_directory: str | Path | None = None,
+        project_state_provider: Callable[[], Mapping[str, Any]] | None = None,
     ) -> None:
         base = Path(data_directory).expanduser().resolve() if data_directory else _default_data_root()
         self.store = KnowledgeStore(base)
@@ -150,6 +152,12 @@ class KnowledgeService:
 
             zotero_settings = get_zotero_settings
         self._zotero_settings = zotero_settings
+        self._legacy_store_directory = (
+            Path(legacy_store_directory).expanduser().resolve()
+            if legacy_store_directory is not None
+            else None
+        )
+        self._project_state_provider = project_state_provider
         self._tasks: set[asyncio.Task[Any]] = set()
         self._reembed: dict[str, dict[str, Any]] = {}
 
@@ -882,6 +890,24 @@ class KnowledgeService:
 
     async def startup(self) -> None:
         await asyncio.to_thread(self.store.initialize)
+        if self._legacy_store_directory is not None:
+            provider = self._project_state_provider
+            if provider is None:
+                from cyrene.workbench.context import read_project_state
+
+                provider = read_project_state
+            try:
+                project_state = provider()
+                from .legacy_migration import migrate_legacy_knowledge
+
+                await asyncio.to_thread(
+                    migrate_legacy_knowledge,
+                    self.store,
+                    self._legacy_store_directory,
+                    project_state if isinstance(project_state, Mapping) else {},
+                )
+            except Exception:
+                logger.exception("Legacy knowledge migration failed")
 
     def local_model_status(self) -> dict[str, Any]:
         from . import local_models
@@ -961,11 +987,15 @@ def create_knowledge_service(
     *,
     workspace_resolver: Callable[[str], str] | None = None,
     zotero_settings: Callable[[], Mapping[str, Any]] | None = None,
+    legacy_store_directory: str | Path | None = None,
+    project_state_provider: Callable[[], Mapping[str, Any]] | None = None,
 ) -> KnowledgeService:
     return KnowledgeService(
         data_directory,
         workspace_resolver=workspace_resolver,
         zotero_settings=zotero_settings,
+        legacy_store_directory=legacy_store_directory,
+        project_state_provider=project_state_provider,
     )
 
 

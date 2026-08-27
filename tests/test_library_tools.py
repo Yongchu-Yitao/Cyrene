@@ -1,4 +1,5 @@
 from pathlib import Path
+import sqlite3
 import sys
 
 import pytest
@@ -16,6 +17,205 @@ async def test_knowledge_store_creates_missing_parent_directory(tmp_path):
     store = KnowledgeStore(db_path.parent)
 
     assert store.db_path.is_file()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_plugin_migrates_legacy_database_once(tmp_path):
+    from agent.plugin.plugin_impl.cyrene_knowledge.service import create_knowledge_service
+
+    legacy_store = tmp_path / "store"
+    legacy_store.mkdir()
+    source_file = tmp_path / "legacy-note.md"
+    source_file.write_text("Legacy knowledge body", encoding="utf-8")
+    legacy_db = legacy_store / "kb_default.db"
+    with sqlite3.connect(legacy_db) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE kb_documents (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL,
+                content_hash TEXT DEFAULT '', content_type TEXT DEFAULT '',
+                kind TEXT DEFAULT 'file', size INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'pending', source TEXT DEFAULT 'upload',
+                title TEXT DEFAULT '', summary TEXT DEFAULT '', tags TEXT DEFAULT '[]',
+                char_count INTEGER DEFAULT 0, chunk_count INTEGER DEFAULT 0,
+                entity_id TEXT, error TEXT DEFAULT '', created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL, indexed_at TEXT, metadata TEXT DEFAULT '{}'
+            );
+            CREATE TABLE kb_chunks (
+                id TEXT PRIMARY KEY, document_id TEXT NOT NULL, ordinal INTEGER NOT NULL,
+                content TEXT NOT NULL, char_start INTEGER DEFAULT 0,
+                char_end INTEGER DEFAULT 0, token_count INTEGER DEFAULT 0,
+                embedding BLOB, embedding_dim INTEGER DEFAULT 0,
+                embedding_model TEXT DEFAULT '', created_at TEXT NOT NULL
+            );
+            CREATE TABLE kb_relations (
+                id TEXT PRIMARY KEY, src_id TEXT NOT NULL, dst_id TEXT NOT NULL,
+                relation TEXT DEFAULT 'related', weight REAL DEFAULT 1.0,
+                source TEXT DEFAULT 'manual', created_at TEXT NOT NULL,
+                UNIQUE(src_id, dst_id, relation)
+            );
+            CREATE TABLE library_items (
+                id TEXT PRIMARY KEY, provider TEXT, provider_library_id TEXT,
+                provider_item_key TEXT, provider_version INTEGER, item_type TEXT,
+                title TEXT, tags TEXT, created_at TEXT, updated_at TEXT,
+                last_read_at TEXT, deleted_at TEXT
+            );
+            CREATE TABLE library_attachments (
+                id TEXT PRIMARY KEY, item_id TEXT, kb_document_id TEXT, title TEXT,
+                filename TEXT, path TEXT, content_type TEXT, content_hash TEXT,
+                provider TEXT, provider_library_id TEXT, provider_key TEXT,
+                created_at TEXT, updated_at TEXT
+            );
+            """
+        )
+        connection.execute(
+            "INSERT INTO kb_documents VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "doc-old",
+                source_file.name,
+                str(source_file),
+                "",
+                "text/markdown",
+                "file",
+                source_file.stat().st_size,
+                "indexed",
+                "upload",
+                "Migrated note",
+                "Old summary",
+                '["legacy"]',
+                21,
+                1,
+                None,
+                "",
+                "2025-01-01T00:00:00+00:00",
+                "2025-01-02T00:00:00+00:00",
+                "2025-01-02T00:00:00+00:00",
+                "{}",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO kb_chunks VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "chunk-old",
+                "doc-old",
+                0,
+                "Legacy knowledge body",
+                0,
+                21,
+                3,
+                None,
+                0,
+                "",
+                "2025-01-01T00:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO kb_documents VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "doc-paper",
+                source_file.name,
+                str(source_file),
+                "paper-hash",
+                "text/markdown",
+                "file",
+                source_file.stat().st_size,
+                "indexed",
+                "library",
+                "Paper attachment",
+                "",
+                "[]",
+                21,
+                1,
+                None,
+                "",
+                "2025-02-01T00:00:00+00:00",
+                "2025-02-02T00:00:00+00:00",
+                "2025-02-02T00:00:00+00:00",
+                "{}",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO kb_chunks VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "chunk-paper",
+                "doc-paper",
+                0,
+                "Indexed paper body",
+                0,
+                18,
+                3,
+                None,
+                0,
+                "",
+                "2025-02-01T00:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO library_items VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "paper-old",
+                "zotero",
+                "library-a",
+                "ITEM1",
+                7,
+                "journalArticle",
+                "Migrated paper",
+                '["research"]',
+                "2025-02-01T00:00:00+00:00",
+                "2025-02-02T00:00:00+00:00",
+                None,
+                None,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO library_attachments VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "attachment-old",
+                "paper-old",
+                "doc-paper",
+                "Paper attachment",
+                source_file.name,
+                str(source_file),
+                "text/markdown",
+                "paper-hash",
+                "zotero",
+                "library-a",
+                "ATT1",
+                "2025-02-01T00:00:00+00:00",
+                "2025-02-02T00:00:00+00:00",
+            ),
+        )
+
+    project_state = {
+        "activeProjectId": "project-a",
+        "projects": [{"id": "project-a", "dataKey": "default"}],
+    }
+    service = create_knowledge_service(
+        tmp_path / "data" / "plugin_data" / "cyrene_knowledge",
+        workspace_resolver=lambda workspace: workspace,
+        zotero_settings=lambda: {},
+        legacy_store_directory=legacy_store,
+        project_state_provider=lambda: project_state,
+    )
+
+    await service.startup()
+    first = await service.items("project-a")
+    await service.startup()
+    second = await service.items("project-a")
+
+    assert first["total"] == second["total"] == 2
+    migrated_note = next(item for item in first["items"] if item["title"] == "Migrated note")
+    item = await service.get_item("project-a", migrated_note["id"])
+    assert item is not None
+    assert item["title"] == "Migrated note"
+    assert item["tags"] == ["legacy"]
+    assert item["indexed_text"] == "Legacy knowledge body"
+    assert Path(item["attachments"][0]["path"]).read_text(encoding="utf-8") == "Legacy knowledge body"
+    migrated_paper = next(item for item in first["items"] if item["title"] == "Migrated paper")
+    paper = await service.get_item("project-a", migrated_paper["id"])
+    assert paper is not None
+    assert paper["tags"] == ["research"]
+    assert paper["indexed_text"] == "Indexed paper body"
 
 
 @pytest.fixture
