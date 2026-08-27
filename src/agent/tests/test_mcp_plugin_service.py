@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-from agent.plugin import PluginContext, PluginRegistry, PluginRuntime
-from agent.plugin import mcp_service as native_mcp
+from agent.plugin import PluginContext, PluginPack, PluginRegistry, PluginRuntime
+from agent.plugin.plugin_impl.cyrene_mcp import service as native_mcp
 
 
 class _FakeConnection:
@@ -114,6 +114,124 @@ async def test_mcp_server_is_a_dynamic_pack_through_toolbox(
     assert all(pack.id != "mcp.docs" for pack in registry.list_packs())
 
 
+@pytest.mark.asyncio
+async def test_mcp_raw_invoke_obeys_dynamic_pack_and_tool_activation(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    service = native_mcp.MCPPluginService(data_directory=tmp_path)
+    config = {
+        "name": "docs",
+        "transport": "stdio",
+        "command": "/opt/fake/mcp-docs",
+        "args": [],
+        "enabled": True,
+    }
+    monkeypatch.setattr(service, "configs", lambda **_kwargs: [dict(config)])
+    monkeypatch.setattr(native_mcp, "MCPServerConnection", _FakeConnection)
+    registry = PluginRegistry()
+    service.attach_registry(registry, authoritative=True)
+    await service.startup()
+
+    result = await service.invoke_raw("docs", "search", {"query": "Cyrene"})
+    assert result["content"][0]["text"] == "found:Cyrene"
+    renamed = registry.customize_tool(
+        "mcp__docs__search",
+        {"name": "renamed_mcp_docs_search"},
+    )
+    assert renamed is not None
+    assert (
+        await service.invoke_raw("docs", "search", {"query": "renamed"})
+    )["content"][0]["text"] == "found:renamed"
+
+    registry.set_pack_enabled("mcp.docs", False)
+    with pytest.raises(RuntimeError, match="disabled"):
+        await service.invoke_raw("docs", "search", {"query": "blocked"})
+
+    registry.set_pack_enabled("mcp.docs", True)
+    registry.set_plugin_enabled("renamed_mcp_docs_search", False)
+    with pytest.raises(RuntimeError, match="disabled"):
+        await service.invoke_raw("docs", "search", {"query": "blocked"})
+
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_mcp_raw_invoke_rejects_deleted_dynamic_tool(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    service = native_mcp.MCPPluginService(data_directory=tmp_path)
+    config = {
+        "name": "docs",
+        "transport": "stdio",
+        "command": "/opt/fake/mcp-docs",
+        "args": [],
+        "enabled": True,
+    }
+    monkeypatch.setattr(service, "configs", lambda **_kwargs: [dict(config)])
+    monkeypatch.setattr(native_mcp, "MCPServerConnection", _FakeConnection)
+    registry = PluginRegistry()
+    service.attach_registry(registry, authoritative=True)
+    await service.startup()
+
+    registry.customize_tool("mcp__docs__search", {"deleted": True})
+    with pytest.raises(RuntimeError, match="not registered"):
+        await service.invoke_raw("docs", "search", {"query": "blocked"})
+
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_mcp_registry_collision_marks_connected_server_as_error(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    service = native_mcp.MCPPluginService(data_directory=tmp_path)
+    config = {
+        "name": "docs",
+        "transport": "stdio",
+        "command": "/opt/fake/mcp-docs",
+        "args": [],
+        "enabled": True,
+    }
+    monkeypatch.setattr(service, "configs", lambda **_kwargs: [dict(config)])
+    monkeypatch.setattr(native_mcp, "MCPServerConnection", _FakeConnection)
+
+    conflicting_registry = PluginRegistry()
+    conflicting_registry.register_pack(
+        PluginPack(id="mcp.docs", description="occupied", plugins=()),
+        source="test",
+    )
+    healthy_registry = PluginRegistry()
+    # Keep this order: a later successful sync must not erase the earlier
+    # registry-specific collision from the service status.
+    service.attach_registry(conflicting_registry)
+    service.attach_registry(healthy_registry)
+
+    await service.startup()
+    status = service.server_status("docs")
+
+    assert status is not None
+    assert status["status"] == "error"
+    assert status["error"]
+    occupied = next(
+        pack
+        for pack in conflicting_registry.list_packs()
+        if pack.id == "mcp.docs"
+    )
+    assert occupied.description == "occupied"
+    assert healthy_registry.registered("mcp__docs__search").source == "mcp:docs"
+    with pytest.raises(RuntimeError, match="not registered"):
+        await service.invoke_raw("docs", "search", {"query": "blocked"})
+
+    await service.shutdown()
+    assert any(
+        pack.id == "mcp.docs" for pack in conflicting_registry.list_packs()
+    )
+    assert all(pack.id != "mcp.docs" for pack in healthy_registry.list_packs())
+
+
 def test_mcp_config_redaction_preserves_existing_secrets() -> None:
     existing = [
         {
@@ -128,3 +246,25 @@ def test_mcp_config_redaction_preserves_existing_secrets() -> None:
     assert redacted[0]["headers"] == {"Authorization": "[configured]"}
     merged = native_mcp.merge_redacted_mcp_configs(existing, redacted)
     assert merged[0]["headers"] == {"Authorization": "Bearer secret"}
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "https://example.test/mcp?api_key=secret",
+        "https://example.test/mcp#access-token",
+    ),
+)
+def test_mcp_config_rejects_url_embedded_secrets(url: str) -> None:
+    with pytest.raises(ValueError, match="use headers for authentication"):
+        native_mcp.validate_mcp_configs(
+            [
+                {
+                    "name": "remote",
+                    "transport": "streamable_http",
+                    "url": url,
+                    "headers": {},
+                    "enabled": True,
+                }
+            ]
+        )

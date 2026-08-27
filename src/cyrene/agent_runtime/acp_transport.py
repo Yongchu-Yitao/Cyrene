@@ -51,9 +51,8 @@ from cyrene.agent_runtime.errors import AgentRuntimeError
 logger = logging.getLogger(__name__)
 
 # A command is acceptable only when it is a bare executable name: no path
-# separators, no flags, no whitespace.  This mirrors the install-time
-# validation in ``cyrene.extensions.agent_runtime`` so the runtime never
-# depends on the caller having validated correctly.
+# separators, no flags, no whitespace. This mirrors the Extensions Plugin's
+# install-time contract so the runtime never trusts caller-side validation.
 _BARE_COMMAND_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 # Defaults (all overridable through the constructor / request kwargs).

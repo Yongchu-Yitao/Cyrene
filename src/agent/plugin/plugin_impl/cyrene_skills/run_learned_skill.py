@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import re as _re
 from typing import Any
 
 from agent.plugin import PluginContext
 from agent.plugin.execution import invoke_plugin
-from agent.plugin.native_runtime import run_context_value
+from agent.plugin.native_runtime import plugin_localized, run_context_value
 from .definitions import get_native_tool_def
-from cyrene.learning.replay import (
+from .replay import (
     AUTO_REPLAY_BLOCKED_TOOLS,
     HIGH_RISK_TOOLS,
     REPLAY_IGNORED_TOOLS,
@@ -18,6 +19,7 @@ from cyrene.learning.replay import (
 
 TOOL_NAME = "RunLearnedSkill"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
+logger = logging.getLogger(__name__)
 
 def _normalize_learned_step(
     step: dict[str, Any],
@@ -58,7 +60,11 @@ def _has_unsafe_step(steps: list[dict[str, Any]]) -> bool:
     return False
 
 
-def _validate_params(schema: list[dict[str, Any]], params: dict[str, Any]) -> list[str]:
+def _validate_params(
+    schema: list[dict[str, Any]],
+    params: dict[str, Any],
+    context: PluginContext,
+) -> list[str]:
     errors: list[str] = []
     for item in schema:
         name = str(item.get("parameter_name") or item.get("name") or "").strip()
@@ -66,19 +72,26 @@ def _validate_params(schema: list[dict[str, Any]], params: dict[str, Any]) -> li
             continue
         value = params.get(name)
         if bool(item.get("required")) and (value is None or value == ""):
-            errors.append(f"missing required parameter: {name}")
+            errors.append(
+                plugin_localized(
+                    context,
+                    "Missing required parameter: {name}",
+                    "缺少必填参数：{name}",
+                    name=name,
+                )
+            )
             continue
         if value is None:
             continue
         kind = str(item.get("type") or "text")
         if kind.startswith("list") and not isinstance(value, list):
-            errors.append(f"parameter {name} must be a list")
+            errors.append(plugin_localized(context, "Parameter {name} must be a list.", "参数 {name} 必须是列表。", name=name))
         elif kind == "boolean" and not isinstance(value, bool):
-            errors.append(f"parameter {name} must be a boolean")
+            errors.append(plugin_localized(context, "Parameter {name} must be a boolean.", "参数 {name} 必须是布尔值。", name=name))
         elif kind == "number" and not isinstance(value, (int, float)):
-            errors.append(f"parameter {name} must be a number")
+            errors.append(plugin_localized(context, "Parameter {name} must be a number.", "参数 {name} 必须是数字。", name=name))
         elif kind in {"text", "string", "path", "url", "date"} and not isinstance(value, str):
-            errors.append(f"parameter {name} must be a string")
+            errors.append(plugin_localized(context, "Parameter {name} must be a string.", "参数 {name} 必须是字符串。", name=name))
     return errors
 
 
@@ -112,21 +125,42 @@ def _resolve_value_template(value: Any, params: dict[str, Any]) -> Any:
 async def _execute_one(
     tool_name: str,
     resolved_args: dict[str, Any] | Any,
+    context: PluginContext,
 ) -> dict[str, Any]:
     if not str(tool_name or "").strip():
         return {
             "tool": "",
             "ok": False,
-            "output": "Learned step is missing its Plugin name.",
+            "output": plugin_localized(
+                context,
+                "The learned step is missing its Plugin name.",
+                "学习步骤缺少插件名称。",
+            ),
             "truncated": False,
         }
     if not isinstance(resolved_args, dict):
-        raw = f"Tool {tool_name} failed: resolved arguments must be a dict, got {type(resolved_args).__name__}"
+        raw = plugin_localized(
+            context,
+            "Plugin {tool_name} received invalid resolved arguments ({type_name}).",
+            "插件 {tool_name} 收到无效的解析参数（{type_name}）。",
+            tool_name=tool_name,
+            type_name=type(resolved_args).__name__,
+        )
         return {"tool": tool_name, "ok": False, "output": raw, "truncated": False}
     try:
         raw = await invoke_plugin(tool_name, resolved_args, review=True)
     except Exception as exc:
-        raw = f"Plugin {tool_name} failed: {exc}"
+        logger.error(
+            "Learned-skill Plugin step failed: %s",
+            tool_name,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        raw = plugin_localized(
+            context,
+            "Plugin {tool_name} failed.",
+            "插件 {tool_name} 执行失败。",
+            tool_name=tool_name,
+        )
         ok = False
     else:
         ok = True
@@ -157,12 +191,23 @@ async def _tool_run_learned_skill(
 ) -> str:
     name = str(args.get("name") or "").strip()
     if not name:
-        return json.dumps({"ok": False, "error": "name is required"}, ensure_ascii=False)
+        return json.dumps(
+            {
+                "ok": False,
+                "code": "skill_name_required",
+                "error": plugin_localized(
+                    context,
+                    "A skill name is required.",
+                    "必须提供技能名称。",
+                ),
+            },
+            ensure_ascii=False,
+        )
 
     params = dict(args.get("params") or {})
 
     try:
-        import cyrene.learning.orchestrator as learning
+        from . import orchestrator as learning
 
         explicit_skill_id = str(context.data.get("learning_skill_id") or "").strip()
         if explicit_skill_id:
@@ -175,17 +220,36 @@ async def _tool_run_learned_skill(
                 session_id=str(run_context_value(context, "session_id") or ""),
             )
         if skill is None:
-            return json.dumps({"ok": False, "error": f"no active learned skill named '{name}'"}, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "ok": False,
+                    "code": "learned_skill_not_found",
+                    "error": plugin_localized(
+                        context,
+                        "No active learned skill is named {name}.",
+                        "没有名为 {name} 的已启用学习技能。",
+                        name=name,
+                    ),
+                },
+                ensure_ascii=False,
+            )
 
         schema = skill.get("input_schema") or []
         params = _params_with_defaults(schema, params)
-        param_errors = _validate_params(schema, params)
+        param_errors = _validate_params(schema, params, context)
         if param_errors:
             await learning.record_manual_skill_run(
                 skill["skill_id"], int(skill["version"]),
                 execution_status="fallback",
             )
-            return json.dumps({"ok": False, "error": "; ".join(param_errors)}, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "ok": False,
+                    "code": "invalid_skill_parameters",
+                    "error": "; ".join(param_errors),
+                },
+                ensure_ascii=False,
+            )
 
         if _has_unsafe_step(skill["steps"]):
             await learning.record_manual_skill_run(
@@ -193,7 +257,15 @@ async def _tool_run_learned_skill(
                 execution_status="fallback",
             )
             return json.dumps(
-                {"ok": False, "error": "skill contains high-risk steps that cannot be auto-executed"},
+                {
+                    "ok": False,
+                    "code": "skill_requires_manual_approval",
+                    "error": plugin_localized(
+                        context,
+                        "This skill contains high-risk steps that cannot be run automatically.",
+                        "此技能包含高风险步骤，无法自动运行。",
+                    ),
+                },
                 ensure_ascii=False,
             )
 
@@ -209,14 +281,14 @@ async def _tool_run_learned_skill(
             if isinstance(items, list) and items:
                 for item_args in items:
                     resolved = _resolve_value_template(item_args, params)
-                    step_result = await _execute_one(tool_name, resolved)
+                    step_result = await _execute_one(tool_name, resolved, context)
                     all_ok = all_ok and step_result["ok"]
                     results.append(step_result)
                     if not step_result["ok"]:
                         break
             else:
                 resolved_args = _resolve_value_template(args_template, params)
-                step_result = await _execute_one(tool_name, resolved_args)
+                step_result = await _execute_one(tool_name, resolved_args, context)
                 all_ok = all_ok and step_result["ok"]
                 results.append(step_result)
             if not all_ok:
@@ -237,7 +309,22 @@ async def _tool_run_learned_skill(
             "results": results,
         }, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"ok": False, "error": f"skill execution failed: {exc}"}, ensure_ascii=False)
+        logger.error(
+            "Learned-skill execution failed",
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        return json.dumps(
+            {
+                "ok": False,
+                "code": "learned_skill_execution_failed",
+                "error": plugin_localized(
+                    context,
+                    "The learned skill could not be run.",
+                    "无法运行学习技能。",
+                ),
+            },
+            ensure_ascii=False,
+        )
 
 
 handler = _tool_run_learned_skill

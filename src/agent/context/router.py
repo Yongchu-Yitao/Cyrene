@@ -129,6 +129,7 @@ class ContextStoreRouter:
             "context.router",
             "initialize",
             phase="completed",
+            level=logging.DEBUG,
             directory=self.directory,
             max_open_trees=self._max_open_trees,
             token_limit=self._token_limit,
@@ -183,12 +184,47 @@ class ContextStoreRouter:
                 "context.router",
                 "lookup_tree",
                 phase="failed",
-                level=logging.WARNING,
+                level=logging.DEBUG,
                 tree_id=tree_id,
                 reason="not_found",
             )
             raise TreeNotFoundError(f"context tree not found: {tree_id}")
         return row
+
+    def existing_tree_ids(self, tree_ids: Iterable[str]) -> frozenset[str]:
+        """Resolve candidate tree ids with batched index-only queries."""
+
+        candidates = tuple(
+            dict.fromkeys(
+                normalized
+                for tree_id in tree_ids
+                if (normalized := str(tree_id or "").strip())
+            )
+        )
+        if not candidates:
+            return frozenset()
+        found: set[str] = set()
+        with self._condition:
+            self._ensure_open()
+            for start in range(0, len(candidates), 500):
+                batch = candidates[start : start + 500]
+                placeholders = ",".join("?" for _ in batch)
+                rows = self._index.execute(
+                    f"SELECT tree_id FROM context_tree_index "
+                    f"WHERE tree_id IN ({placeholders})",
+                    batch,
+                ).fetchall()
+                found.update(str(row["tree_id"]) for row in rows)
+        log_operation(
+            logger,
+            "context.router",
+            "existing_tree_ids",
+            phase="completed",
+            level=logging.DEBUG,
+            candidate_count=len(candidates),
+            existing_count=len(found),
+        )
+        return frozenset(found)
 
     def tree_database_path(self, tree_id: str) -> Path:
         with self._condition:
@@ -200,6 +236,7 @@ class ContextStoreRouter:
             "context.router",
             "tree_database_path",
             phase="completed",
+            level=logging.DEBUG,
             tree_id=tree_id,
             database=result,
         )
@@ -241,6 +278,7 @@ class ContextStoreRouter:
             "context.router",
             "hooks_for",
             phase="completed",
+            level=logging.DEBUG,
             tree_id=tree_id,
             root_id=hooks.root_id,
         )
@@ -273,6 +311,7 @@ class ContextStoreRouter:
                 "context.router",
                 "open_store",
                 phase="cache_hit",
+                level=logging.DEBUG,
                 tree_id=tree_id,
                 users=cached.users,
             )
@@ -295,6 +334,7 @@ class ContextStoreRouter:
             "context.router",
             "open_store",
             phase="completed",
+            level=logging.DEBUG,
             tree_id=tree_id,
             database=store.database,
             cache_size=len(self._cache),
@@ -475,6 +515,7 @@ class ContextStoreRouter:
             "context.router",
             "get_tree",
             phase="completed",
+            level=logging.DEBUG,
             tree_id=tree.id,
             root_id=tree.root_id,
         )
@@ -746,6 +787,7 @@ class ContextStoreRouter:
             "context.router",
             "close",
             phase="completed",
+            level=logging.DEBUG,
             directory=self.directory,
             closed_hook_sets=len(hook_sets),
             closed_idle_trees=len(idle_ids),

@@ -39,6 +39,8 @@ from .plugin import (
     PluginCall,
     PluginCallResult,
     PluginContext,
+    PluginLoadFailure,
+    PluginPack,
     PluginRegistry,
     PluginRuntime,
     PluginSetupContext,
@@ -49,10 +51,19 @@ from .plugin.core_impl import (
     PermissionReviewPlugin,
 )
 from .prompt import DEFAULT_SYSTEM_PROMPT
+from cyrene.localization import app_language, localized
 
 
 logger = logging.getLogger(__name__)
 _DEFAULT_INITIAL_ROOT = object()
+_REQUIRED_PRODUCT_SESSION_PACK_IDS = frozenset({
+    "cyrene_composer_context",
+    "cyrene_context",
+})
+
+
+def _l(en: str, zh: str, **values: Any) -> str:
+    return localized(en, zh, **values)
 
 AgentEventType = Literal[
     "session.state",
@@ -94,6 +105,45 @@ class AgentSessionEvent:
 AgentEventListener = Callable[[AgentSessionEvent], None]
 
 
+class _SetupHookTracker:
+    """Record Hooks a pack setup creates or rebinds without constraining it."""
+
+    def __init__(self, hooks: Any) -> None:
+        self._hooks = hooks
+        self.touched: set[str] = set()
+
+    def register(self, *args: Any, **kwargs: Any) -> Any:
+        before = {hook.id for hook in self._hooks.list()}
+        unsubscribe = self._hooks.register(*args, **kwargs)
+        self.touched.update(
+            hook.id for hook in self._hooks.list() if hook.id not in before
+        )
+        return unsubscribe
+
+    def bind_plugin(self, plugin_id: str, *args: Any, **kwargs: Any) -> Any:
+        result = self._hooks.bind_plugin(plugin_id, *args, **kwargs)
+        self.touched.update(
+            hook.id
+            for hook in self._hooks.list()
+            if hook.plugin_id == str(plugin_id)
+        )
+        return result
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._hooks, name)
+
+
+@dataclass(slots=True)
+class _SessionPackAttachment:
+    pack: PluginPack
+    source: str
+    setup_fingerprint: tuple[Any, ...]
+    hooks: set[str]
+    previous_services: dict[str, tuple[bool, Any]]
+    provided_services: dict[str, Any]
+    driver: Any = None
+
+
 class AgentSession:
     """One tree whose passive trigger nodes advance the Agent state machine."""
 
@@ -105,7 +155,7 @@ class AgentSession:
         *,
         model_plugin: str = "MiniMax",
         max_model_calls: int = 12,
-        tree_id: str = "demo",
+        tree_id: str = "agent-session",
         registry: PluginRegistry | None = None,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
         host_context: Mapping[str, Any] | None = None,
@@ -114,7 +164,6 @@ class AgentSession:
         initial_root_value: Any = _DEFAULT_INITIAL_ROOT,
         agent_id: str = "main",
         parent_agent_id: str = "",
-        subagent_manager: Any = None,
         load_plugins: bool = True,
         permission_user_request: str | None = None,
     ) -> None:
@@ -169,8 +218,37 @@ class AgentSession:
                 self.registry,
                 self.runtime,
             )
+        self._plugin_reconcile_lock = threading.RLock()
+        self._plugin_pack_attachments: dict[str, _SessionPackAttachment] = {}
+        self._plugin_setup_failures: dict[str, str] = {}
+        self._plugin_load_failures: tuple[PluginLoadFailure, ...] = tuple(failures)
+        self._required_session_pack_ids: set[str] = {
+            pack.id
+            for pack in self.registry.list_packs()
+            if pack.setup is not None and bool(pack.metadata.get("required"))
+        }
+        required_product_failure = any(
+            failure.path.name in _REQUIRED_PRODUCT_SESSION_PACK_IDS
+            for failure in failures
+        )
+        if load_plugins and (
+            required_product_failure
+            or (self.plugin_directory / "cyrene_context").exists()
+        ):
+            # These are product infrastructure even when an import failure or
+            # a partially missing canonical directory leaves no PluginPack
+            # metadata to inspect. Isolated embedders with no Cyrene packs are
+            # not forced to install product UI infrastructure.
+            self._required_session_pack_ids.update(
+                _REQUIRED_PRODUCT_SESSION_PACK_IDS
+            )
+        self._plugin_sync_token: tuple[Any, ...] | None = None
+        self._authoritative_directory_revision: int | None = None
+        self._authoritative_customization_revision: int | None = None
+        self._host_service_names: set[str] = set()
+        self._capture_application_host_services()
         self.store = ContextStoreRouter(self.data_directory / "context")
-        self._tree_id_hint = str(tree_id or "demo")
+        self._tree_id_hint = str(tree_id or "agent-session")
         self._state_lock = threading.RLock()
         self._context_event_deferral = threading.local()
         self._event_lock = threading.RLock()
@@ -178,7 +256,7 @@ class AgentSession:
         self._event_listeners: dict[int, AgentEventListener] = {}
         self._next_event_listener_id = 1
         self._status = "idle"
-        self._detail = "Ready"
+        self._detail = _l("Ready", "就绪")
         self._leaf_id = "root"
         self._current_user_request = ""
         self._current_run_id = ""
@@ -186,8 +264,8 @@ class AgentSession:
         self._cancelled_run_ids: set[str] = set()
         self._model_calls = 0
         self._max_model_calls = max(1, int(max_model_calls))
-        self._subagent_manager = subagent_manager
-        self._owns_subagent_manager = False
+        self._session_driver: Any = None
+        self._owns_session_driver = False
         self._closed = False
         self._transition_condition = threading.Condition(threading.RLock())
         self._transition_pending: set[str] = set()
@@ -240,7 +318,6 @@ class AgentSession:
         root_node = self.store.get_node(self.tree.id, self.tree.root_id)
         self._initial_root_value = deepcopy(root_node.value)
         if isinstance(self._initial_root_value, dict):
-            self._initial_root_value.pop("_cyrene_subagents", None)
             if self._system_prompt:
                 self._initial_root_value["role"] = "system"
                 self._initial_root_value["content"] = self._system_prompt
@@ -301,8 +378,8 @@ class AgentSession:
                     current_root,
                 )
                 self._initial_root_value = deepcopy(current_root)
-                self._initial_root_value.pop("_cyrene_subagents", None)
         self._attach_plugin_packs()
+        self.hooks.set_before_dispatch(self.reconcile_plugins)
         nodes = self.store.get_subtree(self.tree.id, self.tree.root_id)
         self._event_sequence = sum(
             self._event_for_node(node, sequence=0) is not None for node in nodes
@@ -312,11 +389,6 @@ class AgentSession:
             tree_id=self.tree.id,
         )
         self._restore()
-        if self._subagent_manager is None and self.agent_id == "main":
-            from .subagent import SubagentManager
-
-            self._subagent_manager = SubagentManager(self)
-            self._owns_subagent_manager = True
         log_operation(
             logger,
             "agent.session",
@@ -334,8 +406,8 @@ class AgentSession:
             restored_run_id=self._current_run_id,
         )
         self._transition_thread.start()
-        if self._owns_subagent_manager:
-            self._subagent_manager.restore()
+        if self._owns_session_driver:
+            self._session_driver.attach()
 
     @property
     def current_user_request(self) -> str:
@@ -373,8 +445,10 @@ class AgentSession:
         return deepcopy(self._initial_root_value)
 
     @property
-    def subagent_manager(self) -> Any:
-        return self._subagent_manager
+    def session_driver(self) -> Any:
+        """Return the optional generic coordinator contributed by a Plugin pack."""
+
+        return self._session_driver
 
     @property
     def plugin_context_data(self) -> dict[str, Any]:
@@ -388,8 +462,32 @@ class AgentSession:
 
         return dict(self._plugin_service_values)
 
+    def active_plugin_services(self) -> dict[str, Any]:
+        """Return reconciled services after enforcing required session packs."""
+
+        return self._plugin_services()
+
+    async def build_session_context(
+        self,
+        details: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Build Plugin SessionStart context for non-transcript model calls."""
+
+        self.reconcile_plugins()
+        self._ensure_required_session_packs()
+        return await self.hooks.session_start(dict(details or {}))
+
     def _plugin_data(self, *, run_id: str = "", **details: Any) -> dict[str, Any]:
         data = dict(self._plugin_context_data)
+        raw_run_context = data.get("run_context")
+        inherited_language = (
+            raw_run_context.get("language")
+            if isinstance(raw_run_context, Mapping)
+            else ""
+        )
+        data["language"] = app_language(
+            data.get("language") or inherited_language
+        )
         caller = "main_agent"
         if self.agent_id != "main":
             caller = f"subagent_{self.agent_id}"
@@ -398,20 +496,221 @@ class AgentSession:
             data["caller"] = caller
         if run_id:
             data["run_id"] = run_id
-        raw_run_context = data.get("run_context")
         if isinstance(raw_run_context, Mapping):
             run_context = dict(raw_run_context)
             run_context["agent_id"] = self.agent_id
             run_context["caller"] = caller
             if run_id:
                 run_context["round_id"] = run_id
+            run_context["language"] = data["language"]
             data["run_context"] = run_context
         data.update(details)
         return data
 
     def _attach_plugin_packs(self) -> None:
-        """Attach session services and Hooks contributed by loaded Plugin packs."""
+        """Attach the initially available session contributions."""
 
+        self.reconcile_plugins(force=True)
+
+    def _application_host(self) -> Any | None:
+        from .plugin import active_plugin_application_host
+
+        host = active_plugin_application_host()
+        if host is None:
+            return None
+        if Path(host.plugin_directory).resolve() != self.plugin_directory:
+            return None
+        return host
+
+    def _capture_application_host_services(self) -> None:
+        host = self._application_host()
+        if host is None:
+            return
+        for name, value in host.services.items():
+            if self._plugin_service_values.get(name) is value:
+                self._host_service_names.add(name)
+        self._authoritative_directory_revision = host.registry.directory_revision
+        self._authoritative_customization_revision = host.registry.customizations.revision
+
+    def _sync_application_host_services(self, host: Any | None) -> None:
+        if host is None:
+            return
+        active = host.active_services
+        owned = {
+            name
+            for attachment in self._plugin_pack_attachments.values()
+            for name in attachment.provided_services
+        }
+        names = self._host_service_names | set(active)
+        self._host_service_names.update(active)
+        for name in names:
+            if name in owned:
+                continue
+            if name in active:
+                self._plugin_service_values[name] = active[name]
+            else:
+                self._plugin_service_values.pop(name, None)
+
+    def _failed_pack_sources(self, host: Any | None) -> set[str]:
+        failures = list(self._plugin_load_failures)
+        if host is not None:
+            failures.extend(host.load_failures)
+        return {str(item.path.resolve()) for item in failures}
+
+    def _application_pack_state_token(self, host: Any | None) -> tuple[Any, ...]:
+        """Include process lifecycle state in lazy session reconciliation."""
+
+        if host is None:
+            return ("application_host", "unavailable")
+        values = []
+        for pack in self.registry.list_packs():
+            if pack.application_setup is None:
+                continue
+            values.append(
+                (
+                    pack.id,
+                    host.pack_operational(pack.id),
+                    host.pack_restart_required(pack.id),
+                    host.startup_failures.get(pack.id, ""),
+                )
+            )
+        return tuple(values)
+
+    @staticmethod
+    def _application_pack_error(pack: PluginPack, host: Any | None) -> str:
+        if pack.application_setup is None:
+            return ""
+        if host is None:
+            # A session can be embedded without Cyrene's process-level
+            # application host (for example in a worker, test harness, or a
+            # standalone Agent integration).  ``application_setup`` is an
+            # additional surface; it must not prevent the pack's
+            # session-scoped ``setup`` from wiring Hooks and services there.
+            # When a host exists its lifecycle state is authoritative and is
+            # still enforced below.
+            return ""
+        if host.pack_restart_required(pack.id):
+            return "application contribution changed and requires restart"
+        startup_error = host.startup_failures.get(pack.id, "")
+        if startup_error:
+            return f"application startup failed: {startup_error}"
+        if not host.pack_operational(pack.id):
+            return "application contribution is not operational"
+        return ""
+
+    def _remember_required_session_packs(self, host: Any | None) -> None:
+        for pack in self.registry.list_packs():
+            if pack.setup is not None and bool(pack.metadata.get("required")):
+                self._required_session_pack_ids.add(pack.id)
+        failures = list(self._plugin_load_failures)
+        if host is not None:
+            failures.extend(host.load_failures)
+        if any(
+            failure.path.name in _REQUIRED_PRODUCT_SESSION_PACK_IDS
+            for failure in failures
+        ):
+            self._required_session_pack_ids.update(
+                _REQUIRED_PRODUCT_SESSION_PACK_IDS.intersection(
+                    failure.path.name for failure in failures
+                )
+            )
+
+    def _required_session_pack_error(self, host: Any | None = None) -> str:
+        missing = sorted(
+            pack_id
+            for pack_id in self._required_session_pack_ids
+            if pack_id not in self._plugin_pack_attachments
+        )
+        if not missing:
+            return ""
+        failures = list(self._plugin_load_failures)
+        if host is not None:
+            failures.extend(host.load_failures)
+        load_errors = {
+            failure.path.name: str(failure.error or "load failed")
+            for failure in failures
+        }
+        details = []
+        for pack_id in missing:
+            reason = self._plugin_setup_failures.get(pack_id)
+            if not reason:
+                reason = load_errors.get(pack_id, "setup is not attached")
+            details.append(f"{pack_id} ({reason})")
+        return ", ".join(details)
+
+    def _ensure_required_session_packs(self) -> None:
+        error = self._required_session_pack_error(self._application_host())
+        if error:
+            raise RuntimeError(
+                "Required Plugin session setup unavailable: " + error
+            )
+
+    @staticmethod
+    def _pack_setup_fingerprint(pack: PluginPack, source: str) -> tuple[Any, ...]:
+        """Keep no-op directory refreshes from restarting session services."""
+
+        path = Path(source)
+        try:
+            if path.is_dir():
+                files = tuple(sorted(path.rglob("*.py")))
+            elif path.is_file():
+                files = (path,)
+            else:
+                files = ()
+            if files:
+                return (
+                    "files",
+                    tuple(
+                        (
+                            str(item.relative_to(path) if path.is_dir() else item.name),
+                            item.stat().st_mtime_ns,
+                            item.stat().st_size,
+                        )
+                        for item in files
+                    ),
+                )
+        except OSError:
+            pass
+        return ("callable", id(pack.setup))
+
+    def _detach_session_pack(self, pack_id: str, *, reason: str) -> None:
+        attachment = self._plugin_pack_attachments.pop(pack_id, None)
+        if attachment is None:
+            return
+        for hook_id in attachment.hooks:
+            self.hooks.unregister(hook_id)
+        for name, provided in attachment.provided_services.items():
+            if self._plugin_service_values.get(name) is not provided:
+                continue
+            existed, previous = attachment.previous_services[name]
+            if existed:
+                self._plugin_service_values[name] = previous
+            else:
+                self._plugin_service_values.pop(name, None)
+        driver = attachment.driver
+        if driver is not None:
+            request_cancel = getattr(driver, "request_cancel_all", None)
+            if callable(request_cancel):
+                try:
+                    request_cancel(reason)
+                except Exception:
+                    logger.exception("Failed to cancel session driver for %s", pack_id)
+            close = getattr(driver, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    logger.exception("Failed to close session driver for %s", pack_id)
+            if self._session_driver is driver:
+                self._session_driver = None
+                self._owns_session_driver = False
+
+    def _attach_session_pack(self, pack: PluginPack, source: str) -> None:
+        if "agent_session" in self._plugin_service_values:
+            raise ValueError("Plugin service name is reserved: agent_session")
+        before = dict(self._plugin_service_values)
+        tracker = _SetupHookTracker(self.hooks)
+        self._plugin_service_values["agent_session"] = self
         context = PluginSetupContext(
             data_directory=self.data_directory,
             plugin_directory=self.plugin_directory,
@@ -419,29 +718,152 @@ class AgentSession:
             tree=self.store,
             tree_id=self.tree.id,
             root_id=self.tree.root_id,
-            hooks=self.hooks,
+            hooks=tracker,
             data=self._plugin_data(),
             services=self._plugin_service_values,
             agent_id=self.agent_id,
             parent_agent_id=self.parent_agent_id,
         )
-        for pack in self.registry.list_packs():
-            if pack.setup is None or not self.registry.pack_enabled(pack.id):
-                continue
-            try:
-                pack.setup(context)
-            except Exception:
-                logger.exception(
-                    "Failed to attach Plugin pack %s to Agent session %s",
-                    pack.id,
-                    self.tree.id,
-                )
+        try:
+            assert pack.setup is not None
+            pack.setup(context)
+            driver = self._plugin_service_values.pop("session_driver", None)
+            changed = {
+                name: value
+                for name, value in self._plugin_service_values.items()
+                if name != "agent_session" and before.get(name) is not value
+            }
+            previous = {
+                name: (name in before, before.get(name)) for name in changed
+            }
+            attachment = _SessionPackAttachment(
+                pack=pack,
+                source=source,
+                setup_fingerprint=self._pack_setup_fingerprint(pack, source),
+                hooks=set(tracker.touched),
+                previous_services=previous,
+                provided_services=changed,
+                driver=driver,
+            )
+            self._plugin_pack_attachments[pack.id] = attachment
+            if driver is not None:
+                if self._session_driver is not None:
+                    raise ValueError("Plugin session_driver service already exists")
+                self._session_driver = driver
+                self._owns_session_driver = True
+                attach = getattr(driver, "attach", None)
+                if callable(attach) and self._transition_thread.is_alive():
+                    attach()
+        except Exception as exc:
+            self._plugin_setup_failures[pack.id] = str(exc)
+            self._plugin_service_values.pop("agent_session", None)
+            attachment = self._plugin_pack_attachments.get(pack.id)
+            if attachment is not None:
+                self._detach_session_pack(pack.id, reason="plugin_setup_failed")
+            else:
+                for hook_id in tracker.touched:
+                    self.hooks.unregister(hook_id)
+                for name in tuple(self._plugin_service_values):
+                    if name not in before:
+                        self._plugin_service_values.pop(name, None)
+                self._plugin_service_values.update(before)
+            logger.exception(
+                "Failed to attach Plugin pack %s to Agent session %s",
+                pack.id,
+                self.tree.id,
+            )
+        else:
+            self._plugin_setup_failures.pop(pack.id, None)
+            self._plugin_service_values.pop("agent_session", None)
+
+    def reconcile_plugins(self, *, force: bool = False) -> None:
+        """Synchronize live setup Hooks/services with shared Plugin state."""
+
+        with self._plugin_reconcile_lock:
+            if self._closed:
+                return
+            host = self._application_host()
+            host_token = host.registry.sync_token if host is not None else None
+            failure_token = tuple(
+                sorted(self._failed_pack_sources(host))
+            )
+            application_token = self._application_pack_state_token(host)
+            token = (
+                self.registry.sync_token,
+                host_token,
+                failure_token,
+                application_token,
+            )
+            if not force and token == self._plugin_sync_token:
+                return
+
+            if host is not None:
+                authoritative_directory = host.registry.directory_revision
+                if (
+                    host.registry is not self.registry
+                    and self._authoritative_directory_revision is not None
+                    and authoritative_directory != self._authoritative_directory_revision
+                ):
+                    self._plugin_load_failures = tuple(
+                        self.registry.refresh_directory(self.plugin_directory)
+                    )
+                self._authoritative_directory_revision = authoritative_directory
+                customization_revision = host.registry.customizations.revision
+            else:
+                customization_revision = self.registry.customizations.revision
+            if customization_revision != self._authoritative_customization_revision:
+                self.registry.refresh_customizations()
+                self._authoritative_customization_revision = customization_revision
+
+            self._remember_required_session_packs(host)
+            failed_sources = self._failed_pack_sources(host)
+            desired: dict[str, tuple[PluginPack, str]] = {}
+            for pack in self.registry.list_packs():
+                if pack.setup is None:
+                    continue
+                try:
+                    source = self.registry.pack_source(pack.id)
+                    enabled = self.registry.pack_enabled(pack.id)
+                except Exception:
+                    continue
+                application_error = self._application_pack_error(pack, host)
+                if application_error:
+                    self._plugin_setup_failures[pack.id] = application_error
+                if (
+                    enabled
+                    and not application_error
+                    and str(Path(source).resolve()) not in failed_sources
+                ):
+                    desired[pack.id] = (pack, source)
+
+            for pack_id, attachment in tuple(self._plugin_pack_attachments.items()):
+                next_value = desired.get(pack_id)
+                if next_value is None or (
+                    attachment.source != next_value[1]
+                    or attachment.setup_fingerprint
+                    != self._pack_setup_fingerprint(*next_value)
+                ):
+                    self._detach_session_pack(
+                        pack_id,
+                        reason="plugin_disabled_or_reloaded",
+                    )
+
+            self._sync_application_host_services(host)
+            for pack_id, (pack, source) in desired.items():
+                if pack_id not in self._plugin_pack_attachments:
+                    self._attach_session_pack(pack, source)
+
+            self._plugin_sync_token = (
+                self.registry.sync_token,
+                host.registry.sync_token if host is not None else None,
+                tuple(sorted(self._failed_pack_sources(host))),
+                self._application_pack_state_token(host),
+            )
 
     def _plugin_services(self) -> dict[str, Any]:
-        services = dict(self._plugin_service_values)
-        if self._subagent_manager is not None:
-            services["subagents"] = self._subagent_manager
-        return services
+        self.reconcile_plugins()
+        self._ensure_required_session_packs()
+        return dict(self._plugin_service_values)
 
     def subscribe(
         self,
@@ -867,21 +1289,8 @@ class AgentSession:
                 if isinstance(payload.get("allow_custom"), bool)
                 else True
             )
-            if tool_name == "enter_plan_mode" or kind == "plan_confirmation":
-                kind = "plan_confirmation"
-                text = text or "计划已准备好，是否同意并开始执行？"
-                raw_options = raw_options if isinstance(raw_options, list) and raw_options else [
-                    "同意并开始",
-                    "拒绝",
-                ]
-            elif tool_name == "browser_request_takeover" or payload.get("takeover") is True:
-                kind = kind or "browser_takeover"
-                text = str(arguments.get("reason") or text).strip() or "请在浏览器窗口完成操作，然后确认继续。"
-                raw_options = raw_options if isinstance(raw_options, list) and raw_options else ["我已完成"]
-                allow_custom = False
-            else:
-                kind = kind or "clarification"
-                text = text or "请补充继续处理所需的信息。"
+            kind = kind or "clarification"
+            text = text or "请补充继续处理所需的信息。"
             question: dict[str, Any] = {
                 "status": "awaiting_user",
                 "id": str(payload.get("question_id") or payload.get("id") or "").strip()
@@ -1081,7 +1490,10 @@ class AgentSession:
                     )
                     failure = self._mount_assistant(
                         node.id,
-                        f"Agent transition failed: {exc}",
+                        _l(
+                            "The Agent transition failed.",
+                            "Agent 状态转换失败。",
+                        ),
                         error=True,
                         caused_by=self._transition_key(node),
                         run_id=run_id,
@@ -1107,7 +1519,7 @@ class AgentSession:
                             ):
                                 cancelled_state = self._set_state_locked(
                                     "idle",
-                                    "Cancelled",
+                                    _l("Cancelled", "已取消"),
                                 )
                             else:
                                 cancelled_state = None
@@ -1195,7 +1607,9 @@ class AgentSession:
         value = leaf.value if isinstance(leaf.value, Mapping) else {}
         if value.get("cancelled") is True:
             self._current_user_request = ""
-            self._set_state("idle", "Restored cancelled run", leaf_id=leaf.id)
+            self._set_state(
+                "idle", _l("Restored cancelled run", "已恢复取消的运行"), leaf_id=leaf.id
+            )
             log_operation(
                 logger,
                 "agent.session",
@@ -1213,7 +1627,7 @@ class AgentSession:
         if pending is not None:
             self._set_state(
                 "awaiting_user",
-                str(pending.get("text") or "Waiting for user answer"),
+                str(pending.get("text") or _l("Waiting for user answer", "正在等待用户答复")),
                 leaf_id=leaf.id,
             )
             log_operation(
@@ -1235,7 +1649,10 @@ class AgentSession:
             if should_resume and self._transition_assistant(leaf) is None:
                 self._set_state(
                     "queued",
-                    "Resuming model after context compaction",
+                    _l(
+                        "Resuming model after context compaction",
+                        "正在压缩上下文后恢复模型",
+                    ),
                     leaf_id=leaf.id,
                 )
                 self._enqueue_transition("advance", leaf)
@@ -1244,7 +1661,7 @@ class AgentSession:
                 self._current_user_request = ""
                 self._set_state(
                     "idle",
-                    "Restored compacted context",
+                    _l("Restored compacted context", "已恢复压缩后的上下文"),
                     leaf_id=leaf.id,
                 )
                 outcome = "compacted_idle"
@@ -1263,7 +1680,9 @@ class AgentSession:
             return
         if value.get("role") == "assistant" and value.get("tool_calls"):
             if self._batch_result_node(leaf) is None:
-                self._set_state("queued", "Resuming tool batch", leaf_id=leaf.id)
+                self._set_state(
+                    "queued", _l("Resuming tool batch", "正在恢复工具批次"), leaf_id=leaf.id
+                )
                 self._enqueue_transition("tools", leaf)
                 log_operation(
                     logger,
@@ -1281,7 +1700,7 @@ class AgentSession:
         if value.get("role") == "context" and value.get("trigger_model") is False:
             self._set_state(
                 "queued",
-                "Resuming context mount",
+                _l("Resuming context mount", "正在恢复上下文挂载"),
                 leaf_id=leaf.id,
             )
             source_id = str(value.get("source_node_id") or "")
@@ -1316,7 +1735,7 @@ class AgentSession:
             if has_context_provider:
                 self._set_state(
                     "queued",
-                    "Resuming context mount",
+                    _l("Resuming context mount", "正在恢复上下文挂载"),
                     leaf_id=leaf.id,
                 )
                 self.store.update_node(self.tree.id, leaf.id, dict(value))
@@ -1342,7 +1761,7 @@ class AgentSession:
         ):
             self._set_state(
                 "queued",
-                "Resuming SessionEnd Hooks",
+                _l("Resuming SessionEnd hooks", "正在恢复 SessionEnd Hook"),
                 leaf_id=leaf.id,
             )
             self._enqueue_transition("finish", leaf)
@@ -1360,7 +1779,11 @@ class AgentSession:
             )
             return
         if value.get("trigger_model") is True and self._transition_assistant(leaf) is None:
-            self._set_state("queued", "Resuming model transition", leaf_id=leaf.id)
+            self._set_state(
+                "queued",
+                _l("Resuming model transition", "正在恢复模型状态转换"),
+                leaf_id=leaf.id,
+            )
             self._enqueue_transition("advance", leaf)
             log_operation(
                 logger,
@@ -1375,7 +1798,7 @@ class AgentSession:
                 model_calls=self._model_calls,
             )
             return
-        self._set_state("idle", "Restored", leaf_id=leaf.id)
+        self._set_state("idle", _l("Restored", "已恢复"), leaf_id=leaf.id)
         if value.get("role") == "assistant":
             self._current_user_request = ""
         log_operation(
@@ -1400,12 +1823,14 @@ class AgentSession:
         node_id: str | None = None,
         permission_user_request: str | None = None,
     ) -> ContextNode:
+        self.reconcile_plugins()
+        self._ensure_required_session_packs()
         content = str(text or "").strip()
         if not content:
-            raise ValueError("message cannot be empty")
+            raise ValueError(_l("Message cannot be empty.", "消息不能为空。"))
         normalized_run_id = str(run_id or f"run_{uuid4().hex}").strip()
         if not normalized_run_id:
-            raise ValueError("run_id cannot be empty")
+            raise ValueError(_l("run_id cannot be empty.", "run_id 不能为空。"))
         if self._permission_user_request is not None:
             authorization_request = self._permission_user_request
         elif permission_user_request is not None:
@@ -1423,12 +1848,15 @@ class AgentSession:
         has_session_context = bool(self.hooks.list(SESSION_START))
         with self._state_lock:
             if self._closed:
-                raise RuntimeError("the Agent session is closed")
+                raise RuntimeError(_l("The Agent session is closed.", "Agent 会话已关闭。"))
             if self._status != "idle":
-                raise RuntimeError("the Agent is still processing the previous message")
+                raise RuntimeError(_l(
+                    "The Agent is still processing the previous message.",
+                    "Agent 仍在处理上一条消息。",
+                ))
             parent_id = self._leaf_id
             self._status = "queued"
-            self._detail = "User context mounted"
+            self._detail = _l("User context mounted", "用户上下文已挂载")
             self._current_user_request = content
             self._current_run_id = normalized_run_id
             self._run_permission_user_request = authorization_request
@@ -1475,9 +1903,13 @@ class AgentSession:
                 parent_id=parent_id,
                 error=exc,
             )
-            self._set_state("idle", "Mount failed")
+            self._set_state("idle", _l("Mount failed", "挂载失败"))
             raise
-        self._set_state("queued", "Waiting for ContextChange Hook", leaf_id=node.id)
+        self._set_state(
+            "queued",
+            _l("Waiting for ContextChange hook", "正在等待 ContextChange Hook"),
+            leaf_id=node.id,
+        )
         log_operation(
             logger,
             "agent.session",
@@ -1493,23 +1925,36 @@ class AgentSession:
     def answer(self, question_id: str, answer: str) -> ContextNode:
         """Resolve one durable pending Plugin result and continue the same run."""
 
+        self.reconcile_plugins()
         normalized_question_id = str(question_id or "").strip()
         normalized_answer = str(answer or "").strip()
         if not normalized_question_id or not normalized_answer:
-            raise ValueError("question_id and answer are required")
+            raise ValueError(_l(
+                "question_id and answer are required.",
+                "必须提供 question_id 和 answer。",
+            ))
         with self._linearized_context_commit():
             if self._closed:
-                raise RuntimeError("the Agent session is closed")
+                raise RuntimeError(_l("The Agent session is closed.", "Agent 会话已关闭。"))
             if self._status != "awaiting_user":
-                raise RuntimeError("the Agent session is not awaiting a user answer")
+                raise RuntimeError(_l(
+                    "The Agent session is not awaiting a user answer.",
+                    "Agent 会话当前并未等待用户答复。",
+                ))
             node = self.store.get_node(self.tree.id, self._leaf_id)
             value = dict(node.value) if isinstance(node.value, Mapping) else {}
             pending = self._pending_from_node(node)
             if pending is None or str(pending.get("id") or "") != normalized_question_id:
-                raise ValueError("no matching pending question")
+                raise ValueError(_l(
+                    "No matching pending question was found.",
+                    "未找到匹配的待处理问题。",
+                ))
             run_id = str(value.get("run_id") or self._current_run_id)
             if not run_id or run_id in self._cancelled_run_ids:
-                raise RuntimeError("the pending Agent run was cancelled")
+                raise RuntimeError(_l(
+                    "The pending Agent run was cancelled.",
+                    "待处理的 Agent 运行已取消。",
+                ))
 
             matched = False
             updated_results: list[Any] = []
@@ -1543,7 +1988,10 @@ class AgentSession:
                     matched = True
                 updated_results.append(stored)
             if not matched:
-                raise RuntimeError("the pending tool result is no longer available")
+                raise RuntimeError(_l(
+                    "The pending tool result is no longer available.",
+                    "待处理的工具结果已不可用。",
+                ))
 
             value["results"] = updated_results
             value["pending_question"] = {
@@ -1556,7 +2004,10 @@ class AgentSession:
             node = self.store.update_node(self.tree.id, node.id, value)
             answered_state = self._set_state_locked(
                 "queued",
-                "User answer mounted; waiting for model",
+                _l(
+                    "User answer mounted; waiting for model",
+                    "用户答复已挂载，正在等待模型",
+                ),
                 leaf_id=node.id,
             )
         self._emit_event(
@@ -1592,7 +2043,7 @@ class AgentSession:
             if self._closed or run_id in self._cancelled_run_ids:
                 return
         if value.get("session_start_complete") is not True:
-            session_context = await self.hooks.session_start(
+            session_context = await self.build_session_context(
                 {
                     "run_id": run_id,
                     "agent_id": self.agent_id,
@@ -1694,6 +2145,7 @@ class AgentSession:
             return 0
 
     def _model_tool_tokens(self) -> int:
+        self.reconcile_plugins()
         self.registry.refresh_customizations()
         self._model_tools = self.registry.direct_tool_definitions(agent_id=self.agent_id)
         if not self._model_tools:
@@ -1934,15 +2386,21 @@ class AgentSession:
             transitions_pending = bool(self._transition_pending)
         with self._state_lock:
             if self._closed:
-                raise RuntimeError("the Agent session is closed")
+                raise RuntimeError(_l("The Agent session is closed.", "Agent 会话已关闭。"))
             if self._status == "awaiting_user":
-                raise RuntimeError("cannot compact while awaiting a user answer")
+                raise RuntimeError(_l(
+                    "Cannot compact while awaiting a user answer.",
+                    "等待用户答复时无法压缩上下文。",
+                ))
             if self._status != "idle" or transitions_pending:
-                raise RuntimeError("manual context compaction requires an idle Agent")
+                raise RuntimeError(_l(
+                    "Manual context compaction requires an idle Agent.",
+                    "手动压缩上下文要求 Agent 处于空闲状态。",
+                ))
             leaf = self.store.get_node(self.tree.id, self._leaf_id)
             compacting_state = self._set_state_locked(
                 "compacting",
-                "Compacting durable context",
+                _l("Compacting durable context", "正在压缩持久上下文"),
             )
         self._emit_state_snapshot(compacting_state)
         node: ContextNode | None = None
@@ -1958,7 +2416,9 @@ class AgentSession:
             with self._state_lock:
                 idle_state = self._set_state_locked(
                     "idle",
-                    "Context compacted" if node else "Ready",
+                    _l("Context compacted", "上下文已压缩")
+                    if node
+                    else _l("Ready", "就绪"),
                     leaf_id=(node.id if node else leaf.id),
                 )
                 self._current_user_request = ""
@@ -1979,11 +2439,17 @@ class AgentSession:
             transitions_pending = bool(self._transition_pending)
         with self._state_lock:
             if self._closed:
-                raise RuntimeError("the Agent session is closed")
+                raise RuntimeError(_l("The Agent session is closed.", "Agent 会话已关闭。"))
             if self._status == "awaiting_user":
-                raise RuntimeError("cannot retry while awaiting a user answer")
+                raise RuntimeError(_l(
+                    "Cannot retry while awaiting a user answer.",
+                    "等待用户答复时无法重试。",
+                ))
             if self._status != "idle" or transitions_pending:
-                raise RuntimeError("retry requires an idle Agent")
+                raise RuntimeError(_l(
+                    "Retry requires an idle Agent.",
+                    "重试要求 Agent 处于空闲状态。",
+                ))
             path = self.store.get_path(self.tree.id, self._leaf_id)
             latest_user = next(
                 (
@@ -1995,12 +2461,15 @@ class AgentSession:
                 None,
             )
             if latest_user is None or latest_user.parent_id is None:
-                raise RuntimeError("the conversation has no user turn to retry")
+                raise RuntimeError(_l(
+                    "The conversation has no user turn to retry.",
+                    "会话中没有可重试的用户轮次。",
+                ))
             previous_run_id = str(latest_user.value.get("run_id") or "")
             parent_id = str(latest_user.parent_id)
             state = self._set_state_locked(
                 "idle",
-                "Ready to retry",
+                _l("Ready to retry", "已准备重试"),
                 leaf_id=parent_id,
             )
             self._current_user_request = ""
@@ -2045,6 +2514,8 @@ class AgentSession:
             else:
                 await self._finish_success(existing)
             return
+        self.reconcile_plugins()
+        self._ensure_required_session_packs()
         trigger_value = (
             trigger.value if isinstance(trigger.value, Mapping) else {}
         )
@@ -2083,9 +2554,17 @@ class AgentSession:
                 return
             model_state = self._set_state_locked(
                 "model",
-                f"Calling {self.model_plugin} ({count}/{self._max_model_calls})",
+                _l(
+                    "Calling {model} ({count}/{limit})",
+                    "正在调用 {model}（{count}/{limit}）",
+                    model=self.model_plugin,
+                    count=count,
+                    limit=self._max_model_calls,
+                ),
             )
         self._emit_state_snapshot(model_state)
+        self.reconcile_plugins()
+        self._ensure_required_session_packs()
         self.registry.refresh_customizations()
         self._model_tools = self.registry.direct_tool_definitions(agent_id=self.agent_id)
         arguments = {
@@ -2111,9 +2590,10 @@ class AgentSession:
         if self._is_cancelled(run_id):
             return
         if not result.success or not isinstance(result.value, Mapping):
+            logger.error("Model Plugin call failed: %s", result.error)
             failure = self._mount_assistant(
                 trigger.id,
-                result.error or "Model call failed",
+                _l("The model call failed.", "模型调用失败。"),
                 error=True,
                 caused_by=self._transition_key(trigger),
                 run_id=run_id,
@@ -2164,7 +2644,9 @@ class AgentSession:
             )
             assistant_state = self._set_state_locked(
                 "tools" if calls else "finalizing",
-                "Executing tools" if calls else "Running SessionEnd Hooks",
+                _l("Executing tools", "正在执行工具")
+                if calls
+                else _l("Running SessionEnd hooks", "正在运行 SessionEnd Hook"),
                 leaf_id=assistant.id,
             )
         self._emit_state_snapshot(assistant_state)
@@ -2252,7 +2734,9 @@ class AgentSession:
                 assistant = current
             completed_state = self._set_state_locked(
                 "idle",
-                "Complete" if terminal_status == "completed" else "Failed",
+                _l("Complete", "已完成")
+                if terminal_status == "completed"
+                else _l("Failed", "失败"),
                 leaf_id=assistant.id,
             )
             self._current_user_request = ""
@@ -2310,13 +2794,19 @@ class AgentSession:
                 if pending is not None:
                     restored_state = self._set_state_locked(
                         "awaiting_user",
-                        str(pending.get("text") or "Waiting for user answer"),
+                        str(
+                            pending.get("text")
+                            or _l("Waiting for user answer", "正在等待用户答复")
+                        ),
                         leaf_id=existing_result.id,
                     )
                 else:
                     restored_state = self._set_state_locked(
                         "model",
-                        "Tool results restored; waiting for model",
+                        _l(
+                            "Tool results restored; waiting for model",
+                            "工具结果已恢复，正在等待模型",
+                        ),
                         leaf_id=existing_result.id,
                     )
             self._emit_state_snapshot(restored_state)
@@ -2340,7 +2830,10 @@ class AgentSession:
         if not plugin_calls:
             failure = self._mount_assistant(
                 assistant.id,
-                "The model returned no valid tool calls.",
+                _l(
+                    "The model returned no valid tool calls.",
+                    "模型未返回有效的工具调用。",
+                ),
                 error=True,
                 caused_by=str(value.get("batch_key") or ""),
                 run_id=run_id,
@@ -2363,7 +2856,7 @@ class AgentSession:
                 return
             tools_state = self._set_state_locked(
                 "tools",
-                "Reviewing and executing tools",
+                _l("Reviewing and executing tools", "正在审核并执行工具"),
                 leaf_id=assistant.id,
             )
         self._emit_state_snapshot(tools_state)
@@ -2425,13 +2918,19 @@ class AgentSession:
             if pending_question is not None:
                 tool_state = self._set_state_locked(
                     "awaiting_user",
-                    str(pending_question.get("text") or "Waiting for user answer"),
+                    str(
+                        pending_question.get("text")
+                        or _l("Waiting for user answer", "正在等待用户答复")
+                    ),
                     leaf_id=tool_node.id,
                 )
             else:
                 tool_state = self._set_state_locked(
                     "model",
-                    "Tool results mounted; waiting for model",
+                    _l(
+                        "Tool results mounted; waiting for model",
+                        "工具结果已挂载，正在等待模型",
+                    ),
                     leaf_id=tool_node.id,
                 )
         self._emit_state_snapshot(tool_state)
@@ -2473,13 +2972,13 @@ class AgentSession:
                 node = existing
             terminal_state = self._set_state_locked(
                 "finalizing",
-                "Running SessionEnd Hooks",
+                _l("Running SessionEnd hooks", "正在运行 SessionEnd Hook"),
                 leaf_id=node.id,
             )
         self._emit_state_snapshot(terminal_state)
         return node
 
-    def _mark_leaf_waiting_for_subagents(self) -> None:
+    def _mark_leaf_waiting_for_driver(self) -> None:
         with self._state_lock:
             leaf_id = self._leaf_id
         node = self.store.get_node(self.tree.id, leaf_id)
@@ -2491,7 +2990,9 @@ class AgentSession:
         ):
             return
         value["intermediate"] = True
-        value["waiting_for_subagents"] = True
+        metadata = getattr(self._session_driver, "waiting_metadata", {})
+        if isinstance(metadata, Mapping):
+            value.update(deepcopy(dict(metadata)))
         self.store.update_node(self.tree.id, leaf_id, value)
 
     def _messages(self, node_id: str) -> list[dict[str, Any]]:
@@ -2628,12 +3129,27 @@ class AgentSession:
                             ),
                         }
                     )
-                    from .plugin.mcp_content import build_mcp_observation_content
-
-                    observation = build_mcp_observation_content(
-                        result.get("value"),
-                        tool_name=str(result.get("name") or ""),
+                    mcp_service = self._plugin_services().get("mcp")
+                    builder = getattr(
+                        mcp_service,
+                        "build_observation_content",
+                        None,
                     )
+                    observation = (
+                        builder(
+                            result.get("value"),
+                            tool_name=str(result.get("name") or ""),
+                        )
+                        if callable(builder)
+                        else None
+                    )
+                    materialize = getattr(
+                        mcp_service,
+                        "materialize_content_block",
+                        None,
+                    )
+                    if observation and callable(materialize):
+                        observation = [materialize(block) for block in observation]
                     if observation:
                         observations.append(
                             {
@@ -2709,7 +3225,11 @@ class AgentSession:
             ),
         )
         if not result.success or not isinstance(result.value, Mapping):
-            raise RuntimeError(result.error or "permission model failed")
+            logger.error("Permission model failed: %s", result.error)
+            raise RuntimeError(_l(
+                "The permission model failed.",
+                "权限模型调用失败。",
+            ))
         self._persist_auxiliary_model_usage(assistant_id, result.value)
         decisions = [
             call
@@ -2717,12 +3237,16 @@ class AgentSession:
             if isinstance(call, Mapping) and call.get("name") == "decide"
         ]
         if len(decisions) != 1:
-            raise RuntimeError(
-                f"permission model must call decide exactly once; got {len(decisions)}"
-            )
+            raise RuntimeError(_l(
+                "The permission model returned an invalid decision count.",
+                "权限模型返回了无效的决策数量。",
+            ))
         arguments = decisions[0].get("arguments")
         if not isinstance(arguments, Mapping):
-            raise RuntimeError("permission model returned invalid decide arguments")
+            raise RuntimeError(_l(
+                "The permission model returned invalid decision arguments.",
+                "权限模型返回了无效的决策参数。",
+            ))
         return dict(arguments)
 
     def request_cancel(self, reason: str = "user_cancelled") -> bool:
@@ -2743,10 +3267,10 @@ class AgentSession:
                     reason=normalized_reason,
                 )
                 return False
-        manager = self._subagent_manager if self._owns_subagent_manager else None
-        children_active = bool(manager is not None and manager.has_active)
+        driver = self._session_driver if self._owns_session_driver else None
+        children_active = bool(driver is not None and driver.has_active)
         if children_active:
-            manager.request_cancel_all(normalized_reason)
+            driver.request_cancel_all(normalized_reason)
         with self._linearized_context_commit():
             if (
                 self._closed
@@ -2788,7 +3312,7 @@ class AgentSession:
             self._cancelled_run_ids.add(run_id)
             cancelling_state = self._set_state_locked(
                 "cancelling",
-                normalized_reason,
+                _l("Cancelling", "正在取消"),
                 leaf_id=cancelled.id,
             )
             self._current_user_request = ""
@@ -2818,7 +3342,7 @@ class AgentSession:
             loop.call_soon_threadsafe(task.cancel)
             active_task_cancelled = True
         elif not has_pending:
-            self._set_state("idle", "Cancelled", leaf_id=cancelled.id)
+            self._set_state("idle", _l("Cancelled", "已取消"), leaf_id=cancelled.id)
             active_task_cancelled = False
         else:
             active_task_cancelled = False
@@ -2859,14 +3383,14 @@ class AgentSession:
                     and self._status != "idle"
                     and bool(self._current_run_id)
                 )
-            manager = self._subagent_manager if self._owns_subagent_manager else None
+            driver = self._session_driver if self._owns_session_driver else None
             changed = self.request_cancel(reason)
             if not changed:
                 op.finish(changed=False)
                 return False
 
-            if manager is not None:
-                await manager.cancel_all(reason)
+            if driver is not None:
+                await driver.cancel_all(reason)
 
             async def settle() -> None:
                 await self.hooks.stop(
@@ -2883,7 +3407,7 @@ class AgentSession:
                         settle(),
                         timeout=max(0.0, float(timeout)),
                     )
-                self._set_state("idle", "Cancelled")
+                self._set_state("idle", _l("Cancelled", "已取消"))
             op.finish(changed=True, status="idle", leaf_id=self._leaf_id)
             return True
 
@@ -2938,13 +3462,23 @@ class AgentSession:
             run_id = self._current_run_id
         with self._event_lock:
             event_sequence = self._event_sequence
-        pending_subagents = bool(
-            self._owns_subagent_manager
-            and self._subagent_manager is not None
-            and self._subagent_manager.has_pending_work
+        pending_driver = bool(
+            self._owns_session_driver
+            and self._session_driver is not None
+            and self._session_driver.has_pending_work
         )
-        public_status = "running" if status == "idle" and pending_subagents else status
-        public_detail = "Waiting for subagents" if pending_subagents else detail
+        public_status = "running" if status == "idle" and pending_driver else status
+        public_detail = (
+            str(
+                getattr(
+                    self._session_driver,
+                    "pending_detail",
+                    _l("Background work", "后台工作"),
+                )
+            )
+            if pending_driver
+            else detail
+        )
         result = {
             "tree_id": self.tree.id,
             "root_id": self.tree.root_id,
@@ -2967,8 +3501,10 @@ class AgentSession:
                 for node in nodes
             ],
         }
-        if self._owns_subagent_manager and self._subagent_manager is not None:
-            result["subagents"] = self._subagent_manager.query()
+        if self._owns_session_driver and self._session_driver is not None:
+            snapshot = self._session_driver.session_snapshot()
+            if isinstance(snapshot, Mapping):
+                result.update(deepcopy(dict(snapshot)))
         log_operation(
             logger,
             "agent.session",
@@ -3012,12 +3548,12 @@ class AgentSession:
                         )
                         return
                     if (
-                        self._owns_subagent_manager
-                        and self._subagent_manager is not None
-                        and self._subagent_manager.has_pending_work
+                        self._owns_session_driver
+                        and self._session_driver is not None
+                        and self._session_driver.has_pending_work
                     ):
-                        self._mark_leaf_waiting_for_subagents()
-                        if await self._subagent_manager.drive():
+                        self._mark_leaf_waiting_for_driver()
+                        if await self._session_driver.drive():
                             continue
                     op.finish(attempts=attempt, status=self._status, leaf_id=self._leaf_id)
                     return
@@ -3056,8 +3592,8 @@ class AgentSession:
             self._transition_condition.notify_all()
         if self._transition_thread is not threading.current_thread():
             self._transition_thread.join()
-        if self._owns_subagent_manager and self._subagent_manager is not None:
-            self._subagent_manager.close()
+        if self._owns_session_driver and self._session_driver is not None:
+            self._session_driver.close()
         self._unsubscribe_context_events()
         self.store.close()
         log_operation(
@@ -3070,14 +3606,9 @@ class AgentSession:
             status=self._status,
         )
 
-
-AgentTreeSession = AgentSession
-
-
 __all__ = [
     "AgentEventListener",
     "AgentSession",
     "AgentSessionEvent",
-    "AgentTreeSession",
     "DEFAULT_SYSTEM_PROMPT",
 ]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 from agent.plugin import PluginContext
+from agent.plugin.native_runtime import plugin_localized
 
 TOOL_NAME = "browser_tab_new"
 TOOL_DEF = {
@@ -21,14 +22,33 @@ TOOL_DEF = {
 }
 
 
-async def _tool_browser_tab_new(args: dict[str, Any], _context: PluginContext) -> str:
-    from cyrene.browser import new_tab
+async def _tool_browser_tab_new(args: dict[str, Any], context: PluginContext) -> str:
+    from .runtime import new_tab
 
     result = await new_tab(str(args.get("url") or "about:blank"))
     if result.get("ok") is False:
-        return f"New browser tab failed: {result.get('error', 'unknown error')}"
+        from .browser_output import browser_error_text
+
+        return plugin_localized(
+            context,
+            "New browser tab failed: {error}",
+            "新建浏览器标签页失败：{error}",
+            error=browser_error_text(
+                result,
+                context,
+                "The browser tab could not be created.",
+                "无法创建浏览器标签页。",
+            ),
+        )
     active = result.get("activeTab") if isinstance(result.get("activeTab"), dict) else {}
-    return f"Opened browser tab {active.get('id', '—')}.\nURL: {active.get('url', 'about:blank')}\nTitle: {active.get('title', '—')}"
+    return plugin_localized(
+        context,
+        "Opened browser tab {tab}.\nURL: {url}\nTitle: {title}",
+        "已打开浏览器标签页 {tab}。\n网址：{url}\n标题：{title}",
+        tab=active.get("id", "—"),
+        url=active.get("url", "about:blank"),
+        title=active.get("title", "—"),
+    )
 
 
 handler = _tool_browser_tab_new

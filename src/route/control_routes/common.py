@@ -8,7 +8,7 @@ from typing import Any, Awaitable
 
 from fastapi.responses import FileResponse, JSONResponse
 
-from cyrene.runtime.remote_commands import public_remote_event
+from cyrene.workbench.control_event_projection import public_run_event
 from cyrene.workbench.control_services import ControlServiceError
 from route.control_schemas import (
     ControlChatDetail,
@@ -145,7 +145,7 @@ def task_detail(raw: dict[str, Any]) -> ControlTaskDetail:
 def public_event(raw: dict[str, Any]) -> dict[str, Any] | None:
     if str(raw.get("type") or "") in {"reasoning_delta", "reasoning_done", "reasoning_start"}:
         return None
-    return public_remote_event(raw)
+    return public_run_event(raw)
 
 
 def run_event(raw: dict[str, Any]) -> ControlRunEvent:

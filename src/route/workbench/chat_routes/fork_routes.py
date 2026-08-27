@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from cyrene.workbench import project_runtime
 from cyrene.workbench.chat_events import publish_chat_changed
 from route import schemas as api_models
+from route.errors import localized_error_response
 from route.workbench.chat_routes.context import ChatRouteContext
 
 logger = logging.getLogger(__name__)
@@ -19,25 +20,36 @@ def _build_fork_chat(service, chat: dict[str, Any], message_id: str, new_content
     from cyrene.agent_runtime.builtin import normalize_agent_binding
 
     if not normalize_agent_binding(chat.get("agent") if isinstance(chat.get("agent"), dict) else None).is_builtin:
-        return JSONResponse(
-            {
-                "error": "This Agent does not support conversation forks",
-                "code": "capability_missing",
-                "failureKind": "capability_missing",
-            },
-            status_code=409,
+        return localized_error_response(
+            "This Agent does not support conversation forks.",
+            "此 Agent 不支持分叉对话。",
+            409,
+            "capability_missing",
+            failureKind="capability_missing",
         )
     messages = chat.get("messages") if isinstance(chat.get("messages"), list) else []
     if not messages:
-        return JSONResponse({"error": "chat has no messages"}, status_code=400)
+        return localized_error_response(
+            "This chat has no messages to fork.",
+            "此对话没有可供分叉的消息。",
+            400,
+            "chat_has_no_messages",
+        )
     edit_index = next(
         (index for index, entry in enumerate(messages) if str(entry.get("id") or "") == message_id),
         -1,
     )
     if edit_index < 0:
-        return JSONResponse({"error": "message not found"}, status_code=404)
+        return localized_error_response(
+            "Message not found.", "未找到消息。", 404, "message_not_found"
+        )
     if str(messages[edit_index].get("role") or "") != "user":
-        return JSONResponse({"error": "can only edit user messages"}, status_code=400)
+        return localized_error_response(
+            "Only user messages can be edited when forking a chat.",
+            "分叉对话时只能编辑用户消息。",
+            400,
+            "fork_message_role_invalid",
+        )
 
     user_ordinal = sum(1 for entry in messages[: edit_index + 1] if str(entry.get("role") or "") == "user")
     project_id = str(chat.get("projectId") or "")
@@ -54,6 +66,10 @@ def _build_fork_chat(service, chat: dict[str, Any], message_id: str, new_content
         new_chat["workspaceOverride"] = str(chat["workspaceOverride"])
     new_chat["soulActive"] = service.chat_soul_active(chat)
     new_chat["workspaceActive"] = service.chat_workspace_active(chat)
+    new_chat["contextActivations"] = dict(
+        chat.get("contextActivations") or {}
+    )
+    new_chat["remoteDeviceIds"] = list(chat.get("remoteDeviceIds") or ())
     if chat.get("reasoningEffort"):
         new_chat["reasoningEffort"] = str(chat["reasoningEffort"])
     new_chat["forkMessage"] = new_content.replace("\n", " ").strip()[:80]
@@ -103,13 +119,25 @@ def register_fork_routes(router: APIRouter, context: ChatRouteContext) -> None:
         message_id = str(body.get("messageId") or "").strip()
         new_content = str(body.get("content") or "").strip()
         if not message_id:
-            return JSONResponse({"error": "messageId is required"}, status_code=400)
+            return localized_error_response(
+                "A message ID is required.",
+                "缺少消息 ID。",
+                400,
+                "message_id_required",
+            )
         if not new_content:
-            return JSONResponse({"error": "content is required"}, status_code=400)
+            return localized_error_response(
+                "Message content is required.",
+                "请输入消息内容。",
+                400,
+                "content_required",
+            )
         payload = await asyncio.to_thread(_read_chats_store)
         chat = _find_chat(payload, chat_id)
         if not chat:
-            return JSONResponse({"error": "chat not found"}, status_code=404)
+            return localized_error_response(
+                "Chat not found.", "未找到对话。", 404, "chat_not_found"
+            )
         project_id = str(chat.get("projectId") or "")
         fork_result = _build_fork_chat(service, chat, message_id, new_content)
         if isinstance(fork_result, JSONResponse):
@@ -124,18 +152,17 @@ def register_fork_routes(router: APIRouter, context: ChatRouteContext) -> None:
                 new_chat_id,
                 user_ordinal=user_ordinal,
             )
-        except Exception as exc:
+        except Exception:
             logger.exception(
                 "Failed to fork ContextTree %s from %s",
                 new_chat_id,
                 chat_id,
             )
-            return JSONResponse(
-                {
-                    "error": str(exc) or "conversation context could not be forked",
-                    "code": "context_fork_failed",
-                },
-                status_code=409,
+            return localized_error_response(
+                "The conversation context could not be forked.",
+                "无法分叉对话上下文。",
+                409,
+                "context_fork_failed",
             )
 
         payload.setdefault("chats", []).insert(0, new_chat)

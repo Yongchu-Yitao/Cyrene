@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from cyrene.config import ASSISTANT_NAME, WORKSPACE_DIR, cyrene_dir
+from cyrene.localization import app_language, localized
 from .archive_format import (
     parse_archive_meta,
     parse_archive_sections,
@@ -84,6 +85,7 @@ def archive_session_exchange(
     workspace_dir: str | Path | None = None,
     session_title: str = "",
     round_id: str = "",
+    language: str = "",
 ) -> Path | None:
     """Append one user/assistant exchange to ``conversations/<session_id>.md``.
 
@@ -105,7 +107,10 @@ def archive_session_exchange(
     filepath = directory / f"{_safe_session_filename(sid)}.md"
     now = datetime.now().astimezone()
     timestamp = now.strftime("%Y-%m-%d %H:%M:%S %Z").strip() or now.strftime("%Y-%m-%d %H:%M:%S")
-    user_text = str(user_message or "").strip() or "（无文本）"
+    language = app_language(language)
+    user_text = str(user_message or "").strip() or localized(
+        "(no text)", "（无文本）", language=language
+    )
     assistant_text = str(assistant_response or "").strip()
     round_block = f"{round_marker}\n\n" if round_marker else ""
     entry = (
@@ -296,7 +301,11 @@ async def search_conversations(keyword: str, path: str | None = None) -> str:
         files = sorted(search_root.glob("**/*.md"))
     except Exception:
         logger.exception("Failed to list conversation files")
-        return "Error searching conversations."
+        return localized(
+            "Error searching conversations.",
+            "搜索对话时出错。",
+            language=app_language(),
+        )
 
     for filepath in files:
         try:
@@ -314,7 +323,11 @@ async def search_conversations(keyword: str, path: str | None = None) -> str:
         if len(matches) >= 200:
             break
 
-    return "\n".join(matches) if matches else "No matches found."
+    return "\n".join(matches) if matches else localized(
+        "No matches found.",
+        "未找到匹配项。",
+        language=app_language(),
+    )
 
 
 def _split_session_entry_blocks(content: str) -> list[str]:

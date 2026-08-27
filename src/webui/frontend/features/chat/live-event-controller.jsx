@@ -6,9 +6,14 @@ function wbcForwardRemoteJobUpdate(event) {
     window.dispatchEvent(new CustomEvent("cyrene:remote-job-update", { detail: event }));
     var feedback = workbenchServices.feedback();
     if (feedback && typeof feedback.showToast === "function") {
+      var status = String(event.status || "completed");
+      var statusLabel = wbcT(
+        "settings.remoteOutcome." + status,
+        status.replace(/_/g, " ").replace(/^./, function (character) { return character.toUpperCase(); })
+      );
       feedback.showToast(
         wbcT("workbenchChat.remoteJobFinished", "Remote job {jobId}: {status}", {
-          jobId: event.job_id || "", status: event.status || "completed",
+          jobId: event.job_id || "", status: statusLabel,
         }),
         event.status === "completed" ? "success" : "info"
       );

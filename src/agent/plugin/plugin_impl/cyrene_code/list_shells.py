@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.plugin import PluginContext
-from agent.plugin.native_runtime import json_result
+from agent.plugin.native_runtime import json_result, plugin_localized
 
 from .definitions import get_native_tool_def
 from .services import terminal_service
@@ -31,11 +31,19 @@ async def _tool_list_shells(
         if str(item.get("id") or "") not in bound_ids
     )
     if not shells:
-        return "No terminals are bound to this conversation or visible in the current split."
+        return plugin_localized(
+            context,
+            "No terminals are bound to this conversation or visible in the current split.",
+            "当前会话未绑定终端，当前分屏中也没有可见终端。",
+        )
     return json_result([
         {
             "shell_id": item.get("id", ""),
-            "title": item.get("title", "independent shell"),
+            "title": item.get("title") or plugin_localized(
+                context,
+                "Independent terminal",
+                "独立终端",
+            ),
             "cwd": (
                 item.get("remoteCwd", "") or item.get("cwd", ".")
                 if item.get("connectionKind") == "ssh"

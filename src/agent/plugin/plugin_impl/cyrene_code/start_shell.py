@@ -8,6 +8,7 @@ from agent.plugin import PluginContext
 from agent.plugin.native_runtime import (
     guard_shell_command_workspace_write,
     json_result,
+    plugin_localized,
     resolve_tool_path,
     run_context_value,
 )
@@ -24,12 +25,27 @@ async def _tool_start_shell(
     context: PluginContext,
 ) -> str:
     cwd_arg = str(args.get("cwd", ".") or ".")
-    cwd_path = resolve_tool_path(cwd_arg, context)
+    try:
+        cwd_path = resolve_tool_path(cwd_arg, context)
+    except (RuntimeError, ValueError):
+        raise ValueError(plugin_localized(
+            context,
+            "The requested working directory is not available in this workspace.",
+            "请求的工作目录在当前工作区中不可用。",
+        )) from None
     cwd = str(cwd_path)
     command = str(args.get("command", "") or "")
     ssh_target = str(args.get("ssh_target", "") or "").strip()
     if command:
-        guard_shell_command_workspace_write(command, context)
+        try:
+            guard_shell_command_workspace_write(command, context)
+        except ValueError:
+            raise ValueError(plugin_localized(
+                context,
+                "The command was blocked because its workspace write targets "
+                "could not be verified safely.",
+                "该命令已被阻止，因为无法安全确认其写入目标位于工作区内。",
+            )) from None
     wake_on_exit = bool(args.get("wake_on_exit", False))
     wake_note = str(args.get("wake_note", "") or "")
     created = await terminal_service(context).create(
@@ -61,7 +77,11 @@ async def _tool_start_shell(
             if snap.get("connectionKind") == "ssh"
             else snap.get("cwd", ".")
         ),
-        "title": snap.get("title", "Terminal"),
+        "title": snap.get("title") or plugin_localized(
+            context,
+            "Terminal",
+            "终端",
+        ),
         "owner_chat_id": snap.get("ownerChatId", ""),
         "wake_on_exit": bool(snap.get("wakeId")),
         "wake_id": snap.get("wakeId", ""),
@@ -75,15 +95,22 @@ async def _tool_start_shell(
     }
     if result["wake_on_exit"]:
         if result["execution_mode"] == "one_shot":
-            result["wake_hint"] = (
+            result["wake_hint"] = plugin_localized(
+                context,
                 "The command is running as a one-shot background job. Do not wait or poll. "
                 "Finish this turn; an internal wake will remind you to read this terminal "
-                "with code.shell.read when it completes."
+                "with code.shell.read when it completes.",
+                "该命令正在作为一次性后台任务运行。请勿等待或轮询。结束当前轮次即可；"
+                "任务完成后，内部唤醒会提醒你使用 code.shell.read 读取此终端。",
             )
         else:
-            result["wake_hint"] = (
+            result["wake_hint"] = plugin_localized(
+                context,
                 "The terminal is running in the background. Do not wait or poll. "
-                "It remains in the conversation terminal list and wakes this chat only when its process exits."
+                "It remains in the conversation terminal list and wakes this chat only "
+                "when its process exits.",
+                "终端正在后台运行。请勿等待或轮询。它会保留在当前会话的终端列表中，"
+                "并仅在进程退出时唤醒此聊天。",
             )
     return json_result(result)
 

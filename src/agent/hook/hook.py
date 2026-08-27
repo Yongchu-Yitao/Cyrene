@@ -60,7 +60,7 @@ class HookEvent:
 
 HookPlugin: TypeAlias = Callable[[HookEvent], Any | Awaitable[Any]]
 HookMatcher: TypeAlias = Callable[[HookEvent], bool]
-FailurePolicy: TypeAlias = Literal["open", "block"]
+FailurePolicy: TypeAlias = Literal["open", "block", "closed"]
 
 
 @dataclass(frozen=True, slots=True)

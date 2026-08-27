@@ -59,7 +59,8 @@ html[data-theme="dark"] .wbc-page {
   /* Keep the three primary chat cards on one opaque surface. A translucent
      fill resolves differently over each track and creates a visible tint
      shift between the rail, conversation, and detail panel. */
-  --wbc-panel-surface: #171819;
+  --wbc-panel-surface: #17181c;
+  --wb-floating-rail-bg: var(--wbc-panel-surface);
 }
 
 .wbc-page.wbc-nav-collapsed {

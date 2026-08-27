@@ -1515,12 +1515,18 @@ function WbcSide({
   onBrowserTakeoverComplete,
   browserActiveByChat,
   browserSuppressed,
+  mapAvailable,
+  browserAvailable,
   onToggleSide,
   floating,
   widthResizable,
   onCloseFloating,
 }) {
-  workbenchServices.data().useVersion();
+  var dataStore = workbenchServices.data();
+  dataStore.useVersion();
+  var pluginModules = Array.isArray(dataStore.state.pluginModules) ? dataStore.state.pluginModules : [];
+  if (mapAvailable === undefined) mapAvailable = pluginModules.indexOf("map") >= 0;
+  if (browserAvailable === undefined) browserAvailable = pluginModules.indexOf("browser") >= 0;
   var [changesAvailability, setChangesAvailability] = useWbcState({ chatId: "", hasChanges: false });
   var hasWorkspaceChanges = (
     String(changesAvailability.chatId || "") === String(activeChatId || "")
@@ -1569,8 +1575,8 @@ function WbcSide({
   var browserState = wbcBrowserStateForChat(activeChatId);
   var browserMarkedActive = !!(browserActiveByChat && browserActiveByChat[activeChatId]);
   var browserPanelState = browserState || {};
-  var hasMap = wbcChatUsedMap(chat, runtime);
-  var hasBrowser = !!((browserState && browserState.active) || browserMarkedActive);
+  var hasMap = mapAvailable !== false && wbcChatUsedMap(chat, runtime);
+  var hasBrowser = browserAvailable !== false && !!((browserState && browserState.active) || browserMarkedActive);
   var fileItems = wbcChatArtifactFiles(chat);
   var artifactItems = wbcChatDeliveredArtifacts(chat);
   var hasFiles = fileItems.length > 0;
@@ -1650,7 +1656,7 @@ function WbcSide({
       {activeTab === "changes" && <WbcChangesTab chatId={activeChatId} onSelectChange={onSelectChange} />}
       {activeTab === "branches" && <WbcBranchTab chats={chats} activeChatId={activeChatId} onSelectChat={onSelectChat} />}
       {activeTab === "viewer" && <WbcViewerList files={viewerItems} selectedFile={chatViewerFile} onSelect={onSelectViewer} />}
-      {activeTab === "map" && <WbcMapList chatId={chat ? chat.id : ""} onSelect={onSelectMap} />}
+      {activeTab === "map" && mapAvailable !== false && <WbcMapList chatId={chat ? chat.id : ""} onSelect={onSelectMap} available={mapAvailable} />}
       {activeTab === "browser" && !browserSuppressed && (
         <WbcBrowserList browserState={browserPanelState} onSelect={onSelectBrowser} />
       )}

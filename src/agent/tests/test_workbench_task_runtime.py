@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
-from agent.workbench.task_runtime import _pending_question, _project_tool_events
+from agent.workbench.task_runtime import (
+    TaskAgentRuntime,
+    _pending_question,
+    _project_tool_events,
+    _task_system_extra,
+)
 
 
 def _snapshot() -> dict:
@@ -82,6 +89,61 @@ def test_toolbox_invocation_is_projected_from_context_tree():
     }
     assert events[0]["success"] is True
     assert events[0]["result"]["status"] == "awaiting_user"
+
+
+def test_task_turn_persists_exact_host_context_on_user_node(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeBridge:
+        def snapshot(self):
+            return {"status": "idle", "run_id": ""}
+
+        async def submit_result(self, text, *, run_id, metadata, **_kwargs):
+            captured.update(text=text, run_id=run_id, metadata=dict(metadata))
+            return SimpleNamespace(
+                text="done",
+                usage={},
+                model="test-model",
+                model_identity={},
+                snapshot={"nodes": []},
+                generation_duration_ms=1.0,
+                output_tokens_per_second=1.0,
+            )
+
+        def close(self):
+            captured["closed"] = True
+
+    runtime = TaskAgentRuntime(bot=object(), db_path=str(tmp_path / "workbench.db"))
+    monkeypatch.setattr(runtime, "_open_bridge", lambda **_kwargs: FakeBridge())
+    project = {
+        "id": "project-1",
+        "name": "Project",
+        "workspacePath": str(tmp_path),
+    }
+    session = {
+        "id": "task-1",
+        "title": "Inspect cache",
+        "goal": "Persist context exactly once",
+        "status": "running",
+        "plan": [],
+    }
+
+    asyncio.run(runtime.run_turn(
+        project=project,
+        session=session,
+        text="inspect",
+        run_id="run-1",
+        metadata={"ephemeral_context": "caller must not override host context"},
+    ))
+
+    assert captured["metadata"]["ephemeral_context"] == _task_system_extra(
+        project,
+        session,
+        purpose="task",
+        instruction="",
+        attachments=(),
+    )
+    assert captured["closed"] is True
 
 
 def test_task_and_goal_loop_sources_do_not_depend_on_removed_runtimes():

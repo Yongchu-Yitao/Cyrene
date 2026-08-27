@@ -1,4 +1,4 @@
-from cyrene.terminal import shell_runtime
+from agent.plugin.plugin_impl.cyrene_code.terminal import shell_runtime
 
 
 def _set_windows(monkeypatch) -> None:

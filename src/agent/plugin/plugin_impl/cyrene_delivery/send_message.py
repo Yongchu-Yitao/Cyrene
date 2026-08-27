@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from agent.plugin import PluginContext
-from agent.plugin.native_runtime import publish_runtime_event, run_context_value
+from agent.plugin.native_runtime import plugin_localized, publish_runtime_event, run_context_value
 
 from .definitions import get_native_tool_def
 
@@ -18,10 +18,14 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 async def _tool_send_user_message(args: dict[str, Any], context: PluginContext) -> str:
     text = str(args.get("text", "") or "").strip()
     if not text:
-        return "Error: 'text' is required."
+        return plugin_localized(context, "Error: 'text' is required.", "错误：必须提供 text。")
     sender = str(run_context_value(context, "agent_id") or "").strip()
     if sender not in {"main", "scheduler"}:
-        return "Only the main agent can send a user-visible WebUI message. Subagents must return a final response or use send_agent_message."
+        return plugin_localized(
+            context,
+            "Only the main Agent can send a user-visible Web UI message. Subagents must return a final response or use send_agent_message.",
+            "只有主 Agent 可以发送用户可见的 Web UI 消息。子 Agent 必须返回最终答复或使用 send_agent_message。",
+        )
 
     if sender == "scheduler":
         await publish_runtime_event(context, {
@@ -34,7 +38,7 @@ async def _tool_send_user_message(args: dict[str, Any], context: PluginContext) 
         if isinstance(notify_state, dict):
             notify_state["sent"] = True
             notify_state["delivered_text"] = text
-        return "Scheduled message sent to the user."
+        return plugin_localized(context, "Scheduled message sent to the user.", "定时消息已发送给用户。")
 
     round_id = str(run_context_value(context, "round_id") or "").strip()
     if not round_id:
@@ -47,7 +51,7 @@ async def _tool_send_user_message(args: dict[str, Any], context: PluginContext) 
         if isinstance(notify_state, dict):
             notify_state["sent"] = True
             notify_state["delivered_text"] = text
-        return "System message sent to the user."
+        return plugin_localized(context, "System message sent to the user.", "系统消息已发送给用户。")
 
     client_request_id = str(run_context_value(context, "client_request_id") or "").strip()
     public_message = {
@@ -70,7 +74,7 @@ async def _tool_send_user_message(args: dict[str, Any], context: PluginContext) 
     notify_state = context.data.get("notify_state")
     if isinstance(notify_state, dict):
         notify_state["sent"] = True
-    return "Mid-run message sent to the user."
+    return plugin_localized(context, "Mid-run message sent to the user.", "运行中消息已发送给用户。")
 
 
 handler = _tool_send_user_message

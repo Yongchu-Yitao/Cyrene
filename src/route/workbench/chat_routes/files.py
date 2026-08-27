@@ -6,12 +6,13 @@ import mimetypes
 from pathlib import Path
 
 from fastapi import APIRouter
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 
 from cyrene.workbench.workspace_changes import (
     get_chat_file_change,
     list_chat_change_sets,
 )
+from route.errors import localized_error_response
 from route.workbench.chat_routes.context import ChatRouteContext
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,9 @@ def register_file_routes(router: APIRouter, context: ChatRouteContext) -> None:
         """Return durable run-scoped workspace changes without consulting Git."""
         payload = await asyncio.to_thread(_read_chats_store)
         if not _find_chat(payload, chat_id):
-            return JSONResponse({"error": "chat not found"}, status_code=404)
+            return localized_error_response(
+                "Chat not found.", "未找到对话。", 404, "chat_not_found"
+            )
         change_sets = await asyncio.to_thread(list_chat_change_sets, service.db_path, chat_id)
         return {
             "changeSets": change_sets,
@@ -46,7 +49,9 @@ def register_file_routes(router: APIRouter, context: ChatRouteContext) -> None:
         """Return the immutable diff recorded for one file in one agent run."""
         payload = await asyncio.to_thread(_read_chats_store)
         if not _find_chat(payload, chat_id):
-            return JSONResponse({"error": "chat not found"}, status_code=404)
+            return localized_error_response(
+                "Chat not found.", "未找到对话。", 404, "chat_not_found"
+            )
         change = await asyncio.to_thread(
             get_chat_file_change,
             service.db_path,
@@ -55,7 +60,12 @@ def register_file_routes(router: APIRouter, context: ChatRouteContext) -> None:
             file_path,
         )
         if change is None:
-            return JSONResponse({"error": "file change not found"}, status_code=404)
+            return localized_error_response(
+                "File change not found.",
+                "未找到文件变更记录。",
+                404,
+                "file_change_not_found",
+            )
         return {"change": change}
 
     @router.get("/api/workbench/chats/{chat_id}/files/{file_path:path}")
@@ -64,31 +74,54 @@ def register_file_routes(router: APIRouter, context: ChatRouteContext) -> None:
         payload = await asyncio.to_thread(_read_chats_store)
         chat = _find_chat(payload, chat_id)
         if not chat:
-            return JSONResponse({"error": "chat not found"}, status_code=404)
+            return localized_error_response(
+                "Chat not found.", "未找到对话。", 404, "chat_not_found"
+            )
         normalized = str(file_path or "").strip().replace("\\", "/")
         tracked = next(
             (item for item in (chat.get("generatedFiles") or []) if isinstance(item, dict) and str(item.get("path") or "").replace("\\", "/") == normalized),
             None,
         )
         if not tracked:
-            return JSONResponse({"error": "file not found"}, status_code=404)
+            return localized_error_response(
+                "File not found.", "未找到文件。", 404, "file_not_found"
+            )
         R = _routes()
         project_store = await asyncio.to_thread(R.read_store)
         project = R.find_project(project_store, str(chat.get("projectId") or ""))
         if not project:
-            return JSONResponse({"error": "project not found"}, status_code=404)
+            return localized_error_response(
+                "Project not found.", "未找到项目。", 404, "project_not_found"
+            )
         try:
             workspace_dir = _resolve_chat_workspace_dir(chat, project, R.resolve_workspace_dir)
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+        except ValueError:
+            logger.warning(
+                "Invalid workspace configuration for chat %s",
+                chat_id,
+                exc_info=True,
+            )
+            return localized_error_response(
+                "The workspace configuration is invalid.",
+                "工作区配置无效。",
+                400,
+                "invalid_workspace",
+            )
         root = Path(workspace_dir).expanduser().resolve()
         try:
             target = (root / normalized).resolve()
             target.relative_to(root)
         except (OSError, ValueError):
-            return JSONResponse({"error": "file path is outside workspace"}, status_code=403)
+            return localized_error_response(
+                "The file path is outside the workspace.",
+                "文件路径位于工作区之外。",
+                403,
+                "file_outside_workspace",
+            )
         if not target.is_file():
-            return JSONResponse({"error": "file not found"}, status_code=404)
+            return localized_error_response(
+                "File not found.", "未找到文件。", 404, "file_not_found"
+            )
         filename = Path(str(tracked.get("name") or target.name)).name or target.name
         media_type = str(tracked.get("content_type") or "").strip() or mimetypes.guess_type(filename)[0] or "application/octet-stream"
         return FileResponse(target, filename=filename, media_type=media_type)

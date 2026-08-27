@@ -360,8 +360,9 @@ def test_plain_chat_bridge_submits_publishes_and_forwards_plugin_context(tmp_pat
         {
             "bot": session.plugin_context_data["bot"],
             "chat_id": "chat-1",
-            "db_path": "/tmp/workbench.sqlite3",
-            "run_id": "run-chat-1",
+                "db_path": "/tmp/workbench.sqlite3",
+                "language": "zh",
+                "run_id": "run-chat-1",
             "model_call_kind": "tool",
             "user_request": "use the probe",
         }
@@ -639,7 +640,7 @@ def test_plugin_pack_session_context_and_terminal_lifecycle_are_durable(tmp_path
     ) == "memory-aware reply"
 
     assert model_services[0]["test.memory"] == {"ready": True}
-    assert "subagents" in model_services[0]
+    assert "subagents" not in model_services[0]
     assert "Durable memory context" in model_messages[0][0]["content"]
     context_nodes = [
         node
@@ -655,6 +656,176 @@ def test_plugin_pack_session_context_and_terminal_lifecycle_are_durable(tmp_path
     assert [name for name, _payload in lifecycle_events] == ["start", "end"]
     assert lifecycle_events[-1][1]["assistant_text"] == "memory-aware reply"
     bridge.close()
+
+
+def test_required_session_pack_hot_setup_failure_blocks_model_and_submit(tmp_path):
+    model_calls = []
+
+    async def model(_arguments, _context):
+        model_calls.append(True)
+        return {"content": "must not run", "tool_calls": []}
+
+    def setup(_context):
+        return None
+
+    registry = model_registry(model)
+    registry.register_pack(
+        PluginPack(
+            "required-context",
+            "required session context fixture",
+            (),
+            setup=setup,
+            metadata={"required": True},
+        ),
+        source="test:required-context",
+    )
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        tree_id="required-context-chat",
+        registry=registry,
+    )
+
+    def broken_setup(_context):
+        raise RuntimeError("context setup broke during reload")
+
+    registry.register_pack(
+        PluginPack(
+            "required-context",
+            "required session context fixture",
+            (),
+            setup=broken_setup,
+            metadata={"required": True},
+        ),
+        source="test:required-context",
+        replace=True,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Required Plugin session setup unavailable: required-context",
+    ):
+        session._plugin_services()
+    with pytest.raises(
+        RuntimeError,
+        match="Required Plugin session setup unavailable: required-context",
+    ):
+        session.submit("do not run unconstrained", run_id="blocked-run")
+
+    assert model_calls == []
+    assert all(
+        not isinstance(node.value, dict) or node.value.get("role") != "user"
+        for node in session.store.get_subtree(session.tree.id, session.tree.root_id)
+    )
+    session.close()
+
+
+def test_live_session_reconciles_memory_soul_and_subagent_style_setups(tmp_path):
+    async def model(_arguments, _context):
+        return {"content": "unused", "tool_calls": []}
+
+    drivers = []
+
+    class Driver:
+        def __init__(self):
+            self.attached = 0
+            self.closed = False
+            drivers.append(self)
+
+        def attach(self):
+            self.attached += 1
+
+        def request_cancel_all(self, _reason):
+            pass
+
+        def close(self):
+            self.closed = True
+
+        @property
+        def has_pending_work(self):
+            return False
+
+    def memory_setup(context):
+        context.provide("memory.v1", object())
+        context.hooks.register(
+            SESSION_START,
+            lambda _event: {"context": "memory-context"},
+            plugin_id="cyrene_memory.start",
+            hook_id="cyrene-memory-start",
+        )
+
+    def soul_setup(context):
+        context.hooks.register(
+            SESSION_START,
+            lambda _event: {"context": "soul-context"},
+            plugin_id="cyrene_soul.mount",
+            hook_id="cyrene-soul-start",
+        )
+
+    def subagent_setup(context):
+        driver = Driver()
+        context.provide("subagents", driver)
+        context.provide("session_driver", driver)
+
+    registry = model_registry(model)
+    for pack_id, setup in (
+        ("cyrene_memory", memory_setup),
+        ("cyrene_soul", soul_setup),
+        ("cyrene_subagent", subagent_setup),
+    ):
+        registry.register_pack(
+            PluginPack(pack_id, f"{pack_id} fixture", (), setup=setup),
+            source=f"test:{pack_id}",
+        )
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        tree_id="hot-plugin-session",
+        registry=registry,
+    )
+    root_before = session.store.get_node(session.tree.id, session.tree.root_id).value
+
+    assert set(run(session.hooks.session_start()).split("\n\n")) == {
+        "memory-context",
+        "soul-context",
+    }
+    assert "memory.v1" in session.plugin_services
+    assert "subagents" in session.plugin_services
+    assert drivers[-1].attached == 1
+
+    registry.set_pack_enabled("cyrene_memory", False)
+    assert run(session.hooks.session_start()) == "soul-context"
+    assert "memory.v1" not in session.plugin_services
+    assert "cyrene-memory-start" not in {hook.id for hook in session.hooks.list()}
+
+    registry.set_pack_enabled("cyrene_soul", False)
+    assert run(session.hooks.session_start()) == ""
+    assert "cyrene-soul-start" not in {hook.id for hook in session.hooks.list()}
+
+    old_driver = drivers[-1]
+    registry.set_pack_enabled("cyrene_subagent", False)
+    session.reconcile_plugins()
+    assert old_driver.closed is True
+    assert "subagents" not in session.plugin_services
+
+    registry.set_pack_enabled("cyrene_memory", True)
+    registry.set_pack_enabled("cyrene_soul", True)
+    registry.set_pack_enabled("cyrene_subagent", True)
+    session.reconcile_plugins()
+    assert set(run(session.hooks.session_start()).split("\n\n")) == {
+        "memory-context",
+        "soul-context",
+    }
+    assert drivers[-1] is not old_driver
+    assert drivers[-1].attached == 1
+    assert session.store.get_node(session.tree.id, session.tree.root_id).value == root_before
+    session.close()
 
 
 def test_cancelling_workbench_task_cancels_and_persists_agent_run(tmp_path):

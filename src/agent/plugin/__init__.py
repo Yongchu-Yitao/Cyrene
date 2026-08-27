@@ -24,6 +24,7 @@ from .plugin import (
     PluginCall,
     PluginCallResult,
     PluginContext,
+    PluginFrontendHandler,
     PluginHandler,
     PluginLifecycleHandler,
     PluginPack,
@@ -42,6 +43,14 @@ from .registry import (
     default_plugin_impl_directory,
 )
 from .runtime import PluginRuntime, PreparedPluginCall
+from .session_state import (
+    PLUGIN_SESSION_STATE_KEY,
+    plugin_child_context_ids,
+    plugin_public_session_snapshot,
+    plugin_session_state,
+    with_plugin_session_state,
+    without_plugin_session_state,
+)
 from .validation import PluginInputValidationError, PluginSchemaError
 
 __all__ = [
@@ -60,6 +69,7 @@ __all__ = [
     "PluginCallResult",
     "PluginCustomizationState",
     "PluginContext",
+    "PluginFrontendHandler",
     "PluginHandler",
     "PluginLifecycleHandler",
     "PluginInputValidationError",
@@ -75,6 +85,7 @@ __all__ = [
     "PluginUnavailableError",
     "PluginRuntime",
     "PluginSchemaError",
+    "PLUGIN_SESSION_STATE_KEY",
     "PreparedPluginCall",
     "RegisteredPlugin",
     "TOOLBOX_PLUGIN_NAME",
@@ -84,4 +95,9 @@ __all__ = [
     "ensure_model_router",
     "set_active_plugin_application_host",
     "merge_plugin_pack_metadata",
+    "plugin_child_context_ids",
+    "plugin_public_session_snapshot",
+    "plugin_session_state",
+    "with_plugin_session_state",
+    "without_plugin_session_state",
 ]

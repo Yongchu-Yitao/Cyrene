@@ -85,7 +85,7 @@ def test_seeded_user_directory_loads_complete_memory_pack(tmp_path):
 
     assert registry.load_directory(isolated_root) == ()
     pack = next(pack for pack in registry.list_packs() if pack.id == "cyrene_memory")
-    assert len(pack.plugins) == 9
+    assert len(pack.plugins) == 11
     assert pack.setup is not None
     assert pack.application_setup is not None
     assert (isolated_root / "cyrene_memory" / "application.py").is_file()
@@ -109,7 +109,7 @@ def test_seeded_user_directory_loads_complete_memory_pack(tmp_path):
 
 
 def test_memory_pack_mounts_session_context_through_hook(monkeypatch, tmp_path):
-    from agent.demo import AgentTreeSession
+    from agent.session import AgentSession
     from agent.plugin import Plugin, PluginPack
     from agent.plugin.plugin_impl.cyrene_memory.service import MemoryService
 
@@ -144,7 +144,7 @@ def test_memory_pack_mounts_session_context_through_hook(monkeypatch, tmp_path):
     )
     plugin_directory = tmp_path / "plugin_impl"
     plugin_directory.mkdir()
-    session = AgentTreeSession(
+    session = AgentSession(
         tmp_path / "data",
         tmp_path / "workspace",
         plugin_directory,
@@ -167,6 +167,41 @@ def test_memory_pack_mounts_session_context_through_hook(monkeypatch, tmp_path):
     assert mounted["metadata"] == {"source": "SessionStart"}
     assert "Project memory:\nUse the verified design." in captured[0][0]["content"]
     session.close()
+
+
+def test_memory_plugin_mounts_recent_conversation_for_proactive_run(
+    monkeypatch,
+    tmp_path,
+):
+    from datetime import datetime, timezone
+
+    from agent.hook import HookEvent, SESSION_START
+    from agent.plugin.plugin_impl.cyrene_memory import archive
+    from agent.plugin.plugin_impl.cyrene_memory.service import MemoryService
+
+    async def recent_conversations(days=1):
+        assert days == 1
+        return "user: ship the release\nassistant: noted"
+
+    monkeypatch.setattr(archive, "get_recent_conversations", recent_conversations)
+    monkeypatch.setattr(MemoryService, "context_block", lambda _self: "base memory")
+    service = MemoryService(
+        workspace=tmp_path,
+        tree=None,
+        tree_id="proactive",
+        data={},
+    )
+    event = HookEvent(
+        SESSION_START,
+        "proactive",
+        datetime.now(timezone.utc),
+        payload={"metadata": {"proactive": True}},
+    )
+
+    result = run(service.on_session_start(event))
+
+    assert result["context"].startswith("base memory\n\n## 近期对话")
+    assert "ship the release" in result["context"]
 
 
 def test_memory_plugin_session_end_owns_automatic_capture(monkeypatch, tmp_path):
@@ -432,7 +467,7 @@ def test_memory_application_setup_owns_routes_search_and_shutdown(monkeypatch, t
     assert "/api/workbench/memory" in paths
     assert "/api/projects/{project_id}/memory-prompt" in paths
     assert "/api/memory" in paths
-    assert "/api/settings/soul" in paths
+    assert "/api/settings/soul" not in paths
     assert "/api/search/conversations" in paths
     assert services == {"memory": fake}
     assert search_providers == {"memory": fake.search_workbench}
@@ -467,12 +502,14 @@ def test_memory_pack_attaches_real_application_contributions(tmp_path):
     assert "/api/workbench/memory" in paths
     assert "/api/projects/{project_id}/memory-prompt" in paths
     assert "/api/workbench/chats/{chat_id}/memory-learning" in paths
-    assert "/api/settings/soul" in paths
+    assert "/api/settings/soul" not in paths
     assert "/api/search/conversations" in paths
 
 
 def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_memory import archive, soul
+    from agent.plugin.plugin_impl.cyrene_memory import archive
+    from agent.plugin.plugin_impl.cyrene_soul import plugin_pack as soul_pack
+    from agent.plugin.plugin_impl.cyrene_soul import store as soul_store
     from cyrene.runtime.database import init_db
     from cyrene.workbench.store import write_document
 
@@ -492,7 +529,7 @@ def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch
         },
         lambda: {"projects": []},
     )
-    monkeypatch.setattr(soul, "WORKSPACE_DIR", tmp_path / "workspace")
+    monkeypatch.setattr(soul_store, "WORKSPACE_DIR", tmp_path / "workspace")
     monkeypatch.setattr(
         archive,
         "CONVERSATIONS_DIR",
@@ -501,6 +538,7 @@ def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch
 
     registry = PluginRegistry(include_core=False)
     registry.register_pack(plugin_pack, source="test-memory")
+    registry.register_pack(soul_pack, source="test-soul")
     app = FastAPI()
     host = PluginApplicationHost(
         app=app,
@@ -649,7 +687,7 @@ def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch
         "/api/search/conversations",
     ):
         assert route_fragment in compiled_frontend
-    assert host.frontend_modules == ["memory"]
+    assert host.frontend_modules == ["memory", "soul"]
 
 
 def test_memory_application_search_preserves_visibility_and_project_scope(
@@ -697,7 +735,7 @@ def test_memory_application_search_preserves_visibility_and_project_scope(
     assert results[0]["projectName"] == "Demo"
 
 
-def test_memory_application_owns_workbench_injection_and_learning_policy(tmp_path):
+def test_memory_application_owns_workbench_learning_policy(tmp_path):
     from agent.plugin.plugin_impl.cyrene_memory import structured
     from cyrene.workbench.store import ensure_schema
 
@@ -708,31 +746,6 @@ def test_memory_application_owns_workbench_injection_and_learning_policy(tmp_pat
         str(database), object(), object(), tmp_path / "data"
     )
     project = {"id": "project policy", "name": "Policy"}
-    session = {"id": "session-1"}
-
-    structured.add_agent_memory(
-        "project_policy",
-        "Use the verified Plugin boundary.",
-        category="project",
-    )
-    fixed, volatile = application.compose_workbench_context(project, session)
-
-    assert "verified Plugin boundary" in fixed
-    assert volatile == ""
-    assert session["_promptMemoryKey"] == "project_policy"
-
-    structured.add_agent_memory(
-        "project_policy",
-        "A fact learned after this session started.",
-        category="fact",
-    )
-    fixed_again, volatile_again = application.compose_workbench_context(
-        project,
-        session,
-    )
-
-    assert "learned after this session" not in fixed_again
-    assert "learned after this session" in volatile_again
     assert application.store_reflection_insights(
         project,
         {
@@ -810,48 +823,14 @@ def test_memory_application_owns_workbench_lifecycle_operations(monkeypatch, tmp
     ]
 
 
-def test_memory_application_owns_persona_reset(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_memory import short_term
-
-    soul_path = tmp_path / "workspace" / ".cyrene" / "SOUL.md"
-    soul_path.parent.mkdir(parents=True)
-    soul_path.write_text("old persona", encoding="utf-8")
-    calls: list[object] = []
-    monkeypatch.setattr(
-        memory_application.MemoryApplication,
-        "soul_path",
-        lambda _self: soul_path,
-    )
-    monkeypatch.setattr(
-        memory_application.MemoryApplication,
-        "ensure_soul",
-        lambda _self: calls.append("ensure-soul"),
-    )
-    monkeypatch.setattr(
-        short_term,
-        "save_entries",
-        lambda entries: calls.append(("short-term", list(entries))),
-    )
-    application = memory_application.MemoryApplication(
-        "", object(), object(), tmp_path / "data"
-    )
-
-    application.reset_persona_memory()
-
-    assert not soul_path.exists()
-    assert calls == ["ensure-soul", ("short-term", [])]
-
-
 def test_memory_application_owns_archive_storage_and_backup_contract(
     monkeypatch,
     tmp_path,
 ):
-    from agent.plugin.plugin_impl.cyrene_memory import archive, soul
+    from agent.plugin.plugin_impl.cyrene_memory import archive
 
     conversations = tmp_path / "workspace" / ".cyrene" / "conversations"
-    soul_path = tmp_path / "workspace" / ".cyrene" / "SOUL.md"
     monkeypatch.setattr(archive, "CONVERSATIONS_DIR", conversations)
-    monkeypatch.setattr(soul, "WORKSPACE_DIR", tmp_path / "workspace")
     conversations.mkdir(parents=True)
     source = conversations / "2026-08-26.md"
     source.write_text(
@@ -883,14 +862,12 @@ def test_memory_application_owns_archive_storage_and_backup_contract(
         application.read_archive_sections("..")
 
     assert application.backup_sources() == {
-        "files": ((soul_path, "workspace/SOUL.md"),),
         "directories": ((conversations, "workspace/conversations"),),
     }
     assert application.storage_paths() == {
         "memory": (
             tmp_path / "data" / "short_term.json",
             tmp_path / "data" / "memory_steward.json",
-            soul_path,
         ),
         "conversations": (conversations,),
     }

@@ -1,15 +1,17 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { useWbcState, wbcErrorText, wbcNormalizePaneLayout, wbcPaneCardLocation, wbcT } from "../../workbench-chat.jsx"
 
-function useWbcTerminalCatalog(projectId) {
+function useWbcTerminalCatalog(projectId, enabled) {
   var terminalClient = workbenchServices.terminal().Client;
   var [terminals, setTerminals] = useWbcState([]);
   var [terminalsLoading, setTerminalsLoading] = useWbcState(false);
   var [activeTerminalId, setActiveTerminalId] = useWbcState("");
 
   function refresh(options, onRestore) {
-    if (!projectId) {
+    if (!enabled || !projectId) {
       setTerminals([]);
+      setTerminalsLoading(false);
+      setActiveTerminalId("");
       return Promise.resolve([]);
     }
     if (!(options && options.background)) setTerminalsLoading(true);

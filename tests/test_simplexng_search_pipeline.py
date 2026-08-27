@@ -168,7 +168,7 @@ async def test_simplexng_engine_outage_is_not_reported_as_zero_results(monkeypat
 
 
 async def test_all_simplexng_engine_failures_continue_to_next_provider(monkeypatch):
-    from cyrene.runtime.search_settings import SearchRuntimeSettings
+    from agent.plugin.plugin_impl.cyrene_content.search_settings import SearchRuntimeSettings
     from agent.plugin.plugin_impl.cyrene_content import search_backend as search
 
     payload = {

@@ -31,15 +31,21 @@ function wbcRevealTopbarResource(context, chatId, resource) {
 }
 
 function wbcMarkViewerFileRead(context, file) {
-  if (!file || file.source === "project" || !context.projectId || !file.url) return;
+  var source = String(file && (file.sourceKind || file.source) || "").toLowerCase();
+  if (!context.knowledgeAvailable || !file || ["knowledge", "library"].indexOf(source) < 0 || !context.projectId || !file.url) return;
+  var controller = new AbortController();
+  if (context.knowledgeReadControllersRef) context.knowledgeReadControllersRef.current.add(controller);
   fetch("/api/workbench/library/read?workspace=" + encodeURIComponent(context.projectId), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal: controller.signal,
     body: JSON.stringify({
       attachment_url: String(file.url || ""),
       file_name: String(file.name || ""),
     }),
-  }).catch(function () {});
+  }).catch(function () {}).finally(function () {
+    if (context.knowledgeReadControllersRef) context.knowledgeReadControllersRef.current.delete(controller);
+  });
 }
 
 function wbcLoadSubagents(context, chatId, roundId) {

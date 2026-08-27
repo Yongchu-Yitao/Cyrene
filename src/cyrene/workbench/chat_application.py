@@ -23,6 +23,7 @@ from typing import Any
 
 import httpx
 
+from cyrene.localization import app_language, localized
 from cyrene.model_runtime.constants import NETWORK_RETRY_LIMIT
 from cyrene.workbench.chat_repository import ChatRepository
 from cyrene.workbench.workspace_changes import (
@@ -34,6 +35,17 @@ from cyrene.workbench.workspace_changes import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _composer_context_service():
+    from agent.plugin import active_plugin_service
+
+    service = active_plugin_service("composer_context")
+    if service is None:
+        raise RuntimeError(
+            "Required Plugin application service is unavailable: composer_context"
+        )
+    return service
 
 _USAGE_KEYS = (
     "prompt_tokens",
@@ -152,17 +164,17 @@ def new_chat(
     now = utc_now_iso()
     supplied_title = str(title or "").strip()
     if soul_active is None or workspace_active is None:
-        from cyrene.runtime.settings_store import is_soul_active, is_workspace_active
+        defaults = _composer_context_service().default_input_context()
 
         if soul_active is None:
-            soul_active = bool(is_soul_active())
+            soul_active = bool(defaults["soulActive"])
         if workspace_active is None:
-            workspace_active = bool(is_workspace_active())
+            workspace_active = bool(defaults["workspaceActive"])
     chat: dict[str, Any] = {
         "id": short_id("wbchat"),
         "projectId": str(project_id or ""),
         "kind": "chat",
-        "title": supplied_title[:60] or "新对话",
+        "title": supplied_title[:60] or localized("New chat", "新对话"),
         "titleLocked": bool(supplied_title),
         "status": "idle",
         "model": str(model or ""),
@@ -193,20 +205,44 @@ def new_chat(
     return chat
 
 
-def chat_soul_active(chat: Mapping[str, Any]) -> bool:
+def chat_soul_active(
+    chat: Mapping[str, Any],
+    *,
+    defaults: Mapping[str, Any] | None = None,
+) -> bool:
     if isinstance(chat.get("soulActive"), bool):
         return bool(chat["soulActive"])
-    from cyrene.runtime.settings_store import is_soul_active
+    resolved = defaults or _composer_context_service().default_input_context()
+    return bool(resolved["soulActive"])
 
-    return bool(is_soul_active())
 
-
-def chat_workspace_active(chat: Mapping[str, Any]) -> bool:
+def chat_workspace_active(
+    chat: Mapping[str, Any],
+    *,
+    defaults: Mapping[str, Any] | None = None,
+) -> bool:
     if isinstance(chat.get("workspaceActive"), bool):
         return bool(chat["workspaceActive"])
-    from cyrene.runtime.settings_store import is_workspace_active
+    resolved = defaults or _composer_context_service().default_input_context()
+    return bool(resolved["workspaceActive"])
 
-    return bool(is_workspace_active())
+
+def resolve_composer_input_context(
+    chat: Mapping[str, Any],
+    workspace_dir: str | Path,
+    *,
+    strict: bool = True,
+) -> dict[str, Any]:
+    """Delegate every composer-owned context field to its required Plugin."""
+
+    return _composer_context_service().resolve_input_context(
+        soul_active=chat_soul_active(chat),
+        workspace_active=chat_workspace_active(chat),
+        workspace_dir=str(workspace_dir or ""),
+        remote_device_ids=chat.get("remoteDeviceIds") or (),
+        context_activations=chat.get("contextActivations"),
+        strict=bool(strict),
+    )
 
 
 def normalize_workspace_override(path: Any) -> str:
@@ -455,9 +491,16 @@ def public_chat_light(
     chat: Mapping[str, Any],
     *,
     active_run: Any = None,
+    composer_context: Any = None,
+    default_input_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    from cyrene.workbench.composer_context import normalize_context_activations
-
+    composer = composer_context or _composer_context_service()
+    defaults = default_input_context
+    if defaults is None and (
+        not isinstance(chat.get("soulActive"), bool)
+        or not isinstance(chat.get("workspaceActive"), bool)
+    ):
+        defaults = composer.default_input_context()
     projection = chat.get("_messageProjection")
     projected_usage = (
         projection.get("usage") if isinstance(projection, Mapping) else None
@@ -513,9 +556,9 @@ def public_chat_light(
         ),
         "permissionMode": chat.get("permissionMode") or "default",
         "workspaceOverride": str(chat.get("workspaceOverride") or ""),
-        "soulActive": chat_soul_active(chat),
-        "workspaceActive": chat_workspace_active(chat),
-        "contextActivations": normalize_context_activations(
+        "soulActive": chat_soul_active(chat, defaults=defaults),
+        "workspaceActive": chat_workspace_active(chat, defaults=defaults),
+        "contextActivations": composer.normalize(
             chat.get("contextActivations")
         ),
         "remoteDeviceIds": [
@@ -555,6 +598,38 @@ def public_chat_light(
     if chat.get("agentMode") is not None:
         payload["agentMode"] = chat.get("agentMode")
     return payload
+
+
+def public_chats_light(
+    chats: list[Mapping[str, Any]],
+    *,
+    active_runs: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Project a chat collection with one Composer catalog resolution.
+
+    Historical rows may predate the explicit Composer booleans. Their fallback
+    is request-scoped: the catalog is resolved once and the resulting defaults
+    are shared by every row in this projection.
+    """
+
+    composer = _composer_context_service()
+    defaults: Mapping[str, Any] = {}
+    if any(
+        not isinstance(chat.get("soulActive"), bool)
+        or not isinstance(chat.get("workspaceActive"), bool)
+        for chat in chats
+    ):
+        defaults = composer.default_input_context()
+    runs = active_runs or {}
+    return [
+        public_chat_light(
+            chat,
+            active_run=runs.get(str(chat.get("id") or "")),
+            composer_context=composer,
+            default_input_context=defaults,
+        )
+        for chat in chats
+    ]
 
 
 def public_chat_full(
@@ -689,9 +764,12 @@ def mark_user_activity(chat: dict[str, Any], timestamp: str) -> None:
     chat["lastUserMessageAt"] = timestamp
     chat["updatedAt"] = timestamp
     try:
-        from cyrene.runtime.scheduler import reset_lottery
+        from agent.plugin import active_plugin_service
 
-        reset_lottery()
+        proactive = active_plugin_service("proactive")
+        reset = getattr(proactive, "reset_lottery", None)
+        if callable(reset):
+            reset()
     except Exception:
         logger.debug("Could not reset proactive lottery", exc_info=True)
 
@@ -736,12 +814,22 @@ def chat_transcript_for_brief(
     ]
     blocks: list[str] = []
     total = 0
+    language = app_language()
     for message in reversed(messages[-max_messages:]):
-        role = "用户" if str(message.get("role")) == "user" else "助手"
+        role = (
+            localized("User", "用户", language=language)
+            if str(message.get("role")) == "user"
+            else localized("Assistant", "助手", language=language)
+        )
         text = str(message.get("content") or "").strip()
         if len(text) > 2000:
-            text = text[:2000] + "…（内容过长已截断）"
-        block = f"{role}：{text}"
+            text = text[:2000] + localized(
+                "… (truncated)", "…（内容过长已截断）", language=language
+            )
+        block = localized(
+            "{role}: {text}", "{role}：{text}",
+            language=language, role=role, text=text,
+        )
         if blocks and total + len(block) > max_chars:
             break
         blocks.append(block)
@@ -765,16 +853,26 @@ def parse_json_object(raw: Any) -> dict[str, Any] | None:
 
 
 def chat_run_error_message(exc: Exception, lang: str = "") -> str:
+    language = app_language(lang)
     http_error = _http_status_error(exc)
     if http_error is not None and int(http_error.response.status_code) in (401, 403):
-        if str(lang or "").lower() == "en":
-            return "The model service could not be authenticated. Check its API key or sign-in, then try again."
-        return "无法访问模型服务：鉴权失败。请检查 API Key 或登录状态后重试。"
+        return localized(
+            "The model service could not be authenticated. Check its API key or sign-in, then try again.",
+            "无法访问模型服务：鉴权失败。请检查 API Key 或登录状态后重试。",
+            language=language,
+        )
     if isinstance(exc, httpx.TransportError):
-        if str(lang or "").lower() == "en":
-            return f"The network connection still failed after {NETWORK_RETRY_LIMIT} automatic retries. Please send this message again."
-        return f"网络连接异常，已自动重试 {NETWORK_RETRY_LIMIT} 次仍未成功。请重新发送这条消息。"
-    return str(exc).strip() or exc.__class__.__name__
+        return localized(
+            "The network connection still failed after {count} automatic retries. Please send this message again.",
+            "网络连接异常，已自动重试 {count} 次仍未成功。请重新发送这条消息。",
+            language=language,
+            count=NETWORK_RETRY_LIMIT,
+        )
+    return localized(
+        "The Agent run failed. Please try again.",
+        "Agent 运行失败，请重试。",
+        language=language,
+    )
 
 
 def _http_status_error(exc: Exception) -> httpx.HTTPStatusError | None:
@@ -1230,9 +1328,11 @@ __all__ = [
     "prune_orphaned_fork_metadata",
     "public_chat_full",
     "public_chat_light",
+    "public_chats_light",
     "public_message",
     "remove_retry_replaced_messages",
     "resolve_chat_workspace_dir",
+    "resolve_composer_input_context",
     "sanitize_durable_traces",
     "short_id",
     "side_agent_parent_transcript",

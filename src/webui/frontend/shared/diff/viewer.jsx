@@ -70,10 +70,19 @@ import { workbenchServices } from "../runtime/services.jsx"
   }
 
   function DiffViewerPanel(props) {
+    var dataStore = workbenchServices.data();
+    dataStore.useVersion();
+    var pluginModules = Array.isArray(dataStore.state.pluginModules)
+      ? dataStore.state.pluginModules : [];
+    var codeAvailable = pluginModules.indexOf("code") >= 0;
     var [diffText, setDiffText] = useState(props.diff || "");
     var [loading, setLoading] = useState(false);
 
     useEffect(function () {
+      if (!codeAvailable) {
+        setLoading(false);
+        return;
+      }
       if (props.mode === "file" && props.left && props.right) {
         setLoading(true);
         fetch("/api/code/diff", {
@@ -93,7 +102,9 @@ import { workbenchServices } from "../runtime/services.jsx"
       } else if (props.diff) {
         setDiffText(props.diff);
       }
-    }, [props.diff, props.left, props.right, props.mode]);
+    }, [props.diff, props.left, props.right, props.mode, codeAvailable]);
+
+    if (!codeAvailable) return null;
 
     var binary = isBinaryDiff(diffText);
     var hunks = parseDiff(diffText);
@@ -121,6 +132,7 @@ import { workbenchServices } from "../runtime/services.jsx"
         props.onClose && createElement("button", {
           className: "code-editor-close-btn",
           onClick: props.onClose,
+          "aria-label": diffT("common.close", "Close"),
         }, "×")
       ),
       // Content
@@ -146,7 +158,7 @@ import { workbenchServices } from "../runtime/services.jsx"
                   !props.hideHunkHeaders && createElement("div", {
                     className: "diff-hunk-header",
                     title: hunk.header,
-                    "aria-label": "Changed lines " + leftRange + " to " + rightRange,
+                    "aria-label": diffT("chat.diff.changedLines", "Changed lines {left} to {right}", { left: leftRange, right: rightRange }),
                   },
                     createElement("span", { className: "diff-hunk-range old" }, leftRange),
                     createElement("span", { className: "diff-hunk-arrow", "aria-hidden": "true" }, "→"),

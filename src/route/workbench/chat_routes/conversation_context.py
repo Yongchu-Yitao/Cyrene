@@ -10,12 +10,15 @@ from cyrene.workbench.conversation_context_service import (
     ConversationInboxQueryService,
     ConversationNotFoundError,
 )
+from route.errors import localized_error_response
 
 
 def _not_found(exc: ConversationNotFoundError | None = None) -> JSONResponse:
-    return JSONResponse(
-        {"error": str(exc) if exc is not None else "chat not found"},
-        status_code=404,
+    return localized_error_response(
+        "Chat not found.",
+        "未找到对话。",
+        404,
+        "chat_not_found",
     )
 
 

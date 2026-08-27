@@ -1,16 +1,25 @@
 import asyncio
+import sqlite3
 
 import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from agent.plugin import PluginApplicationHost
+from agent.plugin import PluginApplicationHost, PluginRegistry
+from agent.plugin.native_tools import seed_builtin_plugin_directory
 from agent.plugin.plugin_impl.cyrene_entity.service import EntityService
+from agent.plugin.plugin_impl.cyrene_schedule.repository import ScheduleRepository
+from agent.plugin.plugin_impl.cyrene_schedule.service import ScheduleRuntimeService
 from cyrene.runtime.database import init_db
-from cyrene.runtime.persistence.scheduler import SchedulerRepository
-from cyrene.workbench.schedule_repository import WorkspaceProjectResolver
-from cyrene.workbench.schedule_service import ScheduleApplicationService
-from route.workbench.schedule import register_workbench_schedule_routes
+from agent.plugin.plugin_impl.cyrene_schedule.workbench_repository import (
+    WorkspaceProjectResolver,
+)
+from agent.plugin.plugin_impl.cyrene_schedule.workbench_service import (
+    ScheduleApplicationService,
+)
+from agent.plugin.plugin_impl.cyrene_schedule.routes import (
+    register_workbench_schedule_routes,
+)
 
 
 def _client(tmp_path, notifications):
@@ -23,12 +32,20 @@ def _client(tmp_path, notifications):
         ),
         read_projects=lambda: [project],
     )
+    plugin_directory = tmp_path / "plugin_impl"
+    seed_builtin_plugin_directory(plugin_directory)
+    registry = PluginRegistry()
+    assert registry.load_directory(plugin_directory) == ()
     service = ScheduleApplicationService(
         db_path,
         resolver,
         lambda **payload: notifications.append(payload),
         entities=EntityService(db_path),
-        plugin_directory=tmp_path / "plugin_impl",
+        registry=registry,
+        runtime_service=ScheduleRuntimeService(
+            db_path,
+            plugin_directory=plugin_directory,
+        ),
     )
     app = FastAPI()
     router = APIRouter()
@@ -66,7 +83,7 @@ def test_schedule_crud_runs_and_project_isolation_use_plugin_runtime(tmp_path):
     assert notifications[-1]["source"] == "schedule_updated"
 
     asyncio.run(
-        SchedulerRepository(db_path).log_run(
+        ScheduleRepository(db_path).log_run(
             task_id,
             125,
             "success",
@@ -116,6 +133,14 @@ def test_schedule_pack_owns_routes_service_and_frontend_module(tmp_path):
     router = APIRouter()
     host.attach(router)
 
+    with sqlite3.connect(db_path) as database:
+        assert database.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'scheduled_tasks'"
+        ).fetchone() is None
+
+    asyncio.run(host.startup())
+
     assert "cyrene_schedule" in host.attached_packs
     assert host.service("schedules") is not None
     assert host.service("schedule_application") is not None
@@ -124,3 +149,12 @@ def test_schedule_pack_owns_routes_service_and_frontend_module(tmp_path):
         getattr(route, "path", "") == "/api/workbench/schedule/tasks"
         for route in router.routes
     )
+    with sqlite3.connect(db_path) as database:
+        tables = {
+            str(row[0])
+            for row in database.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+    assert {"scheduled_tasks", "task_run_logs"} <= tables
+    asyncio.run(host.shutdown())

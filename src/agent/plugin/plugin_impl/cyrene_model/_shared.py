@@ -84,7 +84,7 @@ def _candidate(context: PluginContext) -> Mapping[str, Any]:
     if not profile_id:
         return supplied
     try:
-        from cyrene.runtime.model_configuration import candidate_for_profile
+        from .configuration import candidate_for_profile
 
         configured = candidate_for_profile(profile_id)
     except Exception:

@@ -13,7 +13,15 @@ class PluginCustomizationState:
     def __init__(self, values: Mapping[str, Mapping[str, Any]] | None = None) -> None:
         self._lock = threading.RLock()
         self._values: dict[str, dict[str, Any]] = {}
+        self._revision = 0
         self.replace(values or {})
+
+    @property
+    def revision(self) -> int:
+        """Monotonic process-local version used by live Agent sessions."""
+
+        with self._lock:
+            return self._revision
 
     @staticmethod
     def _entry(canonical_name: str, value: Mapping[str, Any]) -> dict[str, Any]:
@@ -45,7 +53,10 @@ class PluginCustomizationState:
             if str(name or "").strip()
         }
         with self._lock:
+            if self._values == next_values:
+                return
             self._values = next_values
+            self._revision += 1
 
     def get(self, canonical_name: str) -> dict[str, Any]:
         with self._lock:
@@ -54,10 +65,13 @@ class PluginCustomizationState:
     def set(self, canonical_name: str, value: Mapping[str, Any]) -> None:
         normalized = self._entry(canonical_name, value)
         with self._lock:
+            previous = self._values.get(str(canonical_name))
             if normalized:
                 self._values[str(canonical_name)] = normalized
             else:
                 self._values.pop(str(canonical_name), None)
+            if previous != normalized:
+                self._revision += 1
 
     def snapshot(self) -> dict[str, dict[str, Any]]:
         with self._lock:

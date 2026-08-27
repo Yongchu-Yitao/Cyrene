@@ -59,8 +59,7 @@ function remoteOutcomeLabel(t, outcome) {
 
 function remoteEventTime(value) {
   if (!value) return "—";
-  var date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+  return workbenchServices.i18n().formatDate(value, { dateStyle: "medium", timeStyle: "short" }) || "—";
 }
 
 function RemotePanel(p) {
@@ -308,7 +307,9 @@ function RemotePanel(p) {
         document.body.appendChild(input);
         input.select();
         try {
-          if (!document.execCommand("copy")) throw new Error("copy failed");
+          if (!document.execCommand("copy")) {
+            throw new Error(t("settings.remoteCopyFailed"));
+          }
           resolve();
         } catch (error) {
           reject(error);

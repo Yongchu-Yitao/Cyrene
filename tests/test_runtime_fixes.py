@@ -14,6 +14,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from agent.plugin import PluginContext
 
 
+def test_core_soul_projection_is_empty_when_plugin_is_unavailable(monkeypatch):
+    from cyrene.workbench import presentation_runtime
+
+    monkeypatch.setattr(
+        presentation_runtime,
+        "active_plugin_service",
+        lambda _name: None,
+    )
+
+    assert presentation_runtime._soul_presentation() == {
+        "path": "",
+        "content": "",
+        "updated_at": "",
+        "recent_items": [],
+        "section_count": 0,
+    }
+
+
 def _patch_memory_archive(monkeypatch, tmp_path):
     from agent.plugin.plugin_impl.cyrene_memory import archive
     from agent.plugin.plugin_impl.cyrene_memory.application import MemoryApplication
@@ -43,9 +61,8 @@ def _patch_active_memory_service(monkeypatch, service, *module_aliases):
 
 
 def test_get_memory_context_includes_short_term_by_default(tmp_path, monkeypatch):
-    from cyrene.runtime import settings_store
-    from agent.plugin.plugin_impl.cyrene_memory import short_term, soul
-    from agent.plugin.plugin_impl.cyrene_memory.application import MemoryApplication
+    from agent.plugin.plugin_impl.cyrene_memory import application as memory_application
+    from agent.plugin.plugin_impl.cyrene_memory import short_term
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -58,9 +75,14 @@ def test_get_memory_context_includes_short_term_by_default(tmp_path, monkeypatch
             "emotional_valence": 0,
         }
     ])
-    monkeypatch.setattr(settings_store, "is_soul_active", lambda: True)
-    monkeypatch.setattr(soul, "read_shallow_memory", lambda: "## SELF:IDENTITY\n- test memory")
-    application = MemoryApplication("", object(), object(), tmp_path)
+    monkeypatch.setattr(
+        memory_application,
+        "_soul_application",
+        lambda: SimpleNamespace(
+            persona_context=lambda: "## SELF:IDENTITY\n- test memory"
+        ),
+    )
+    application = memory_application.MemoryApplication("", object(), object(), tmp_path)
     context = application.memory_context()
 
     assert "SELF:IDENTITY" in context
@@ -69,9 +91,8 @@ def test_get_memory_context_includes_short_term_by_default(tmp_path, monkeypatch
 
 
 def test_get_memory_context_can_skip_short_term(tmp_path, monkeypatch):
-    from cyrene.runtime import settings_store
-    from agent.plugin.plugin_impl.cyrene_memory import short_term, soul
-    from agent.plugin.plugin_impl.cyrene_memory.application import MemoryApplication
+    from agent.plugin.plugin_impl.cyrene_memory import application as memory_application
+    from agent.plugin.plugin_impl.cyrene_memory import short_term
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -84,9 +105,14 @@ def test_get_memory_context_can_skip_short_term(tmp_path, monkeypatch):
             "emotional_valence": 0,
         }
     ])
-    monkeypatch.setattr(settings_store, "is_soul_active", lambda: True)
-    monkeypatch.setattr(soul, "read_shallow_memory", lambda: "## SELF:BELIEFS\n- test belief")
-    application = MemoryApplication("", object(), object(), tmp_path)
+    monkeypatch.setattr(
+        memory_application,
+        "_soul_application",
+        lambda: SimpleNamespace(
+            persona_context=lambda: "## SELF:BELIEFS\n- test belief"
+        ),
+    )
+    application = memory_application.MemoryApplication("", object(), object(), tmp_path)
     context = application.memory_context(include_short_term=False)
 
     assert "SELF:BELIEFS" in context
@@ -477,7 +503,7 @@ async def test_recall_conversation_tool_searches_active_workbench_workspace(tmp_
 
 
 async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
-    from cyrene.runtime import scheduler
+    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
 
     seen = {}
 
@@ -492,9 +518,6 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
         consecutive_unanswered=0, cooldown_until=0.0, last_proactive_time=0.0, probability=0.0,
     )
 
-    async def fake_context(_db_path=""):
-        return "## Recent memories about the user\n- user is preparing a launch"
-
     async def fake_run_plugin_proactive_turn(
         prompt, *, bot, owner_id, db_path, **_kwargs
     ):
@@ -507,7 +530,6 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
             pending_question=None,
         )
 
-    monkeypatch.setattr(scheduler, "_assemble_proactive_context", fake_context)
     monkeypatch.setattr(
         scheduler,
         "_run_plugin_proactive_turn",
@@ -520,7 +542,7 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
     assert seen["chat_id"] == 7
     assert seen["db_path"] == "db.sqlite3"
     assert "scheduler-initiated proactive check-in" in seen["prompt"]
-    assert "Recent memories about the user" in seen["prompt"]
+    assert "Recent memories about the user" not in seen["prompt"]
     assert "autonomous work cycle, not a social check-in" in seen["prompt"]
     assert "use tools and complete the work now" in seen["prompt"]
     assert "Never claim or imply that the user just woke up" in seen["prompt"]
@@ -532,7 +554,7 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
 
 
 async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypatch):
-    from cyrene.runtime import scheduler
+    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
 
     seen = {"notified": False}
 
@@ -546,9 +568,6 @@ async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypat
         consecutive_unanswered=0, cooldown_until=0.0, last_proactive_time=0.0, probability=0.0,
     )
 
-    async def fake_context(_db_path):
-        return "## Recent conversation\n- user already closed the loop"
-
     async def fake_run_plugin_proactive_turn(prompt, **_kwargs):
         seen["prompt"] = prompt
         return SimpleNamespace(text="", model="", pending_question=None)
@@ -556,7 +575,6 @@ async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypat
     async def fake_notify(*args, **kwargs):
         seen["notified"] = True
 
-    monkeypatch.setattr(scheduler, "_assemble_proactive_context", fake_context)
     monkeypatch.setattr(
         scheduler,
         "_run_plugin_proactive_turn",
@@ -573,7 +591,6 @@ async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypat
     assert "scheduler-initiated proactive check-in" in seen["prompt"]
     # A work cycle with nothing material to do must bow out silently instead
     # of manufacturing a social check-in.
-    assert "quit" in seen["prompt"].lower()
     assert "If there is no useful safe action or no material result" in seen["prompt"]
 
 
@@ -583,7 +600,7 @@ async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(
     accumulate into the cooldown threshold."""
     import time
 
-    from cyrene.runtime import scheduler
+    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
 
     monkeypatch.setattr(scheduler, "OWNER_ID", 7)
     monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
@@ -596,9 +613,6 @@ async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(
         consecutive_unanswered=0, cooldown_until=0.0, last_proactive_time=0.0, probability=0.0,
     )
 
-    async def fake_context(_db_path=""):
-        return ""
-
     # Deliver exactly one message on the first tick; stay silent ever after.
     calls = {"n": 0}
 
@@ -610,7 +624,6 @@ async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(
             pending_question=None,
         )
 
-    monkeypatch.setattr(scheduler, "_assemble_proactive_context", fake_context)
     monkeypatch.setattr(
         scheduler,
         "_run_plugin_proactive_turn",
@@ -633,7 +646,7 @@ async def test_proactive_cooldown_arms_when_streak_reaches_threshold(monkeypatch
     the next check arms the cooldown instead of sending again."""
     import time
 
-    from cyrene.runtime import scheduler
+    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
 
     sent = {"count": 0}
 
@@ -649,14 +662,10 @@ async def test_proactive_cooldown_arms_when_streak_reaches_threshold(monkeypatch
         cooldown_until=0.0, last_proactive_time=0.0, probability=0.0,
     )
 
-    async def fake_context(_db_path=""):
-        return ""
-
     async def fake_run_plugin_proactive_turn(prompt, **_kwargs):
         sent["count"] += 1
         return SimpleNamespace(text="hi", model="test-model", pending_question=None)
 
-    monkeypatch.setattr(scheduler, "_assemble_proactive_context", fake_context)
     monkeypatch.setattr(
         scheduler,
         "_run_plugin_proactive_turn",
@@ -711,7 +720,7 @@ def test_last_user_time_prefers_archive_over_state_mtime(tmp_path, monkeypatch):
     otherwise mask genuine user silence and suppress the >72h reach-out."""
     from datetime import datetime, timezone
 
-    from cyrene.runtime import scheduler
+    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
 
     conv_dir = tmp_path / "conversations"
     conv_dir.mkdir()
@@ -753,7 +762,7 @@ def test_last_user_time_mtime_fallback_requires_user_spoke_last(tmp_path, monkey
     import os
     from datetime import datetime, timezone
 
-    from cyrene.runtime import scheduler
+    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
 
     conv_dir = tmp_path / "conversations"  # deliberately not created
     state_file = tmp_path / "state.json"

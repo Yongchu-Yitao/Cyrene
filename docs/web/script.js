@@ -25,7 +25,7 @@
     'nav.usage': { zh: '使用', en: 'Usage' },
     'nav.core-concepts': { zh: '核心概念', en: 'Core Concepts' },
     'nav.features': { zh: '功能', en: 'Features' },
-    'nav.development': { zh: '开发', en: 'Development' },
+    'nav.development-section': { zh: '开发', en: 'Development' },
     // Sidebar nav — page links
     'nav.overview': { zh: '概述', en: 'Overview' },
     'nav.installation': { zh: '安装', en: 'Installation' },
@@ -47,6 +47,9 @@
     'sidebar.github': { zh: 'GitHub', en: 'GitHub' },
     'sidebar.aria-label': { zh: '文档导航', en: 'Documentation Navigation' },
     'theme.aria-label': { zh: '切换主题', en: 'Toggle theme' },
+    'lang.aria-label': { zh: '切换语言', en: 'Switch language' },
+    'skip.content': { zh: '跳到内容', en: 'Skip to content' },
+    'site.title': { zh: 'Cyrene — 持续进化的 AI Agent', en: 'Cyrene — AI Agent That Evolves' },
     // Search
     'search.placeholder': { zh: '搜索文档...', en: 'Search docs...' },
     'search.no-results': { zh: '无匹配结果', en: 'No results' },
@@ -79,7 +82,10 @@
 
   // --- State ---
   let currentPage = null;
-  let currentLang = localStorage.getItem('cyrene-docs-lang') || 'zh';
+  const savedLang = localStorage.getItem('cyrene-docs-lang');
+  let currentLang = savedLang === 'en' || savedLang === 'zh'
+    ? savedLang
+    : String(navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
 
   // --- DOM refs ---
   const sidebar = document.getElementById('sidebar');
@@ -124,6 +130,8 @@
 
   function applyLang() {
     document.documentElement.setAttribute('data-lang', currentLang);
+    document.documentElement.setAttribute('lang', currentLang === 'zh' ? 'zh-CN' : 'en');
+    document.title = t('site.title');
     // Update all data-i18n elements
     document.querySelectorAll('[data-i18n]').forEach(el => {
       const key = el.dataset.i18n;
@@ -151,14 +159,26 @@
     // Update theme toggle aria-label
     const themeBtn = document.getElementById('themeToggle');
     if (themeBtn) themeBtn.setAttribute('aria-label', t('theme.aria-label'));
+    const langBtn = document.getElementById('langToggle');
+    if (langBtn) langBtn.setAttribute('aria-label', t('lang.aria-label'));
   }
 
   function toggleLang() {
     currentLang = currentLang === 'zh' ? 'en' : 'zh';
     localStorage.setItem('cyrene-docs-lang', currentLang);
     applyLang();
+    searchIndex = buildSearchIndex();
+    if (searchInput && searchInput.value.trim()) doSearch(searchInput.value.trim());
   }
   window.toggleLang = toggleLang;
+
+  window.addEventListener('storage', function(event) {
+    if (event.key !== 'cyrene-docs-lang' || (event.newValue !== 'en' && event.newValue !== 'zh')) return;
+    currentLang = event.newValue;
+    applyLang();
+    searchIndex = buildSearchIndex();
+    if (searchInput && searchInput.value.trim()) doSearch(searchInput.value.trim());
+  });
 
   // ==========================================
   // Theme
@@ -185,6 +205,11 @@
     if (!el) return '';
     // Clone to avoid modifying live DOM
     const clone = el.cloneNode(true);
+    clone.querySelectorAll('[lang]').forEach(node => {
+      const nodeLang = String(node.getAttribute('lang') || '').toLowerCase();
+      const matches = currentLang === 'zh' ? nodeLang.startsWith('zh') : nodeLang.startsWith('en');
+      if (!matches) node.remove();
+    });
     // Remove code blocks and flow diagrams from search (too noisy)
     clone.querySelectorAll('.code-block, .flow-diagram, .table-wrapper').forEach(n => n.remove());
     return clone.textContent || '';

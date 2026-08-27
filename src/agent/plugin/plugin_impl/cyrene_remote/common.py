@@ -3,29 +3,44 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
 from collections.abc import Sequence
 from typing import Any
 from uuid import uuid4
 
 from agent.plugin import PluginContext
-from agent.plugin.native_runtime import run_context_value
-from cyrene.runtime.remote_control import (
+from agent.plugin.native_runtime import plugin_localized, run_context_value
+from .control import (
     RemoteControlStore,
     get_remote_gateway,
 )
 
 
-def remote_tool_error(exc: Exception) -> dict[str, Any]:
+logger = logging.getLogger(__name__)
+
+
+def remote_tool_error(
+    exc: Exception,
+    context: PluginContext,
+) -> dict[str, Any]:
     """Return a stable controller-side error instead of an ambiguous string."""
     message = str(exc).strip() or exc.__class__.__name__
+    logger.warning(
+        "Remote Plugin operation failed",
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
     if isinstance(exc, sqlite3.OperationalError) and (
         "locked" in message.lower() or "busy" in message.lower()
     ):
         return {
             "ok": False,
             "code": "remote_controller_database_busy",
-            "error": message,
+            "error": plugin_localized(
+                context,
+                "The remote controller database is busy. Try again shortly.",
+                "远程控制器数据库正忙，请稍后重试。",
+            ),
             "error_origin": "controller",
             "retryable": True,
         }
@@ -33,7 +48,11 @@ def remote_tool_error(exc: Exception) -> dict[str, Any]:
         return {
             "ok": False,
             "code": "remote_command_timeout",
-            "error": "remote command timed out",
+            "error": plugin_localized(
+                context,
+                "The remote command timed out.",
+                "远程命令执行超时。",
+            ),
             "error_origin": "transport",
             "retryable": True,
         }
@@ -41,7 +60,23 @@ def remote_tool_error(exc: Exception) -> dict[str, Any]:
         return {
             "ok": False,
             "code": "remote_controller_permission_denied",
-            "error": message,
+            "error": plugin_localized(
+                context,
+                "The remote device is not authorized for this operation.",
+                "远程设备未获授权执行此操作。",
+            ),
+            "error_origin": "controller",
+            "retryable": False,
+        }
+    if isinstance(exc, ValueError):
+        return {
+            "ok": False,
+            "code": "invalid_remote_request",
+            "error": plugin_localized(
+                context,
+                "The remote command request is invalid.",
+                "远程命令请求无效。",
+            ),
             "error_origin": "controller",
             "retryable": False,
         }
@@ -49,14 +84,22 @@ def remote_tool_error(exc: Exception) -> dict[str, Any]:
         return {
             "ok": False,
             "code": "remote_transport_unavailable",
-            "error": message,
+            "error": plugin_localized(
+                context,
+                "The remote connection is unavailable.",
+                "远程连接不可用。",
+            ),
             "error_origin": "transport",
             "retryable": True,
         }
     return {
         "ok": False,
         "code": "remote_controller_error",
-        "error": message,
+        "error": plugin_localized(
+            context,
+            "The remote operation failed.",
+            "远程操作失败。",
+        ),
         "error_origin": "controller",
         "retryable": False,
     }
@@ -68,7 +111,7 @@ def selected_remote_devices(
     """Return the current chat and only its still-trusted selected devices."""
     chat_id = str(run_context_value(context, "session_id", "") or "").strip()
     if not chat_id:
-        raise ValueError("当前没有活动对话，无法解析远程设备上下文")
+        raise ValueError("active conversation is unavailable")
     raw_device_ids = context.data.get("remote_device_ids")
     if not isinstance(raw_device_ids, Sequence) or isinstance(
         raw_device_ids,
@@ -85,7 +128,7 @@ def selected_remote_devices(
     }
     db_path = str(context.data.get("db_path") or "").strip()
     if not db_path:
-        raise ValueError("远程设备工具缺少数据库上下文")
+        raise ValueError("remote database context is unavailable")
 
     store = RemoteControlStore(db_path)
     selected: list[dict[str, Any]] = []
@@ -113,12 +156,12 @@ def resolve_selected_remote_device(
             if str(device.get("device_id") or "") == requested:
                 return chat, device
         raise PermissionError(
-            "目标远程设备未添加到当前对话上下文，或授权已被撤销"
+            "requested remote device is not authorized for this conversation"
         )
     if not devices:
-        raise PermissionError("当前对话尚未添加可控制的远程设备")
+        raise PermissionError("no authorized remote device is attached")
     if len(devices) > 1:
-        raise ValueError("当前对话有多个远程设备，请明确提供 device_id")
+        raise ValueError("device_id is required when multiple devices are attached")
     return chat, devices[0]
 
 
@@ -132,10 +175,10 @@ async def request_remote_command(
     )
     db_path = str(context.data.get("db_path") or "").strip()
     if not db_path:
-        raise ValueError("远程设备工具缺少数据库上下文")
+        raise ValueError("remote database context is unavailable")
     gateway = get_remote_gateway(db_path)
     if gateway is None:
-        raise RuntimeError("远程连接尚未启动，请先在设置中启用远程控制")
+        raise RuntimeError("remote gateway is not running")
     timeout = max(1.0, min(float(args.get("timeout_seconds") or 30), 120.0))
     result = await gateway.request(
         str(device["device_id"]),

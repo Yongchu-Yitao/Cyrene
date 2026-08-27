@@ -137,9 +137,7 @@ function UpdateSection({ t, config }) {
 
   function fmtDate(value) {
     if (!value) return "—";
-    var d = new Date(value);
-    if (isNaN(d.getTime())) return value;
-    try { return d.toLocaleDateString(); } catch (e) { return value; }
+    return workbenchServices.i18n().formatDate(value, { dateStyle: "medium" }) || "—";
   }
 
   function notesText() {

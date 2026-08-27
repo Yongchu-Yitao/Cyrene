@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from agent.plugin import PluginContext
-from agent.plugin.native_runtime import publish_runtime_event, run_context_value
+from agent.plugin.native_runtime import plugin_localized, publish_runtime_event, run_context_value
 from .definitions import get_native_tool_def
 
 TOOL_NAME = 'send_message_to_user'
@@ -18,13 +18,14 @@ async def _tool_send_message_to_user(args: dict[str, Any], context: PluginContex
     """Send a message directly to the user. Only available to subagents responding to @mentions."""
     text = str(args.get("text", "") or "").strip()
     if not text:
-        return "Error: 'text' is required."
+        return plugin_localized(context, "Error: 'text' is required.", "错误：必须提供 text。")
 
     agent_id = str(run_context_value(context, "agent_id") or "subagent")
     if agent_id == "main":
-        return (
-            "Error: send_message_to_user is only available when responding to a direct "
-            "user message via @mention. Return your result normally for other rounds."
+        return plugin_localized(
+            context,
+            "Error: send_message_to_user is only available when responding to a direct user message via @mention. Return your result normally for other turns.",
+            "错误：send_message_to_user 仅可用于回复通过 @ 提及发来的直接用户消息。其他轮次请正常返回结果。",
         )
 
     round_id = str(run_context_value(context, "round_id") or "").strip()
@@ -42,7 +43,11 @@ async def _tool_send_message_to_user(args: dict[str, Any], context: PluginContex
     notify_state = context.data.get("notify_state")
     if isinstance(notify_state, dict):
         notify_state["sent"] = True
-    return "Message sent. Now act on the user's guidance — adjust your approach and continue working with your other tools."
+    return plugin_localized(
+        context,
+        "Message sent. Now act on the user's guidance, adjust your approach, and continue with your other tools.",
+        "消息已发送。现在请根据用户的指导调整方案，并继续使用其他工具工作。",
+    )
 
 
 handler = _tool_send_message_to_user

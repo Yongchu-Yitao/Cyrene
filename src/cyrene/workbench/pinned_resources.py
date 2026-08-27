@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from cyrene.localization import localized
 from cyrene.workbench.store import read_document, write_document
 
 _KEY = "workbench_pinned_resources"
@@ -141,9 +142,10 @@ def upsert_resource(raw: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("snippet text is required")
         from cyrene.runtime.attachments import EXPORTS_DIR
 
-        summary = str(raw.get("title") or text.splitlines()[0] or "摘录").strip()
+        default_title = localized("Excerpt", "摘录")
+        summary = str(raw.get("title") or text.splitlines()[0] or default_title).strip()
         summary = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "-", summary)
-        summary = re.sub(r"\s+", " ", summary).strip(" .-")[:40] or "摘录"
+        summary = re.sub(r"\s+", " ", summary).strip(" .-")[:40] or default_title
         display_name = summary if summary.lower().endswith(".md") else summary + ".md"
         EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
         # Keep the user-facing Unicode title separate from the on-disk key.

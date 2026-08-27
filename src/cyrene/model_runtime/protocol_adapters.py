@@ -425,6 +425,7 @@ def prepare_request(
             "messages": converted,
             "max_tokens": max(1, int(max_tokens or 4096)),
             "stream": bool(stream),
+            "cache_control": {"type": "ephemeral"},
         }
         if system:
             payload["system"] = system
@@ -518,6 +519,26 @@ def _usage(adapter: str, data: dict[str, Any]) -> dict[str, int]:
             result["prompt_cache_miss_tokens"] = max(0, prompt - hit)
         return result
     raw = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    if adapter == "anthropic":
+        # Anthropic reports uncached, cache-write, and cache-read input as
+        # disjoint buckets. Their sum is the complete prompt token count.
+        uncached = max(0, int(raw.get("input_tokens") or 0))
+        cache_write = max(0, int(raw.get("cache_creation_input_tokens") or 0))
+        cache_read = max(0, int(raw.get("cache_read_input_tokens") or 0))
+        prompt = uncached + cache_write + cache_read
+        completion = max(0, int(raw.get("output_tokens") or 0))
+        result = {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+        }
+        if (
+            raw.get("cache_creation_input_tokens") is not None
+            or raw.get("cache_read_input_tokens") is not None
+        ):
+            result["prompt_cache_hit_tokens"] = cache_read
+            result["prompt_cache_miss_tokens"] = uncached + cache_write
+        return result
     prompt = int(raw.get("input_tokens") or raw.get("prompt_tokens") or 0)
     completion = int(raw.get("output_tokens") or raw.get("completion_tokens") or 0)
     result = {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": int(raw.get("total_tokens") or prompt + completion)}

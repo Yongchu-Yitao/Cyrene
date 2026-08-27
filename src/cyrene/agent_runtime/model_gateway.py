@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from cyrene.config import CACHE_DIR, WEB_PORT
+from cyrene.localization import localized
 
 logger = logging.getLogger(__name__)
 
@@ -137,9 +138,15 @@ def issue_model_gateway_binding(_model_access: Any, context: dict[str, Any]) -> 
         raise AgentRuntimeError(
             "model_gateway_unavailable",
             (
-                "No Cyrene model is configured for this Agent"
+                localized(
+                    "No Cyrene model is configured for this Agent",
+                    "尚未为此智能体配置 Cyrene 模型",
+                )
                 if profile_id in {"", "primary"}
-                else f"Cyrene model profile {profile_id!r} is unavailable"
+                else localized(
+                    f"Cyrene model profile {profile_id!r} is unavailable",
+                    f"Cyrene 模型配置 {profile_id!r} 不可用",
+                )
             ),
         )
     installation_id = str(context.get("installation_id") or "")
@@ -357,7 +364,10 @@ async def call_model_gateway(body: dict[str, Any], scope: dict[str, Any]) -> dic
     if candidate is None:
         raise AgentRuntimeError(
             "model_binding_unsupported",
-            "The Cyrene model selected for this Agent is no longer available",
+            localized(
+                "The Cyrene model selected for this Agent is no longer available",
+                "为此智能体选择的 Cyrene 模型已不可用",
+            ),
         )
     from agent.plugin import active_plugin_service
 
@@ -365,7 +375,10 @@ async def call_model_gateway(body: dict[str, Any], scope: dict[str, Any]) -> dic
     if gateway is None:
         raise AgentRuntimeError(
             "model_gateway_unavailable",
-            "Model Provider Plugins are not available",
+            localized(
+                "Model Provider Plugins are not available",
+                "模型提供商插件不可用",
+            ),
         )
     logger.info(
         "gateway call_model_gateway calling Provider Plugin "

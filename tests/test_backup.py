@@ -151,13 +151,19 @@ async def test_backup_collects_plugin_owned_files_and_replace_roots(
             for _path, arcname in backup._MANAGED_DIRECTORIES
         },
     )
-    service = SimpleNamespace(
+    memory_service = SimpleNamespace(
         backup_sources=lambda: {
-            "files": ((soul, "workspace/SOUL.md"),),
             "directories": ((conversations, "workspace/conversations"),),
         }
     )
-    host = SimpleNamespace(services={"memory": service})
+    soul_service = SimpleNamespace(
+        backup_sources=lambda: {
+            "files": ((soul, "workspace/SOUL.md"),),
+        }
+    )
+    host = SimpleNamespace(
+        active_services={"memory": memory_service, "soul": soul_service}
+    )
     monkeypatch.setattr(
         plugin_runtime,
         "active_plugin_application_host",

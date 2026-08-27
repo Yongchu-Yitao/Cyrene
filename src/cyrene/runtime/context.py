@@ -22,20 +22,6 @@ HostMode = Literal["cli", "web", "electron", "gui", "bot", "test", "unknown"]
 ResourceCloser = Callable[[], Any]
 
 
-@dataclass(frozen=True, slots=True)
-class RuntimeConfigSnapshot:
-    """The startup settings needed by application-level services.
-
-    Provider, channel, and UI settings will move into focused immutable
-    snapshots as their consumers are migrated.  Keeping this type deliberately
-    small prevents ``RuntimeContext`` from becoming a replacement global bag.
-    """
-
-    searxng_auto_start: bool
-    searxng_host: str
-    searxng_port: int
-
-
 @dataclass(slots=True)
 class _ManagedResource:
     value: Any
@@ -49,11 +35,9 @@ class RuntimeContext:
     paths: AppPaths
     database_path: Path
     inbox_path: Path
-    config: RuntimeConfigSnapshot
     host_mode: HostMode = "unknown"
     background_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
     initialized_components: set[str] = field(default_factory=set)
-    started_services: set[str] = field(default_factory=set)
     accepting_work: bool = True
     closed: bool = False
     _resources: dict[str, _ManagedResource] = field(default_factory=dict)
@@ -147,6 +131,5 @@ class RuntimeContext:
 
 __all__ = [
     "HostMode",
-    "RuntimeConfigSnapshot",
     "RuntimeContext",
 ]

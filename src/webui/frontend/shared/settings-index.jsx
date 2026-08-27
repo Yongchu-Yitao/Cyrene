@@ -16,10 +16,8 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "model-usage", labelKey: "settings.modelUsage" },
     { id: "agents", labelKey: "settings.agents" },
     { id: "voice", labelKey: "settings.voiceTab" },
-    { id: "plugins", labelKey: "settings.pluginsTab" },
     { id: "channels", labelKey: "settings.channels" },
     { id: "remote", labelKey: "settings.remoteTab" },
-    { id: "mcp-providers", labelKey: "settings.mcpProviders" },
     { id: "plugin-registry", labelKey: "settings.pluginRegistry" },
     { id: "integrations", labelKey: "settings.integrations" },
     { id: "budget", labelKey: "settings.budget" },
@@ -72,13 +70,10 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "setting-workbench-background", tab: "appearance", labelKey: "settings.workbenchBackground", hintKey: "settings.workbenchBackgroundHint", keywords: ["背景", "background", "壁纸"] },
     { id: "setting-performance-mode", tab: "appearance", labelKey: "settings.performanceMode", hintKey: "settings.performanceModeHint", keywords: ["性能", "performance"] },
     { id: "setting-pulse-animation", tab: "appearance", labelKey: "settings.pulseAnimation", hintKey: "settings.pulseAnimationHint", keywords: ["动画", "animation", "pulse", "呼吸"] },
-    // ── Voice & Plugins ──
-    { id: "setting-plugin-packs", tab: "plugins", labelKey: "settings.pluginPacks", hintKey: "settings.pluginPacksHint", keywords: ["插件包", "plugin pack", "插件", "工具"] },
-    { id: "setting-standalone-plugins", tab: "plugins", labelKey: "settings.pluginStandalone", hintKey: "settings.pluginStandaloneHint", keywords: ["独立插件", "standalone plugin", "plugin", "Python"] },
+    // ── Voice ──
     { id: "setting-voice", tab: "voice", labelKey: "settings.voiceCapability", hintKey: "settings.voiceCapabilityHint", keywords: ["语音", "voice", "tts", "asr", "声音"] },
     // ── Plugin framework ──
-    { id: "setting-mcp-providers", tab: "mcp-providers", labelKey: "settings.mcpProviders", hintKey: "settings.mcpProvidersHint", keywords: ["MCP", "provider", "服务器", "插件包"] },
-    { id: "setting-plugin-registry", tab: "plugin-registry", labelKey: "settings.pluginRegistry", hintKey: "settings.pluginRegistryHint", keywords: ["插件注册表", "plugin registry", "插件包", "standalone plugin", "模型", "model"] },
+    { id: "setting-plugin-registry", tab: "plugin-registry", labelKey: "settings.pluginRegistry", hintKey: "settings.pluginRegistryHint", keywords: ["插件中心", "plugin center", "插件注册表", "plugin registry", "插件包", "standalone plugin", "Skill", "技能", "MCP", "provider", "服务器", "服务", "CLI", "命令行", "模型", "model"] },
     // ── Data ──
     { id: "setting-storage", tab: "data", labelKey: "settings.storageUsage", keywords: ["存储", "storage", "空间", "占用", "缓存"] },
     { id: "setting-paths", tab: "data", labelKey: "settings.pathInfo", keywords: ["路径", "path", "目录", "目录位置"] },

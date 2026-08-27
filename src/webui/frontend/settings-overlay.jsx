@@ -7,7 +7,7 @@ import {
 import {
   RemotePanel, GeneralPanel, SearchPanel, ChannelsPanel, AgentsPanel,
   AppearancePanel, CapabilitiesPanel, DataPanel, requestDataPanelStorage, AboutPanel,
-  McpProvidersPanel, PluginRegistryPanel, ShortcutsPanel, BudgetPanel, MediaPanel,
+  PluginRegistryPanel, ShortcutsPanel, BudgetPanel, MediaPanel,
 } from "./features/settings/index.jsx"
 
 // ── Tab definitions ──
@@ -22,13 +22,13 @@ var TABS = [
   { id: "media", labelKey: "settings.mediaGeneration", icon: "photo-video" },
   { id: "agents", labelKey: "settings.agents", icon: "robot" },
   { id: "voice", labelKey: "settings.voiceTab", icon: "microphone" },
-  { id: "plugins", labelKey: "settings.pluginsTab", icon: "tools" },
   { id: "channels", labelKey: "settings.channels", icon: "messages" },
   { id: "remote", labelKey: "settings.remoteTab", icon: "device-desktop-up" },
-  { id: "mcp-providers", labelKey: "settings.mcpProviders", icon: "puzzle" },
   { id: "plugin-registry", labelKey: "settings.pluginRegistry", icon: "package" },
   { id: "integrations", labelKey: "settings.integrations", icon: "plug-connected" },
-  { id: "budget", labelKey: "settings.budget", icon: "wallet" },
+  // Keep the budget surface available for direct routing while its sidebar
+  // entry is temporarily withheld from the settings navigation.
+  { id: "budget", labelKey: "settings.budget", icon: "wallet", hidden: true },
   { id: "usage", labelKey: "settings.usage", icon: "chart-bar" },
   { id: "data", labelKey: "settings.data", icon: "database" },
   { id: "about", labelKey: "settings.about", icon: "info-circle" },
@@ -36,9 +36,9 @@ var TABS = [
 
 var SETTINGS_TAB_GROUPS = [
   { labelKey: "settings.group.general", ids: ["profile", "general", "search", "appearance", "shortcuts"] },
-  { labelKey: "settings.group.intelligence", ids: ["model-usage", "models", "media", "agents", "voice", "plugins"] },
+  { labelKey: "settings.group.intelligence", ids: ["model-usage", "models", "media", "agents", "voice"] },
   { labelKey: "settings.group.connections", ids: ["channels", "remote"] },
-  { labelKey: "settings.group.extensionsSystem", ids: ["mcp-providers", "plugin-registry", "integrations"] },
+  { labelKey: "settings.group.extensionsSystem", ids: ["plugin-registry", "integrations"] },
   { labelKey: "settings.group.data", ids: ["budget", "usage", "data"] },
   { labelKey: "settings.group.other", ids: ["about"] },
 ];
@@ -47,6 +47,33 @@ var TABS_BY_ID = TABS.reduce(function (acc, item) {
   acc[item.id] = item;
   return acc;
 }, {});
+
+var SETTINGS_TAB_MODULES = {
+  search: ["search"],
+  "model-usage": ["model"],
+  models: ["model"],
+  media: ["media"],
+  agents: ["soul", "proactive", "skills", "subagent"],
+  voice: ["voice"],
+  channels: ["channels"],
+  remote: ["remote"],
+  integrations: ["office", "knowledge"],
+};
+
+var LEGACY_SETTINGS_TABS = {
+  "mcp-providers": "plugin-registry",
+  extensions: "plugin-registry",
+  skills: "plugin-registry",
+  plugins: "plugin-registry",
+};
+
+var LEGACY_SETTINGS_ANCHORS = {
+  "setting-mcp-providers": "setting-plugin-registry",
+  "setting-extensions": "setting-plugin-registry",
+  "setting-skills": "setting-plugin-registry",
+  "setting-plugin-packs": "setting-plugin-registry",
+  "setting-standalone-plugins": "setting-plugin-registry",
+};
 
 function settingsIconMarkup(name) {
   var assets = window.CyreneIconAssets;
@@ -71,12 +98,11 @@ function SettingsTabIcon(id) {
 }
 
 // ── Settings Page ──
-function agentSettingsPayload(config, agentProactive) {
-  return {
+function agentSettingsPayload(config, agentProactive, pluginModules) {
+  var modules = Array.isArray(pluginModules) ? pluginModules : [];
+  var payload = {};
+  if (modules.indexOf("subagent") >= 0) Object.assign(payload, {
     spawn_policy: config.spawn_policy || "conservative",
-    heartbeat_interval: Number(config.heartbeat_interval) || 1800,
-    background_skill_learning: config.background_skill_learning !== false,
-    agent_proactive: agentProactive,
     subagent_execution_max_tool_calls: Number(config.subagent_execution_max_tool_calls) || 200,
     subagent_execution_max_wall_seconds: Number(config.subagent_execution_max_wall_seconds) || 1800,
     subagent_execution_no_progress_turns: Number(config.subagent_execution_no_progress_turns) || 3,
@@ -90,7 +116,15 @@ function agentSettingsPayload(config, agentProactive) {
     subagent_discussion_max_wall_seconds: Number(config.subagent_discussion_max_wall_seconds) || 600,
     subagent_discussion_max_tool_calls: Number(config.subagent_discussion_max_tool_calls) || 50,
     subagent_discussion_no_new_info_rounds: Number(config.subagent_discussion_no_new_info_rounds) || 2,
-  };
+  });
+  if (modules.indexOf("proactive") >= 0) Object.assign(payload, {
+    heartbeat_interval: Number(config.heartbeat_interval) || 1800,
+    agent_proactive: agentProactive,
+  });
+  if (modules.indexOf("skills") >= 0) {
+    payload.background_skill_learning = config.background_skill_learning !== false;
+  }
+  return payload;
 }
 
 function SettingsPage({
@@ -105,10 +139,26 @@ function SettingsPage({
   scrollToId,
 }) {
   var { t, lang, setLang } = useWorkbenchI18n();
-  function normalizeSettingsTab(value) {
-    return TABS_BY_ID[value] ? value : "general";
+  var dataStore = workbenchServices.data();
+  dataStore.useVersion();
+  var pluginModules = Array.isArray(dataStore.state.pluginModules)
+    ? dataStore.state.pluginModules : [];
+  function settingsTabAvailable(id) {
+    var required = SETTINGS_TAB_MODULES[id];
+    return !required || required.some(function (module) {
+      return pluginModules.indexOf(module) >= 0;
+    });
   }
+  function normalizeSettingsTab(value) {
+    var target = LEGACY_SETTINGS_TABS[value] || value;
+    return TABS_BY_ID[target] && settingsTabAvailable(target) ? target : "general";
+  }
+  var normalizedScrollToId = LEGACY_SETTINGS_ANCHORS[scrollToId] || scrollToId;
   var [tab, setTab] = useStateSt(normalizeSettingsTab(initialTab));
+
+  useEffectSt(function () {
+    if (!settingsTabAvailable(tab)) setTab("general");
+  }, [tab, pluginModules.join("|")]);
 
   // Warm the comparatively expensive storage scan as soon as Settings is
   // mounted. DataPanel shares this request, so opening Data while the scan is
@@ -136,7 +186,7 @@ function SettingsPage({
   // setting-amap-key is only rendered when the AMap provider is selected),
   // give feedback instead of staying silent and land on the tab top.
   useEffectSt(function () {
-    if (!scrollToId) return;
+    if (!normalizedScrollToId) return;
     var attempts = 0;
     var timer = null;
     function showDeepLinkFallback() {
@@ -150,7 +200,7 @@ function SettingsPage({
       }
     }
     function tryScroll() {
-      var el = document.getElementById(scrollToId);
+      var el = document.getElementById(normalizedScrollToId);
       if (el) {
         el.scrollIntoView({ block: "center", behavior: "smooth" });
         el.classList.add("wb-settings-highlight");
@@ -168,7 +218,7 @@ function SettingsPage({
     return function () {
       if (timer) clearTimeout(timer);
     };
-  }, [scrollToId]);
+  }, [normalizedScrollToId]);
 
   // ── General state ──
   var [desktopNotifications, setDesktopNotifications] = useStateSt(function () {
@@ -215,10 +265,6 @@ function SettingsPage({
 
   // ── Capabilities state ──
   var [redactSecrets, setRedactSecrets] = useStateSt(function () { return readCapability("redactSecrets", true); });
-  var [pluginPacks, setPluginPacks] = useStateSt([]);
-  var [standalonePlugins, setStandalonePlugins] = useStateSt([]);
-  var [pluginSaved, setPluginSaved] = useStateSt("");
-  var [pluginSettingBusy, setPluginSettingBusy] = useStateSt("");
   var [voiceStatus, setVoiceStatus] = useStateSt({
     asr_ready: false,
     tts_model_ready: false,
@@ -486,19 +532,32 @@ function SettingsPage({
       });
     }).catch(function () {});
 
-    refreshPluginSettings().catch(function () {});
-    refreshVoiceStatus();
-    settingsFetch("/api/settings/keys").then(function (r) { return r.json(); }).then(function (p) {
-      var tk = (p.keys || []).find(function (item) { return item.key === "TELEGRAM_BOT_TOKEN"; });
-      if (tk) setTelegramToken(tk.value || "");
-      var ak = (p.keys || []).find(function (item) { return item.key === "AMAP_API_KEY"; });
-      if (ak) setAmapKey(ak.value || "");
-    }).catch(function () {});
-
     settingsFetch("/api/backup/list").then(function (r) { return r.json(); }).then(function (d) { if (d.ok) setBackupList(d.backups || []); }).catch(function () {});
   }, []);
 
   useEffectSt(function () {
+    if (pluginModules.indexOf("voice") < 0) return;
+    refreshVoiceStatus();
+  }, [pluginModules.indexOf("voice") >= 0]);
+
+  useEffectSt(function () {
+    var hasChannels = pluginModules.indexOf("channels") >= 0;
+    var hasMap = pluginModules.indexOf("map") >= 0;
+    if (!hasChannels && !hasMap) return;
+    settingsFetch("/api/settings/keys").then(function (r) { return r.json(); }).then(function (p) {
+      if (hasChannels) {
+        var tk = (p.keys || []).find(function (item) { return item.key === "TELEGRAM_BOT_TOKEN"; });
+        if (tk) setTelegramToken(tk.value || "");
+      }
+      if (hasMap) {
+        var ak = (p.keys || []).find(function (item) { return item.key === "AMAP_API_KEY"; });
+        if (ak) setAmapKey(ak.value || "");
+      }
+    }).catch(function () {});
+  }, [pluginModules.indexOf("channels") >= 0, pluginModules.indexOf("map") >= 0]);
+
+  useEffectSt(function () {
+    if (pluginModules.indexOf("voice") < 0) return undefined;
     function onVoiceStatusChanged(event) {
       var detail = event && event.detail;
       if (detail && typeof detail === "object") {
@@ -512,7 +571,7 @@ function SettingsPage({
     return function () {
       window.removeEventListener("cyrene:voice-status-changed", onVoiceStatusChanged);
     };
-  }, []);
+  }, [pluginModules.indexOf("voice") >= 0]);
 
   function saveSoul() {
     setSoulStatus("");
@@ -523,59 +582,12 @@ function SettingsPage({
 
   function saveAgents() {
     settingsFetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(agentSettingsPayload(config, agentProactive)),
+      body: JSON.stringify(agentSettingsPayload(config, agentProactive, pluginModules)),
     }).then(function () {
       showSettingsToast(t("settings.saved"), "success");
     }).catch(function (error) {
       showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error");
     });
-  }
-
-  function refreshPluginSettings() {
-    return settingsFetch("/api/settings/plugins").then(readSettingsResponse).then(function (payload) {
-      setPluginPacks(Array.isArray(payload.packs) ? payload.packs : []);
-      setStandalonePlugins(Array.isArray(payload.standalone_plugins) ? payload.standalone_plugins : []);
-      return payload;
-    });
-  }
-
-  function persistPluginActivation(kind, id, nextEnabled) {
-    id = String(id || "");
-    if (!id || pluginSettingBusy) return;
-    var payload = kind === "pack" ? { packs: {} } : { plugins: {} };
-    payload[kind === "pack" ? "packs" : "plugins"][id] = nextEnabled;
-    setPluginSettingBusy(kind + ":" + id);
-    setPluginSaved(t("settings.saving"));
-    settingsFetch("/api/settings/plugins", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }).then(readSettingsResponse).then(function () {
-      return Promise.all([
-        refreshPluginSettings(),
-        workbenchServices.plugins().refresh(),
-      ]);
-    }).then(function () {
-      setPluginSaved("");
-      showSettingsToast(t("settings.saved"), "success");
-    }).catch(function (error) {
-      setPluginSaved("");
-      showSettingsToast(t("settings.error") + ": " + (error && error.message || ""), "error");
-    }).finally(function () {
-      setPluginSettingBusy("");
-    });
-  }
-
-  function savePluginPack(packId, nextEnabled) {
-    var pack = pluginPacks.find(function (item) { return String(item.id || "") === String(packId || ""); });
-    if (!pack || pack.locked === true) return;
-    persistPluginActivation("pack", packId, nextEnabled);
-  }
-
-  function saveStandalonePlugin(pluginName, nextEnabled) {
-    var plugin = standalonePlugins.find(function (item) { return String(item.id || item.name || "") === String(pluginName || ""); });
-    if (!plugin || plugin.locked === true) return;
-    persistPluginActivation("plugin", plugin.id || pluginName, nextEnabled);
   }
 
   function publishVoiceStatus(next) {
@@ -715,12 +727,17 @@ function SettingsPage({
   }
 
   function formatBytes(n) { n = Number(n || 0); if (n < 1024) return n + " B"; if (n < 1048576) return (n / 1024).toFixed(1) + " KB"; if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB"; return (n / 1073741824).toFixed(2) + " GB"; }
-  function formatDate(iso) { if (!iso) return "—"; try { return new Date(iso).toLocaleString(); } catch (e) { return iso; } }
+  function formatDate(iso) {
+    if (!iso) return "—";
+    return workbenchServices.i18n().formatDate(iso, { dateStyle: "medium", timeStyle: "short" }) || "—";
+  }
 
   useEffectSt(function () {
     if (!window.CyreneUI.has("uiSurface")) return undefined;
     var uiSurface = workbenchServices.uiSurface();
-    var unregister = TABS.map(function (item) {
+    var unregister = TABS.filter(function (item) {
+      return item.hidden !== true && settingsTabAvailable(item.id);
+    }).map(function (item) {
       return uiSurface.register({
         node_id: "settings_tab_" + item.id,
         parent_id: "settings_page",
@@ -737,7 +754,7 @@ function SettingsPage({
       });
     });
     return function () { unregister.forEach(function (remove) { remove(); }); };
-  }, [tab, t]);
+  }, [tab, t, pluginModules.join("|")]);
 
   return React.createElement("div", {
     className: "settings-overlay",
@@ -765,7 +782,7 @@ function SettingsPage({
               React.createElement("div", { className: "settings-overlay-nav-label" }, t(group.labelKey)),
               group.ids.map(function (id) {
                 var item = TABS_BY_ID[id];
-                if (!item) return null;
+                if (!item || item.hidden === true || !settingsTabAvailable(id)) return null;
                 return React.createElement("button", {
                   key: item.id,
                   type: "button",
@@ -792,28 +809,25 @@ function SettingsPage({
           tab === "profile" && React.createElement("div", { className: "settings-profile-panel" },
             React.createElement(workbenchServices.profile().Page)
           ),
-          tab === "general" && React.createElement(GeneralPanel, { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project }),
+          tab === "general" && React.createElement(GeneralPanel, { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project, pluginModules }),
           tab === "search" && React.createElement(SearchPanel, { t: t }),
           tab === "models" && React.createElement(workbenchServices.modelSettings().ServicesPage, { t: t, project: project }),
           tab === "model-usage" && React.createElement(workbenchServices.modelSettings().UsagePage, { t: t, project: project }),
-          tab === "media" && React.createElement(MediaPanel, { t: t }),
+          tab === "media" && React.createElement(MediaPanel, { t: t, available: settingsTabAvailable("media") }),
           tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
           tab === "remote" && React.createElement(RemotePanel, { t }),
-          tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents }),
+          tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents, pluginModules }),
           tab === "appearance" && React.createElement(AppearancePanel, { t, tweaks, setTweak, actualTheme, theme: initialTheme }),
-          (tab === "voice" || tab === "plugins") && CapabilitiesPanel({
-            mode: tab,
-            t, pluginPacks, standalonePlugins, pluginSaved, pluginSettingBusy,
-            savePluginPack, saveStandalonePlugin,
+          tab === "voice" && CapabilitiesPanel({
+            t,
             voiceStatus, voiceReferenceText, setVoiceReferenceText,
             voiceReferenceFile, setVoiceReferenceFile, voiceReferencePhase, voiceReferenceElapsed,
             startVoiceReferenceRecording, finishVoiceReferenceRecording,
             voiceBusy, voiceNotice,
             saveVoiceBooleanSetting, saveVoiceMode, saveVoicePreset, saveVoiceTtsModel, saveVoiceProfile, deleteVoiceProfile,
           }),
-          tab === "mcp-providers" && React.createElement(McpProvidersPanel, { t: t }),
-          tab === "plugin-registry" && React.createElement(PluginRegistryPanel, { t: t }),
-          tab === "integrations" && React.createElement(GeneralPanel, { integrationsOnly: true, t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project }),
+          tab === "plugin-registry" && React.createElement(PluginRegistryPanel, { t: t, pluginModules: pluginModules }),
+          tab === "integrations" && React.createElement(GeneralPanel, { integrationsOnly: true, t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project, pluginModules }),
           tab === "shortcuts" && React.createElement(ShortcutsPanel, { t }),
           tab === "data" && React.createElement(DataPanel, { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
           (tab === "budget" || tab === "usage") && React.createElement(BudgetPanel, { t, config, mode: tab }),

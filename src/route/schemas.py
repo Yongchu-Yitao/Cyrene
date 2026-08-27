@@ -235,6 +235,7 @@ class ChatCreateBody(APIBody):
     modelAccess: ModelAccessBody | None = None
     soulActive: bool | None = None
     workspaceActive: bool | None = None
+    remoteDeviceIds: list[str] = Field(default_factory=list, max_length=50)
     reasoningEffort: Literal["", "low", "medium", "high", "xhigh", "max", "ultra"] = ""
     contextActivations: ComposerContextActivationsBody | None = None
 
@@ -258,6 +259,7 @@ class ChatUpdateBody(APIBody):
     soulActive: bool | None = None
     workspaceActive: bool | None = None
     workspaceOverride: str | None = Field(default=None, max_length=4096)
+    remoteDeviceIds: list[str] | None = Field(default=None, max_length=50)
     contextActivations: ComposerContextActivationsBody | None = None
 
 
@@ -293,6 +295,7 @@ class ChatMessageBody(APIBody):
     workspaceOverride: str | None = Field(default=None, max_length=4096)
     soulActive: bool | None = None
     workspaceActive: bool | None = None
+    remoteDeviceIds: list[str] | None = Field(default=None, max_length=50)
     contextActivations: ComposerContextActivationsBody | None = None
     uiInstanceId: str | None = Field(default=None, max_length=200)
     agent: AgentBindingBody | None = None

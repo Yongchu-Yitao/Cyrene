@@ -76,7 +76,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     return isNaN(d.getTime()) ? null : d;
   }
   function pad2(n) { return (n < 10 ? "0" : "") + n; }
-  // Relative label for list cards: 今天 / 昨天 / MM-DD / YYYY-MM-DD.
+  // Relative label for list cards: today / yesterday / MM-DD / YYYY-MM-DD.
   function formatRel(s, t) {
     var d = parseDate(s);
     if (!d) return "—";
@@ -84,8 +84,8 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     var startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     var startThat = new Date(d.getFullYear(), d.getMonth(), d.getDate());
     var days = Math.round((startToday - startThat) / 86400000);
-    if (days === 0) return t ? t("memory.today", "Today") : "今天";
-    if (days === 1) return t ? t("memory.yesterday", "Yesterday") : "昨天";
+    if (days === 0) return t ? t("memory.today", "Today") : "Today";
+    if (days === 1) return t ? t("memory.yesterday", "Yesterday") : "Yesterday";
     if (d.getFullYear() === now.getFullYear()) return pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
     return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
   }
@@ -113,11 +113,11 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     history: function (s) { return svg({ width: s, height: s }, h("path", { d: "M4.5 9.5V4.8m0 4.7h4.7M5 9a8 8 0 1 1-.6 5.7" }), h("path", { d: "M12 7.5V12l3.1 1.8" })); },
   };
   var CATS = {
-    preference: { label: "个人偏好", tone: "rose" },
-    project: { label: "项目背景", tone: "green" },
-    habit: { label: "工作习惯", tone: "blue" },
-    fact: { label: "事实信息", tone: "amber" },
-    conversation: { label: "对话习惯", tone: "violet" },
+    preference: { label: "Personal preferences", tone: "rose" },
+    project: { label: "Project context", tone: "green" },
+    habit: { label: "Work habits", tone: "blue" },
+    fact: { label: "Facts", tone: "amber" },
+    conversation: { label: "Conversation habits", tone: "violet" },
   };
   var CAT_ORDER = ["preference", "project", "habit", "fact", "conversation"];
   var SOURCE_TONE = { conversation: "violet", knowledge: "amber", manual: "green", agent: "blue", other: "slate" };
@@ -137,7 +137,21 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
   }
   function confidenceLabel(id, t) {
     var raw = String(id || "auto");
-    return raw === "auto" ? (t ? t("memory.auto", "Automatic") : "自动") : (t ? t("memory.confidence." + raw, raw) : raw);
+    return raw === "auto" ? (t ? t("memory.auto", "Automatic") : "Automatic") : (t ? t("memory.confidence." + raw, raw) : raw);
+  }
+  function citationSourceLabel(id, t) {
+    var raw = String(id || "other");
+    return t ? t("memory.citationSource." + raw, sourceLabel(raw, t)) : raw;
+  }
+  function historyActionLabel(id, t) {
+    var raw = String(id || "edited");
+    return t ? t("memory.historyAction." + raw, raw) : raw;
+  }
+  function historyDetailText(event, t) {
+    if (!event) return "";
+    var code = String(event.detail_code || "");
+    if (code) return t ? t("memory.historyDetail." + code, code) : code;
+    return String(event.detail || "");
   }
   function catIcon(id, size) { return (ICON[id] || ICON.fact)(size || 18); }
 
@@ -169,7 +183,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     return h("span", { className: "wb-mem-chip" + (props.tone ? " " + props.tone : "") }, props.children);
   }
 
-  // Donut chart for 记忆来源 built from {label,count,pct} segments.
+  // Memory-source donut chart built from {label,count,pct} segments.
   function Donut(props) {
     var segs = (props.segments || []).filter(function (s) { return s.count > 0; });
     var segmentTotal = segs.reduce(function (a, s) { return a + s.count; }, 0);
@@ -179,7 +193,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       return h("svg", { className: "wb-mem-donut", viewBox: "0 0 80 80", width: 78, height: 78 },
         h("circle", { cx: 40, cy: 40, r: R, fill: "none", stroke: "var(--wb-line)", strokeWidth: 12 }),
         h("text", { x: 40, y: 37, textAnchor: "middle", className: "wb-mem-donut-num" }, displayTotal),
-        h("text", { x: 40, y: 50, textAnchor: "middle", className: "wb-mem-donut-cap" }, props.t ? props.t("memory.itemsUnit", "items") : "条"));
+        h("text", { x: 40, y: 50, textAnchor: "middle", className: "wb-mem-donut-cap" }, props.t ? props.t("memory.itemsUnit", "items") : "items"));
     }
     var arcs = segs.map(function (s, i) {
       var len = (s.count / segmentTotal) * C;
@@ -195,7 +209,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     return h("svg", { className: "wb-mem-donut", viewBox: "0 0 80 80", width: 78, height: 78 },
       arcs,
       h("text", { x: 40, y: 37, textAnchor: "middle", className: "wb-mem-donut-num" }, displayTotal),
-      h("text", { x: 40, y: 50, textAnchor: "middle", className: "wb-mem-donut-cap" }, props.t ? props.t("memory.itemsUnit", "items") : "条"));
+      h("text", { x: 40, y: 50, textAnchor: "middle", className: "wb-mem-donut-cap" }, props.t ? props.t("memory.itemsUnit", "items") : "items"));
   }
 
   // ── create / edit modal ──────────────────────────────────────────────
@@ -337,7 +351,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
         ? h("div", { className: "wb-mem-cite-list" }, m.citations.map(function (c, i) {
             return h("div", { className: "wb-mem-cite-row", key: i },
               h("div", { className: "wb-mem-cite-row-head" },
-                h("span", { className: "wb-mem-chip " + (SOURCE_TONE[c.source] || "slate") }, c.source_label || c.source),
+                h("span", { className: "wb-mem-chip " + (SOURCE_TONE[c.source] || "slate") }, citationSourceLabel(c.source, t)),
                 h("time", null, formatFull(c.at))),
               c.snippet && h("p", { className: "wb-mem-cite-snippet" }, c.snippet));
           }))
@@ -362,8 +376,8 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
             return h("div", { className: "wb-mem-history-row", key: i },
               h("span", { className: "wb-mem-dot" + (i === 0 ? "" : " muted") }),
               h("div", null,
-                h("b", null, ev.action_label || ev.action),
-                ev.detail && h("p", { className: "wb-mem-history-detail" }, ev.detail),
+                h("b", null, historyActionLabel(ev.action, t)),
+                historyDetailText(ev, t) && h("p", { className: "wb-mem-history-detail" }, historyDetailText(ev, t)),
                 h("small", null, formatFull(ev.at))));
           }))
         : h("div", { className: "wb-mem-empty-soft" }, h("p", null, t("memory.noHistory", "No edit history"))));
@@ -996,6 +1010,10 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     // Both memory and learning use the canonical Workbench project id.
     var learningProject = (project && project.id) || workspace;
     var t = useMemoryT();
+    var dataStore = workbenchServices.data();
+    dataStore.useVersion();
+    var pluginModules = Array.isArray(dataStore.state.pluginModules) ? dataStore.state.pluginModules : [];
+    var skillsEnabled = pluginModules.indexOf("skills") >= 0;
 
     var payloadState = useState(null); var payload = payloadState[0]; var setPayload = payloadState[1];
     var loadState = useState(true); var loading = loadState[0]; var setLoading = loadState[1];
@@ -1022,6 +1040,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     var learningSessionSelState = useState(""); var selectedLearningSessionId = learningSessionSelState[0]; var setSelectedLearningSessionId = learningSessionSelState[1];
     var workspaceRef = useRef(workspace); workspaceRef.current = workspace;
     var learningProjectRef = useRef(learningProject); learningProjectRef.current = learningProject;
+    var learningActive = skillsEnabled && activePanel === "learning";
 
     var client = useMemo(function () { return api(workspace); }, [workspace]);
 
@@ -1060,6 +1079,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
         .finally(function () { if (workspaceRef.current === requestedWorkspace) setLoading(false); });
     }
     function loadLearning() {
+      if (!skillsEnabled) return Promise.resolve(null);
       var requestedProject = learningProject;
       var cached = memoryPageCache.learningPayloads[requestedProject];
       if (learningProjectRef.current === requestedProject) { setLearningLoading(!cached); setLearningError(""); }
@@ -1078,6 +1098,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
         .finally(function () { if (learningProjectRef.current === requestedProject) setLearningLoading(false); });
     }
     function runLearningAction(kind, turnId) {
+      if (!skillsEnabled) return Promise.resolve(null);
       var url = (kind === "rebuild" ? "/api/learning/rebuild" : "/api/learning/process") + "?project=" + encodeURIComponent(learningProject);
       if (kind === "learn" && turnId) url += "&turn_id=" + encodeURIComponent(turnId);
       setLearningBusy(kind); setLearningNote(""); setLearningError("");
@@ -1102,7 +1123,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
         .finally(function () { setLearningBusy(""); });
     }
     function decideSkillCandidate(candidateId, decision) {
-      if (!candidateId) return Promise.resolve();
+      if (!skillsEnabled || !candidateId) return Promise.resolve();
       setLearningBusy("candidate:" + candidateId); setLearningNote(""); setLearningError("");
       return fetch("/api/skill-candidates/" + encodeURIComponent(candidateId) + "/decision", {
         method: "POST",
@@ -1129,7 +1150,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       setSelectedLearningSkillId(id || "");
     }
     function handleDeleteLearnedSkill(skillId) {
-      if (!skillId) return Promise.resolve();
+      if (!skillsEnabled || !skillId) return Promise.resolve();
       setLearningBusy("delete");
       return fetch("/api/learned-skills/" + encodeURIComponent(skillId) + "/delete", { method: "POST" }).then(function (r) { return r.json(); })
         .then(function (data) {
@@ -1218,10 +1239,10 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       return function () { window.removeEventListener("cyrene:workbench-navigate", onNavigate); };
     }, []);
     useEffect(function () {
-      if (activePanel === "learning" && !learningData && !learningLoading) loadLearning();
-    }, [activePanel]);
+      if (learningActive && !learningData && !learningLoading) loadLearning();
+    }, [learningActive]);
     useEffect(function () {
-      if (activePanel !== "learning") return undefined;
+      if (!learningActive) return undefined;
       var stopped = false;
       function refresh() {
         if (stopped || document.hidden || learningBusy || learningLoading) return;
@@ -1243,7 +1264,14 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
         window.removeEventListener("cyrene:wbc-chat-created", onChatCreated);
         window.removeEventListener("cyrene:wbc-refresh-chats", onChatCreated);
       };
-    }, [activePanel, workspace, learningProject, learningBusy, learningLoading]);
+    }, [learningActive, workspace, learningProject, learningBusy, learningLoading]);
+    useEffect(function () {
+      if (skillsEnabled) return;
+      if (activePanel === "learning") setActivePanel("");
+      setLearningData(null);
+      setLearningError("");
+      setLearningNote("");
+    }, [skillsEnabled]);
 
     var memories = (payload && payload.memories) || [];
     var categories = (payload && payload.categories) || [];
@@ -1446,7 +1474,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
             h("span", { className: "wb-mem-cat-label" }, c.id === "all" ? t("memory.allTypes", "All types") : catLabel(c.id, t)),
             h("span", { className: "wb-mem-cat-count" }, c.count));
         }),
-        h("button", { type: "button", className: "wb-mem-cat" + (activePanel === "learning" ? " active" : ""), onClick: function () { setActivePanel("learning"); setSelectedId(""); } },
+        skillsEnabled && h("button", { type: "button", className: "wb-mem-cat" + (learningActive ? " active" : ""), onClick: function () { setActivePanel("learning"); setSelectedId(""); } },
           h("span", { className: "wb-mem-cat-ico blue" }, ICON.learning(15)),
           h("span", { className: "wb-mem-cat-label" }, t("memory.learningNav", "Skill learning")),
           h("span", { className: "wb-mem-cat-count" }, "›"))),
@@ -1485,7 +1513,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
           h("div", { className: "wb-mem-item-tags" },
             h(Chip, { tone: meta.tone }, catLabel(m.category, t)),
             (m.tags || []).slice(0, 2).map(function (t, i) { return h(Chip, { key: i }, t); }),
-            h(Chip, { tone: "ghost" }, m.source_label))));
+            h(Chip, { tone: "ghost" }, sourceLabel(m.source, t)))));
     }
 
     var learning = {
@@ -1499,7 +1527,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       decideCandidate: decideSkillCandidate,
     };
 
-    var main = activePanel === "learning" ? h(SkillLearningMain, {
+    var main = learningActive ? h(SkillLearningMain, {
       learning: learning,
       chain: selectedLearningChain,
       skill: selectedLearningSkill,
@@ -1547,10 +1575,10 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
               : h("div", { className: "wb-mem-list" }, visible.map(card))),
         h("div", { className: "wb-mem-count" }, t("memory.count", "{count} memories", { count: visible.length }))));
 
-    return h("section", { className: "wb-mem-page" + (activePanel === "learning" ? " learning-active" : "") },
+    return h("section", { className: "wb-mem-page" + (learningActive ? " learning-active" : "") },
       rail,
       main,
-      activePanel === "learning" ? h(SkillLearningPanel, { learning: learning, detailKind: selectedLearningDetailKind, chain: selectedLearningChain, skill: selectedLearningSkill, candidate: selectedLearningCandidate, onDeleteSkill: handleDeleteLearnedSkill }) : h(DetailPanel, {
+      learningActive ? h(SkillLearningPanel, { learning: learning, detailKind: selectedLearningDetailKind, chain: selectedLearningChain, skill: selectedLearningSkill, candidate: selectedLearningCandidate, onDeleteSkill: handleDeleteLearnedSkill }) : h(DetailPanel, {
         memory: selected, related: related, busy: busy,
         t: t,
         onSelect: setSelectedId,

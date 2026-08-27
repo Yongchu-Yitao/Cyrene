@@ -26,6 +26,7 @@ from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from cyrene.observability.trace import trace_span
+from cyrene.localization import localized
 from cyrene.workbench.persistence.schema import ensure_schema
 
 logger = logging.getLogger(__name__)
@@ -793,7 +794,10 @@ class WorkbenchAgentInbox:
             payload = {
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
-                "result": "Tool cancelled because the chat run was interrupted.",
+                "result": localized(
+                    "The tool was cancelled because the chat run was interrupted.",
+                    "聊天运行被中断，工具已取消。",
+                ),
                 "is_error": True,
             }
             duration_ms = (time.perf_counter() - started) * 1000
@@ -812,11 +816,15 @@ class WorkbenchAgentInbox:
             tool_span.set_attribute("result_chars", len(payload["result"]))
             await tool_span.finish(status="cancelled")
             raise
-        except Exception as exc:
+        except Exception:
+            logger.exception("Workbench tool %s failed", tool_name)
             payload = {
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
-                "result": f"Tool failed: {exc}",
+                "result": localized(
+                    "The tool failed.",
+                    "工具执行失败。",
+                ),
                 "is_error": True,
             }
         duration_ms = (time.perf_counter() - started) * 1000
@@ -938,7 +946,10 @@ class WorkbenchAgentInbox:
             {
                 "tool_call_id": call.tool_call_id,
                 "tool_name": call.tool_name,
-                "result": "Skipped before execution because new user guidance superseded this tool-call batch.",
+                "result": localized(
+                    "Skipped before execution because new user guidance superseded this tool-call batch.",
+                    "新的用户指导已取代此工具调用批次，因此该工具在执行前被跳过。",
+                ),
                 "is_error": False,
                 "skipped": True,
             },
@@ -964,7 +975,10 @@ class WorkbenchAgentInbox:
     ) -> str:
         """Run non-conflicting calls concurrently while preserving barriers."""
         if self._closed:
-            raise RuntimeError("Workbench agent inbox is closed")
+            raise RuntimeError(localized(
+                "The Workbench Agent inbox is closed.",
+                "Workbench Agent 收件箱已关闭。",
+            ))
         batch_id = str(batch_id or f"batch_{uuid4().hex}")
         normalized = [self._normalize_batch_call(call) for call in calls]
         for call in normalized:

@@ -33,7 +33,7 @@ def _file(*, sha256: str = "a" * 64) -> dict:
 
 async def test_upload_executes_after_central_plugin_review(monkeypatch, tmp_path):
     from agent.plugin import PluginContext
-    from cyrene import browser
+    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
     from agent.plugin.plugin_impl.cyrene_browser import browser_upload_files as tool
 
     target = _target()
@@ -68,7 +68,7 @@ async def test_upload_executes_after_central_plugin_review(monkeypatch, tmp_path
 
 async def test_changed_file_binding_cancels_after_approval(monkeypatch):
     from agent.plugin import PluginContext
-    from cyrene import browser
+    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
     from agent.plugin.plugin_impl.cyrene_browser import browser_upload_files as tool
 
     target = _target()
@@ -93,7 +93,7 @@ async def test_changed_file_binding_cancels_after_approval(monkeypatch):
     monkeypatch.setattr(tool, "_resolve_files", fake_resolve)
     result = await tool._tool_browser_upload_files(
         {"chooser_id": "chooser_1", "paths": ["report.txt"]},
-        PluginContext(),
+        PluginContext(data={"language": "en"}),
     )
 
     assert "changed after approval" in result
@@ -102,7 +102,7 @@ async def test_changed_file_binding_cancels_after_approval(monkeypatch):
 
 async def test_non_http_destination_is_rejected_before_reading_files(monkeypatch):
     from agent.plugin import PluginContext
-    from cyrene import browser
+    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
     from agent.plugin.plugin_impl.cyrene_browser import browser_upload_files as tool
 
     async def fake_prepare(**_kwargs):
@@ -120,14 +120,14 @@ async def test_non_http_destination_is_rejected_before_reading_files(monkeypatch
 
     result = await tool._tool_browser_upload_files(
         {"chooser_id": "chooser_1", "paths": ["report.txt"]},
-        PluginContext(),
+        PluginContext(data={"language": "en"}),
     )
 
     assert "verified HTTP(S) origin" in result
 
 
 async def test_electron_upload_transport_uses_dedicated_rpc(monkeypatch):
-    from cyrene import browser
+    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
 
     calls = []
 
@@ -152,11 +152,20 @@ async def test_electron_upload_transport_uses_dedicated_rpc(monkeypatch):
 async def test_intercepted_chooser_message_is_actionable():
     from agent.plugin.plugin_impl.cyrene_browser.browser_output import file_chooser_instruction
 
-    message = file_chooser_instruction({
-        "code": "FILE_CHOOSER_INTERCEPTED",
-        "chooserId": "chooser_abc",
-        "uploadTarget": {"origin": "https://upload.example", "accept": ".pdf", "multiple": True},
-    })
+    from agent.plugin import PluginContext
+
+    message = file_chooser_instruction(
+        {
+            "code": "FILE_CHOOSER_INTERCEPTED",
+            "chooserId": "chooser_abc",
+            "uploadTarget": {
+                "origin": "https://upload.example",
+                "accept": ".pdf",
+                "multiple": True,
+            },
+        },
+        PluginContext(data={"language": "en"}),
+    )
 
     assert "chooser_abc" in message
     assert "browser_upload_files" in message

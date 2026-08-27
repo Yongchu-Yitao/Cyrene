@@ -37,6 +37,12 @@ MODEL_PROVIDERS = (
     AMD_GPU_CLOUD_PROVIDER,
 )
 
+
+def application_setup(context) -> None:
+    from .application import setup_application
+
+    setup_application(context)
+
 plugin_pack = PluginPack(
     id="cyrene_model",
     description="Editable model providers and discovery adapters.",
@@ -56,6 +62,7 @@ plugin_pack = PluginPack(
         OPENROUTER_PLUGIN,
         AMD_GPU_CLOUD_PLUGIN,
     ),
+    application_setup=application_setup,
 )
 
-__all__ = ["MODEL_PROVIDERS", "plugin_pack"]
+__all__ = ["MODEL_PROVIDERS", "application_setup", "plugin_pack"]

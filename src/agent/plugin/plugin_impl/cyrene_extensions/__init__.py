@@ -5,9 +5,15 @@ from __future__ import annotations
 from types import ModuleType
 from typing import Any
 
-from agent.plugin import Plugin, PluginPack
+from agent.plugin import Plugin, PluginApplicationContext, PluginPack
 
 from . import list_environment, manage_extensions, search_environment
+
+
+def application_setup(context: PluginApplicationContext) -> None:
+    from .application import setup_application
+
+    setup_application(context)
 
 
 def _plugin(module: ModuleType) -> Plugin:
@@ -28,12 +34,25 @@ def _plugin(module: ModuleType) -> Plugin:
 
 plugin_pack = PluginPack(
     id="cyrene_extensions",
-    description="Inspect and manage extensions, environments, and hooks.",
+    description="Inspect and manage external integrations and runtime environments.",
     plugins=tuple(_plugin(module) for module in (
         list_environment,
         search_environment,
         manage_extensions,
     )),
+    application_setup=application_setup,
+    metadata={
+        "i18n": {
+            "en": {
+                "name": "Extensions",
+                "description": "Inspect and manage external integrations and runtime environments.",
+            },
+            "zh": {
+                "name": "扩展",
+                "description": "查看并管理外部集成和运行环境。",
+            },
+        },
+    },
 )
 
-__all__ = ["plugin_pack"]
+__all__ = ["application_setup", "plugin_pack"]

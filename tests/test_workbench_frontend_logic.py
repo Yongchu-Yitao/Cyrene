@@ -47,7 +47,7 @@ def test_external_agent_frontend_consumes_unified_dynamic_events_and_viewers():
     assert 'del self.projection.trace[:-40]' in route_source
     assert '"trace": projection.trace[-40:]' in route_source
     assert 'status in {"failed", "error", "failure", "expired", "cancelled"}' in route_source
-    assert 'notifyAgentCatalogChanged("installed")' in settings
+    assert 'PluginRegistryPanel' in settings
     assert '"workbenchChat.attachmentType.audio": "音频"' in i18n
 
 
@@ -150,11 +150,11 @@ def test_context_panel_has_only_the_new_agent_tree_projection():
     assert "workbenchChat.ctxBlocks.layer.agent_other" not in i18n
 
 
-def test_external_agent_context_hides_cyrene_only_inbox_and_tool_packages():
+def test_external_agent_context_hides_cyrene_only_inbox_and_plugin_packs():
     source = workbench_chat_source()
     assert 'var externalAgent = !!wbcChatAgent(chat) && !wbcIsBuiltinAgent(wbcChatAgent(chat));' in source
     assert '!externalAgent && <WbcInboxCard' in source
-    assert '!externalAgent && <section className="workbench-side-section" aria-label={wbcT("workbenchChat.usedToolPackages"' in source
+    assert '!externalAgent && <section className="workbench-side-section" aria-label={wbcT("workbenchChat.usedPluginPacks"' in source
 
 
 def test_system_default_model_description_is_localized_without_rewriting_custom_copy():
@@ -571,7 +571,7 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
         "// Conversation main (column 3)", 1
     )[0]
     drop_controller = frontend_module_source("features/chat/rail-drop-controller.jsx")
-    assert "WBC_CHAT_GROUPS_PREFIX" in source
+    assert "WBC_CHAT_ORDER_PREFIX" in source
     assert "function wbcCreateChatGroup(" in source
     assert "function wbcRemoveChatFromGroups(" in source
     assert 'mode: "group"' in rail
@@ -789,20 +789,20 @@ def test_chat_sidebar_context_is_flat_and_overview_is_integrated():
     assert '<WbcContextBlockList data={contextBlocks} compact={false} />' in context_source
     assert 'className: "wbc-context-detail"' in source
     assert '<WbcInboxCard liveView={inboxView} hideTitle={true} />' in context_source
-    assert "usedToolPackages.length === 0" in context_source
-    assert "workbenchChat.noUsedToolPackages" in context_source
-    tool_package_heading = context_source.index('className="wbc-context-empty-head wbc-tool-pack-head"')
-    tool_package_condition = context_source.index("usedToolPackages.length === 0 ? (")
-    assert tool_package_heading < tool_package_condition
+    assert "usedPluginPacks.length === 0" in context_source
+    assert "workbenchChat.noUsedPluginPacks" in context_source
+    plugin_pack_heading = context_source.index('className="wbc-context-empty-head wbc-plugin-pack-head"')
+    plugin_pack_condition = context_source.index("usedPluginPacks.length === 0 ? (")
+    assert plugin_pack_heading < plugin_pack_condition
     assert 'className="workbench-side-section wbc-context-stats"' in context_source
     assert "WbcSortableCardStack" not in context_source
     context_css = styles.split(".wbc-context-sections {", 1)[1].split("}", 1)[0]
     assert "flex-direction: column;" in context_css
-    first_tool_package_css = styles.split(
-        ".wbc-context-sections .wbc-tool-pack-head + .wbc-tool-pack-row {",
+    first_plugin_pack_css = styles.split(
+        ".wbc-context-sections .wbc-plugin-pack-head + .wbc-plugin-pack-row {",
         1,
     )[1].split("}", 1)[0]
-    assert "border-top: 0;" in first_tool_package_css
+    assert "border-top: 0;" in first_plugin_pack_css
 
 
 def test_builtin_agent_in_overview_uses_plain_text_without_builtin_suffix():
@@ -832,6 +832,15 @@ def test_workbench_chat_cards_are_borderless_and_compact_overview_is_flat():
     focus_chat_css = styles.split(
         ".wbc-chat-card:focus,\n.wbc-chat-card:focus-visible {", 1
     )[1].split("}", 1)[0]
+    dark_page_css = styles.split(
+        'html[data-theme="dark"] .wbc-page {', 1
+    )[1].split("}", 1)[0]
+    rail_hover_css = styles.split(
+        ".wbc-rail .wbc-chat-card:hover,", 1
+    )[1].split("}", 1)[0]
+    rail_active_hover_css = styles.split(
+        ".wbc-rail .wbc-chat-card.active:hover {", 1
+    )[1].split("}", 1)[0]
     page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
 
     assert "border: 0;" in chat_card_css
@@ -850,6 +859,10 @@ def test_workbench_chat_cards_are_borderless_and_compact_overview_is_flat():
     assert "0 5px 14px rgba(15, 23, 42, 0.02)" in page_css
     assert "border-color:" not in active_chat_css
     assert "outline: 0;" in focus_chat_css
+    assert "--wbc-panel-surface: #17181c;" in dark_page_css
+    assert "--wb-floating-rail-bg: var(--wbc-panel-surface);" in dark_page_css
+    assert "var(--wb-accent) 7%" in rail_hover_css
+    assert "var(--wb-active-bg) 92%" in rail_active_hover_css
 
 
 def test_workbench_chat_search_and_custom_background_composer_stay_distinct():
@@ -1199,7 +1212,7 @@ def test_workbench_chat_primary_cards_share_an_opaque_dark_surface():
     )[1].split("}", 1)[0]
 
     assert "--wbc-panel-surface: var(--wb-floating-rail-bg);" in page_css
-    assert "--wbc-panel-surface: #171819;" in dark_page_css
+    assert "--wbc-panel-surface: #17181c;" in dark_page_css
     assert "background: var(--wbc-panel-surface);" in rail_card_css
     assert "background: var(--wbc-panel-surface);" in pane_card_css
     assert "background: var(--wbc-panel-surface);" in side_card_css
@@ -1550,8 +1563,6 @@ const fileA = wbcPaneCard("file", {{ path: "a.md" }}, {{ id: "file:a" }});
 const fileB = wbcPaneCard("file", {{ path: "b.md" }}, {{ id: "file:b" }});
 const chatB = wbcPaneCard("chat", "chat-b", {{ id: "chat:chat-b" }});
 const duplicateMain = wbcPaneCard("chat", "main", {{ freshInstance: true, ownerChatId: "main" }});
-const pluginA = wbcPaneCard("plugin-view", {{ pluginId: "usage", viewId: "main" }});
-const pluginB = wbcPaneCard("plugin-view", {{ viewId: "main", pluginId: "usage" }});
 const verticalSameChat = wbcPlacePaneCard(base, duplicateMain, "left", "top", "", "chat:main");
 const verticalSource = verticalSameChat.left[1];
 const verticalCompanion = verticalSameChat.left[0];
@@ -1580,7 +1591,6 @@ process.stdout.write(JSON.stringify({{
     distinctIds: verticalSameChat.left[0].id !== verticalSameChat.left[1].id,
     payloads: verticalSameChat.left.map(card => card.payload),
   }},
-  pluginIdentity: [pluginA.id === pluginB.id, pluginA.id.startsWith("plugin-view:")],
   axisLeft: [axisLeft.left[0].id === verticalSource.id, axisLeft.right[0].id === verticalCompanion.id],
   axisRight: [axisRight.left[0].id === verticalCompanion.id, axisRight.right[0].id === verticalSource.id],
   externalLeft: [externalLeft.left[0].id, externalLeft.right[0].id],
@@ -1607,7 +1617,6 @@ process.stdout.write(JSON.stringify({{
             "distinctIds": True,
             "payloads": ["main", "main"],
         },
-        "pluginIdentity": [True, True],
         "axisLeft": [True, True],
         "axisRight": [True, True],
         "externalLeft": ["file:a", "chat:main"],
@@ -2812,7 +2821,7 @@ def test_workbench_resource_tabs_use_lists_and_shared_splits_while_branches_expa
 
     side = source.split("function WbcSide({", 1)[1].split("function wbcChangeTypeLabel", 1)[0]
     assert 'activeTab === "viewer" && <WbcViewerList' in side
-    assert 'activeTab === "map" && <WbcMapList' in side
+    assert 'activeTab === "map" && mapAvailable !== false && <WbcMapList' in side
     assert '<WbcBrowserList browserState={browserPanelState}' in side
     assert 'var opensSplit = item.id === "subagents" || item.id === "browser";' in side
     assert 'if (item.id === "subagents" && onOpenSubagents) onOpenSubagents();' in side
@@ -2898,6 +2907,9 @@ def test_workbench_chat_composer_themes_share_one_optimized_glass_pipeline():
     dark = styles.split(
         'html[data-theme="dark"] :is(.wbc-composer-box, .wbc-side-card) {', 1
     )[1].split("}", 1)[0]
+    dark_composer = styles.split(
+        'html[data-theme="dark"] .wbc-composer-box {', 1
+    )[1].split("}", 1)[0]
     dark_palette = styles.split(
         'html[data-theme="dark"] .workbench-shell {', 1
     )[1].split("}", 1)[0]
@@ -2916,6 +2928,8 @@ def test_workbench_chat_composer_themes_share_one_optimized_glass_pipeline():
     assert "rgba(0, 0, 0, .42)" in dark
     assert "#fff 14%" in dark
     assert "#fff 4%" in dark
+    assert "--wbc-composer-glass-background: var(--wb-composer-surface);" in dark_composer
+    assert "--wb-composer-surface: color-mix(in srgb, #18191d 76%, transparent);" in dark_palette
     assert "backdrop-filter" not in light
     assert "backdrop-filter" not in dark
     assert "backdrop-filter: none !important;" in performance
@@ -4073,8 +4087,8 @@ def test_workbench_keeps_live_subagent_logs_across_silent_refreshes():
     source = workbench_shell_source()
 
     assert 'data.type === "subagent_update"' in source
-    assert 'session_id = str(entry.get("session_id") or "")' in (
-        root / "src" / "cyrene" / "subagent.py"
+    assert 'plugin_context_data.get("session_id")' in (
+        root / "src" / "agent" / "plugin" / "plugin_impl" / "cyrene_subagent" / "manager.py"
     ).read_text(encoding="utf-8")
     assert "event.live && event.id" in source
     assert "data.message" in source
@@ -4191,7 +4205,7 @@ def test_workbench_memory_skill_learning_selects_tool_chains(monkeypatch, tmp_pa
     styles = workbench_style_source()
     i18n = workbench_i18n_source()
     pattern = (
-        root / "src" / "cyrene" / "learning" / "facade.py"
+        root / "src" / "agent" / "plugin" / "plugin_impl" / "cyrene_skills" / "application_service.py"
     ).read_text(encoding="utf-8")
 
     assert "selectedLearningChainId" in source
@@ -4233,8 +4247,8 @@ def test_workbench_memory_skill_learning_selects_tool_chains(monkeypatch, tmp_pa
     assert 'var learningProject = (project && project.id) || workspace;' in source
     assert '"/api/evolution?project=" + encodeURIComponent(learningProject)' in source
     assert '"?project=" + encodeURIComponent(learningProject)' in source
-    from cyrene import learning
-    from cyrene.learning.application_service import (
+    from agent.plugin.plugin_impl.cyrene_skills import orchestrator as learning
+    from agent.plugin.plugin_impl.cyrene_skills.application_service import (
         LearningApplicationService,
         MediaRepository,
         ProjectResolver,
@@ -6217,18 +6231,6 @@ def test_status_preview_answers_the_target_background_chat_without_opening_it():
     assert "var actionOptions = options.length" in preview
 
 
-def test_agent_tab_hides_search_filter_and_header_install_button():
-    source = workbench_settings_source()
-    panel = source.split("function ExtensionsPanel(", 1)[1].split(
-        "function ShortcutsPanel(", 1
-    )[0]
-
-    assert '"agent"' in panel
-    assert 'category !== "agent" && React.createElement("div", { className: "wb-extension-filter" }' in panel
-    assert 'category !== "recommended" && category !== "agent" && React.createElement("button"' in panel
-    assert 'category === "agent"\n      ? React.createElement(AgentTabPanel' in panel or 'category === "agent" ? React.createElement(AgentTabPanel' in panel
-
-
 def test_composer_model_flyout_lists_agent_row_before_model_row():
     source = workbench_chat_source()
     root_panel = source.split('{modelPanel === "root" && (', 1)[1].split(
@@ -6321,7 +6323,7 @@ def test_permission_prompt_localizes_capability_ids_and_hides_internal_fingerpri
     assert "i18n.permissionQuestionText(pending, i18n.getLang())" in chat
     assert "function workbenchPermissionQuestionText(pending, lang)" in i18n
     assert '/^cyrene-(?:setting|lifecycle):/' in i18n
-    assert "legacyTool" in i18n
+    assert '"skill.install": "InstallSkill"' in i18n
     assert 'wbcPermissionOptionLabel(opt, i, options.length)' in chat
     assert '? wbcPermissionQuestionText(pending)' in chat
     assert 'value: wbcQuestionOptionValue(option)' in chat
@@ -6409,7 +6411,7 @@ def test_workbench_context_tab_has_durable_agent_inbox_card():
         'workbenchChat.conversationContext'
     )
     assert context_tab.index(inbox_call) < context_tab.index(
-        'workbenchChat.usedToolPackages'
+        'workbenchChat.usedPluginPacks'
     )
     assert '"/inbox"' in source
     assert 'cache: "no-store"' in live_hook
@@ -6462,13 +6464,14 @@ def test_workbench_context_tab_has_durable_agent_inbox_card():
     assert ".wbc-inbox-event-meta code" not in css
 
 
-def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
+def test_voice_settings_are_scoped_and_context_shows_plugin_disclosure():
     root = Path(__file__).resolve().parents[1]
     overlay = workbench_settings_source()
     chat = workbench_chat_source()
     i18n = workbench_i18n_source()
     css = workbench_style_source()
     classic_settings = root / "src" / "webui" / "static" / "app" / "settings.jsx"
+    settings_overlay = frontend_module_source("settings-overlay.jsx")
 
     capabilities = overlay.split("function CapabilitiesPanel", 1)[1].split(
         "function DataPanel", 1
@@ -6476,11 +6479,14 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
     context_tab = chat.split("function WbcContextTab", 1)[1].split(
         "function WbcArtifactsTab", 1
     )[0]
-    assert 'group.kind === "package"' in capabilities
     assert 'FieldRow(' in capabilities
-    assert 'saveToolGroup(group.id, !packageEnabled)' in capabilities
-    assert 't("toolName." + group.wire_name)' in capabilities
-    assert 't("toolPackageDesc." + group.id)' in capabilities
+    assert 'settings.voiceCapability' in capabilities
+    assert 'mode === "plugins"' not in capabilities
+    assert 'settings.pluginPacks' not in capabilities
+    assert 'settings.pluginStandalone' not in capabilities
+    assert '{ id: "plugins", labelKey: "settings.pluginsTab", icon: "tools" }' not in settings_overlay
+    assert 'tab === "plugins"' not in settings_overlay
+    assert 'settingsFetch("/api/settings/plugins"' not in settings_overlay
     assert "toggleTool(" not in capabilities
     assert "toolList.map" not in capabilities
     assert "saveBrowserTools" not in overlay
@@ -6494,26 +6500,26 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
     )[1].split("}", 1)[0]
     assert "justify-content: flex-end;" in voice_save_actions_css
 
-    disclosure = chat.split("function wbcUsedToolPackages", 1)[1].split(
+    disclosure = chat.split("function wbcUsedPluginPacks", 1)[1].split(
         "function WbcContextTab", 1
     )[0]
     assert 'fetch("/api/settings/tools"' not in context_tab
     assert '"cyrene-tool-packages-change"' not in context_tab
-    assert "wbcUsedToolPackages(contextBlocks)" in context_tab
+    assert "wbcUsedPluginPacks(contextBlocks)" in context_tab
     assert "message.tools" not in disclosure
     assert "runtime.activities" not in disclosure
     assert "WBC_PROGRESSIVE_TOOL_PACKAGES" not in chat
     assert 'compositionSource === "public_transcript"' not in context_tab
     assert 'compositionSource === "agent_report"' not in context_tab
-    assert "contextBlocks.usedToolPackages" in disclosure
+    assert "contextBlocks.usedPluginPacks" in disclosure
     assert ".forEach(addReportedPackage)" in disclosure
     assert "contextBlocks.messageCount" in context_tab
     assert "contextBlocks.updatedAt" in context_tab
     assert "chat.messageCount" not in context_tab
     assert 'item.messageType === "task_result"' in chat
-    assert "workbenchChat.usedToolPackages" in context_tab
-    assert "usedToolPackages.length === 0" in context_tab
-    assert "workbenchChat.noUsedToolPackages" in context_tab
+    assert "workbenchChat.usedPluginPacks" in context_tab
+    assert "usedPluginPacks.length === 0" in context_tab
+    assert "workbenchChat.noUsedPluginPacks" in context_tab
     assert 'className="wbc-side-empty"' in context_tab
     assert ".workbench-shell .wbc-side-empty p" in css
     assert "toolPackage.enabled" not in context_tab
@@ -6521,51 +6527,33 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
     assert "settings.soulMd" not in context_tab
     assert "workspacePathLabel" not in context_tab
 
-    for package_id in (
-        "code_tools",
-        "browser_tools",
-        "desktop_tools",
-        "memory_tools",
-        "knowledge_tools",
-        "task_tools",
-        "entity_tools",
-        "map_tools",
-        "subagent_tools",
-        "delivery_tools",
-        "environment_tools",
-        "skill_tools",
-        "remote_tools",
-        "cyrene_tools",
-        "office_tools",
-        "plugin_tools",
-        "custom_tools",
-        "integration_tools",
-    ):
-        assert i18n.count(f'"toolPackageDesc.{package_id}"') == 2
-        assert i18n.count(f'"toolName.{package_id}"') == 2
+    assert '"toolPackageDesc.' not in i18n
 
     for package_id in (
         "cyrene_application",
         "cyrene_browser",
         "cyrene_code",
         "cyrene_content",
+        "cyrene_context",
         "cyrene_control",
         "cyrene_delivery",
         "cyrene_desktop",
         "cyrene_entity",
         "cyrene_extensions",
+        "cyrene_cli",
         "cyrene_image",
         "cyrene_knowledge",
         "cyrene_map",
         "cyrene_media",
+        "cyrene_mcp",
         "cyrene_memory",
         "cyrene_model",
         "cyrene_office",
-        "cyrene_plugins",
         "cyrene_remote",
         "cyrene_renderer",
         "cyrene_schedule",
         "cyrene_skills",
+        "cyrene_soul",
         "cyrene_subagent",
         "cyrene_task",
     ):
@@ -6575,8 +6563,8 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
     assert "@media (prefers-reduced-motion: reduce)" in css
     assert '"workbenchChat.inbox.title": "Session inbox"' in i18n
     assert '"workbenchChat.inbox.title": "Agent 收件箱"' in i18n
-    assert '"workbenchChat.usedToolPackages": "Used tool packages"' in i18n
-    assert '"workbenchChat.usedToolPackages": "已使用的工具包"' in i18n
+    assert '"workbenchChat.usedPluginPacks": "Used Plugin packs"' in i18n
+    assert '"workbenchChat.usedPluginPacks": "已使用的插件包"' in i18n
     assert '"workbenchChat.inbox.agentMessage": "Agent message"' in i18n
     assert '"workbenchChat.inbox.subagentResult": "Subagent 结果"' in i18n
     assert '"workbenchChat.ctxBlock.system.root": "Agent instructions"' in i18n
@@ -6586,15 +6574,15 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
     assert '"workbenchChat.inbox.live"' not in i18n
 
 
-def test_new_context_projection_drives_used_tool_package_list():
+def test_new_context_projection_drives_used_plugin_pack_list():
     source = workbench_chat_source()
-    helper = "function wbcUsedToolPackages" + source.split(
-        "function wbcUsedToolPackages", 1
+    helper = "function wbcUsedPluginPacks" + source.split(
+        "function wbcUsedPluginPacks", 1
     )[1].split("function WbcContextTab", 1)[0]
     script = f"""
 eval({json.dumps(helper)});
-process.stdout.write(JSON.stringify(wbcUsedToolPackages({{
-  usedToolPackages: ["cyrene_subagent", "", "cyrene_code", "cyrene_subagent"]
+process.stdout.write(JSON.stringify(wbcUsedPluginPacks({{
+  usedPluginPacks: ["cyrene_subagent", "", "cyrene_code", "cyrene_subagent"]
 }})));
 """
     completed = subprocess.run(
@@ -6607,45 +6595,44 @@ process.stdout.write(JSON.stringify(wbcUsedToolPackages({{
     assert json.loads(completed.stdout) == ["cyrene_subagent", "cyrene_code"]
 
 
-def test_registry_tool_settings_replace_the_legacy_custom_tool_page():
+def test_plugin_center_replaces_the_legacy_plugin_activation_page():
     root = Path(__file__).resolve().parents[1]
-    settings = workbench_settings_source()
-    appearance = frontend_module_source("features/settings/appearance.jsx")
     capabilities = frontend_module_source("features/settings/capabilities.jsx")
     overlay = frontend_module_source("settings-overlay.jsx")
-    events = frontend_module_source("platform/events.jsx")
     settings_index = (
         root / "src" / "webui" / "frontend" / "shared" / "settings-index.jsx"
     ).read_text(encoding="utf-8")
     app_entry = (root / "src" / "webui" / "frontend" / "entry" / "app.jsx").read_text(
         encoding="utf-8"
     )
-    css = workbench_style_source()
-
-    assert "/api/custom-tools" not in settings
-    assert "function CustomToolsPanel" not in appearance
-    assert "CustomToolsPanel" not in overlay
-    assert 'id: "custom-tools"' not in overlay
-    assert 'id: "custom-tools"' not in settings_index
-    assert 'id: "setting-custom-tools"' not in settings_index
-    assert 'id: "setting-standalone-tools", tab: "tools"' in settings_index
-    assert 'setStandaloneTools(Array.isArray(payload.standalone_tools)' in overlay
-    assert 'settingsFetch("/api/settings/tools")' in overlay
-    assert 'payload[kind === "package" ? "packages" : "tools"]' in overlay
-    assert 'workbenchServices.plugins().refresh()' in overlay
-    assert 't("settings.pluginStandalone", "Standalone tools")' in capabilities
-    assert 'tool.locked === true || !!toolSettingBusy' in capabilities
-    assert 'group.locked === true || !!toolSettingBusy' in capabilities
-    assert "custom_tools_changed" not in events
-    assert ".wb-custom-tools-" not in css
+    assert '{ id: "plugins", labelKey: "settings.pluginsTab", icon: "tools" }' not in overlay
+    assert 'id: "plugins"' not in settings_index
+    assert 'id: "setting-plugin-packs"' not in settings_index
+    assert 'id: "setting-standalone-plugins"' not in settings_index
+    assert 'tab === "plugins"' not in overlay
+    assert 'plugins: "plugin-registry"' in overlay
+    assert 'settingsFetch("/api/settings/plugins"' not in overlay
+    assert not (root / "src" / "webui" / "frontend" / "features" / "settings" / "extensions.jsx").exists()
+    assert "pluginPacks" not in capabilities
+    assert "standalonePlugins" not in capabilities
+    assert "pluginSettingBusy" not in capabilities
+    assert "settings.pluginPacks" not in capabilities
+    assert "settings.pluginStandalone" not in capabilities
+    assert "settings.voiceCapability" in capabilities
+    assert '{ id: "plugin-registry", labelKey: "settings.pluginRegistry", icon: "package" }' in overlay
+    assert '{ id: "plugin-registry", labelKey: "settings.pluginRegistry" }' in settings_index
 
     assert 'import "../settings-overlay.jsx"' in app_entry
     assert 'import "../shared/settings-index.jsx"' in app_entry
 
 
-def test_plugin_registry_frontend_uses_only_the_new_status_and_activation_apis():
+def test_plugin_center_combines_runtime_status_with_plugin_owned_intake_apis():
     overlay = frontend_module_source("settings-overlay.jsx")
     plugin_settings = frontend_module_source("features/settings/custom-plugins.jsx")
+    plugin_intake = frontend_module_source("features/settings/plugin-center-add.jsx")
+    plugin_catalog = frontend_module_source("features/settings/plugin-center-catalog.jsx")
+    plugin_cli_hooks = frontend_module_source("features/settings/plugin-center-cli-hooks.jsx")
+    plugin_mcp = frontend_module_source("features/settings/plugin-center-mcp.jsx")
     plugin_service = frontend_module_source("platform/plugins.jsx")
 
     assert '{ id: "plugin-registry", labelKey: "settings.pluginRegistry", icon: "package" }' in overlay
@@ -6659,9 +6646,37 @@ def test_plugin_registry_frontend_uses_only_the_new_status_and_activation_apis()
     assert "application_restart_required" in plugin_service
     assert "EventSource" not in plugin_service
     assert "/contributions" not in plugin_service
-    assert '"/call"' not in plugin_service
-    assert 'settingsFetch("/api/settings/plugins", {' in plugin_settings
-    assert 'agent_exposure: direct ? "discoverable" : "direct"' in plugin_settings
+    assert '"/api/plugins/packs/" + encodeURIComponent(packId) + "/call"' in plugin_service
+    assert 'settingsFetch("/api/plugins/activation", {' in plugin_settings
+    assert 'import { PluginCenterAddButton, PluginCenterPage } from "./plugin-center-add.jsx"' in plugin_settings
+    assert plugin_settings.index("React.createElement(PluginCenterAddButton") < plugin_settings.index('t("settings.pluginReload",')
+    assert "if (showCenter)" in plugin_settings
+    assert "React.createElement(PluginCenterPage" in plugin_settings
+    assert 'onClose: function () { setShowCenter(false) }' in plugin_settings
+    assert "wb-plugin-center-page-shell" in plugin_settings
+    for kind in ("recommended", "skill", "mcp", "cli", "toolchain", "agent"):
+        assert kind in plugin_intake
+    assert 'selected === "recommended" ? "/api/plugin-center/overview"' in plugin_intake
+    assert '"/api/plugin-center/" + encodeURIComponent(kind) + "/install"' in plugin_intake
+    assert 'body: JSON.stringify({ extension_id: id, request: request })' in plugin_intake
+    assert '"/api/plugin-center/skill/inspect"' in plugin_intake
+    assert '"/api/plugin-center/skill/upload"' in plugin_intake
+    assert '"/api/plugin-center/skill/import"' in plugin_intake
+    assert '"/api/plugin-center/sources"' in frontend_module_source("features/settings/plugin-center-admin.jsx")
+    assert '"/api/plugin-center/mcp/" + encodeURIComponent(editor.name) + "/configuration"' in plugin_mcp
+    assert 'modules.indexOf("cli") >= 0' in plugin_intake
+    assert 'selected === "cli" ? "cyrene_cli"' in plugin_intake
+    assert '"/api/plugin-center/cli/hooks"' in plugin_cli_hooks
+    assert '"/api/plugin-center/cli/hooks/proposals/"' in plugin_cli_hooks
+    assert '"/api/plugin-center/cli/" + encodeURIComponent(id) + "/configure-hook"' in plugin_intake
+    assert "wb-plugin-center-page" in plugin_intake
+    assert "McpToolDetails" in plugin_catalog
+    assert "AgentTab" in plugin_intake
+    assert '"mcp-providers": "plugin-registry"' in overlay
+    assert '"setting-plugin-packs": "setting-plugin-registry"' in overlay
+    assert '"setting-standalone-plugins": "setting-plugin-registry"' in overlay
+    assert "McpProvidersPanel" not in overlay
+    assert 'agent_exposure: item.agent_exposure === "direct" ? "discoverable" : "direct"' in plugin_settings
     assert 'settings.pluginToolAgentDescription' in plugin_settings
     assert 'settings.pluginToolDelete' in plugin_settings
     assert 'item.locked === true' in plugin_settings
@@ -6677,8 +6692,6 @@ def test_plugin_registry_frontend_uses_only_the_new_status_and_activation_apis()
         "/api/plugins/contributions",
         "/api/plugins/events",
         "/enabled",
-        "/call",
-        "/assets/",
     ):
         assert removed_api not in plugin_service + plugin_settings
 
@@ -6782,6 +6795,25 @@ def test_workbench_chat_loading_is_centered_in_the_rail():
     assert "justify-content: center;" in loading_styles
 
 
+def test_unified_search_only_shows_loading_status_while_results_are_pending():
+    source = frontend_module_source("features/chat/rail.jsx")
+    input_markup = source.split('data-cyrene-node-id="chat_search_input"', 1)[1].split(
+        "/>\n", 1
+    )[0]
+    unified_results = source.split("{unifiedSearchActive ? (", 1)[1].split(
+        ') : railMode === "task" ? (', 1
+    )[0]
+
+    assert "setGlobalFilesLoading(codeAvailable && Boolean(nextQuery.trim()))" in input_markup
+    assert "{globalFilesLoading ? (" in unified_results
+    loading_branch, settled_branch = unified_results.split(") : <>", 1)
+    assert 'className="workbench-muted wbc-rail-loading" role="status"' in loading_branch
+    assert "wbc-unified-search-section is-chat" not in loading_branch
+    assert "wbc-unified-search-section is-file" not in loading_branch
+    assert "wbc-unified-search-section is-chat" in settled_branch
+    assert "wbc-unified-search-section is-file" in settled_branch
+
+
 def test_every_workspace_sidebar_card_can_swipe_between_module_tabs():
     source = workbench_shell_source()
     navigation = frontend_module_source("features/shell/navigation-controller.jsx")
@@ -6792,7 +6824,8 @@ def test_every_workspace_sidebar_card_can_swipe_between_module_tabs():
         "return { openPage:", 1
     )[0]
     assert 'target.closest(".workbench-integrated-rail, .workbench-sidebar-dock.is-persistent")' in sidebar_wheel
-    assert 'var moduleOrder = ["schedule", "board", "work", "knowledge", "memory"];' in sidebar_wheel
+    assert 'var moduleOrder = Array.isArray(enabledModules) && enabledModules.length' in navigation
+    assert '["schedule", "board", "work", "knowledge", "memory"]' in navigation
     assert "Math.abs(deltaX) <= Math.abs(deltaY) * 1.15" in sidebar_wheel
     assert "Math.abs(gesture.delta) < 44" in sidebar_wheel
     assert "gesture.lockedUntil = now + 420" in sidebar_wheel
@@ -7538,7 +7571,7 @@ def test_workbench_agent_media_and_references_reuse_inline_attachment_renderer()
         "function WbcLiveAgentArtifacts(", 1
     )[0]
     assistant = source.split("function WbcAssistantMessage(", 1)[1].split(
-        "var WbcRemoteDeviceCatalog", 1
+        "function WbcHeartbeat(", 1
     )[0]
     assert (
         '["image", "video", "audio"].indexOf(wbcFileViewKind(file)) !== -1 && file.url'
@@ -7658,7 +7691,7 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
     assert 'className="wbc-trace-summary-preview"' not in source
     assert "wbc-trace-summary-preview" not in styles
     assert "var previewText = wbcToolPreviewText(entry.preview);" in source
-    assert "{previewText ? <small>（{previewText}）</small> : null}" in source
+    assert "{previewText ? <small>{wbcParenthesize(previewText)}</small> : null}" in source
     assert ".wbc-trace-details .wbc-trace-mark" not in styles
     assert 'className="wbc-trace-mark"' in source
     assert "编辑了文件" in workbench_i18n_source()
@@ -8241,11 +8274,12 @@ def test_workbench_activity_group_has_live_and_completed_disclosure_states():
 
 
 def test_codex_reasoning_effort_updates_the_primary_candidate_without_stale_state():
-    settings = workbench_settings_source()
+    root = Path(__file__).resolve().parent.parent
+    settings = (root / "src" / "webui" / "frontend" / "settings-model-configuration.jsx").read_text(encoding="utf-8")
+    shared = (root / "src" / "webui" / "frontend" / "features" / "settings" / "shared.jsx").read_text(encoding="utf-8")
 
-    assert "setCodexCandidate(normalizeModel({" in settings
-    assert "selectedEffort != null ? selectedEffort : codexEffort" in settings
-    assert "setCodexPrimaryCandidate(codexModel, value);" in settings
+    assert "reasoning_effort: String(profile.reasoning_effort || \"\").trim()" in settings
+    assert "codexModelReasoningEfforts" in shared
     assert "return [candidate].concat(rest);" not in settings
 
 
@@ -8391,7 +8425,7 @@ def test_session_export_uses_balanced_responsive_action_layout():
     assert 'role: "radiogroup"' in session_export
     assert '"aria-checked": exportFmt === "markdown"' in session_export
     assert 'className: "wb-section-block wb-session-export-block"' in session_export
-    assert "var sessionDate = s.updated_at || s.created_at;" in session_export
+    assert "var sessionDate = s.updatedAt || s.createdAt;" in session_export
     assert ".settings-overlay .wb-export-session-option {\n  min-height: 44px;" in styles
     assert "@media (max-width: 700px)" in styles
     assert i18n.count('"settings.sessionExportFormat"') == 2
@@ -8473,7 +8507,7 @@ wbcToolPreviewText("invoke, skill_tools, {'name': '播放首页推荐首个视�
 """
     )
 
-    assert result == "调用能力, 技能工具, name: 播放首页推荐首个视频, auto: True"
+    assert result == "调用能力, skill_tools, name: 播放首页推荐首个视频, auto: True"
 
 
 def test_workbench_chat_last_user_message_has_retry_action():
@@ -9059,7 +9093,7 @@ def test_backup_actions_use_native_file_pickers_and_comfortable_density_only(
     assert "ipcMain.handle('dialog:pick-backup-save-path'" in main
     assert "ipcMain.handle('dialog:pick-backup-file'" in main
     assert "dialog.showSaveDialog" in main
-    assert "filters: [{ name: 'Cyrene backup', extensions: ['zip'] }]" in main
+    assert "extensions: ['zip']" in main
     assert "ipcRenderer.invoke('dialog:pick-backup-save-path'" in preload
     assert "ipcRenderer.invoke('dialog:pick-backup-file'" in preload
     assert "await bridge.pickBackupSavePath" in data_panel
@@ -9142,6 +9176,9 @@ def test_electron_browser_panel_uses_native_browser_bridge():
     browser_pack = (
         root / "src" / "agent" / "plugin" / "plugin_impl" / "cyrene_browser" / "__init__.py"
     ).read_text(encoding="utf-8")
+    skills_pack = (
+        root / "src" / "agent" / "plugin" / "plugin_impl" / "cyrene_skills" / "__init__.py"
+    ).read_text(encoding="utf-8")
     assert "browser_tab_new" in browser_pack
     assert "browser: {" in preload
     assert "ipcRenderer.invoke('browser:navigate'" in preload
@@ -9151,7 +9188,8 @@ def test_electron_browser_panel_uses_native_browser_bridge():
     assert "bridge.setBounds" in view
     assert "bridge.setContext" in view
     assert "bridge.setMuted" in view
-    assert "browser_user_events" in browser_pack
+    assert "browser_user_events" not in browser_pack
+    assert "browser_user_events" in skills_pack
 
 
 def test_native_browser_yields_to_model_confirm_and_topbar_overlays():
@@ -9177,7 +9215,9 @@ def test_electron_browser_type_uses_react_compatible_native_setter():
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     browser_input = (root / "electron" / "browser-input.js").read_text(encoding="utf-8")
     package = (root / "electron" / "package.json").read_text(encoding="utf-8")
-    playwright_browser = (root / "src" / "cyrene" / "browser.py").read_text(encoding="utf-8")
+    playwright_browser = (
+        root / "src" / "agent" / "plugin" / "plugin_impl" / "cyrene_browser" / "runtime.py"
+    ).read_text(encoding="utf-8")
 
     assert "buildBrowserTypeTargetScript" in main
     assert "runPageOperation('set-native')" in main
@@ -9200,7 +9240,9 @@ def test_electron_browser_tabs_are_per_session_while_login_state_is_shared():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
-    browser = (root / "src" / "cyrene" / "browser.py").read_text(encoding="utf-8")
+    browser = (
+        root / "src" / "agent" / "plugin" / "plugin_impl" / "cyrene_browser" / "runtime.py"
+    ).read_text(encoding="utf-8")
     chat_routes = workbench_chat_route_source()
     view = (root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
     chat = workbench_chat_source()
@@ -9220,14 +9262,17 @@ def test_electron_browser_tabs_are_per_session_while_login_state_is_shared():
     assert 'String(next.sessionId || "") === electronSessionId' in view
     assert "bridge.getState(chatId)" in chat
     assert "Array.isArray(next.tabs)" in view
-    assert "await close_electron_browser_session(removed_chat_id)" in chat_routes
-    assert "await close_electron_browser_session(session_id)" in chat_routes
+    assert 'active_plugin_service("browser")' in chat_routes
+    assert "if browser_service is not None:" in chat_routes
+    assert "await browser_service.close_session(removed_chat_id)" in chat_routes
 
 
 def test_browser_snapshot_filters_non_interactable_page_nodes():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
-    browser = (root / "src" / "cyrene" / "browser.py").read_text(encoding="utf-8")
+    browser = (
+        root / "src" / "agent" / "plugin" / "plugin_impl" / "cyrene_browser" / "runtime.py"
+    ).read_text(encoding="utf-8")
 
     for source in (main, browser):
         assert "el.closest('[hidden],[inert],[aria-hidden=\"true\"]')" in source
@@ -9243,7 +9288,7 @@ def test_browser_snapshot_filters_non_interactable_page_nodes():
 
 
 async def test_electron_browser_user_events_are_recorded_for_learning(monkeypatch):
-    from cyrene.workbench import browser_live_service
+    from agent.plugin.plugin_impl.cyrene_browser import live_service
 
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
@@ -9253,10 +9298,17 @@ async def test_electron_browser_user_events_are_recorded_for_learning(monkeypatc
     async def record_browser_user_event(**event):
         recorded.append(event)
 
+    class LearningService:
+        pass
+
+    LearningService.record_browser_user_event = staticmethod(
+        record_browser_user_event
+    )
+
     monkeypatch.setattr(
-        browser_live_service.behavior_learning,
-        "record_browser_user_event",
-        record_browser_user_event,
+        live_service,
+        "_active_learning_service",
+        lambda: LearningService(),
     )
 
     assert "BROWSER_USER_EVENT_CONSOLE_PREFIX" in main
@@ -9267,7 +9319,7 @@ async def test_electron_browser_user_events_are_recorded_for_learning(monkeypatc
     assert "browser:set-context" in main
     assert "bridge.setContext({ sessionId: electronSessionId, roundId: rid })" in view
 
-    result = await browser_live_service.BrowserLiveApplicationService().record_user_event({
+    result = await live_service.BrowserLiveApplicationService().record_user_event({
         "sessionId": "session_1",
         "roundId": "round_1",
         "eventKind": "navigate",
@@ -9334,21 +9386,21 @@ def test_workbench_chat_workspace_chip_follows_project_until_user_overrides_it()
     assert "function wbcWorkspaceContextKey(chatId, projectId)" in chat
     assert "var workspaceContextKey = wbcWorkspaceContextKey(chatId, projectId);" in chat
     assert "wbcSaveWorkspaceOverride(prevKey, currentOverride, draftNs);" in chat
-    assert 'var nextOverride = String(chat && chat.workspaceOverride || "").trim()' in chat
+    assert 'String(chat && chat.workspaceOverride || "").trim()' in chat
     assert 'window.dispatchEvent(new CustomEvent("cyrene:wbc-chat-created"' in chat
-    assert 'window.addEventListener("cyrene:wbc-chat-created", onChatCreated);' in chat
-    assert "wbcSaveWorkspaceOverride(nextKey, workspaceOverrideRef.current, draftNs);" in chat
+    assert 'window.addEventListener("cyrene:wbc-chat-created", onChatCreated);' not in chat
+    assert "wbcSaveWorkspaceOverride(workspaceContextKey, workspaceOverride, draftNs);" in chat
     assert 'var projectWorkspacePath = (project && project.workspacePath) || "";' in chat
     assert (
         "var wsDir = workspaceOverride || projectWorkspacePath || "
         "(contextState && contextState.workspace_dir) || \"\";"
     ) in chat
-    assert "}, [projectId, projectWorkspacePath]);" in chat
+    assert "}, [projectId, projectWorkspacePath, composerContextAvailable, contextStateRevision]);" in chat
     assert (
         'setWorkspaceOverride(selectedPath && selectedPath !== '
         'projectWorkspacePath ? selectedPath : "");'
     ) in chat
-    assert "workspaceOverride: workspaceOverride," in chat
+    assert "workspaceOverride: selectedPath && selectedPath !== projectWorkspacePath" in chat
     assert 'body.workspaceOverride = input.workspaceOverride || "";' in chat
     assert "model.updateChatPreferences(chatId, { soulActive: next })" in chat
     assert "model.updateChatPreferences(chatId, { workspaceActive: false })" in chat
@@ -9361,10 +9413,8 @@ def test_workbench_chat_workspace_chip_follows_project_until_user_overrides_it()
     assert "chat={composerChat}" in chat
     assert "Array.isArray(chat.remoteDeviceIds) ? chat.remoteDeviceIds.slice() : []" in chat
     assert 'setReasoningEffort(String(chat && chat.reasoningEffort || "").trim().toLowerCase());' in chat
-    assert "var personaOn = soulActive !== false;" in chat
-    assert "var workspaceOn = workspaceActive !== false;" in chat
-    assert "if (Number(catalog.revision) < 0) return;" in chat
-    assert "Session summaries now carry this field." in chat
+    assert "var personaOn = soulAvailable && soulActive !== false;" in chat
+    assert "var workspaceOn = workspaceAvailable && workspaceActive !== false;" in chat
 
 
 def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths():
@@ -9402,19 +9452,20 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     assert 'role="combobox"' in chat
     assert 'event.key === "ArrowDown" || event.key === "ArrowUp"' in chat
     assert "wbcParseSlashCommandText(text, slashPool)" in chat
-    assert '"/api/workbench/context-capabilities"' in chat
+    assert '"/api/context/state"' in chat
+    assert '"/api/workbench/context-capabilities"' not in chat
     assert '"/api/workbench/slash-commands?project_id="' in chat
     assert "slashCommandCatalog.length ? slashCommandCatalog : WBC_COMMANDS" in chat
     assert 'item.group === "skill"' in chat
     assert 'item.group === "mcp"' in chat
-    assert 'item.group === "toolPackage"' in chat
+    assert 'item.group === "toolPackage"' not in chat
     assert 'item.group === "customTool"' in chat
     assert 'item.group === "plugin"' in chat
-    assert "contextActivations: submittedContextActivations" in chat
+    assert "payload.contextActivations = submittedContextActivations" in chat
     assert "submittedDescriptor && submittedDescriptor.activation" in chat
     assert 'key: "mcpServers"' in chat
     assert 'key: "skills"' in chat
-    assert 'key: "toolPackages"' in chat
+    assert 'key: "pluginPacks"' in chat
     assert 'key: "customTools"' not in chat
     assert ".wbc-tools-context-options" in styles
     command_clear_guard = 'session.updateKind === "available_commands_update" || session.commands.length'
@@ -9559,14 +9610,12 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     root = Path(__file__).resolve().parent.parent
     source = workbench_settings_source()
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
-    save_block = source.split("function saveModels()", 1)[1].split("function saveTools()", 1)[0]
+    save_block = source.split("function persistQueuedConfig()", 1)[1].split("function updateConfig", 1)[0]
 
     assert "async function readSettingsResponse(response)" in source
     assert "if (!response.ok)" in source
-    assert "settingsFetch(\"/api/settings/models\").then(readSettingsResponse)" in source
-    assert "}).then(readSettingsResponse).then(function (p)" in save_block
-    assert "p.custom_models || norm" in save_block
-    assert "p.vision_models || p.vision_candidates || vNorm" in save_block
+    assert 'requestJson("/api/settings/model-config")' in source
+    assert "store.setConfig(snapshot);" in source
     assert '<script type="module" src="compiled/app.js?v=0.8.0-beta3"></script>' in index
 
 
@@ -9655,7 +9704,7 @@ def test_workbench_chat_exposes_browser_live_view_and_takeover():
     assert "WBC_ICONS.windowRestore" in browser_split
     assert 'className={"wbc-side-agent-split wbc-browser-split" + (maximized ? " maximized" : "")}' in browser_split
     assert 'window.ReactDOM.createPortal(browserSplit, workbenchPortalRoot)' in browser_split
-    assert "handleAnswer(pending.id" in source
+    assert "answerPendingQuestion(questionId, optionText, resumeMode)" in source
 
 
 def test_warning_toast_has_no_colored_left_accent():
@@ -10233,9 +10282,9 @@ def test_extension_center_uses_fixed_settings_geometry_and_localized_catalog_cop
     styles = workbench_style_source()
 
     assert '.settings-overlay-panel:has([data-settings-active-tab="extensions"])' not in styles
-    assert 'if (props.id === "github-cli") return AboutRelatedIcon("github");' in source
-    assert 'className: "wb-extension-expand-button"' in source
-    assert source.index('className: "wb-extension-actions"') < source.index('className: "wb-extension-expand-button"')
+    assert 'React.createElement(PluginCenterPage' in source
+    assert 'className="wb-extension-expand-button"' in source
+    assert source.index('className="wb-extension-actions"') < source.index('className="wb-extension-expand-button"')
     chevron_css = styles.split(".wb-extension-chevron {", 1)[1].split("}", 1)[0]
     assert "width: 18px;" in chevron_css
     assert "height: 18px;" in chevron_css
@@ -10243,33 +10292,24 @@ def test_extension_center_uses_fixed_settings_geometry_and_localized_catalog_cop
     assert "place-items: center;" in chevron_css
     assert "line-height: 0;" in chevron_css
     assert ".wb-extension-chevron > svg { display: block; }" in styles
-    assert 'className: "wb-extension-source-sections"' in source
-    assert 't("settings.extensionMcpRegistryHint")' in source
-    assert '.wb-extension-source-modal { width: min(820px, calc(100vw - 32px)); padding: 0; overflow: auto; }' in styles
-    assert '.wb-extension-glyph.github-cli { color: var(--wb-text); }' in styles
-    assert 'min-width: 92px;' in styles.split('.wb-extensions-page .wb-extension-install-button {', 1)[1].split('}', 1)[0]
-    assert 'className: "wb-btn primary wb-extension-install-button wb-extension-tab-install-button"' in source
-    tab_install_button_css = styles.split(
-        ".wb-extension-header-actions .wb-extension-tab-install-button {", 1
+    assert 'className="wb-extension-source-sections"' in source
+    assert 't("settings.extensionMcpRegistryHint",' in source
+    assert ".wb-extension-source-modal" in styles
+    assert 'className="wb-btn wb-plugin-center-back"' in source
+    page_css = styles.split(
+        ".wb-plugin-center-popover.wb-plugin-center-page {", 1
     )[1].split("}", 1)[0]
-    assert "width: 128px;" in tab_install_button_css
-    assert "min-width: 128px;" in tab_install_button_css
+    assert "position: static;" in page_css
+    assert "width: 100%;" in page_css
+    assert "max-height: none;" in page_css
+    assert "box-shadow: none;" in page_css
+    assert ".settings-overlay .settings-panel.wb-plugin-center-page-shell" in styles
+    assert 'role={c.props.inline ? "region" : "dialog"}' in source
 
-    extension_scroll_css = styles.split(
-        '.settings-overlay-content[data-settings-active-tab="extensions"] {', 1
-    )[1].split("}", 1)[0]
-    extension_webkit_scroll_css = styles.split(
-        '.settings-overlay-content[data-settings-active-tab="extensions"]::-webkit-scrollbar {', 1
-    )[1].split("}", 1)[0]
     settings_content_css = styles.split("/* Content area */", 1)[1].split(
         ".settings-overlay-content {", 1
     )[1].split("}", 1)[0]
     assert "overflow-y: auto;" in settings_content_css
-    assert "scrollbar-width: none;" in extension_scroll_css
-    assert "-ms-overflow-style: none;" in extension_scroll_css
-    assert "display: none;" in extension_webkit_scroll_css
-    assert "width: 0;" in extension_webkit_scroll_css
-    assert "height: 0;" in extension_webkit_scroll_css
 
     for extension_id in ("python", "uv", "tex", "node", "github-cli", "bun"):
         assert translations.count(f'"settings.extensionCatalog.{extension_id}.name"') == 2
@@ -10292,30 +10332,24 @@ def test_remote_settings_keeps_compatibility_on_and_persists_package_checkboxes(
     assert ".remote-status-card" not in styles
     assert "remoteCapabilityLabel" not in source
     assert "remoteCompatibilityCapabilities" not in remote_panel
-    assert 't("settings.remoteCompatibilityAlwaysOn")' in source
-    assert 'className: "remote-option-list remote-tool-package-options"' in source
-    assert "toggleInviteToolPack(item.wire_name)" in remote_panel
-    assert "inviteToolPacksRef.current = next" in remote_panel
-    assert "default_tool_packs: next," in remote_panel
-    assert "default_tool_packs: nextRemote.default_tool_packs || []" in remote_panel
-    assert "remoteRequiredCapabilities(" in source
-    assert "remoteToolPackGrants(" in source
+    assert 'Toggle(!!remote.enabled' in remote_panel
+    assert 'className: "remote-option"' in source
+    assert "toggleList(project.id, setInviteProjects)" in remote_panel
+    assert "project_scopes: inviteProjects" in remote_panel
+    assert "remoteTransportDetail(" in source
+    assert "remoteEventLabel(" in source
     assert "remoteTransportDetail(t, transport)" in remote_panel
     assert "transport.port_fallback" in source
     assert i18n.count('"settings.remoteTransportAlternatePort"') == 2
     assert 'var [pairingMode, setPairingMode] = useStateSt("share")' in remote_panel
     assert 'className: "wb-seg remote-pairing-tabs"' in remote_panel
     assert "inviteDefaultsInitializedRef.current = true" in remote_panel
-    assert "payload.remote_tool_packages || []" in remote_panel
+    assert "(payload.projects || []).map(function (project)" in remote_panel
     assert "payload.projects || []" in remote_panel
-    assert 'React.createElement("details", { className: "remote-pairing-settings" }' in remote_panel
-    assert 'React.createElement("summary", null' in remote_panel
-    assert 'className: "remote-pairing-settings-chevron"' in remote_panel
-    assert "ExternalChevron()" in remote_panel
-    assert ".remote-pairing-settings[open] summary" in styles
-    assert ".remote-pairing-settings[open] .remote-pairing-settings-chevron" in styles
-    assert ".remote-pairing-settings summary:focus {" in styles
-    assert ".remote-pairing-settings summary:focus-visible {" in styles
+    assert 'className: "remote-pairing-layout"' in remote_panel
+    assert 'className: "remote-pairing-group"' in remote_panel
+    assert 'className: "remote-project-choices"' in remote_panel
+    assert ".remote-project-choices" in styles
     assert 'className: "remote-pairing-columns"' not in remote_panel
     assert 'className: "remote-pairing-card"' not in remote_panel
     assert ".remote-pairing-columns" not in styles
@@ -10323,10 +10357,9 @@ def test_remote_settings_keeps_compatibility_on_and_persists_package_checkboxes(
     assert i18n.count('"settings.remotePairModeShare"') == 2
     assert i18n.count('"settings.remotePairModeControl"') == 2
     assert i18n.count('"settings.remotePairCapabilities"') == 2
-    assert i18n.count('"settings.remoteShareSettings"') == 2
-    assert i18n.count('"settings.remoteShareSettingsHint"') == 2
-    assert '"settings.remoteAllowController": "允许其他设备控制 Cyrene"' in i18n
-    assert '"settings.remoteAllowControllerHint": "在共享设置中修改允许远程调用的工具或项目。"' in i18n
+    assert i18n.count('"settings.remoteSharedProjects"') == 2
+    assert '"settings.remoteAllowController"' in i18n
+    assert '"settings.remoteAllowControllerHint"' in i18n
     assert 'settingsFetch("/api/remote/pairing/short-key"' in remote_panel
     assert 'settingsFetch("/api/remote/pairing/connect"' in remote_panel
     assert 'error.code === "remote_pairing_peer_update_required"' in remote_panel
@@ -10362,7 +10395,7 @@ def test_remote_settings_keeps_compatibility_on_and_persists_package_checkboxes(
     assert i18n.count('"settings.remotePairingKey"') == 2
     assert i18n.count('"settings.remoteDeviceAddress"') == 2
 
-    assert i18n.count('"settings.remoteCompatibilityAlwaysOn"') == 2
+    assert i18n.count('"settings.remoteCompatibilityAlwaysOn"') == 0
 
     for status in (
         "Configured",
@@ -10438,7 +10471,8 @@ def test_workbench_memory_history_tab_renders_events_not_hardcoded():
     # The History tab now renders from m.history.
     assert "m.history" in source
     assert "historyEvents" in source
-    assert "action_label" in source
+    assert "historyActionLabel(ev.action, t)" in source
+    assert "ev.action_label" not in source
 
 
 def test_workbench_memory_combines_overview_into_source_card():
@@ -10524,6 +10558,56 @@ def test_workbench_skill_learning_uses_actionable_candidate_status_only():
     assert 'onExit: function () { setActivePanel(""); }' in source
     assert "不是可复用的多工具流程" not in translations
     assert '"memory.learning.noRepeatYet": "尚未发现重复"' in translations
+
+
+def test_workbench_skill_learning_is_gated_by_active_skills_plugin():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
+
+    page = source.split("function WorkbenchMemoryPage", 1)[1]
+    assert 'pluginModules.indexOf("skills") >= 0' in page
+    assert 'var learningActive = skillsEnabled && activePanel === "learning";' in page
+    assert 'if (!skillsEnabled) return Promise.resolve(null);' in page
+    assert 'skillsEnabled && h("button"' in page
+    assert 'var main = learningActive ? h(SkillLearningMain' in page
+    assert 'learningActive ? h(SkillLearningPanel' in page
+
+
+def test_code_and_terminal_frontend_stop_when_code_plugin_marker_is_absent():
+    page = frontend_module_source("features/chat/page.jsx")
+    rail = frontend_module_source("features/chat/rail.jsx")
+    terminal = frontend_module_source("terminal/entry.jsx")
+    diff = frontend_module_source("shared/diff/viewer.jsx")
+    editor = frontend_module_source("code/editor.jsx")
+
+    assert 'var codeAvailable = pluginModules.indexOf("code") >= 0;' in page
+    assert "useWbcTerminalCatalog(projectId, codeAvailable)" in page
+    assert "if (!codeAvailable || !projectId || !isActive) return undefined;" in page
+    assert "codeAvailable={codeAvailable}" in page
+    assert "if (!codeAvailable || !projectId)" in rail
+    assert "codeAvailable && (railMode === \"chat\" || railMode === \"task\")" in rail
+    assert 'var codeAvailable = pluginModules.indexOf("code") >= 0;' in terminal
+    assert "if (!codeAvailable || !host || !terminalId) return undefined;" in terminal
+    assert "}, [terminalId, codeAvailable]);" in terminal
+    assert "if (!codeAvailable) return null;" in terminal
+    assert "if (!codeAvailable)" in diff
+    assert "[props.diff, props.left, props.right, props.mode, codeAvailable]" in diff
+    assert "if (!codeAvailable || !hostRef.current) return undefined;" in editor
+
+
+def test_chat_agent_picker_is_gated_by_agents_plugin_marker():
+    page = frontend_module_source("features/chat/page.jsx")
+    composer = frontend_module_source("features/chat/composer.jsx")
+    catalog = frontend_module_source("features/chat/composer-model-state.jsx")
+
+    assert 'var agentsAvailable = pluginModules.indexOf("agents") >= 0;' in page
+    assert "onDraftAgentChange={agentsAvailable ? handleDraftAgentChange : null}" in page
+    assert "wbcSaveDraftAgentBinding(projectId, null);" in page
+    assert 'var agentsAvailable = pluginModules.indexOf("agents") >= 0;' in composer
+    assert 'var agentPickerEnabled = agentsAvailable && typeof onDraftAgentChange === "function";' in composer
+    disabled_branch = catalog.split("if (!enabled) {", 1)[1].split("}", 1)[0]
+    assert "setOptions([])" in disabled_branch
+    assert "WorkbenchChatModel.listAgents()" in catalog
 
 
 def test_workbench_skill_learning_moves_full_content_into_right_inspector():
@@ -11079,14 +11163,15 @@ def test_settings_codex_quota_uses_the_shared_duration_parser():
 
 
 def test_external_agent_probe_and_install_help_are_actionable():
-    settings = workbench_settings_source()
+    settings = frontend_module_source("features/settings/plugin-center-agents.jsx")
     i18n = workbench_i18n_source()
 
-    assert 'if (payload && payload.agent) props.onChanged(payload.agent);' in settings
-    assert 'not_started: t("settings.agentRuntime.notStarted"' in settings
-    assert 'source: { type: "inline", manifest: manifestExample }' in settings
-    assert 'settingsFetch(AGENT_PROPOSAL_ENDPOINT' in settings
-    assert '"/" + encodeURIComponent(proposalId) + "/confirm"' in settings
+    assert 'if (onChanged) onChanged(next)' in settings
+    agent_settings = frontend_module_source("features/settings/plugin-center-agents.jsx")
+    assert 'stateLabel("Runtime"' in agent_settings
+    assert 'source: { type: "inline", manifest: parsed }' in settings
+    assert 'request("/api/plugin-center/agent/install-proposals"' in settings
+    assert 'install-proposals/" + encodeURIComponent(id) + "/confirm' in settings
     assert 't("settings.agentProposalConfirmInstall"' in settings
     assert '"settings.agentRuntime.pendingTransport": "Not tested"' in i18n
     assert '"settings.agentRuntime.pendingTransport": "尚未测试"' in i18n
@@ -11101,7 +11186,7 @@ def test_agent_picker_rebinds_empty_chat_and_confirms_new_nonempty_chat():
     assert 'model.createChatWithBinding(projectId, "", binding)' in source
     assert "model.updateChatAgent(activeChat.id, binding)" in source
     assert 'wbcT("workbenchChat.agentNewChatTitle"' in source
-    assert "onSwitchAgent={handleSwitchAgent}" in source
+    assert "onSwitchAgent={agentsAvailable ? handleSwitchAgent : null}" in source
     agent_panel = source.split('{modelPanel === "agents"', 1)[1].split('{modelPanel === "models"', 1)[0]
     assert "locked: false" in agent_panel
     assert 'canPick: availability.state === "available"' in agent_panel
@@ -11145,9 +11230,9 @@ def test_agent_diagnostics_note_is_localized_from_a_stable_code():
     root = Path(__file__).resolve().parent.parent
     settings = workbench_settings_source()
     i18n = workbench_i18n_source()
-    runtime = (root / "src/cyrene/extensions/agent_runtime.py").read_text(encoding="utf-8")
+    runtime = (root / "src/agent/plugin/plugin_impl/cyrene_extensions/extension_agent_runtime.py").read_text(encoding="utf-8")
 
-    assert 'payload.noteCode || payload.reason' in settings
+    assert 'diagnostics.noteCode || diagnostics.note_code || diagnostics.reason' in settings
     assert 't("settings.agentDiagnosticsStartsOnDemand"' in settings
     assert 'diagnostics.note || ""' not in settings
     assert '"noteCode": "starts_on_demand"' in runtime
@@ -11155,14 +11240,14 @@ def test_agent_diagnostics_note_is_localized_from_a_stable_code():
 
 
 def test_agent_settings_show_composer_usability_and_localized_reasons():
-    settings = workbench_settings_source()
+    settings = frontend_module_source("features/settings/plugin-center-agents.jsx")
     i18n = workbench_i18n_source()
 
-    assert "function agentUsabilityMeta(agent, t)" in settings
+    assert "function agentUsability(agent, t)" in settings
     assert 't("settings.agentComposerAvailability"' in settings
     assert 't("settings.agentUsability.available"' in settings
-    assert '["error", "crashed", "failed"].indexOf(runtimeState)' in settings
-    assert 'authState === "expired" || authState === "failed"' in settings
+    assert 'runtime === "crashed" || runtime === "error"' in settings
+    assert 'auth === "failed" || auth === "expired"' in settings
     assert i18n.count('"settings.agentUsability.available"') == 2
     assert '"settings.agentUsability.available": "可在 Composer 中使用"' in i18n
 
@@ -11484,7 +11569,7 @@ def test_markdown_button_block_renders_payload_with_readable_fallback():
     )
     assert 'class="wbc-button"' in result["finalHtml"]
     # The fallback line is readable: "[按钮: 开始翻译]".
-    assert '[\\u6309\\u94ae: \\u5f00\\u59cb\\u7ffb\\u8bd1]' in result["finalHtml"] or "[按钮: 开始翻译]" in result["finalHtml"]
+    assert "[Button: 开始翻译]" in result["finalHtml"]
     assert result["payload"]["action_id"] == "translate_start"
     assert result["payload"]["label"] == "开始翻译"
     assert result["payload"]["style"] == "primary"
@@ -11842,7 +11927,7 @@ def test_performance_mode_disables_renderer_effects_and_is_boot_persistent():
     assert 'JSON.stringify({ performance_mode: next })' in overlay
     assert 'settings.performanceMode' in overlay
     appearance = overlay.split("function AppearancePanel(p)", 1)[1].split("// ── Capabilities Panel ──", 1)[0]
-    general = overlay.split("function GeneralPanel(p)", 1)[1].split("// ── Models Panel ──", 1)[0]
+    general = (frontend / "features" / "settings" / "general.jsx").read_text(encoding="utf-8")
     assert 'settings.performanceMode' in appearance
     assert 'settings.performanceMode' not in general
     assert 'dataset.performanceMode = next ? "on" : "off"' in workbench
@@ -11975,7 +12060,7 @@ def test_media_settings_hide_comfyui_and_use_progressive_autosave_ui():
     assert "function scheduleMediaSave(queue, delay)" in media
     assert "scheduleMediaSave(store.saveQueue, immediate ? 0 : 600)" in media
     assert "failMediaSave(queue, error, version)" in media
-    assert "if (saveQueue.dirty) persistMediaSave(saveQueue, true)" in media
+    assert "if (saveQueue.available && saveQueue.dirty) persistMediaSave(saveQueue, true)" in media
     assert "expectedRevision" in media
     assert "onClick: media.save" not in panel
     assert 't("settings.mediaSave")' not in panel

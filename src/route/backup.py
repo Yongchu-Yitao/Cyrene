@@ -3,9 +3,10 @@
 import json
 
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 
 from cyrene.runtime.backup import BackupDownloadError, BackupRepository
+from route.errors import localized_error_payload, localized_error_response
 
 
 def register_backup_routes(
@@ -32,7 +33,14 @@ def register_backup_routes(
         body = await request.json()
         path = str(body.get("path") or "").strip()
         if not path:
-            return {"ok": False, "error": "path is required"}
+            return {
+                "ok": False,
+                **localized_error_payload(
+                    "Backup path is required.",
+                    "请选择备份路径。",
+                    "backup_path_required",
+                ),
+            }
         return await backups.restore(path)
 
     @router.post("/api/backup/delete")
@@ -40,7 +48,14 @@ def register_backup_routes(
         body = await request.json()
         name = str(body.get("name") or "").strip()
         if not name:
-            return {"ok": False, "error": "name is required"}
+            return {
+                "ok": False,
+                **localized_error_payload(
+                    "Backup name is required.",
+                    "请选择要删除的备份。",
+                    "backup_name_required",
+                ),
+            }
         ok = await backups.delete(name)
         return {"ok": ok}
 
@@ -49,5 +64,10 @@ def register_backup_routes(
         try:
             target = backups.download(backup_name)
         except BackupDownloadError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=exc.status_code)
+            return localized_error_response(
+                "The backup could not be downloaded.",
+                "无法下载该备份。",
+                exc.status_code,
+                "backup_download_failed",
+            )
         return FileResponse(target, filename=backup_name, media_type="application/zip")

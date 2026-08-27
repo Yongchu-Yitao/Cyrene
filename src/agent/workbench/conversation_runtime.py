@@ -15,6 +15,10 @@ from typing import Any
 from ..context import ContextError, ContextStoreRouter, TreeNotFoundError
 from ..permission import runtime_permission_mode
 from ..plugin import PluginRegistry, default_plugin_impl_directory
+from ..plugin.session_state import (
+    plugin_child_context_ids,
+    without_plugin_session_state,
+)
 from ..plugin.model_gateway import ensure_model_router
 from ..plugin.model_router import MODEL_ROUTER_PLUGIN
 from ..prompt import DEFAULT_SYSTEM_PROMPT
@@ -24,6 +28,16 @@ from .bridge import (
     WorkbenchPublisher,
     WorkbenchSessionBridge,
 )
+from cyrene.localization import app_language
+
+
+def _accounting_publisher(session_id: str) -> WorkbenchPublisher:
+    async def publish(event: dict[str, Any]) -> None:
+        from cyrene.workbench.usage_events import publish_usage_event
+
+        await publish_usage_event(event, session_id=session_id)
+
+    return publish
 
 
 class _ThreadsafeConversationPublisher:
@@ -67,6 +81,68 @@ def _conversation_data_directory(
     return Path(USER_DATA_DIR).expanduser().resolve() / "agent-state"
 
 
+def context_checkpoint_from_nodes(nodes: Sequence[Any]) -> dict[str, Any] | None:
+    """Project a durable run checkpoint from an already-loaded tree snapshot."""
+
+    dialogue = [
+        node
+        for node in nodes
+        if isinstance(node.value, Mapping)
+        and node.value.get("role")
+        in {
+            "system",
+            "user",
+            "context",
+            "context_compaction",
+            "assistant",
+            "tool_results",
+        }
+    ]
+    if not dialogue:
+        return None
+    leaf = max(dialogue, key=lambda item: (item.created_at, item.id))
+    by_id = {node.id: node for node in nodes}
+    current = leaf
+    run_id = ""
+    while current is not None:
+        value = current.value if isinstance(current.value, Mapping) else {}
+        run_id = str(value.get("run_id") or "")
+        if run_id:
+            break
+        current = by_id.get(str(current.parent_id or ""))
+    value = leaf.value if isinstance(leaf.value, Mapping) else {}
+    pending = value.get("pending_question")
+    if (
+        value.get("role") == "tool_results"
+        and value.get("trigger_model") is False
+        and isinstance(pending, Mapping)
+        and str(pending.get("status") or "awaiting_user") == "awaiting_user"
+    ):
+        question = WorkbenchPendingQuestion.from_mapping(pending)
+        return {
+            "status": "awaiting_user",
+            "run_id": run_id,
+            "node_id": leaf.id,
+            "pending_question": question,
+            "active_plan": question.plan,
+        }
+    if value.get("cancelled") is True:
+        status = "cancelled"
+    elif value.get("error") is True:
+        status = "failed"
+    elif value.get("role") == "assistant" and value.get("session_end_complete") is True:
+        status = "completed"
+    elif value.get("role") == "context_compaction" and value.get("resume_model") is not True:
+        status = "completed"
+    else:
+        status = "running"
+    return {
+        "status": status,
+        "run_id": run_id,
+        "node_id": leaf.id,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class ConversationConfig:
     """Host values needed to reopen one Workbench conversation tree."""
@@ -84,6 +160,10 @@ class ConversationConfig:
     remote_device_ids: Sequence[str] = ()
     soul_enabled: bool | None = None
     workspace_enabled: bool | None = None
+    context_activations: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    resolved_context_activations: Mapping[str, Sequence[str]] = field(
+        default_factory=dict
+    )
     system_extra: str = ""
     project_id: str = ""
     project_memory_snapshot: Mapping[str, Any] | None = None
@@ -149,66 +229,7 @@ class ConversationRuntime:
             return None
         finally:
             router.close()
-        dialogue = [
-            node
-            for node in nodes
-            if isinstance(node.value, Mapping)
-            and node.value.get("role")
-            in {
-                "system",
-                "user",
-                "context",
-                "context_compaction",
-                "assistant",
-                "tool_results",
-            }
-        ]
-        if not dialogue:
-            return None
-        leaf = max(dialogue, key=lambda item: (item.created_at, item.id))
-        by_id = {node.id: node for node in nodes}
-        current = leaf
-        run_id = ""
-        while current is not None:
-            value = current.value if isinstance(current.value, Mapping) else {}
-            run_id = str(value.get("run_id") or "")
-            if run_id:
-                break
-            current = by_id.get(str(current.parent_id or ""))
-        value = leaf.value if isinstance(leaf.value, Mapping) else {}
-        pending = value.get("pending_question")
-        if (
-            value.get("role") == "tool_results"
-            and value.get("trigger_model") is False
-            and isinstance(pending, Mapping)
-            and str(pending.get("status") or "awaiting_user") == "awaiting_user"
-        ):
-            question = WorkbenchPendingQuestion.from_mapping(pending)
-            return {
-                "status": "awaiting_user",
-                "run_id": run_id,
-                "node_id": leaf.id,
-                "pending_question": question,
-                "active_plan": question.plan,
-            }
-        if value.get("cancelled") is True:
-            status = "cancelled"
-        elif value.get("error") is True:
-            status = "failed"
-        elif value.get("role") == "assistant" and value.get("session_end_complete") is True:
-            status = "completed"
-        elif (
-            value.get("role") == "context_compaction"
-            and value.get("resume_model") is not True
-        ):
-            status = "completed"
-        else:
-            status = "running"
-        return {
-            "status": status,
-            "run_id": run_id,
-            "node_id": leaf.id,
-        }
+        return context_checkpoint_from_nodes(nodes)
 
     def fork_context(
         self,
@@ -264,9 +285,7 @@ class ConversationRuntime:
             if cutoff < 0:
                 raise LookupError("source user turn was not found")
 
-            root_value = deepcopy(path[0].value)
-            if isinstance(root_value, dict):
-                root_value.pop("_cyrene_subagents", None)
+            root_value = without_plugin_session_state(path[0].value)
             target = router.create_tree(
                 root_value,
                 tree_id=target_id,
@@ -314,11 +333,8 @@ class ConversationRuntime:
             except TreeNotFoundError:
                 return
             value = root.value if isinstance(root.value, Mapping) else {}
-            records = value.get("_cyrene_subagents")
-            if isinstance(records, Mapping):
-                for record in records.values():
-                    if isinstance(record, Mapping):
-                        delete_tree(str(record.get("tree_id") or ""))
+            for child_id in plugin_child_context_ids(value):
+                delete_tree(child_id)
             router.delete_tree(normalized)
             deleted = True
 
@@ -390,22 +406,14 @@ class ConversationRuntime:
             owner_loop.call_soon_threadsafe(invoke)
             return result.result(timeout=30)
 
-        from agent.plugin import active_plugin_service
-        from cyrene.runtime.schedule_runtime import get_schedule_runtime
+        from agent.plugin import active_plugin_application_host
 
-        plugin_services: dict[str, Any] = {}
-        knowledge_service = active_plugin_service("knowledge")
-        memory_application = active_plugin_service("memory")
-        map_service = active_plugin_service("maps")
-        if knowledge_service is not None:
-            plugin_services["knowledge"] = knowledge_service
-        if map_service is not None:
-            plugin_services["maps"] = map_service
-        if str(config.db_path or "").strip():
-            plugin_services["schedules"] = (
-                active_plugin_service("schedules")
-                or get_schedule_runtime(str(config.db_path), bot=config.bot)
-            )
+        application_host = active_plugin_application_host()
+        plugin_services = (
+            application_host.active_services
+            if application_host is not None
+            else {}
+        )
 
         run_context = {
             "agent_id": "main",
@@ -414,6 +422,7 @@ class ConversationRuntime:
             "command": str(config.command or ""),
             "user_request_text": str(config.public_user_message or ""),
             "conversation_source": str(config.conversation_source or ""),
+            "language": app_language(),
             "session_id": str(config.session_id),
             "ui_instance_id": str(config.ui_instance_id or ""),
             "workspace_dir": str(config.workspace_dir or ""),
@@ -450,7 +459,12 @@ class ConversationRuntime:
             },
             plugin_context_data={
                 "session_id": str(config.session_id),
-                "system_extra": str(config.system_extra or ""),
+                "context_activations": deepcopy(
+                    dict(config.context_activations or {})
+                ),
+                "resolved_context_activations": deepcopy(
+                    dict(config.resolved_context_activations or {})
+                ),
                 "project_id": str(config.project_id or ""),
                 "project_memory_snapshot": (
                     deepcopy(dict(config.project_memory_snapshot))
@@ -469,9 +483,6 @@ class ConversationRuntime:
                 "memory_archive_enabled": bool(config.memory_archive_enabled),
                 "retry": bool(config.retry),
                 "completed_turn_count": max(0, int(config.completed_turn_count or 0)),
-                "memory_data_directory": str(
-                    getattr(memory_application, "data_directory", state_root)
-                ),
                 "background_submitter": submit_background,
                 "owner_call": call_on_owner,
                 "run_context": run_context,
@@ -521,6 +532,7 @@ class ConversationRuntime:
         normalized_run_id = str(run_id or "").strip()
         if not normalized_run_id:
             raise ValueError("run_id cannot be empty")
+        event_publisher = publish or _accounting_publisher(config.session_id)
 
         async def operate(bridge: WorkbenchSessionBridge) -> WorkbenchChatResult:
             snapshot = bridge.snapshot()
@@ -535,7 +547,7 @@ class ConversationRuntime:
             if status != "idle":
                 if restored_run_id == normalized_run_id:
                     return await bridge.resume_result(
-                        publish=publish,
+                        publish=event_publisher,
                         cancel_on_caller_cancel=False,
                     )
                 await bridge.cancel("superseded_by_new_workbench_run")
@@ -548,15 +560,19 @@ class ConversationRuntime:
             )
             if retry_branch:
                 bridge.prepare_retry()
+            turn_metadata = dict(metadata or {})
+            # Runtime context is a per-turn durable input mounted exclusively
+            # by the cyrene_context SessionStart Hook.
+            turn_metadata["ephemeral_context"] = str(config.system_extra or "")
             return await bridge.submit_result(
                 str(text or "").strip(),
                 run_id=normalized_run_id,
-                metadata=metadata,
-                publish=publish,
+                metadata=turn_metadata,
+                publish=event_publisher,
                 cancel_on_caller_cancel=False,
             )
 
-        return await self._with_bridge(config, operate, publish=publish)
+        return await self._with_bridge(config, operate, publish=event_publisher)
 
     async def answer(
         self,
@@ -566,15 +582,17 @@ class ConversationRuntime:
         *,
         publish: WorkbenchPublisher | None = None,
     ) -> WorkbenchChatResult:
+        event_publisher = publish or _accounting_publisher(config.session_id)
+
         async def operate(bridge: WorkbenchSessionBridge) -> WorkbenchChatResult:
             return await bridge.answer_result(
                 question_id,
                 answer,
-                publish=publish,
+                publish=event_publisher,
                 cancel_on_caller_cancel=False,
             )
 
-        return await self._with_bridge(config, operate, publish=publish)
+        return await self._with_bridge(config, operate, publish=event_publisher)
 
     async def resume(
         self,
@@ -582,13 +600,15 @@ class ConversationRuntime:
         *,
         publish: WorkbenchPublisher | None = None,
     ) -> WorkbenchChatResult:
+        event_publisher = publish or _accounting_publisher(config.session_id)
+
         async def operate(bridge: WorkbenchSessionBridge) -> WorkbenchChatResult:
             return await bridge.resume_result(
-                publish=publish,
+                publish=event_publisher,
                 cancel_on_caller_cancel=False,
             )
 
-        return await self._with_bridge(config, operate, publish=publish)
+        return await self._with_bridge(config, operate, publish=event_publisher)
 
     async def compact(
         self,
@@ -601,7 +621,11 @@ class ConversationRuntime:
         async def operate(bridge: WorkbenchSessionBridge) -> dict[str, Any]:
             return await bridge.compact(context_limit=context_limit)
 
-        result = await self._with_bridge(config, operate, publish=None)
+        result = await self._with_bridge(
+            config,
+            operate,
+            publish=_accounting_publisher(config.session_id),
+        )
         return dict(result)
 
     def request_cancel(self, chat_id: str, reason: str = "user_cancelled") -> bool:

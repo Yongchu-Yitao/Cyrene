@@ -25,6 +25,7 @@ from typing import Any
 
 from fastapi.responses import JSONResponse
 
+from cyrene.localization import localized
 from cyrene.runtime.run_coordinator import RunCoordinator, RunLease, run_coordinator_for
 from cyrene.workbench import project_repository, project_runtime
 
@@ -131,7 +132,7 @@ def begin_task_run(
         "type": "RunAcceptedEvent",
         "runId": str(run_id),
         "createdAt": now,
-        "body": user_input or ("[附件]" if attachments else ""),
+        "body": user_input or (localized("[Attachment]", "[附件]") if attachments else ""),
         "runType": str(run_type or "task"),
     }
     run: dict[str, Any] = {
@@ -325,7 +326,10 @@ async def _resume_one_task_run(
                 session_id,
                 run_id,
                 status="cancelled",
-                error="任务运行已被中断。",
+                error=localized(
+                    "The task run was interrupted.",
+                    "任务运行已被中断。",
+                ),
                 termination_reason=str(
                     lease.termination_reason or "user_interrupted"
                 ),
@@ -341,7 +345,10 @@ async def _resume_one_task_run(
             session_id,
             run_id,
             status="failed",
-            error=str(exc),
+            error=localized(
+                "The interrupted task run could not be resumed.",
+                "无法恢复被中断的任务运行。",
+            ),
             termination_reason="process_resume_failed",
         )
     finally:
@@ -382,11 +389,21 @@ async def recover_interrupted_task_runs(
                 try:
                     resume_body = _resume_body(run)
                 except ValueError as exc:
+                    logger.warning(
+                        "Interrupted Task run has no resumable request "
+                        "[session=%s run=%s]",
+                        session_id,
+                        run_id,
+                        exc_info=True,
+                    )
                     finish_task_run_if_open(
                         session_id,
                         run_id,
                         status="failed",
-                        error=str(exc),
+                        error=localized(
+                            "The interrupted task run cannot be resumed because its request is unavailable.",
+                            "被中断任务的请求数据不可用，无法恢复运行。",
+                        ),
                         termination_reason="process_resume_request_missing",
                     )
                     continue

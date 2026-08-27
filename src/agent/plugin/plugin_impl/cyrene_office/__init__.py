@@ -5,7 +5,7 @@ from copy import deepcopy
 from types import ModuleType
 from typing import Any
 
-from agent.plugin import Plugin, PluginPack
+from agent.plugin import Plugin, PluginApplicationContext, PluginPack
 
 from . import (
     apply_batch,
@@ -16,6 +16,12 @@ from . import (
     render_slide,
     setup,
 )
+
+
+def application_setup(context: PluginApplicationContext) -> None:
+    from .application import setup_application
+
+    setup_application(context)
 
 
 def _plugin(
@@ -88,8 +94,9 @@ plugin_pack = PluginPack(
         ),
         *_deferred_plugins,
     ),
+    application_setup=application_setup,
 )
 if len(plugin_pack.plugins) != 50:
     raise RuntimeError("office pack must contain exactly 50 Plugins")
 
-__all__ = ["plugin_pack"]
+__all__ = ["application_setup", "plugin_pack"]

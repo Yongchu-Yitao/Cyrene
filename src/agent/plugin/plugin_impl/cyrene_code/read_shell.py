@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 from agent.plugin import PluginContext
-from agent.plugin.native_runtime import json_result
+from agent.plugin.native_runtime import json_result, plugin_localized
 
 from .definitions import get_native_tool_def
 from .services import terminal_service
@@ -44,7 +44,11 @@ async def _tool_read_shell(
     view = str(args.get("view") or "screen").strip().lower()
     if view not in {"screen", "scrollback", "commands", "command_output"}:
         raise ValueError(
-            "view must be 'screen', 'scrollback', 'commands', or 'command_output'"
+            plugin_localized(
+                context,
+                "view must be 'screen', 'scrollback', 'commands', or 'command_output'.",
+                "view 必须是 'screen'、'scrollback'、'commands' 或 'command_output'。",
+            )
         )
     terminal_id = str(terminal.get("id") or "")
     if view == "commands":
@@ -52,19 +56,31 @@ async def _tool_read_shell(
         return json_result({
             "shell_id": terminal_id,
             "terminal_id": terminal_id,
-            "title": terminal.get("title", "Terminal"),
+            "title": terminal.get("title") or plugin_localized(
+                context,
+                "Terminal",
+                "终端",
+            ),
             "source": "commands",
             "commands": list(payload.get("commands") or []),
         })
     if view == "command_output":
         command_id = str(args.get("command_id") or "").strip()
         if not command_id:
-            raise ValueError("command_id is required for view=command_output")
+            raise ValueError(plugin_localized(
+                context,
+                "command_id is required for view=command_output.",
+                "当 view=command_output 时必须提供 command_id。",
+            ))
         payload = await terminals.command_output(terminal_id, command_id)
         return json_result({
             "shell_id": terminal_id,
             "terminal_id": terminal_id,
-            "title": terminal.get("title", "Terminal"),
+            "title": terminal.get("title") or plugin_localized(
+                context,
+                "Terminal",
+                "终端",
+            ),
             "source": "command_output",
             "command": payload.get("command") or {},
             "text": str(payload.get("text") or ""),
@@ -82,7 +98,11 @@ async def _tool_read_shell(
         return json_result({
             "shell_id": terminal.get("id", ""),
             "terminal_id": terminal.get("id", ""),
-            "title": terminal.get("title", "Terminal"),
+            "title": terminal.get("title") or plugin_localized(
+                context,
+                "Terminal",
+                "终端",
+            ),
             "status": terminal_state.get("status", ""),
             "source": "scrollback",
             "range": {
@@ -115,7 +135,11 @@ async def _tool_read_shell(
     return json_result({
         "shell_id": terminal.get("id", ""),
         "terminal_id": terminal.get("id", ""),
-        "title": terminal.get("title", "Terminal"),
+        "title": terminal.get("title") or plugin_localized(
+            context,
+            "Terminal",
+            "终端",
+        ),
         "status": terminal_state.get("status", ""),
         "rows": snap.get("rows"),
         "cols": snap.get("cols"),

@@ -6,10 +6,10 @@ Fernet-encrypted JSON blob under DATA_DIR / "config.enc".
 
 from __future__ import annotations
 
-import importlib
 import json
 import logging
 import os
+import re
 import threading
 from copy import deepcopy
 from pathlib import Path
@@ -36,22 +36,8 @@ _KEY_PATH = DATA_DIR / ".config_key"
 # ---------------------------------------------------------------------------
 
 _DEFAULT_ENV: dict[str, str] = {
-    "TELEGRAM_BOT_TOKEN": "",
-    "WECHAT_BOT_TOKEN": "",
-    "WECHAT_OWNER_ID": "",
-    "AMAP_API_KEY": "",
     "ASSISTANT_NAME": "Cyrene",
     "MAX_TOOL_OUTPUT_CHARS": "0",
-    "SCHEDULER_INTERVAL": "60",
-    "SEARCH_PROXY": "",
-    "TAVILY_API_KEY": "",
-    "BRAVE_SEARCH_API_KEY": "",
-    "SEARXNG_URL": "",
-    "SEARXNG_AUTO_START": "1",
-    "SEARXNG_PORT": "8888",
-    "SEARXNG_HOST": "127.0.0.1",
-    "STEWARD_INTERVAL": "3600",
-    "PATTERN_DETECTION_INTERVAL": "600",
     "WEB_PORT": "4242",
 }
 
@@ -75,57 +61,23 @@ _REMOVED_SETTING_KEYS = frozenset({
     "embedding",
 })
 
-_DEFAULT_ENABLED_PLUGINS: dict[str, bool] = {
-    "Read": True, "Write": True, "Edit": True, "Glob": True, "Grep": True,
-    "Bash": True, "StartShell": True, "SendShell": True, "ListShells": True,
-    "ReadShell": True, "InterruptShell": True, "ShowShell": True, "DeleteShell": True,
-    "WebFetch": True, "WebSearch": True,
-    "spawn_subagent": True, "send_agent_message": True,
-    "send_message": True, "send_file": True, "send_wechat_file": True,
-    "ask_user": True,
-    "send_telegram": False, "query_round": True,
-    "app_use": True,
-}
+# Plugin defaults belong to the contribution metadata. This mapping contains
+# only persisted user overrides and intentionally knows no Plugin names.
+_DEFAULT_ENABLED_PLUGINS: dict[str, bool] = {}
 
 _DEFAULT_SETTINGS: dict = {
-    "search_mode": "builtin",
-    "search_external_url": "",
-    "search": {
-        "provider_order": [],
-        "provider_enabled": {
-            "simplexng": True,
-            "deepseek": True,
-            "tavily": False,
-            "brave": False,
-        },
-    },
-    "spawn_policy": "conservative",
-    "heartbeat_interval": 1800,
-    "background_skill_learning": True,
     "write_permission_mode": "workspace_only",
-    # ``model_configuration`` is intentionally absent until first access. The
-    # canonical model service seeds Model Plugin connections exactly once; a
-    # subsequently saved empty graph must remain empty.
+    # Optional Plugin-owned configuration is intentionally absent until first
+    # access; its owning application service performs one-time seeding and a
+    # subsequently saved empty graph remains empty.
     "enabled_plugins": _DEFAULT_ENABLED_PLUGINS,
     "enabled_plugin_packs": {},
     "plugin_tool_customizations": {},
-    "workspace_history": [],
-    "workspace_active": True,
-    "soul_active": True,
-    "agent_proactive": True,
     "app_language": "",
     "timezone": "Asia/Shanghai",
     # Renderer-wide low-overhead visual profile. The frontend mirrors this
     # value into localStorage so it can apply before the first React paint.
     "performance_mode": False,
-    # Explicit opt-in proxy for Cyrene-launched external Agent processes.
-    # Disabled means proxy variables are not inherited from the parent app.
-    "external_agent_proxy_enabled": False,
-    "external_agent_proxy_url": "",
-    "external_agent_proxy_port": 7897,
-    "proxy_search_enabled": False,
-    "proxy_browser_enabled": False,
-    "proxy_extensions_enabled": False,
     # Custom/API models use a currency budget. Keep the persisted defaults in
     # sync with the values shown by BudgetPanel so enabling the switch without
     # editing the amount still creates a real, visible budget.
@@ -134,45 +86,8 @@ _DEFAULT_SETTINGS: dict = {
     "budget_currency": "CNY",
     "budget_action": "warn",
     "budget_start_day": 1,
-    # Codex OAuth has a separate account quota and enforcement switch.
-    "codex_budget_enabled": True,
-    # Execution workers are completion-driven. These are wide lease/safety
-    # controls, not the main agent's normal tool-round budget.
-    "subagent_execution_max_tool_calls": 200,
-    "subagent_execution_max_wall_seconds": 1800,
-    "subagent_execution_no_progress_turns": 3,
-    "subagent_execution_checkpoint_calls": 20,
-    "subagent_execution_max_cost_usd": 5.0,
-    # 0 means use the active model's configured context window.
-    "subagent_execution_max_context_tokens": 0,
-    # Discussion agents use conversational limits rather than execution turns.
-    "subagent_discussion_max_rounds": 5,
-    "subagent_discussion_max_messages_per_agent": 4,
-    "subagent_discussion_max_total_messages": 20,
-    "subagent_discussion_max_message_chars": 2000,
-    "subagent_discussion_max_wall_seconds": 600,
-    "subagent_discussion_max_tool_calls": 50,
-    "subagent_discussion_no_new_info_rounds": 2,
     "redact_secrets": True,
-    "notify_telegram": True,
-    "notify_wechat": True,
     "shortcut_bindings": {},
-    # Portable Plugin-managed environment declarations. Downloaded runtimes and caches
-    # deliberately live outside this encrypted snapshot.
-    "extension_sources": {},
-    "extension_clis": [],
-    "extension_toolchains": [],
-    "extension_system_bindings": {},
-    "mcp_servers": [],
-    "zotero": {
-        "base_url": "http://127.0.0.1:23119/api",
-        "auto_sync": False,
-        "copy_attachments": True,
-    },
-}
-
-_EDITABLE_ENV_KEYS = {
-    "TELEGRAM_BOT_TOKEN", "WECHAT_BOT_TOKEN", "AMAP_API_KEY",
 }
 
 # ---------------------------------------------------------------------------
@@ -417,6 +332,57 @@ def _ensure_loaded() -> dict:
         return _cache
 
 
+_PORTABLE_SECRET_PARTS = frozenset({
+    "authorization",
+    "credential",
+    "password",
+    "secret",
+    "token",
+})
+_PORTABLE_SECRET_NAMES = frozenset({
+    "apikey",
+    "authorizationheader",
+    "signingkey",
+})
+_PORTABLE_PUBLIC_STATE_SUFFIXES = ("_configured", "_requires_reentry")
+
+
+def _portable_secret_name(value: object) -> bool:
+    raw = str(value or "")
+    lowered = raw.lower()
+    if lowered.endswith(_PORTABLE_PUBLIC_STATE_SUFFIXES):
+        return False
+    snake_case = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", raw).lower()
+    parts = {
+        part
+        for part in re.split(r"[^a-z0-9]+", snake_case)
+        if part
+    }
+    return bool(parts.intersection(_PORTABLE_SECRET_PARTS)) or lowered in (
+        _PORTABLE_SECRET_NAMES
+    )
+
+
+def _redact_portable_settings(value: object, *, replacement: object = "") -> object:
+    """Detach and redact credential-shaped values from any Plugin setting."""
+
+    if isinstance(value, dict):
+        return {
+            str(key): (
+                deepcopy(replacement)
+                if _portable_secret_name(key)
+                else _redact_portable_settings(item, replacement=replacement)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _redact_portable_settings(item, replacement=replacement)
+            for item in value
+        ]
+    return deepcopy(value)
+
+
 def export_snapshot() -> dict:
     """Return a portable, detached snapshot of all configuration.
 
@@ -431,34 +397,10 @@ def export_snapshot() -> dict:
     # references so restore never transports plaintext secrets.
     settings = snapshot.get("settings")
     if isinstance(settings, dict):
-        sources = settings.get("extension_sources")
-        if isinstance(sources, dict) and sources.get("github_token"):
-            sources["github_token"] = ""
-            sources["github_token_requires_reentry"] = True
-        servers = settings.get("mcp_servers")
-        if isinstance(servers, list):
-            for server in servers:
-                if not isinstance(server, dict):
-                    continue
-                for field in ("env", "headers"):
-                    values = server.get(field)
-                    if isinstance(values, dict) and values:
-                        server[field] = {str(key): "[requires re-entry]" for key in values}
-        media = settings.get("media")
-        if isinstance(media, dict):
-            # Provider-specific options evolve independently and may contain
-            # nested credential-shaped fields (for example a future auth
-            # header map).  Use the media boundary's recursive policy instead
-            # of maintaining a fragile list of only today's ``api_key`` fields.
-            redact_media_secrets = importlib.import_module(
-                "cyrene.media.settings"
-            ).redact_media_secrets
-            settings["media"] = redact_media_secrets(
-                media,
-                # Restored values must remain genuinely unconfigured rather
-                # than turning a redaction marker into a usable-looking key.
-                replacement="",
-            )
+        # Plugin settings are intentionally open-ended. Apply one generic
+        # recursive policy so portable backup never depends on, or has to name,
+        # an optional Plugin implementation.
+        snapshot["settings"] = _redact_portable_settings(settings)
     return snapshot
 
 
@@ -561,30 +503,6 @@ def set_env_many(updates: dict[str, str]) -> None:
 def get_all_env() -> dict[str, str]:
     config = _ensure_loaded()
     return dict(config.get("env", {}))
-
-
-def get_editable_env_meta() -> list[dict]:
-    config = _ensure_loaded()
-    env = config.get("env", {})
-    meta = [
-        {"key": "TELEGRAM_BOT_TOKEN", "label": "Telegram Token", "masked": True},
-        {"key": "WECHAT_BOT_TOKEN", "label": "WeChat Token", "masked": True},
-        {"key": "AMAP_API_KEY", "label": "高德地图 Key", "masked": True},
-    ]
-    result = []
-    for m in meta:
-        value = env.get(m["key"], _DEFAULT_ENV.get(m["key"], ""))
-        entry = {"key": m["key"], "label": m["label"], "masked": m["masked"], "value": value}
-        if m["masked"] and value:
-            entry["value"] = _mask_value(value)
-        result.append(entry)
-    return result
-
-
-def _mask_value(value: str, show: int = 4) -> str:
-    if len(value) <= show:
-        return "•" * min(len(value), 4)
-    return "•" * min(len(value) - show, 24) + value[-show:]
 
 
 # ---------------------------------------------------------------------------
@@ -805,8 +723,13 @@ def _parse_ctx_str(ctx_str: str) -> int:
 
 
 def _profile_ctx_limit(profile_id: str) -> int:
-    """Read one saved profile window without importing the model service layer."""
-    configuration = get_setting("model_configuration", {})
+    """Read one profile window through the optional model service port."""
+    from agent.plugin import active_plugin_service
+
+    service = active_plugin_service("model_configuration")
+    if service is None:
+        return 0
+    configuration = service.get_model_configuration()
     if not isinstance(configuration, dict):
         return 0
     profiles = configuration.get("profiles")
@@ -846,15 +769,17 @@ def _profile_ctx_limit(profile_id: str) -> int:
 
 
 def _configured_model_profiles() -> list[dict]:
-    model_configuration = importlib.import_module(
-        "cyrene.runtime.model_configuration"
-    )
-    configuration = model_configuration.get_model_configuration()
+    from agent.plugin import active_plugin_service
+
+    service = active_plugin_service("model_configuration")
+    if service is None:
+        return []
+    configuration = service.get_model_configuration()
     result: list[dict] = []
     for profile in configuration.get("profiles") or []:
         if not isinstance(profile, dict):
             continue
-        candidate = model_configuration.candidate_for_profile(
+        candidate = service.candidate_for_profile(
             str(profile.get("id") or ""),
             configuration,
         )
@@ -986,10 +911,12 @@ def effective_ctx_limit_for_model(
 
 def get_current_ctx_limit() -> int:
     """Context window for the first profile in the primary route."""
-    model_configuration = importlib.import_module(
-        "cyrene.runtime.model_configuration"
-    )
-    models = model_configuration.candidates_for_route("primary")
+    from agent.plugin import active_plugin_service
+
+    service = active_plugin_service("model_configuration")
+    if service is None:
+        return 0
+    models = service.candidates_for_route("primary")
     if not models:
         return 0
     return effective_ctx_limit_for_model(
@@ -1027,53 +954,6 @@ def is_plugin_pack_enabled(pack_id: str) -> bool:
     return get_enabled_plugin_packs().get(str(pack_id or ""), True)
 
 
-def get_spawn_policy() -> str:
-    value = str(get_setting("spawn_policy", "conservative") or "conservative").strip().lower()
-    return value if value in {"aggressive", "conservative", "off"} else "conservative"
-
-
-def get_workspace_history() -> list[str]:
-    return get_setting("workspace_history", [])
-
-
-def add_workspace_to_history(path: str) -> None:
-    history = [p for p in get_workspace_history() if p != path]
-    history.insert(0, path)
-    if len(history) > 10:
-        history = history[:10]
-    set_setting("workspace_history", history)
-
-
-def activate_workspace(path: str = "") -> None:
-    """Enable workspace context and update its history in one durable write."""
-    config = _ensure_loaded()
-    settings = config.setdefault("settings", {})
-    settings["workspace_active"] = True
-    normalized = str(path or "").strip()
-    if normalized:
-        raw_history = settings.get(
-            "workspace_history",
-            _DEFAULT_SETTINGS["workspace_history"],
-        )
-        if not isinstance(raw_history, list):
-            raw_history = []
-        history = [
-            item
-            for item in raw_history
-            if item != normalized
-        ]
-        settings["workspace_history"] = [normalized, *history][:10]
-    _persist(config)
-
-
-def is_workspace_active() -> bool:
-    return get_setting("workspace_active", True)
-
-
-def set_workspace_active(active: bool) -> None:
-    set_setting("workspace_active", active)
-
-
 def get_write_permission_mode() -> str:
     value = str(get_setting("write_permission_mode", "workspace_only") or "workspace_only").strip().lower()
     return value if value in {"workspace_only", "full_access"} else "workspace_only"
@@ -1084,15 +964,3 @@ def set_write_permission_mode(mode: str) -> None:
     if normalized not in {"workspace_only", "full_access"}:
         normalized = "workspace_only"
     set_setting("write_permission_mode", normalized)
-
-
-def is_soul_active() -> bool:
-    return get_setting("soul_active", True)
-
-
-def set_soul_active(active: bool) -> None:
-    set_setting("soul_active", active)
-
-
-def get_heartbeat_interval() -> int:
-    return int(get_setting("heartbeat_interval", 1800) or 1800)

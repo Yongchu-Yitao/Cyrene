@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from cyrene.localization import localized
 from cyrene.workbench import (
     planning_runtime,
     presentation_runtime,
@@ -27,22 +28,22 @@ async def set_task_goal_for_session(session_id: str, goal: str, title: str='', s
     new_title = str(title or '').strip()
     new_summary = str(summary or '').strip()
     if not sid:
-        return {'ok': False, 'error': 'no active task session'}
+        return {'ok': False, 'error': localized('No active task session.', '没有活动的任务会话。'), 'code': 'no_session'}
     if not new_goal and (not new_title) and (not new_summary):
-        return {'ok': False, 'error': 'nothing to update (provide goal, title or summary)'}
+        return {'ok': False, 'error': localized('Nothing to update. Provide a goal, title, or summary.', '没有可更新的内容，请提供目标、标题或摘要。'), 'code': 'nothing_to_update'}
     if new_goal and len(new_goal) < 3:
-        return {'ok': False, 'error': 'goal is too short'}
+        return {'ok': False, 'error': localized('The goal is too short.', '目标过短。'), 'code': 'goal_too_short'}
     payload = project_repository._read_workbench_store()
     project, session = project_repository._workbench_find_session(payload, sid)
     if not session or not project:
-        return {'ok': False, 'error': 'session not found'}
+        return {'ok': False, 'error': localized('Session not found.', '未找到会话。'), 'code': 'session_not_found'}
     if str(session.get('kind') or '') == 'init':
-        return {'ok': False, 'error': 'cannot set goal on an init session'}
+        return {'ok': False, 'error': localized('A goal cannot be set on a project setup session.', '不能为项目初始化会话设置目标。'), 'code': 'init_session'}
     extracted_constraints = await planning_runtime._workbench_extract_constraints(new_goal) if new_goal else []
     payload = project_repository._read_workbench_store()
     project, session = project_repository._workbench_find_session(payload, sid)
     if not session or not project:
-        return {'ok': False, 'error': 'session not found'}
+        return {'ok': False, 'error': localized('Session not found.', '未找到会话。'), 'code': 'session_not_found'}
     now = project_runtime._utc_now_iso()
     if new_goal:
         session['goal'] = new_goal

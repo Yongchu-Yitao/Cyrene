@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from cyrene.media.wake import MediaWakeBridge
+from agent.plugin.plugin_impl.cyrene_media.wake import MediaWakeBridge
 
 
 class _WakeManager:
@@ -110,7 +110,7 @@ async def test_media_wake_started_run_is_settled_as_delivered():
 async def test_long_media_wake_dispatch_renews_claim_until_dispatch_finishes(
     monkeypatch,
 ):
-    from cyrene.media import wake as wake_module
+    from agent.plugin.plugin_impl.cyrene_media import wake as wake_module
 
     manager = _WakeManager()
     bridge = MediaWakeBridge(manager)  # type: ignore[arg-type]

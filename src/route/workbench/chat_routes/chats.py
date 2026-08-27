@@ -16,7 +16,6 @@ from route.workbench.chat_routes.groups_routes import register_groups_routes
 from route.workbench.chat_routes.pinned_routes import register_pinned_routes
 from route.workbench.chat_routes.side_agents_routes import register_side_agents_routes
 from route.workbench.chat_routes.to_task_routes import register_to_task_routes
-from route.workbench.chat_routes.voice_routes import register_voice_routes
 
 
 def register_chat_routes(
@@ -25,16 +24,14 @@ def register_chat_routes(
     *,
     send_chat_detached,
 ) -> dict[str, Any]:
+    # Kept in the composition signature for the core run/action adapters. Voice
+    # command registration is owned by the cyrene_voice application pack.
+    del send_chat_detached
     register_attachment_routes(router)
     register_pinned_routes(router, context)
     register_context_catalog_routes(router)
     handlers: dict[str, Any] = {}
     handlers.update(register_collection_routes(router, context) or {})
-    register_voice_routes(
-        router,
-        context,
-        send_chat_detached=send_chat_detached,
-    )
     register_side_agents_routes(router, context)
     handlers.update(register_detail_routes(router, context) or {})
     register_agent_config_routes(router, context)

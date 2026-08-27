@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from cyrene.localization import app_language, localized
 from cyrene.runtime.io import atomic_write_json, read_json_safe
 
 logger = logging.getLogger(__name__)
@@ -148,7 +149,7 @@ def touch_entry(content_keyword: str, metadata: dict | None = None) -> None:
         logger.exception("Failed to persist memory stats")
 
 
-def get_context(max_chars: int = 5000, header: str = "[Previous context:]") -> str:
+def get_context(max_chars: int = 5000, header: str | None = None) -> str:
     """
     格式化短期记忆条目为一个字符串，用于注入 context。
     按 last_mentioned 倒序（最近的最靠前）。
@@ -168,7 +169,12 @@ def get_context(max_chars: int = 5000, header: str = "[Previous context:]") -> s
         reverse=True,
     )
 
-    parts: list[str] = [header]
+    resolved_header = header or localized(
+        "[Previous context:]",
+        "[先前上下文：]",
+        language=app_language(),
+    )
+    parts: list[str] = [resolved_header]
     chars_used = len(parts[0])
 
     for entry in sorted_entries:
@@ -240,7 +246,28 @@ async def _extract_compressed_memories(
     model_gateway: Any,
     session_id: str = "",
 ) -> str:
-    prompt = f"""Extract key information from the USER's messages below. Focus on:
+    language = app_language()
+    if language == "zh":
+        prompt = f"""从下方用户消息中提取关键信息，重点关注：
+1. 用户事实（工作、偏好、习惯）
+2. 情绪模式或反复话题
+3. 待办事项或已做决定
+
+每条结果分类为：fact | pattern | preference | emotion
+
+完整对话上下文（仅供参考）：
+{chr(10).join(context_lines)}
+
+待分析的用户消息：
+{chr(10).join(user_lines)}
+
+输出格式（每行一条，不要解释）：
+[fact] 用户在一家科技公司工作
+[emotion] 用户因项目截止日期感到沮丧
+[preference] 用户喜欢轻松简短的回复
+"""
+    else:
+        prompt = f"""Extract key information from the USER's messages below. Focus on:
 1. Facts about the user (job, preferences, habits)
 2. Emotional patterns or recurring topics
 3. Action items or decisions made
@@ -266,7 +293,11 @@ Output format (one per line, no explanations):
         [
             {
                 "role": "system",
-                "content": "You extract structured memories from conversations. Be concise.",
+                "content": localized(
+                    "You extract structured memories from conversations. Be concise.",
+                    "你负责从对话中提取结构化记忆。保持简洁。",
+                    language=language,
+                ),
             },
             {"role": "user", "content": prompt},
         ],

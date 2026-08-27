@@ -7,11 +7,13 @@ import time
 from typing import Any
 
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
+from cyrene.localization import app_language, localized
 from cyrene.workbench.chat_events import publish_chat_changed
 from cyrene.workbench.chat_runs import ChatRun
 from route import schemas as api_models
+from route.errors import localized_error_response
 from route.workbench.chat_routes.context import ChatRouteContext
 
 logger = logging.getLogger(__name__)
@@ -69,6 +71,7 @@ class _AnswerOperation:
         self.ui_instance_id = str(body.get("uiInstanceId") or "").strip()
         self.wants_stream = bool(body.get("stream"))
         self.processing_started_at = time.monotonic()
+        self.language = app_language()
 
     async def execute(self):
         from agent.permission import PERMISSION_MODES
@@ -89,12 +92,12 @@ class _AnswerOperation:
             settler=self._publish_settled,
         )
         if not is_new:
-            return JSONResponse(
-                {
-                    "error": "chat already has a running reply",
-                    "code": "chat_run_in_progress",
-                },
-                status_code=409,
+            return localized_error_response(
+                "This chat already has a reply in progress.",
+                "此对话已有回复正在生成。",
+                409,
+                "chat_run_in_progress",
+                language=self.language,
             )
         self.run = run
         if self.wants_stream:
@@ -108,16 +111,25 @@ class _AnswerOperation:
 
     async def _prepare(self, permission_modes):
         if not self.question_id or not self.answer_text:
-            return JSONResponse(
-                {"error": "question_id and answer are required"},
-                status_code=400,
+            return localized_error_response(
+                "A question ID and answer are required.",
+                "缺少问题 ID 或回答。",
+                400,
+                "answer_required",
+                language=self.language,
             )
         self.chat = await asyncio.to_thread(
             self.service.repository.get,
             self.chat_id,
         )
         if not self.chat:
-            return JSONResponse({"error": "chat not found"}, status_code=404)
+            return localized_error_response(
+                "Chat not found.",
+                "未找到对话。",
+                404,
+                "chat_not_found",
+                language=self.language,
+            )
         self.base_chat = copy.deepcopy(self.chat)
         self.mode, self.is_side_agent = _select_answer_permission_mode(
             self.chat,
@@ -140,9 +152,12 @@ class _AnswerOperation:
             else None
         )
         if not pending or str(pending.get("id") or "") != self.question_id:
-            return JSONResponse(
-                {"error": "no matching pending question"},
-                status_code=409,
+            return localized_error_response(
+                "No matching pending question was found.",
+                "未找到匹配的待回答问题。",
+                409,
+                "pending_question_not_found",
+                language=self.language,
             )
         self.pending = pending
         self.agent_run_id = str((checkpoint or {}).get("run_id") or "")
@@ -151,15 +166,32 @@ class _AnswerOperation:
         store = await asyncio.to_thread(self.routes.read_store)
         self.project = self.routes.find_project(store, self.project_id)
         if not self.project:
-            return JSONResponse({"error": "project not found"}, status_code=404)
+            return localized_error_response(
+                "Project not found.",
+                "未找到项目。",
+                404,
+                "project_not_found",
+                language=self.language,
+            )
         try:
             self.workspace_dir = self.service.resolve_chat_workspace_dir(
                 self.chat,
                 self.project,
                 self.routes.resolve_workspace_dir,
             )
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+        except ValueError:
+            logger.warning(
+                "Invalid workspace configuration for chat %s",
+                self.chat_id,
+                exc_info=True,
+            )
+            return localized_error_response(
+                "The workspace configuration is invalid.",
+                "工作区配置无效。",
+                400,
+                "invalid_workspace",
+                language=self.language,
+            )
         return None
 
     async def _persist_answer(self, run: ChatRun) -> None:
@@ -313,6 +345,11 @@ class _AnswerOperation:
             if isinstance(self.chat.get("projectMemorySnapshot"), dict)
             else None
         )
+        input_context = self.service.resolve_composer_input_context(
+            self.chat,
+            self.workspace_dir,
+            strict=True,
+        )
         config = ConversationConfig(
             session_id=self.chat_id,
             workspace_dir=self.workspace_dir,
@@ -323,13 +360,13 @@ class _AnswerOperation:
             permission_mode=self.mode,
             public_user_message=original_request,
             attachment_paths=self._attachment_path_map(),
-            remote_device_ids=tuple(
-                str(item or "").strip()
-                for item in (self.chat.get("remoteDeviceIds") or ())
-                if str(item or "").strip()
+            remote_device_ids=tuple(input_context["remoteDeviceIds"]),
+            soul_enabled=bool(input_context["soulActive"]),
+            workspace_enabled=bool(input_context["workspaceActive"]),
+            context_activations=dict(input_context["contextActivations"]),
+            resolved_context_activations=dict(
+                input_context["resolvedContextActivations"]
             ),
-            soul_enabled=self.service.chat_soul_active(self.chat),
-            workspace_enabled=self.service.chat_workspace_active(self.chat),
             project_id=self.project_id,
             project_memory_snapshot=memory_snapshot,
             session_title=str(self.chat.get("title") or ""),
@@ -404,7 +441,11 @@ class _AnswerOperation:
                 {
                     "type": "error",
                     "error": "answer_resume_failed",
-                    "message": str(exc),
+                    "message": localized(
+                        "The Agent could not continue this answer.",
+                        "Agent 无法继续处理此回答。",
+                        language=self.language,
+                    ),
                     **self.service.chat_error_metadata(exc),
                 }
             )
@@ -571,13 +612,18 @@ class _AnswerOperation:
             exc = outcome.get("exc")
             if not isinstance(exc, Exception):
                 exc = RuntimeError("answer resume failed")
-            return JSONResponse(
-                {
-                    "error": "answer resume failed",
-                    "detail": str(exc),
-                    **self.service.chat_error_metadata(exc),
-                },
-                status_code=502,
+            metadata = dict(self.service.chat_error_metadata(exc))
+            code = str(metadata.pop("code", "") or "answer_resume_failed")
+            metadata.pop("detail", None)
+            metadata.pop("message", None)
+            metadata.pop("error", None)
+            return localized_error_response(
+                "The Agent could not continue this answer.",
+                "Agent 无法继续处理此回答。",
+                502,
+                code,
+                language=self.language,
+                **metadata,
             )
         if kind == "interrupted" or run.status == "cancelled":
             payload: dict[str, Any] = {
@@ -592,9 +638,12 @@ class _AnswerOperation:
         payload = outcome.get("payload")
         if isinstance(payload, dict):
             return payload
-        return JSONResponse(
-            {"error": "answer resume ended without an outcome"},
-            status_code=500,
+        return localized_error_response(
+            "The answer ended without a result.",
+            "回答流程结束，但未产生结果。",
+            500,
+            "answer_outcome_missing",
+            language=self.language,
         )
 
     async def _publish_settled(self, run: ChatRun) -> None:

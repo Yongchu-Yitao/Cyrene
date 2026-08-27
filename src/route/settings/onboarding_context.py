@@ -1,21 +1,69 @@
-"""Thin onboarding, context, and API-key HTTP adapters."""
+"""Thin onboarding, composer-context, and API-key HTTP adapters."""
 
 from __future__ import annotations
 
-import asyncio
+import logging
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from cyrene.model_runtime.errors import format_httpx_error
 from cyrene.runtime.onboarding import (
     get_onboarding_status,
     save_and_test_llm_setup,
     save_codex_oauth_setup,
-    save_personality_setup,
 )
 from cyrene.runtime.onboarding_context_service import OnboardingContextApplicationService
+from route.errors import localized_error_response
+
+
+logger = logging.getLogger(__name__)
+
+_VALIDATION_MESSAGES = {
+    "LLM endpoint is required": "必须填写 LLM 接口地址。",
+    "Model name is required": "必须填写模型名称。",
+    "Codex model is required": "必须选择 Codex 模型。",
+    "OpenAI OAuth login is required": "需要先登录 OpenAI OAuth。",
+    "Selected Codex model is unavailable": "所选 Codex 模型不可用。",
+    "Selected reasoning effort is unavailable for this model": (
+        "所选推理强度不适用于此模型。"
+    ),
+}
+
+
+async def _request_object(request: Request) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+    try:
+        body = await request.json()
+    except ValueError:
+        return None, localized_error_response(
+            "request body must be valid JSON",
+            "请求体必须是有效的 JSON。",
+            400,
+            "invalid_json",
+        )
+    if not isinstance(body, dict):
+        return None, localized_error_response(
+            "request body must be an object",
+            "请求体必须是对象。",
+            400,
+            "invalid_request",
+        )
+    return body, None
+
+
+def _validation_error(exc: ValueError, *, code: str) -> JSONResponse:
+    message = str(exc)
+    translated = _VALIDATION_MESSAGES.get(message)
+    if translated is None:
+        logger.info("Invalid onboarding request [%s]", code, exc_info=True)
+        return localized_error_response(
+            "Invalid onboarding settings.",
+            "引导设置无效。",
+            400,
+            code,
+        )
+    return localized_error_response(message, translated, 400, code)
 
 
 def register_onboarding_routes(router: APIRouter) -> None:
@@ -25,7 +73,10 @@ def register_onboarding_routes(router: APIRouter) -> None:
 
     @router.post("/api/onboarding/llm")
     async def api_onboarding_llm(request: Request):
-        body = await request.json()
+        body, error = await _request_object(request)
+        if error is not None:
+            return error
+        assert body is not None
         try:
             return await save_and_test_llm_setup(
                 str(body.get("api_key") or ""),
@@ -33,69 +84,52 @@ def register_onboarding_routes(router: APIRouter) -> None:
                 str(body.get("model") or ""),
             )
         except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+            return _validation_error(exc, code="invalid_llm_setup")
         except httpx.TimeoutException as exc:
-            return JSONResponse({"error": "upstream model timed out", "detail": str(exc)}, status_code=504)
+            logger.info("Onboarding model probe timed out", exc_info=True)
+            return localized_error_response(
+                "upstream model timed out",
+                "上游模型响应超时。",
+                504,
+                "model_timeout",
+            )
         except httpx.HTTPError as exc:
-            return JSONResponse({"error": "upstream model request failed", "detail": format_httpx_error(exc)}, status_code=502)
+            logger.info("Onboarding model probe failed", exc_info=True)
+            return localized_error_response(
+                "upstream model request failed",
+                "上游模型请求失败。",
+                502,
+                "model_request_failed",
+            )
+        except (RuntimeError, OSError) as exc:
+            logger.info("Onboarding model setup is unavailable", exc_info=True)
+            return localized_error_response(
+                "model setup is temporarily unavailable",
+                "模型设置暂时不可用。",
+                503,
+                "model_setup_unavailable",
+            )
 
     @router.post("/api/onboarding/openai-oauth")
     async def api_onboarding_openai_oauth(request: Request):
-        body = await request.json()
+        body, error = await _request_object(request)
+        if error is not None:
+            return error
+        assert body is not None
         try:
             return await save_codex_oauth_setup(
                 str(body.get("model") or ""), str(body.get("reasoning_effort") or "")
             )
         except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+            return _validation_error(exc, code="invalid_codex_setup")
         except (RuntimeError, OSError, TimeoutError) as exc:
-            return JSONResponse({"error": "Codex model validation failed", "detail": str(exc)}, status_code=503)
-
-    @router.post("/api/onboarding/personality")
-    async def api_onboarding_personality(request: Request):
-        body = await request.json()
-        try:
-            return await save_personality_setup(
-                str(body.get("mode") or ""),
-                name=str(body.get("name") or ""),
-                content=str(body.get("content") or ""),
+            logger.info("Codex onboarding model validation failed", exc_info=True)
+            return localized_error_response(
+                "Codex model validation failed",
+                "Codex 模型验证失败。",
+                503,
+                "codex_model_validation_failed",
             )
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        except httpx.TimeoutException as exc:
-            return JSONResponse({"error": "upstream model timed out", "detail": str(exc)}, status_code=504)
-        except httpx.HTTPError as exc:
-            return JSONResponse({"error": "upstream model request failed", "detail": format_httpx_error(exc)}, status_code=502)
-
-
-def register_context_routes(
-    router: APIRouter, service: OnboardingContextApplicationService
-) -> None:
-    @router.get("/api/context/state")
-    async def api_context_state():
-        return await asyncio.to_thread(service.context_state)
-
-    @router.post("/api/context/remove-soul")
-    async def api_remove_soul():
-        return service.set_soul_active(False)
-
-    @router.post("/api/context/add-soul")
-    async def api_add_soul():
-        return service.set_soul_active(True)
-
-    @router.post("/api/context/remove-workspace")
-    async def api_remove_workspace():
-        return await asyncio.to_thread(service.set_workspace_active, False)
-
-    @router.post("/api/context/add-workspace")
-    async def api_add_workspace(request: Request):
-        body = await request.json()
-        return await asyncio.to_thread(service.activate_workspace, str(body.get("path", "")))
-
-    @router.post("/api/context/pick-directory")
-    async def api_pick_directory():
-        return await service.pick_directory()
-
 
 def register_key_routes(
     router: APIRouter, service: OnboardingContextApplicationService
@@ -106,9 +140,18 @@ def register_key_routes(
 
     @router.put("/api/settings/keys")
     async def api_update_keys(request: Request):
-        result = service.update_keys(await request.json())
+        body, error = await _request_object(request)
+        if error is not None:
+            return error
+        assert body is not None
+        result = service.update_keys(body)
         if result.get("error"):
-            return JSONResponse(result, status_code=400)
+            return localized_error_response(
+                "no valid keys provided",
+                "未提供有效的密钥。",
+                400,
+                "no_valid_keys",
+            )
         return result
 
 
@@ -116,5 +159,4 @@ def register_onboarding_context_routes(
     router: APIRouter, application_service: OnboardingContextApplicationService
 ) -> None:
     register_onboarding_routes(router)
-    register_context_routes(router, application_service)
     register_key_routes(router, application_service)

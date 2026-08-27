@@ -50,9 +50,6 @@ _MANAGED_DIRECTORIES: list[tuple[Path, str]] = [
     (cyrene_dir(WORKSPACE_DIR) / "projects", "workspace/projects"),
     (DATA_DIR / "sessions", "data/sessions"),
     (DATA_DIR / "inbox", "data/inbox"),
-    (DATA_DIR / "installed_skills", "data/installed_skills"),
-    (DATA_DIR / "learned_skill_scripts", "data/learned_skill_scripts"),
-    (DATA_DIR / "behavior-media", "data/behavior-media"),
     (DATA_DIR / "webui_uploads", "data/webui_uploads"),
     # register_generated_attachment copies every file exposed by
     # /api/chat/export here.  These copies are also used as knowledge-library
@@ -61,16 +58,13 @@ _MANAGED_DIRECTORIES: list[tuple[Path, str]] = [
 ]
 _RESTORABLE_REPLACE_ROOTS = {arcname for _, arcname in _MANAGED_DIRECTORIES}
 
-# Browser state, derived indexes, and diagnostics are caches rather than
-# durable agent state. Everything else at the root of data/ and store/ is
-# included.
+# Derived indexes and diagnostics are not durable agent state. Root-level files
+# under data/ and store/ are included; directories are included only when core
+# or an active Plugin application service contributes them explicitly.
 _EXCLUDED_DATA_ROOT_NAMES = {
     "config.enc", ".config_key", "code_index.db",
     # MCP declarations are migrated into the encrypted portable config
     # snapshot. Never copy a legacy plaintext declaration file into backups.
-}
-_EXCLUDED_DATA_DIRECTORIES = {
-    "attachment_cache", "browser_profile", "generated_reports",
 }
 
 _ALLOWED_ROOTS: list[Path] = [STORE_DIR.resolve(), DATA_DIR.resolve(), WORKSPACE_DIR.resolve()]
@@ -236,7 +230,7 @@ def _plugin_backup_descriptors(
         return [], []
     sources: list[_Source] = []
     replace_roots: list[str] = []
-    for service_name, service in sorted(host.services.items()):
+    for service_name, service in sorted(host.active_services.items()):
         provider = getattr(service, "backup_sources", None)
         if not callable(provider):
             continue
@@ -753,9 +747,9 @@ async def restore_backup(zip_path: str, *, dry_run: bool = False) -> dict[str, A
 async def _restore_with_locks(path: Path) -> dict[str, Any]:
     try:
         from apscheduler.schedulers.base import STATE_RUNNING
-        from cyrene.runtime import scheduler as scheduler_module
+        from agent.plugin.background import background_plugin_scheduler
 
-        scheduler = getattr(scheduler_module, "_scheduler", None)
+        scheduler = background_plugin_scheduler()
         scheduler_was_running = scheduler is not None and getattr(scheduler, "state", None) == STATE_RUNNING
     except Exception:
         scheduler = None

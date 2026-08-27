@@ -18,9 +18,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agent.plugin import active_plugin_service
 from agent.workbench.conversation_runtime import ConversationConfig
 
 from cyrene.config import WORKSPACE_DIR
+from cyrene.localization import app_language, localized
 from cyrene.runtime.attachments import build_public_attachment_payload
 from cyrene.workbench import project_runtime
 from cyrene.workbench.chat_events import publish_chat_changed
@@ -99,11 +101,21 @@ class ChannelChatService:
             return dict(existing)
 
         project_id, _workspace = _project_scope()
-        title = "Telegram" if self.channel == "telegram" else "微信"
+        title = "Telegram" if self.channel == "telegram" else localized(
+            "WeChat", "微信"
+        )
+        memory_snapshot = None
+        memory_service = active_plugin_service("memory")
+        snapshot_loader = getattr(memory_service, "current_snapshot", None)
+        if callable(snapshot_loader):
+            loaded = snapshot_loader(project_id)
+            if isinstance(loaded, Mapping):
+                memory_snapshot = dict(loaded)
         created = self.service.create_chat(
             project_id,
             title,
             project_runtime._get_model(),
+            project_memory_snapshot=memory_snapshot,
         )
         created["id"] = self.session_id
         created["channel"] = self.channel
@@ -127,6 +139,22 @@ class ChannelChatService:
     ) -> ConversationConfig:
         project_id = str(chat.get("projectId") or "default")
         _active_project, workspace = _project_scope(project_id)
+        language = app_language()
+        response_language = "English" if language == "en" else "Simplified Chinese"
+        composer_context = active_plugin_service("composer_context")
+        if composer_context is None:
+            raise RuntimeError(
+                "Required Plugin application service is unavailable: "
+                "composer_context"
+            )
+        input_context = composer_context.resolve_input_context(
+            soul_active=self.service.chat_soul_active(chat),
+            workspace_active=self.service.chat_workspace_active(chat),
+            workspace_dir=workspace,
+            remote_device_ids=chat.get("remoteDeviceIds") or (),
+            context_activations=chat.get("contextActivations"),
+            strict=True,
+        )
         return ConversationConfig(
             session_id=self.session_id,
             workspace_dir=workspace,
@@ -136,12 +164,18 @@ class ChannelChatService:
             permission_mode=str(chat.get("permissionMode") or "default"),
             public_user_message=str(public_user_message or ""),
             attachment_paths=dict(attachment_paths or {}),
-            soul_enabled=self.service.chat_soul_active(chat),
-            workspace_enabled=self.service.chat_workspace_active(chat),
+            remote_device_ids=tuple(input_context["remoteDeviceIds"]),
+            soul_enabled=bool(input_context["soulActive"]),
+            workspace_enabled=bool(input_context["workspaceActive"]),
+            context_activations=dict(input_context["contextActivations"]),
+            resolved_context_activations=dict(
+                input_context["resolvedContextActivations"]
+            ),
             system_extra=(
                 f"The user is talking through the {self.channel} channel. "
                 "Return a portable text response; do not rely on Workbench-only "
-                "interactive controls."
+                f"interactive controls. Respond in {response_language} unless "
+                "the user explicitly requests another language."
             ),
             project_id=project_id,
             project_memory_snapshot=(

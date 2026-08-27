@@ -1,7 +1,10 @@
 """Application routes and services owned by the editable entity Plugin."""
 
+import logging
+
 from agent.plugin import PluginApplicationContext
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
+from route.errors import localized_error_response
 
 from .service import EntityService
 
@@ -14,6 +17,7 @@ _UPDATE_FIELDS = {
     "status", "priority", "due_date", "content", "tags", "people",
     "title", "effort", "metadata", "linked_ids", "parent_id",
 }
+logger = logging.getLogger(__name__)
 
 
 def setup_application(context: PluginApplicationContext) -> None:
@@ -51,7 +55,16 @@ def setup_application(context: PluginApplicationContext) -> None:
         try:
             return await entities.create(**filtered)
         except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            logger.info(
+                "Invalid entity create request",
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+            return localized_error_response(
+                "The entity data is invalid.",
+                "事务数据无效。",
+                422,
+                "invalid_entity",
+            )
 
     @router.get("/api/entities/candidates")
     async def api_list_candidates(project_id: str = None, limit: int = 50):
@@ -62,31 +75,77 @@ def setup_application(context: PluginApplicationContext) -> None:
     async def api_approve_candidate(candidate_id: str):
         """Promote a candidate to a full entity."""
         result = await entities.promote_candidate(candidate_id)
-        return result or {"error": "not found"}
+        if result is None:
+            return localized_error_response(
+                "Entity candidate not found.",
+                "未找到事务候选。",
+                404,
+                "entity_candidate_not_found",
+            )
+        return result
 
     @router.delete("/api/entities/candidates/{candidate_id}")
     async def api_reject_candidate(candidate_id: str):
         """Reject a candidate entity."""
         success = await entities.reject_candidate(candidate_id)
+        if not success:
+            return localized_error_response(
+                "Entity candidate not found.",
+                "未找到事务候选。",
+                404,
+                "entity_candidate_not_found",
+            )
         return {"ok": success}
 
     @router.get("/api/entities/{entity_id}")
     async def api_get_entity(entity_id: str):
         """Get a single entity by ID."""
-        return await entities.get(entity_id) or {"error": "not found"}
+        entity = await entities.get(entity_id)
+        if entity is None:
+            return localized_error_response(
+                "Entity not found.",
+                "未找到事务。",
+                404,
+                "entity_not_found",
+            )
+        return entity
 
     @router.put("/api/entities/{entity_id}")
     async def api_update_entity(entity_id: str, body: dict):
         filtered = {k: v for k, v in body.items() if k in _UPDATE_FIELDS}
         try:
-            return await entities.update(entity_id, **filtered) or {"error": "not found"}
+            entity = await entities.update(entity_id, **filtered)
         except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            logger.info(
+                "Invalid entity update request",
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+            return localized_error_response(
+                "The entity update is invalid.",
+                "事务更新内容无效。",
+                422,
+                "invalid_entity_update",
+            )
+        if entity is None:
+            return localized_error_response(
+                "Entity not found.",
+                "未找到事务。",
+                404,
+                "entity_not_found",
+            )
+        return entity
 
     @router.delete("/api/entities/{entity_id}")
     async def api_delete_entity(entity_id: str, permanent: bool = False):
         """Delete or archive an entity."""
         success = await entities.delete(entity_id, permanent=permanent)
+        if not success:
+            return localized_error_response(
+                "Entity not found.",
+                "未找到事务。",
+                404,
+                "entity_not_found",
+            )
         return {"ok": success}
 
     context.provide("entities", entities)

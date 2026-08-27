@@ -9,11 +9,39 @@ from fastapi.testclient import TestClient
 import pytest
 
 
+@pytest.mark.asyncio
+async def test_plugin_data_reset_uses_generic_service_lifecycle():
+    from cyrene.runtime.data_reset import prepare_plugin_data_reset
+
+    calls = []
+
+    class Service:
+        async def prepare_data_reset(self):
+            calls.append("plugin")
+            return {"plugin_cache": True}
+
+    service = Service()
+    host = SimpleNamespace(
+        services={"primary": service, "alias": service, "plain": object()}
+    )
+
+    assert await prepare_plugin_data_reset(host) == {"plugin_cache": True}
+    assert calls == ["plugin"]
+
+
 def test_reset_endpoint_requires_explicit_confirmation(monkeypatch, tmp_path: Path):
     from route.settings import general
 
     reset = AsyncMock(return_value={"ok": True})
     app = FastAPI()
+    # Settings routes are composed only with an active Plugin application
+    # host.  This lightweight test needs only the registry handle required by
+    # the activation adapter; reset itself remains injected below.
+    monkeypatch.setattr(
+        general,
+        "active_plugin_application_host",
+        lambda: SimpleNamespace(registry=SimpleNamespace()),
+    )
     general.register_settings_routes(
         app,
         None,
@@ -65,7 +93,10 @@ def test_config_reset_replaces_persisted_and_live_environment(monkeypatch):
     assert persisted["env"] == config_store._DEFAULT_ENV
     assert "OPENAI_API_KEY" not in live_env
     assert "REMOVED_AFTER_RESET" not in live_env
-    assert live_env["OPENAI_MODEL"] == config_store._DEFAULT_ENV["OPENAI_MODEL"]
+    # Model credentials/defaults belong to the model Plugin and are removed
+    # from the core environment reset boundary.
+    assert "OPENAI_MODEL" not in config_store._DEFAULT_ENV
+    assert "OPENAI_MODEL" not in live_env
 
 
 @pytest.mark.asyncio
@@ -100,7 +131,7 @@ async def test_delete_all_local_models_cancels_runtime_and_removes_root(
 async def test_clear_browser_data_erases_electron_and_playwright_profiles(
     monkeypatch, tmp_path: Path
 ):
-    from cyrene import browser, config
+    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
 
     profile = tmp_path / "browser_profile"
     profile.mkdir()
@@ -111,12 +142,11 @@ async def test_clear_browser_data_erases_electron_and_playwright_profiles(
         calls.append((method, args, kwargs))
         return {"ok": True}
 
-    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(browser, "electron_browser_available", lambda: True)
     monkeypatch.setattr(browser, "_electron_browser_rpc", rpc)
     monkeypatch.setattr(browser, "close_session", AsyncMock())
 
-    result = await browser.clear_browser_data()
+    result = await browser.clear_browser_data(profile)
 
     assert result == {"ok": True, "electron": True, "playwright": True}
     assert calls[0][0] == "clearStorage"

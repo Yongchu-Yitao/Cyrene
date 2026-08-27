@@ -8,8 +8,13 @@ from .tools import connect_pins_plugin, pin_location_plugin
 
 
 def setup_session(context: PluginSetupContext) -> None:
-    if "maps" not in context.services:
-        context.provide("maps", MapService(map_database(context.data_directory)))
+    service = context.services.get("maps")
+    if service is None:
+        service = MapService(map_database(context.data_directory))
+        context.provide("maps", service)
+    initializer = getattr(service, "initialize", None)
+    if callable(initializer):
+        initializer()
 
 
 plugin_pack = PluginPack(

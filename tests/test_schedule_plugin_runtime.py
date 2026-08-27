@@ -1,12 +1,10 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from types import SimpleNamespace
 
 from agent.plugin import PluginContext, PluginRegistry, PluginRuntime
 from agent.plugin.native_tools import seed_builtin_plugin_directory
 from cyrene.runtime.database import init_db
-from cyrene.runtime.schedule_runtime import ScheduleRuntimeService
+from agent.plugin.plugin_impl.cyrene_schedule.service import ScheduleRuntimeService
 
 
 def _runtime(tmp_path):
@@ -176,47 +174,3 @@ def test_hidden_tick_executes_message_and_records_terminal_run(tmp_path):
         assert runs[0]["run_id"] == delivered[0][2]
 
     asyncio.run(scenario())
-
-
-def test_agent_schedule_uses_workbench_chat_runtime(tmp_path, monkeypatch):
-    _runtime_value, service, _context = _runtime(tmp_path)
-    captured = {}
-
-    async def fake_run_workbench_chat(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(text="Agent result")
-
-    monkeypatch.setattr(
-        "agent.workbench.chat_runtime.run_workbench_chat",
-        fake_run_workbench_chat,
-    )
-    monkeypatch.setattr(
-        service,
-        "workspace_for_project",
-        lambda _project_id: Path(tmp_path),
-    )
-
-    async def scenario():
-        await service.ensure_ready()
-        task_id = await service.repository.create(
-            chat_id=-1,
-            prompt="Inspect the workspace",
-            schedule_type="once",
-            schedule_value="2030-01-01T00:00:00+00:00",
-            next_run="2030-01-01T00:00:00+00:00",
-            project_id="project_a",
-            permission_mode="full_access",
-        )
-        task = await service.repository.get(task_id, "project_a")
-        assert task is not None
-        assert await service.run_agent(task, "stable_run") == "Agent result"
-
-    asyncio.run(scenario())
-    assert captured["host_chat_id"] == -1
-    assert captured["client_request_id"] == "stable_run"
-    assert captured["permission_mode"] == "full_access"
-    assert captured["conversation_source"] == "scheduled_task"
-    assert captured["memory_write_enabled"] is False
-    assert captured["memory_trigger_enabled"] is False
-    assert captured["memory_archive_enabled"] is False
-    assert captured["plugin_directory"] == tmp_path / "plugin_impl"

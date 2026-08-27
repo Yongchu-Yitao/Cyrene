@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from cyrene.localization import app_language, localized
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +198,7 @@ class ProjectRepository:
         payload = self.read_store()
         project = self._find_project(payload, project_id)
         if not project:
-            raise ProjectNotFoundError("project not found")
+            raise ProjectNotFoundError(localized("Project not found.", "未找到项目。"))
         return payload, project
 
     def get_session(
@@ -206,7 +207,7 @@ class ProjectRepository:
         payload = self.read_store()
         project, session = self._find_session(payload, session_id)
         if not project or not session:
-            raise ProjectNotFoundError("session not found")
+            raise ProjectNotFoundError(localized("Task not found.", "未找到任务。"))
         return payload, project, session
 
 
@@ -281,14 +282,23 @@ class ProjectApplicationService:
         payload["activeProjectId"] = project_id
         payload["activeSessionId"] = session["id"]
         self.repository.write_store(payload)
+        language = app_language()
         self.lifecycle.notify(
-            title="项目创建完成",
-            body=f"已创建 workspace「{project['name']}」。",
+            title=localized(
+                "Project created", "项目创建完成", language=language
+            ),
+            body=localized(
+                'Created workspace "{name}".',
+                '已创建 workspace「{name}」。',
+                language=language,
+                name=project['name'],
+            ),
             tab="system",
             project_ref=project_id,
             source="project_created",
-            source_label="Workspace",
+            source_label=localized("Workspace", "工作区", language=language),
             link_label=project["name"],
+            language=language,
         )
         return {"ok": True, "project": project, "session": session, **payload}
 
@@ -367,7 +377,10 @@ class ProjectApplicationService:
         except Exception as exc:
             logger.exception("Failed to remove chats for project %s", project_id)
             raise ProjectOperationError(
-                "Project chat agents could not be terminated",
+                localized(
+                    "Project chat agents could not be terminated.",
+                    "无法终止项目对话 Agent。",
+                ),
                 503,
                 "project_chat_agents_not_terminated",
             ) from exc
@@ -398,7 +411,10 @@ class ProjectApplicationService:
             except Exception as exc:
                 logger.exception("Failed to clear session state for %s", session_id)
                 raise ProjectOperationError(
-                    "Project agents could not be terminated",
+                    localized(
+                        "Project agents could not be terminated.",
+                        "无法终止项目 Agent。",
+                    ),
                     503,
                     "project_agents_not_terminated",
                 ) from exc
@@ -423,7 +439,9 @@ class ProjectApplicationService:
         self, project_id: str, body: Mapping[str, Any]
     ) -> dict[str, Any]:
         payload, project = self.repository.get(project_id)
-        title = str(body.get("title") or body.get("goal") or "新任务").strip() or "新任务"
+        language = app_language()
+        default_title = localized("New task", "新任务", language=language)
+        title = str(body.get("title") or body.get("goal") or default_title).strip() or default_title
         session = self.lifecycle.new_session(
             project_id,
             title,
@@ -438,14 +456,26 @@ class ProjectApplicationService:
         payload["activeSessionId"] = session["id"]
         self.repository.write_store(payload)
         self.lifecycle.notify(
-            title="新任务已创建",
-            body=f"任务「{title}」已加入 {project.get('name') or 'workspace'}。",
+            title=localized(
+                "New task created", "新任务已创建", language=language
+            ),
+            body=localized(
+                'Task "{title}" was added to {workspace}.',
+                '任务「{title}」已加入 {workspace}。',
+                language=language,
+                title=title,
+                workspace=(
+                    project.get('name')
+                    or localized("workspace", "工作区", language=language)
+                ),
+            ),
             tab="comment",
             project_ref=project_id,
             source="task_created",
-            source_label="任务",
+            source_label=localized("Task", "任务", language=language),
             link_label=title,
             meta={"sessionId": session["id"]},
+            language=language,
         )
         return {"ok": True, "session": session, **payload}
 
@@ -466,15 +496,28 @@ class ProjectApplicationService:
         payload["activeProjectId"] = project_id
         payload["activeSessionId"] = session["id"]
         self.repository.write_store(payload)
+        language = app_language()
+        source_title = source_session.get('title') or localized(
+            "Task", "任务", language=language
+        )
         self.lifecycle.notify(
-            title="后续任务已创建",
-            body=f"已根据「{source_session.get('title') or '任务'}」的当前情况创建「{session['title']}」。",
+            title=localized(
+                "Follow-up task created", "后续任务已创建", language=language
+            ),
+            body=localized(
+                'Created "{title}" from the current state of "{source}".',
+                '已根据「{source}」的当前情况创建「{title}」。',
+                language=language,
+                source=source_title,
+                title=session['title'],
+            ),
             tab="comment",
             project_ref=project_id,
             source="follow_up_created",
-            source_label="任务",
+            source_label=localized("Task", "任务", language=language),
             link_label=session["title"],
             meta={"sessionId": session["id"], "sourceSessionId": session_id},
+            language=language,
         )
         return {"ok": True, "session": session, "sourceSessionId": session_id, **payload}
 
@@ -489,12 +532,24 @@ class ProjectApplicationService:
         session["priority"] = seed["priority"]
         session["constraints"] = seed["constraints"]
         session["followUpContext"] = seed["context"]
-        session["agentReply"] = "已根据来源任务的当前进度创建后续任务。你可以直接交给 Agent，或继续补充要求。"
+        language = app_language()
+        session["agentReply"] = localized(
+            "A follow-up task was created from the source task's current progress. You can assign it to the Agent or add more requirements.",
+            "已根据来源任务的当前进度创建后续任务。你可以直接交给 Agent，或继续补充要求。",
+            language=language,
+        )
         session["events"] = [{
             "id": self.lifecycle.short_id("event"),
             "type": "CreatedAsFollowUp",
             "createdAt": session["createdAt"],
-            "body": f"基于任务「{source.get('title') or '任务'}」的当前情况创建。",
+            "body": localized(
+                'Created from the current state of task "{title}".',
+                '基于任务「{title}」的当前情况创建。',
+                language=language,
+                title=source.get('title') or localized(
+                    "Task", "任务", language=language
+                ),
+            ),
             "sourceSessionId": source_id,
         }]
         for text in seed["unresolvedAcceptance"]:
@@ -515,7 +570,9 @@ class ProjectApplicationService:
             None,
         )
         if not session:
-            raise ProjectNotFoundError("init session not found")
+            raise ProjectNotFoundError(
+                localized("Initialization task not found.", "未找到初始化任务。")
+            )
         current = (
             session.get("init")
             if isinstance(session.get("init"), dict)

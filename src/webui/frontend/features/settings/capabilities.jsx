@@ -8,15 +8,13 @@ import {
 // ── Capabilities Panel ──
 function CapabilitiesPanel(p) {
   var {
-    t, pluginPacks, standalonePlugins, pluginSaved, pluginSettingBusy,
-    savePluginPack, saveStandalonePlugin,
+    t,
     voiceStatus, voiceReferenceText, setVoiceReferenceText,
     voiceReferenceFile, setVoiceReferenceFile, voiceReferencePhase, voiceReferenceElapsed,
     startVoiceReferenceRecording, finishVoiceReferenceRecording,
     voiceBusy, voiceNotice,
     saveVoiceBooleanSetting, saveVoiceMode, saveVoicePreset, saveVoiceTtsModel, saveVoiceProfile, deleteVoiceProfile,
   } = p;
-  var mode = p.mode === "plugins" ? "plugins" : "voice";
   var localTtsActive = voiceStatus.tts_provider !== "minimax";
   var customVoiceSelected = localTtsActive && voiceStatus.voice_mode === "custom";
   var voiceReferenceActive = voiceReferencePhase === "starting"
@@ -72,9 +70,9 @@ function CapabilitiesPanel(p) {
   }
 
   return React.createElement("div", { className: "settings-panel" },
-    SectionTitle(t(mode === "plugins" ? "settings.pluginsTab" : "settings.voiceTab")),
+    SectionTitle(t("settings.voiceTab")),
 
-    mode === "voice" && React.cloneElement(SectionBlock(t("settings.voiceCapability"), t("settings.voiceCapabilityHint"),
+    React.cloneElement(SectionBlock(t("settings.voiceCapability"), t("settings.voiceCapabilityHint"),
       React.createElement("div", { className: "wb-voice-settings" },
         FieldRow(
           t("settings.voiceAutoSend"),
@@ -252,76 +250,6 @@ function CapabilitiesPanel(p) {
       ),
     ), { id: "setting-voice" }),
 
-    // Registry-backed Plugin packs and standalone Plugins.
-    mode === "plugins" && React.cloneElement(SectionBlock(t("settings.pluginPacks"), t("settings.pluginPacksHint"),
-      React.createElement("div", { className: "wb-plugin-activation-list" },
-        (Array.isArray(pluginPacks) ? pluginPacks : []).map(function (pack) {
-          var packEnabled = pack.configured_enabled !== false;
-          var packName = t("toolName." + pack.id, pack.name || pack.id);
-          var statusParts = [
-            t("pluginPackDesc." + pack.id, pack.description || pack.id),
-            pack.source ? t("settings.pluginSource", { source: pack.source }, "Source: {source}") : "",
-            t("settings.pluginEnabledCount", {
-              enabled: Number(pack.enabled_count || 0),
-              total: Number(pack.plugin_count || 0),
-            }, "{enabled}/{total} enabled"),
-            pack.locked === true ? t("settings.pluginLocked", "Locked") : "",
-          ].filter(Boolean);
-          return FieldRow(
-            packName,
-            statusParts.join(" · "),
-            Toggle(
-              packEnabled,
-              function () { savePluginPack(pack.id, !packEnabled); },
-              pack.locked === true || !!pluginSettingBusy,
-              t("settings.pluginToggleLabel", { name: packName }, "Enable or disable {name}"),
-            ),
-            pack.id,
-          );
-        }),
-        (!Array.isArray(pluginPacks) || !pluginPacks.length) && React.createElement("p", { className: "wb-hint" },
-          t("settings.pluginPacksEmpty", "No plugin packs found")
-        ),
-      ),
-    ), { id: "setting-plugin-packs" }),
-
-    mode === "plugins" && React.cloneElement(SectionBlock(
-      t("settings.pluginStandalone", "Standalone Plugins"),
-      t("settings.pluginStandaloneHint", "Plugins registered directly, outside a Plugin pack."),
-      React.createElement("div", { className: "wb-plugin-activation-list" },
-        (Array.isArray(standalonePlugins) ? standalonePlugins : []).map(function (plugin) {
-          var pluginId = String(plugin.id || plugin.name || "");
-          var pluginName = t("toolName." + pluginId, plugin.name || pluginId);
-          var pluginEnabled = plugin.configured_enabled !== false;
-          var labels = [
-            t("toolDesc." + pluginId, t("settings.pluginToolDescriptionFallback", { name: pluginName }, plugin.description || pluginId)),
-            plugin.kind ? String(plugin.kind) : "",
-            plugin.source ? t("settings.pluginSource", { source: plugin.source }, "Source: {source}") : "",
-            plugin.kind === "model" ? t("settings.pluginModel", "Model") : "",
-            plugin.source === "core" ? t("settings.pluginCore", "Core") : "",
-            plugin.main_only === true ? t("settings.pluginMainOnly", "Main agent only") : "",
-            plugin.locked === true ? t("settings.pluginLocked", "Locked") : "",
-          ].filter(Boolean);
-          return FieldRow(
-            pluginName,
-            labels.join(" · "),
-            Toggle(
-              pluginEnabled,
-              function () { saveStandalonePlugin(pluginId, !pluginEnabled); },
-              plugin.locked === true || !!pluginSettingBusy,
-              t("settings.pluginToggleLabel", { name: pluginId }, "Enable or disable {name}"),
-            ),
-            pluginId,
-          );
-        }),
-        (!Array.isArray(standalonePlugins) || !standalonePlugins.length) && React.createElement("p", { className: "wb-hint" },
-          t("settings.pluginStandaloneEmpty", "No standalone Plugins found")
-        ),
-      ),
-      pluginSaved && React.createElement("div", { className: "wb-save-actions" },
-        React.createElement("span", { className: "wb-hint saved" }, pluginSaved),
-      ),
-    ), { id: "setting-standalone-plugins" }),
   );
 }
 

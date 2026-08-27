@@ -3,7 +3,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from route.pdf import (
+from agent.plugin.plugin_impl.cyrene_content.pdf_routes import (
     _MAX_CONTEXT_CHARS,
     _MAX_CONTEXT_PAGES,
     _MAX_SELECTED_TEXT_CHARS,
@@ -175,7 +175,15 @@ const viewer = {{
 
 def test_both_pdf_viewers_submit_automatic_context():
     workbench = workbench_chat_source()
-    routes = (ROOT / "src" / "route" / "pdf.py").read_text(encoding="utf-8")
+    routes = (
+        ROOT
+        / "src"
+        / "agent"
+        / "plugin"
+        / "plugin_impl"
+        / "cyrene_content"
+        / "pdf_routes.py"
+    ).read_text(encoding="utf-8")
 
     assert "pdf.buildAnalysisInventory(containerRef.current, viewerRef.current, pageNum)" in workbench
     assert "pdf.extractAnalysisContext(" in workbench

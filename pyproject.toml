@@ -53,7 +53,7 @@ dependencies = [
 
 [project.scripts]
 cyrene = "cyrene.__main__:main"
-cyrene-relay = "cyrene.runtime.remote_relay:main"
+cyrene-relay = "agent.plugin.plugin_impl.cyrene_remote.relay:main"
 
 [project.optional-dependencies]
 build = ["pyinstaller>=6.0", "pillow>=11.0"]

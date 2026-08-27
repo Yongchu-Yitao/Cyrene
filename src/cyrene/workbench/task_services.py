@@ -10,12 +10,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from cyrene.localization import app_language, localized, localized_plural
 from cyrene.workbench.task_dto import (
     ProjectShellDTO,
     TaskSessionDTO,
     TaskSessionViewDTO,
     WorkspacePathStatusDTO,
 )
+
+
+def _l(en: str, zh: str, **values: Any) -> str:
+    return localized(en, zh, **values)
 
 
 class TaskSessionNotFoundError(LookupError):
@@ -183,7 +188,9 @@ class TaskApplicationService:
         project, _session = self._session(session_id, require_project=True)
         root = self._workspace_root(project)
         if not root:
-            raise ValueError("no workspace configured")
+            raise ValueError(_l(
+                "No workspace is configured.", "尚未配置工作区。"
+            ))
         raw = str(requested_path or "").strip()
         if not raw:
             return {"exists": False, "path": "", "isDir": False}
@@ -194,7 +201,14 @@ class TaskApplicationService:
             resolved = candidate.resolve()
             relative = resolved.relative_to(root).as_posix()
         except (ValueError, OSError):
-            return {"exists": False, "path": raw, "error": "路径不在工作区内"}
+            return {
+                "exists": False,
+                "path": raw,
+                "error": _l(
+                    "The path is outside the workspace.",
+                    "路径不在工作区内。",
+                ),
+            }
         exists = resolved.exists()
         return {
             "exists": exists,
@@ -211,14 +225,21 @@ class TaskApplicationService:
         payload = self._read_store()
         project, session = self._find_session(payload, session_id)
         if not session or not project:
-            raise TaskSessionNotFoundError("session not found")
+            raise TaskSessionNotFoundError(_l(
+                "Session not found.", "未找到会话。"
+            ))
         previous_status = str(session.get("status") or "")
         requested_status = str(body.get("status") or "")
         if requested_status == "paused" and previous_status not in {
             "running", "waiting_for_user",
         }:
             raise TaskMutationError(
-                "only an active task can be paused", 409, "invalid_status_transition"
+                _l(
+                    "Only an active task can be paused.",
+                    "只有正在执行的任务可以暂停。",
+                ),
+                409,
+                "invalid_status_transition",
             )
         if "title" in body and str(body.get("title") or "").strip():
             session["titleLocked"] = True
@@ -236,7 +257,10 @@ class TaskApplicationService:
                 "status": "review",
                 "verifyReason": "",
                 "recommendReflection": False,
-                "agentReply": "验收条件已修改，请重新验收。",
+                "agentReply": _l(
+                    "Acceptance criteria changed. Run acceptance again.",
+                    "验收条件已修改，请重新验收。",
+                ),
             })
         self._prune_artifacts(session)
         if isinstance(body.get("plan"), list):
@@ -264,17 +288,43 @@ class TaskApplicationService:
         if self._notify and next_status != previous_status and next_status in {
             "done", "completed", "failed", "blocked", "paused", "review",
         }:
-            titles = {"done": "任务完成", "completed": "任务完成", "failed": "任务失败",
-                      "blocked": "任务阻塞", "paused": "任务已暂停", "review": "任务待验收"}
-            labels = {"done": "已完成", "completed": "已完成", "failed": "失败",
-                      "blocked": "阻塞", "paused": "已暂停", "review": "待验收"}
+            language = app_language()
+            titles = {
+                "done": localized("Task completed", "任务完成", language=language),
+                "completed": localized("Task completed", "任务完成", language=language),
+                "failed": localized("Task failed", "任务失败", language=language),
+                "blocked": localized("Task blocked", "任务阻塞", language=language),
+                "paused": localized("Task paused", "任务已暂停", language=language),
+                "review": localized("Task ready for review", "任务待验收", language=language),
+            }
+            labels = {
+                "done": localized("completed", "已完成", language=language),
+                "completed": localized("completed", "已完成", language=language),
+                "failed": localized("failed", "失败", language=language),
+                "blocked": localized("blocked", "阻塞", language=language),
+                "paused": localized("paused", "已暂停", language=language),
+                "review": localized("ready for review", "待验收", language=language),
+            }
+            task_title = session.get('title') or localized(
+                "Untitled task", "未命名任务", language=language
+            )
             self._notify(
-                title=titles.get(next_status, "任务状态更新"),
-                body=f"任务「{session.get('title') or '未命名任务'}」当前状态：{labels.get(next_status, next_status)}。",
+                title=titles.get(next_status, localized(
+                    "Task status updated", "任务状态更新", language=language
+                )),
+                body=localized(
+                    'Task "{title}" is now {status}.',
+                    '任务「{title}」当前状态：{status}。',
+                    language=language,
+                    title=task_title,
+                    status=labels.get(next_status, next_status),
+                ),
                 tab="system" if next_status != "review" else "comment",
-                project_ref=project.get("id"), source="task_status", source_label="任务",
+                project_ref=project.get("id"), source="task_status",
+                source_label=localized("Task", "任务", language=language),
                 link_label=str(session.get("title") or ""),
                 meta={"sessionId": session_id, "status": next_status},
+                language=language,
             )
         return {"ok": True, "project": project, "session": session, **payload}
 
@@ -294,7 +344,9 @@ class TaskApplicationService:
         payload = self._read_store()
         project, session = self._find_session(payload, session_id)
         if not session or not project:
-            raise TaskSessionNotFoundError("session not found")
+            raise TaskSessionNotFoundError(_l(
+                "Session not found.", "未找到会话。"
+            ))
         task_runs.interrupt_task_run(db_path, session_id)
         goal_run = await goal_loops._get_run_by_session(db_path, session_id)
         if goal_run and str(goal_run.get("status") or "") not in {
@@ -321,7 +373,12 @@ class TaskApplicationService:
             await asyncio.sleep(0.05)
         if task_runs.is_task_run_active(db_path, session_id):
             raise TaskMutationError(
-                "任务仍在停止中，请稍后重试删除。", 409, "session_still_running"
+                _l(
+                    "The task is still stopping. Try deleting it again shortly.",
+                    "任务仍在停止中，请稍后重试删除。",
+                ),
+                409,
+                "session_still_running",
             )
         await agent_runtime.clear_session(session_id)
         with store_lock:
@@ -349,7 +406,9 @@ class TaskApplicationService:
         payload = self._read_store()
         project, session = self._find_session(payload, session_id)
         if not session or (require_project and not project):
-            raise TaskSessionNotFoundError("session not found")
+            raise TaskSessionNotFoundError(_l(
+                "Session not found.", "未找到会话。"
+            ))
         return project, session
 
 
@@ -376,7 +435,9 @@ class ArtifactApplicationService:
         payload = self._read_store()
         _project, session = self._find_session(payload, session_id)
         if not session:
-            raise TaskSessionNotFoundError("session not found")
+            raise TaskSessionNotFoundError(_l(
+                "Session not found.", "未找到会话。"
+            ))
         artifacts = session.get("artifacts")
         return artifacts if isinstance(artifacts, list) else []
 
@@ -384,7 +445,9 @@ class ArtifactApplicationService:
         payload = self._read_store()
         project, session = self._find_session(payload, session_id)
         if not session or not project:
-            raise TaskSessionNotFoundError("session not found")
+            raise TaskSessionNotFoundError(_l(
+                "Session not found.", "未找到会话。"
+            ))
         artifact, target = self._resolve_download(project, session, artifact_id)
         filename = Path(str(artifact.get("name") or target.name)).name or target.name
         return ArtifactDownload(
@@ -446,7 +509,9 @@ class PlanningApplicationService:
         payload = self._read_store()
         project, session = self._find_session(payload, session_id)
         if not project or not session:
-            raise TaskSessionNotFoundError("session not found")
+            raise TaskSessionNotFoundError(_l(
+                "Session not found.", "未找到会话。"
+            ))
         return payload, project, session
 
     async def generate_acceptance(self, session_id: str) -> dict[str, Any]:
@@ -459,7 +524,17 @@ class PlanningApplicationService:
         session["events"] = list(session.get("events") or []) + [{
             "id": self._short_id("event"), "type": "AcceptanceGenerated",
             "createdAt": now,
-            "body": f"生成验收标准，共 {len(criteria)} 条。" + ("" if from_llm else "（兜底标准）"),
+            "body": localized_plural(
+                "Generated {count} acceptance criterion.{fallback}",
+                "Generated {count} acceptance criteria.{fallback}",
+                "生成验收标准，共 {count} 条。{fallback}",
+                count=len(criteria),
+                fallback=(
+                    ""
+                    if from_llm
+                    else _l(" (fallback criteria)", "（兜底标准）")
+                ),
+            ),
         }]
         session["updatedAt"] = now
         project["updatedAt"] = now
@@ -474,7 +549,10 @@ class PlanningApplicationService:
             session, project, focus=focus, goal_gap=goal_gap
         )
         if not packet:
-            raise TaskMutationError("no history to reflect on", 400)
+            raise TaskMutationError(_l(
+                "There is no history to reflect on.",
+                "没有可供反思的历史记录。",
+            ), 400)
         self._store_reflection(session, packet, trigger="manual", project=project)
         candidates = self._reflection_candidates(project, session)
         matches = await self._agent_runtime.reflection_hints(
@@ -493,15 +571,22 @@ class PlanningApplicationService:
         try:
             verdict = await self._agent_runtime.verify_acceptance(session, project)
         except Exception as exc:
-            message = str(exc or "模型调用失败")
+            message = str(exc or _l("Model call failed", "模型调用失败"))
             category = str(getattr(exc, "code", "model") or "model")
             raise TaskMutationError(
-                f"验收暂时不可用：{message}", 503,
+                _l(
+                    "Acceptance is temporarily unavailable: {message}",
+                    "验收暂时不可用：{message}",
+                    message=message,
+                ), 503,
                 "verification_unavailable", category,
             ) from exc
         if not isinstance(verdict, dict):
             raise TaskMutationError(
-                "验收暂时不可用：模型没有返回有效结果。", 503,
+                _l(
+                    "Acceptance is temporarily unavailable because the model returned no valid result.",
+                    "验收暂时不可用：模型没有返回有效结果。",
+                ), 503,
                 "verification_unavailable", "response_format",
             )
         results = verdict.get("results") if isinstance(verdict.get("results"), list) else []
@@ -511,7 +596,13 @@ class PlanningApplicationService:
         for criterion in criteria:
             result = by_id.get(str(criterion.get("id")))
             if not isinstance(result, dict):
-                criterion.update(status="failed", evidence="验收器未返回这一项的结论。")
+                criterion.update(
+                    status="failed",
+                    evidence=_l(
+                        "The verifier returned no conclusion for this criterion.",
+                        "验收器未返回这一项的结论。",
+                    ),
+                )
                 any_failed = True
                 continue
             passed = bool(result.get("passed"))
@@ -524,12 +615,30 @@ class PlanningApplicationService:
             reason = str(verdict.get("reason") or "")
             session.update(status="failed", verifyReason=reason,
                            recommendReflection=bool(verdict.get("recommend_reflection")),
-                           agentReply="独立验收未通过：" + (reason or "部分验收标准未达成。"))
-            event_type, event_body = "VerificationFailed", "独立验收未通过。" + reason
+                           agentReply=_l(
+                               "Independent acceptance failed: {reason}",
+                               "独立验收未通过：{reason}",
+                               reason=reason or _l(
+                                   "Some acceptance criteria were not met.",
+                                   "部分验收标准未达成。",
+                               ),
+                           ))
+            event_type = "VerificationFailed"
+            event_body = _l(
+                "Independent acceptance failed. {reason}",
+                "独立验收未通过。{reason}",
+                reason=reason,
+            )
         else:
             session.update(recommendReflection=False, verifyReason="",
-                           agentReply="独立验收通过：所有验收标准均已达成。")
-            event_type, event_body = "VerificationPassed", "独立验收通过，所有标准达成。"
+                           agentReply=_l(
+                               "Independent acceptance passed: all acceptance criteria were met.",
+                               "独立验收通过：所有验收标准均已达成。",
+                           ))
+            event_type, event_body = "VerificationPassed", _l(
+                "Independent acceptance passed; all criteria were met.",
+                "独立验收通过，所有标准达成。",
+            )
         session["events"] = list(session.get("events") or []) + [{
             "id": self._short_id("event"), "type": event_type,
             "createdAt": now, "body": event_body,
@@ -537,7 +646,10 @@ class PlanningApplicationService:
         if not any_failed:
             self._mark_completed(
                 session, now=now,
-                event_body="独立验收通过，所有验收标准均已通过，任务自动标记为已完成。",
+                event_body=_l(
+                    "Independent acceptance passed. All acceptance criteria passed, and the task was marked complete automatically.",
+                    "独立验收通过，所有验收标准均已通过，任务自动标记为已完成。",
+                ),
             )
         session["updatedAt"] = now
         project["updatedAt"] = now
@@ -558,11 +670,16 @@ class PlanningApplicationService:
             payload = self._read_store()
             project, session = self._find_session(payload, session_id)
             if not project or not session:
-                raise PlanningMutationError("session not found", 404)
+                raise PlanningMutationError(_l(
+                    "Session not found.", "未找到会话。"
+                ), 404)
             current_revision = int(session.get("planDefinitionRevision") or 0)
             if base_plan_revision != current_revision:
                 raise PlanningMutationError(
-                    "计划已发生变化，请刷新后重试。",
+                    _l(
+                        "The plan changed. Refresh and try again.",
+                        "计划已发生变化，请刷新后重试。",
+                    ),
                     409,
                     "stale_plan_revision",
                 )
@@ -571,7 +688,10 @@ class PlanningApplicationService:
                 or str(session.get("status") or "") in {"running", "waiting_for_user"}
             ):
                 raise PlanningMutationError(
-                    "Agent 正在执行，暂时不能修改计划。",
+                    _l(
+                        "The Agent is running, so the plan cannot be edited yet.",
+                        "Agent 正在执行，暂时不能修改计划。",
+                    ),
                     409,
                     "plan_running",
                 )
@@ -596,7 +716,10 @@ class PlanningApplicationService:
         if not result.get("ok"):
             code = str(result.get("code") or "")
             raise PlanningMutationError(
-                str(result.get("error") or "unsupported plan operation"),
+                str(result.get("error") or _l(
+                    "Unsupported plan operation.",
+                    "不支持的计划操作。",
+                )),
                 self._status_by_code.get(code, 400),
                 "" if code in {"invalid_context_files", "unsupported_operation"} else code,
             )

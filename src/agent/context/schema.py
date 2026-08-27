@@ -78,7 +78,7 @@ def ensure_tree_schema(connection: sqlite3.Connection) -> None:
             root_only INTEGER NOT NULL DEFAULT 0 CHECK(root_only IN (0, 1)),
             matcher TEXT,
             failure_policy TEXT NOT NULL DEFAULT 'open'
-                CHECK(failure_policy IN ('open', 'block')),
+                CHECK(failure_policy IN ('open', 'block', 'closed')),
             config_json TEXT NOT NULL DEFAULT '{}',
             enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
             created_at TEXT NOT NULL
@@ -107,6 +107,76 @@ def ensure_tree_schema(connection: sqlite3.Connection) -> None:
             ON hook_queue(status, sequence);
         """
     )
+    _ensure_closed_hook_failure_policy(connection)
+
+
+def _ensure_closed_hook_failure_policy(connection: sqlite3.Connection) -> None:
+    """Upgrade pre-closed-policy trees without losing queued Hook deliveries."""
+
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'hook_bindings'"
+    ).fetchone()
+    schema = str(row["sql"] or "") if row is not None else ""
+    if "'closed'" in schema:
+        return
+
+    connection.execute("PRAGMA foreign_keys = OFF")
+    try:
+        with transaction(connection):
+            connection.execute("DROP INDEX IF EXISTS idx_hook_bindings_event")
+            connection.execute("DROP INDEX IF EXISTS idx_hook_queue_status_sequence")
+            connection.execute(
+                """CREATE TABLE hook_bindings_new (
+                    hook_id TEXT PRIMARY KEY,
+                    event TEXT NOT NULL,
+                    plugin_id TEXT NOT NULL,
+                    root_only INTEGER NOT NULL DEFAULT 0 CHECK(root_only IN (0, 1)),
+                    matcher TEXT,
+                    failure_policy TEXT NOT NULL DEFAULT 'open'
+                        CHECK(failure_policy IN ('open', 'block', 'closed')),
+                    config_json TEXT NOT NULL DEFAULT '{}',
+                    enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+                    created_at TEXT NOT NULL
+                )"""
+            )
+            connection.execute(
+                """CREATE TABLE hook_queue_new (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    hook_id TEXT NOT NULL,
+                    event TEXT NOT NULL,
+                    tree_id TEXT NOT NULL,
+                    event_time TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    node_id TEXT,
+                    is_root INTEGER NOT NULL DEFAULT 0 CHECK(is_root IN (0, 1)),
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK(status IN ('pending', 'running', 'blocked', 'failed')),
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY(hook_id)
+                        REFERENCES hook_bindings_new(hook_id) ON DELETE CASCADE
+                )"""
+            )
+            connection.execute(
+                "INSERT INTO hook_bindings_new SELECT * FROM hook_bindings"
+            )
+            connection.execute("INSERT INTO hook_queue_new SELECT * FROM hook_queue")
+            connection.execute("DROP TABLE hook_queue")
+            connection.execute("DROP TABLE hook_bindings")
+            connection.execute(
+                "ALTER TABLE hook_bindings_new RENAME TO hook_bindings"
+            )
+            connection.execute("ALTER TABLE hook_queue_new RENAME TO hook_queue")
+            connection.execute(
+                """CREATE INDEX idx_hook_bindings_event
+                ON hook_bindings(event, enabled, root_only, created_at, hook_id)"""
+            )
+            connection.execute(
+                """CREATE INDEX idx_hook_queue_status_sequence
+                ON hook_queue(status, sequence)"""
+            )
+    finally:
+        connection.execute("PRAGMA foreign_keys = ON")
 
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.plugin import Plugin, PluginContext
+from agent.plugin.native_runtime import plugin_localized, plugin_localized_plural
 
 from ._service import knowledge_service
 from .definitions import get_native_tool_def, get_plugin_spec
@@ -29,15 +30,42 @@ async def handler(arguments: dict[str, Any], context: PluginContext) -> str:
     )
     items = list(result.get("items") or [])
     if not items:
-        return "The current project literature library contains no matching items."
-    lines = [f"Project literature library: {len(items)} returned of {int(result.get('total') or 0)} matching item(s)."]
+        return plugin_localized(
+            context,
+            "The current project literature library contains no matching items.",
+            "当前项目文献库中没有匹配项。",
+        )
+    lines = [plugin_localized_plural(
+        context,
+        "Project literature library: returned {count} of {total} matching item.",
+        "Project literature library: returned {count} of {total} matching items.",
+        "项目文献库：返回 {count}/{total} 个匹配项。",
+        count=len(items),
+        total=int(result.get("total") or 0),
+    )]
     for index, item in enumerate(items, start=1):
-        authors = creator_label(item.get("creators") or []) or "Unknown author"
+        authors = creator_label(item.get("creators") or []) or plugin_localized(
+            context, "Unknown author", "未知作者"
+        )
         lines.append(
-            f"[{index}] {item.get('title') or 'Untitled'} | authors={authors} | "
-            f"year={item.get('year') or ''} | venue={item.get('venue') or ''} | "
-            f"doi={item.get('doi') or ''} | citekey={item.get('citekey') or ''} | "
-            f"status={item.get('reading_status') or 'unread'} | paper_id={item.get('id')}"
+            plugin_localized(
+                context,
+                "[{index}] {title} | authors={authors} | year={year} | venue={venue} | ",
+                "[{index}] {title} | 作者={authors} | 年份={year} | 来源={venue} | ",
+                index=index,
+                title=item.get("title") or plugin_localized(context, "Untitled", "无标题"),
+                authors=authors,
+                year=item.get("year") or "",
+                venue=item.get("venue") or "",
+            )
+            + f"doi={item.get('doi') or ''} | citekey={item.get('citekey') or ''} | "
+            + plugin_localized(
+                context,
+                "status={status} | paper_id={paper_id}",
+                "状态={status} | paper_id={paper_id}",
+                status=item.get("reading_status") or "unread",
+                paper_id=item.get("id"),
+            )
         )
     return "\n".join(lines)
 

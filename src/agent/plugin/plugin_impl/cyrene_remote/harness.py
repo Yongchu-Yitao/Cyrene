@@ -7,8 +7,7 @@ import hashlib
 from typing import Any
 
 from agent.plugin import PluginContext
-from cyrene.runtime.remote_control import (
-    REMOTE_PLUGIN_PACK_IDS,
+from .control import (
     REMOTE_PLUGIN_PACK_PREFIX,
 )
 from .common import (
@@ -40,7 +39,6 @@ TOOL_DEF = {
                 },
                 "plugin_pack": {
                     "type": "string",
-                    "enum": list(REMOTE_PLUGIN_PACK_IDS),
                     "description": "Exact granted Plugin pack id, such as cyrene_desktop.",
                 },
                 "operation": {
@@ -93,8 +91,6 @@ async def handler(
         operation = str(args.get("operation") or "").strip()
         if not project_id or not plugin_pack:
             raise ValueError("project_id and plugin_pack are required")
-        if plugin_pack not in REMOTE_PLUGIN_PACK_IDS:
-            raise ValueError(f"unsupported remote Plugin pack: {plugin_pack}")
         grant = REMOTE_PLUGIN_PACK_PREFIX + plugin_pack
         if grant not in (device.get("received_capabilities") or []):
             raise PermissionError(
@@ -173,7 +169,7 @@ async def handler(
             "project_id": project_id,
         })
     except Exception as exc:
-        return json_result(remote_tool_error(exc))
+        return json_result(remote_tool_error(exc, context))
 
 
 __all__ = ["TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler"]

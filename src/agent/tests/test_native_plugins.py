@@ -12,6 +12,7 @@ from agent.plugin import native_tools
 from agent.plugin.native_tools import (
     CORE_PLUGIN_NAMES,
     USER_STANDALONE_PLUGIN_NAMES,
+    mark_builtin_plugin_deleted,
     seed_builtin_plugin_directory,
 )
 
@@ -21,6 +22,7 @@ TOOL_PACK_IDS = frozenset(
         "cyrene_application",
         "cyrene_browser",
         "cyrene_code",
+        "cyrene_cli",
         "cyrene_content",
         "cyrene_control",
         "cyrene_delivery",
@@ -42,6 +44,11 @@ TOOL_PACK_IDS = frozenset(
     }
 )
 MODEL_VISIBLE_PACK_IDS = TOOL_PACK_IDS - {"cyrene_image"}
+CONTEXT_PACK_IDS = frozenset({
+    "cyrene_composer_context",
+    "cyrene_context",
+    "cyrene_soul",
+})
 
 
 def _run(coroutine):
@@ -79,6 +86,9 @@ def test_seeded_canonical_plugins_complete_toolbox_chain(tmp_path):
             if registry.pack_source(pack.id) != "core"
         }
         assert TOOL_PACK_IDS <= set(user_packs)
+        assert CONTEXT_PACK_IDS <= set(user_packs)
+        assert registry.pack_locked("cyrene_context") is True
+        assert registry.pack_locked("cyrene_composer_context") is True
         business_names = {
             plugin.name
             for pack_id in TOOL_PACK_IDS
@@ -90,9 +100,9 @@ def test_seeded_canonical_plugins_complete_toolbox_chain(tmp_path):
             for plugin in user_packs[pack_id].plugins
         )
         assert all(
-            plugin.kind == "model"
+            plugin.kind == ("model" if pack_id == "cyrene_model" else "tool")
             for pack_id, pack in user_packs.items()
-            if pack_id not in TOOL_PACK_IDS
+            if pack_id not in CONTEXT_PACK_IDS
             for plugin in pack.plugins
         )
         assert not business_names & CORE_PLUGIN_NAMES
@@ -143,7 +153,9 @@ def test_seeded_canonical_plugins_complete_toolbox_chain(tmp_path):
 
         listing = await runtime.call("toolbox", {"operation": "list"}, context)
         assert listing.success is True
-        assert set(listing.value["packs"]) == MODEL_VISIBLE_PACK_IDS
+        assert set(listing.value["packs"]) == MODEL_VISIBLE_PACK_IDS | {
+            "cyrene_plugin_development"
+        }
         assert set(listing.value["standalone_tools"]) == USER_STANDALONE_PLUGIN_NAMES
 
         globbed = await runtime.call(
@@ -342,6 +354,32 @@ def test_unmanaged_pack_and_standalone_collisions_are_never_merged(
     assert all("preserved" in diagnostic for diagnostic in seeded.diagnostics)
     manifest = json.loads(seeded.manifest.read_text(encoding="utf-8"))
     assert manifest == {"version": 1, "files": {}}
+
+
+def test_explicit_canonical_pack_tombstone_prevents_reseed(tmp_path, monkeypatch):
+    plugin_directory = tmp_path / "plugin_impl"
+    canonical = MappingProxyType(
+        {
+            "cyrene_demo/__init__.py": b"pack\n",
+            "cyrene_demo/tool.py": b"tool\n",
+            "edit.py": b"edit\n",
+        }
+    )
+    monkeypatch.setattr(native_tools, "_collect_canonical_files", lambda: canonical)
+    seed_builtin_plugin_directory(plugin_directory)
+    pack = plugin_directory / "cyrene_demo"
+
+    assert mark_builtin_plugin_deleted(plugin_directory, "cyrene_demo") is True
+    for child in pack.iterdir():
+        child.unlink()
+    pack.rmdir()
+    reseeded = seed_builtin_plugin_directory(plugin_directory)
+
+    assert pack.exists() is False
+    assert not any(path.is_relative_to(pack) for path in reseeded.created)
+    manifest = json.loads(reseeded.manifest.read_text(encoding="utf-8"))
+    assert manifest["deleted"] == ["cyrene_demo"]
+    assert all(not key.startswith("cyrene_demo/") for key in manifest["files"])
 
 
 def test_frozen_build_reads_the_packaged_canonical_tree(tmp_path, monkeypatch):

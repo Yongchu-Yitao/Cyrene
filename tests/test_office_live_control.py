@@ -7,7 +7,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 import pytest
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 from agent.plugin import PluginContext
@@ -28,8 +28,8 @@ class FakeWebSocket:
 
 @pytest.mark.asyncio
 async def test_office_bridge_serializes_parallel_requests_per_session():
-    from cyrene.office.protocol import expected_handshake
-    from cyrene.office.service import OfficeBridgeService
+    from agent.plugin.plugin_impl.cyrene_office.protocol import expected_handshake
+    from agent.plugin.plugin_impl.cyrene_office.service import OfficeBridgeService
 
     service = OfficeBridgeService()
     socket = FakeWebSocket()
@@ -68,8 +68,8 @@ async def test_office_bridge_serializes_parallel_requests_per_session():
 
 @pytest.mark.asyncio
 async def test_office_bridge_routes_one_live_session_and_tracks_revision():
-    from cyrene.office.protocol import expected_handshake
-    from cyrene.office.service import OfficeBridgeService
+    from agent.plugin.plugin_impl.cyrene_office.protocol import expected_handshake
+    from agent.plugin.plugin_impl.cyrene_office.service import OfficeBridgeService
 
     service = OfficeBridgeService()
     socket = FakeWebSocket()
@@ -103,8 +103,8 @@ async def test_office_bridge_routes_one_live_session_and_tracks_revision():
 @pytest.mark.asyncio
 async def test_office_bridge_publishes_live_connection_selection_and_revision(monkeypatch):
     from cyrene.observability import debug
-    from cyrene.office.protocol import expected_handshake
-    from cyrene.office.service import OfficeBridgeService
+    from agent.plugin.plugin_impl.cyrene_office.protocol import expected_handshake
+    from agent.plugin.plugin_impl.cyrene_office.service import OfficeBridgeService
 
     events = []
 
@@ -143,7 +143,7 @@ async def test_office_bridge_publishes_live_connection_selection_and_revision(mo
 
 @pytest.mark.asyncio
 async def test_office_bridge_blocks_writes_from_an_outdated_addin_but_allows_context():
-    from cyrene.office.service import OfficeBridgeError, OfficeBridgeService
+    from agent.plugin.plugin_impl.cyrene_office.service import OfficeBridgeError, OfficeBridgeService
 
     service = OfficeBridgeService()
     socket = FakeWebSocket()
@@ -158,7 +158,7 @@ async def test_office_bridge_blocks_writes_from_an_outdated_addin_but_allows_con
 
 @pytest.mark.asyncio
 async def test_office_bridge_requires_session_when_multiple_decks_are_open():
-    from cyrene.office.service import OfficeBridgeError, OfficeBridgeService
+    from agent.plugin.plugin_impl.cyrene_office.service import OfficeBridgeError, OfficeBridgeService
 
     service = OfficeBridgeService()
     await service.register(FakeWebSocket(), {"host": "powerpoint", "document": {"name": "a.pptx"}})
@@ -174,7 +174,7 @@ async def test_office_bridge_requires_session_when_multiple_decks_are_open():
 def test_office_gateway_generates_tls_material_manifest_and_protected_assets(monkeypatch, tmp_path):
     from cryptography import x509
 
-    from cyrene.office.gateway import OfficeGatewayFiles, create_office_gateway_app
+    from agent.plugin.plugin_impl.cyrene_office.gateway import OfficeGatewayFiles, create_office_gateway_app
     from cyrene.runtime import settings_service
 
     def fake_read_public(namespace):
@@ -331,7 +331,7 @@ def test_semantic_slide_spec_compiles_geometry_without_model_coordinates():
 
 
 def test_semantic_image_is_never_silently_dropped_by_non_media_layout():
-    from cyrene.office.slide_layout import compile_slide_spec
+    from agent.plugin.plugin_impl.cyrene_office.slide_layout import compile_slide_spec
 
     spec = compile_slide_spec({
         "layout": "quote",
@@ -548,7 +548,7 @@ async def test_create_slides_rolls_back_completed_pages_after_later_failure(monk
 
 
 def test_powerpoint_addin_uses_typed_dispatch_without_eval():
-    source = (Path(__file__).parents[1] / "src/cyrene/office/static/taskpane.js").read_text(encoding="utf-8")
+    source = (Path(__file__).parents[1] / "src/agent/plugin/plugin_impl/cyrene_office/static/taskpane.js").read_text(encoding="utf-8")
 
     assert '"ppt.apply_batch": applyBatch' in source
     assert '"ppt.create_slide": createSlide' in source
@@ -656,7 +656,7 @@ def test_file_backend_edits_creates_and_undoes_a_real_pptx_package(
     tmp_path,
     real_pillow_modules,
 ):
-    from cyrene.office.file_engine import PptxFileEngine
+    from agent.plugin.plugin_impl.cyrene_office.file_engine import PptxFileEngine
 
     path = tmp_path / "deck.pptx"
     _write_minimal_pptx(path)
@@ -717,7 +717,7 @@ def test_file_backend_edits_creates_and_undoes_a_real_pptx_package(
 
 
 def test_file_backend_reuses_digest_until_file_identity_changes(tmp_path, monkeypatch):
-    from cyrene.office import file_engine
+    from agent.plugin.plugin_impl.cyrene_office import file_engine
 
     path = tmp_path / "digest-cache.pptx"
     _write_minimal_pptx(path)
@@ -747,7 +747,7 @@ def test_file_backend_reuses_digest_until_file_identity_changes(tmp_path, monkey
 
 
 def test_file_backend_precise_reads_persistent_refs_and_review_checks(tmp_path):
-    from cyrene.office.file_engine import PptxFileEngine
+    from agent.plugin.plugin_impl.cyrene_office.file_engine import PptxFileEngine
 
     path = tmp_path / "precise.pptx"
     _write_minimal_pptx(path)
@@ -781,7 +781,7 @@ def test_file_backend_precise_reads_persistent_refs_and_review_checks(tmp_path):
 
 
 def test_file_backend_groups_and_ungroups_with_the_canonical_batch_contract(tmp_path):
-    from cyrene.office.file_engine import PptxFileEngine
+    from agent.plugin.plugin_impl.cyrene_office.file_engine import PptxFileEngine
 
     path = tmp_path / "groups.pptx"
     _write_minimal_pptx(path)
@@ -817,7 +817,7 @@ def test_file_backend_groups_and_ungroups_with_the_canonical_batch_contract(tmp_
 
 @pytest.mark.asyncio
 async def test_file_backend_output_version_keeps_revision_across_multiple_created_slides(tmp_path):
-    from cyrene.office.file_engine import PptxFileEngine
+    from agent.plugin.plugin_impl.cyrene_office.file_engine import PptxFileEngine
     from agent.plugin.plugin_impl.cyrene_office import kit
 
     source = tmp_path / "source-version.pptx"
@@ -844,7 +844,7 @@ async def test_file_backend_output_version_keeps_revision_across_multiple_create
 
 
 def test_template_creation_and_replacement_have_the_same_file_semantics(tmp_path):
-    from cyrene.office.file_engine import PptxFileEngine
+    from agent.plugin.plugin_impl.cyrene_office.file_engine import PptxFileEngine
 
     path = tmp_path / "template-semantics.pptx"
     _write_minimal_pptx(path)
@@ -879,7 +879,7 @@ def test_template_creation_and_replacement_have_the_same_file_semantics(tmp_path
 
 
 def test_file_backend_native_table_notes_master_layout_and_import(tmp_path):
-    from cyrene.office.file_engine import PptxFileEngine
+    from agent.plugin.plugin_impl.cyrene_office.file_engine import PptxFileEngine
 
     target = tmp_path / "target.pptx"
     source = tmp_path / "source.pptx"
@@ -950,7 +950,7 @@ def test_file_backend_native_table_notes_master_layout_and_import(tmp_path):
 
 
 def test_file_backend_replaces_one_slide_from_presentation_and_keeps_single_undo(tmp_path):
-    from cyrene.office.file_engine import PptxFileEngine
+    from agent.plugin.plugin_impl.cyrene_office.file_engine import PptxFileEngine
 
     target = tmp_path / "replace-target.pptx"
     source = tmp_path / "replace-source.pptx"
@@ -988,8 +988,8 @@ def test_file_backend_replaces_one_slide_from_presentation_and_keeps_single_undo
 
 
 def test_macos_office_install_copies_manifest_to_powerpoint_wef(monkeypatch, tmp_path):
-    from cyrene.office import installation
-    from cyrene.office.gateway import OfficeGatewayFiles
+    from agent.plugin.plugin_impl.cyrene_office import installation
+    from agent.plugin.plugin_impl.cyrene_office.gateway import OfficeGatewayFiles
 
     files = OfficeGatewayFiles(tmp_path / "gateway", port=4943)
     files.ensure()
@@ -1013,8 +1013,8 @@ def test_macos_office_install_copies_manifest_to_powerpoint_wef(monkeypatch, tmp
 
 
 def test_windows_office_install_prepares_manifest_without_unsafe_registry_writes(monkeypatch, tmp_path):
-    from cyrene.office import installation
-    from cyrene.office.gateway import OfficeGatewayFiles
+    from agent.plugin.plugin_impl.cyrene_office import installation
+    from agent.plugin.plugin_impl.cyrene_office.gateway import OfficeGatewayFiles
 
     files = OfficeGatewayFiles(tmp_path / "gateway", port=4943)
     files.ensure()
@@ -1044,7 +1044,7 @@ def test_service_integrations_page_contains_powerpoint_install_controls():
 
 
 def test_office_integration_status_route_is_registered(monkeypatch):
-    from route.settings import office as office_routes
+    from agent.plugin.plugin_impl.cyrene_office import settings_routes as office_routes
 
     monkeypatch.setattr(office_routes, "integration_status", lambda: {
         "running": True,
@@ -1064,9 +1064,37 @@ def test_office_integration_status_route_is_registered(monkeypatch):
     }
 
 
+def test_disabled_office_pack_does_not_attach_routes_or_services(tmp_path):
+    from agent.plugin import (
+        PluginActivationState,
+        PluginApplicationHost,
+        PluginRegistry,
+    )
+    from agent.plugin.plugin_impl.cyrene_office import plugin_pack
+
+    registry = PluginRegistry(
+        include_core=False,
+        activation=PluginActivationState(packs={"cyrene_office": False}),
+    )
+    registry.register_pack(plugin_pack, source="test")
+    host = PluginApplicationHost(
+        app=FastAPI(),
+        registry=registry,
+        bot=None,
+        db_path=str(tmp_path / "app.db"),
+        data_directory=tmp_path / "data",
+        plugin_directory=tmp_path / "plugin_impl",
+    )
+    router = APIRouter()
+    host.attach(router)
+
+    assert not any(route.path.startswith("/api/settings/integrations/office") for route in router.routes)
+    assert host.service("office") is None
+
+
 def test_office_tool_error_is_structured_when_powerpoint_is_not_connected(monkeypatch):
     from agent.plugin.plugin_impl.cyrene_office import _shared
-    from cyrene.office.service import OfficeBridgeService
+    from agent.plugin.plugin_impl.cyrene_office.service import OfficeBridgeService
 
     monkeypatch.setattr(_shared, "get_office_bridge", lambda: OfficeBridgeService())
     monkeypatch.setattr(_shared.get_office_gateway_runtime(), "info", lambda: {"running": False, "manifest_path": "/tmp/cyrene-powerpoint-addin.xml"})
@@ -1075,3 +1103,21 @@ def test_office_tool_error_is_structured_when_powerpoint_is_not_connected(monkey
     assert payload["status"] == "error"
     assert payload["error_code"] == "office_not_connected"
     assert "setup" in payload
+
+
+def test_office_error_messages_follow_invocation_language_and_hide_raw_errors():
+    from agent.plugin.plugin_impl.cyrene_office import _shared
+    from agent.plugin.plugin_impl.cyrene_office.service import OfficeBridgeError
+
+    rendered = _shared._failure(
+        "ppt.context.get",
+        OfficeBridgeError(
+            "office_not_connected",
+            "ConnectionError: private bridge detail",
+        ),
+        PluginContext(data={"language": "zh"}),
+    )
+    payload = json.loads(rendered)
+
+    assert payload["message"] == "当前没有 PowerPoint 演示文稿连接到 Cyrene。"
+    assert "private bridge detail" not in rendered

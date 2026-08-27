@@ -15,6 +15,14 @@ function wbcLocalizedToolName(toolName) {
   return wbcT("toolName." + raw, raw);
 }
 
+function wbcParenthesize(value) {
+  var text = String(value || "");
+  if (!text) return "";
+  return workbenchServices.i18n().getLang() === "zh"
+    ? "（" + text + "）"
+    : "(" + text + ")";
+}
+
 function WbcQuestionPrompt({ pending, onAnswer, busy, trace }) {
   var pq = pending || {};
   var options = Array.isArray(pq.options) ? pq.options : [];
@@ -1096,7 +1104,7 @@ function WbcTraceCard({ trace, live, running, label, reasoning }) {
                           return toolKey;
                         })()}
                       </span>
-                      {previewText ? <small>（{previewText}）</small> : null}
+                      {previewText ? <small>{wbcParenthesize(previewText)}</small> : null}
                       {presentationKind !== "generic" ? <em className="wbc-tool-presentation-kind">{wbcT("workbenchChat.toolPresentation." + presentationKind, presentationKind)}</em> : null}
                       {isRunning && Number(entry.progressTotal) > 0 ? (
                         <span className="wbc-transfer-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(Number(entry.progress || 0) * 100)}>
@@ -1337,7 +1345,7 @@ function wbcPhase1ProgressDetail(entries) {
     var status = String(entry && entry.status || "").trim().toLowerCase();
     var failed = !!(entry && entry.failed) || ["failed", "error", "failure", "expired", "cancelled"].indexOf(status) >= 0;
     var mark = failed ? "×" : (status === "running" ? "◌" : "✓");
-    return [mark, text, preview ? "（" + wbcToolPreviewText(preview) + "）" : ""]
+    return [mark, text, preview ? wbcParenthesize(wbcToolPreviewText(preview)) : ""]
       .filter(Boolean)
       .join(" ");
   }).filter(Boolean).join("\n");
@@ -1631,93 +1639,4 @@ function wbcSaveWorkspaceOverride(key, path, ns) {
   } catch (e) {}
 }
 
-// One process-wide, revision-ordered catalog keeps every composer in sync with
-// pairing/grant changes without coupling chat selection to Settings state.
-var WbcRemoteDeviceCatalog = (function () {
-  var revision = -1;
-  var devices = [];
-  var listeners = new Set();
-  var pending = null;
-  var started = false;
-  var eventUnsubscribe = null;
-  var broadcast = null;
-
-  function snapshot() {
-    return { revision: revision, devices: devices.slice() };
-  }
-
-  function notify() {
-    var value = snapshot();
-    listeners.forEach(function (listener) {
-      try { listener(value); } catch (error) { console.error(error); }
-    });
-  }
-
-  function apply(payload) {
-    var nextRevision = Number(payload && payload.revision);
-    if (!Number.isFinite(nextRevision)) nextRevision = revision + 1;
-    if (nextRevision < revision) return snapshot();
-    revision = nextRevision;
-    devices = Array.isArray(payload && payload.devices) ? payload.devices.slice() : [];
-    notify();
-    return snapshot();
-  }
-
-  function refresh(options) {
-    var force = !!(options && options.force);
-    if (pending && !force) return pending;
-    var request = fetch("/api/remote/context-devices", { cache: "no-store" })
-      .then(function (response) {
-        if (!response.ok) throw new Error("HTTP " + response.status);
-        return response.json();
-      })
-      .then(apply)
-      .finally(function () {
-        if (pending === request) pending = null;
-      });
-    pending = request;
-    return request;
-  }
-
-  function invalidate(reason) {
-    refresh({ force: true }).catch(function () {});
-    if (broadcast) {
-      try { broadcast.postMessage({ type: "remote_devices_changed", reason: reason || "local" }); } catch (e) {}
-    }
-  }
-
-  function start() {
-    if (started) return;
-    started = true;
-    try {
-      eventUnsubscribe = workbenchServices.events().subscribe(function (event) {
-        if (event && event.type === "remote_devices_changed") invalidate(event.reason || "sse");
-      });
-    } catch (e) {}
-    window.addEventListener("cyrene:remote-devices-changed", function (event) {
-      invalidate((event && event.detail && event.detail.reason) || "local");
-    });
-    window.addEventListener("focus", function () { invalidate("focus"); });
-    document.addEventListener("visibilitychange", function () {
-      if (document.visibilityState === "visible") invalidate("visible");
-    });
-    if (typeof BroadcastChannel === "function") {
-      try {
-        broadcast = new BroadcastChannel("cyrene-remote-devices");
-        broadcast.onmessage = function () { refresh({ force: true }).catch(function () {}); };
-      } catch (e) {}
-    }
-    refresh().catch(function () {});
-  }
-
-  function subscribe(listener) {
-    start();
-    listeners.add(listener);
-    listener(snapshot());
-    return function () { listeners.delete(listener); };
-  }
-
-  return { subscribe: subscribe, refresh: refresh, invalidate: invalidate };
-})();
-
-export { WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRemoteDeviceCatalog, WbcRuntimeTranscript, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey }
+export { WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRuntimeTranscript, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey }

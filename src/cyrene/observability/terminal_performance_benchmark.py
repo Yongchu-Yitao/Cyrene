@@ -318,7 +318,7 @@ async def _run_case(
     root: Path, workload: str, subscribed: bool, total_bytes: int,
     output_limit: int,
 ) -> dict[str, Any]:
-    from cyrene.terminal.manager import TerminalManager
+    from agent.plugin.plugin_impl.cyrene_code.terminal.manager import TerminalManager
 
     case_root = root / f"{workload}-{'subscribed' if subscribed else 'unsubscribed'}"
     case_root.mkdir(parents=True)
@@ -506,7 +506,7 @@ async def _run_fairness_case(
     from websockets.asyncio.client import connect
     from websockets.asyncio.server import serve
 
-    from cyrene.terminal.manager import TerminalManager
+    from agent.plugin.plugin_impl.cyrene_code.terminal.manager import TerminalManager
 
     case_root = root / "multi-terminal-fairness"
     case_root.mkdir(parents=True)

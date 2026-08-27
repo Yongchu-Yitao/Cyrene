@@ -5,6 +5,20 @@ from pathlib import Path
 import pytest
 
 
+@pytest.mark.asyncio
+async def test_media_tool_requires_operational_application_service():
+    from agent.plugin import PluginContext
+    from agent.plugin.plugin_impl.cyrene_media.start_media_generation import (
+        _tool_start_media_generation,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="cyrene_media application service is unavailable",
+    ):
+        await _tool_start_media_generation({}, PluginContext())
+
+
 def test_media_tool_keeps_reference_sources_and_roles_in_provider_order(
     tmp_path,
     monkeypatch,
@@ -111,4 +125,17 @@ def test_media_tool_rejects_attachments_outside_the_current_chat(monkeypatch):
         media_tool._resolve_attachment_reference(
             "foreign-attachment",
             chat_attachment_ids={"current-attachment"},
+        )
+
+
+def test_media_validation_uses_the_invocation_language():
+    from agent.plugin import PluginContext
+    from agent.plugin.plugin_impl.cyrene_media import start_media_generation as media_tool
+
+    with pytest.raises(ValueError, match="必须是 image、video 或 music"):
+        media_tool._normalize_request(
+            {"kind": "document", "prompt": "test"},
+            index=0,
+            chat_attachment_ids=set(),
+            context=PluginContext(data={"language": "zh"}),
         )

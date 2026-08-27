@@ -1,6 +1,6 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_BUILTIN_AGENT_ID, WBC_BUILTIN_AGENT_INSTALLATION, WBC_COMMANDS, WBC_COMMAND_ICONS, WBC_ICONS, WBC_MODES, WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAgentAvailability, wbcAgentChatFlowSnapshot, wbcAgentDisplayName, wbcAttachmentTypeLabel, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcComposerAgentRow, wbcComposerSlashCommands, wbcCreateComposerVoiceFeedback, wbcCurrentModel, wbcDefaultAgentBinding, wbcErrorText, wbcFriendlyModelName, wbcHasAgentCapabilitySnapshot, wbcIsBuiltinAgent, wbcLocalizedModelDescription, wbcModeMeta, wbcNormalizePermissionMode, wbcPublishChatModelChanged, wbcReasoningEffortForModel, wbcStartVoiceRecorder, wbcSupportedReasoningEfforts, wbcT, wbcTranscribeVoiceBlob, wbcWorkspaceDisplayName } from "../../workbench-chat.jsx"
-import { WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, WbcRemoteDeviceCatalog, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey } from "./messages.jsx"
+import { WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey } from "./messages.jsx"
 import { WbcFileVisual, wbcCommandMeta } from "./file-resources.jsx"
 import { useWbcComposerAttachments } from "./composer-attachments.jsx"
 import { useWbcComposerAgentFlow } from "./composer-flow.jsx"
@@ -8,6 +8,14 @@ import { useWbcComposerAgentCatalog, useWbcComposerAgentConfig, useWbcComposerCo
 import { useWbcComposerVoice } from "./composer-voice.jsx"
 
 var WBC_CONTEXT_ACTIVATION_KEYS = ["mcpServers", "skills", "pluginPacks"];
+
+function wbcAuthoredContextTranslation(item, field) {
+  var translations = item && item.i18n && typeof item.i18n === "object" ? item.i18n : {};
+  var language = "en";
+  try { language = workbenchServices.i18n().getLang() || "en"; } catch (error) {}
+  var localized = translations[language] || translations[String(language).split("-")[0]] || {};
+  return String(localized && localized[field] || "");
+}
 
 function wbcNormalizeContextActivations(value) {
   var source = value && typeof value === "object" ? value : {};
@@ -18,6 +26,17 @@ function wbcNormalizeContextActivations(value) {
     }).filter(Boolean)));
   });
   return result;
+}
+
+function wbcContextCatalogItems(catalog, key) {
+  return catalog && typeof catalog === "object" && Array.isArray(catalog[key])
+    ? catalog[key] : [];
+}
+
+function wbcAvailableContextIds(items) {
+  return new Set((items || []).filter(function (item) {
+    return item && item.available === true;
+  }).map(function (item) { return String(item.id || ""); }).filter(Boolean));
 }
 
 function wbcParseSlashCommandText(text, commands) {
@@ -37,6 +56,16 @@ function wbcCommandOptionId(commandId) {
 // Workbench chat feature module with explicit ESM dependencies.
 function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind, compact, placeholder, runningPlaceholder, topOverlay, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
   var model = WorkbenchChatModel;
+  var dataStore = workbenchServices.data();
+  dataStore.useVersion();
+  var pluginModules = Array.isArray(dataStore.state.pluginModules)
+    ? dataStore.state.pluginModules : [];
+  var composerContextAvailable = pluginModules.indexOf("composer_context") >= 0;
+  var soulMarkerAvailable = composerContextAvailable && pluginModules.indexOf("soul") >= 0;
+  var agentsAvailable = pluginModules.indexOf("agents") >= 0;
+  var remoteMarkerAvailable = composerContextAvailable && pluginModules.indexOf("remote") >= 0;
+  var mcpMarkerAvailable = composerContextAvailable && pluginModules.indexOf("mcp") >= 0;
+  var skillsMarkerAvailable = composerContextAvailable && pluginModules.indexOf("skills") >= 0;
   var chatId = chat ? chat.id : "";
   var awaitingAnswer = !!(chat && chat.pendingQuestion && chat.pendingQuestion.id);
   var projectId = (project && project.id) || "";
@@ -45,7 +74,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   // window passes one so its draft/attachments never overwrite the main
   // window's for the same chat id.
   var draftNs = draftNamespace || "";
-  var agentPickerEnabled = typeof onDraftAgentChange === "function";
+  var agentPickerEnabled = agentsAvailable && typeof onDraftAgentChange === "function";
   var shouldClearOnSend = clearOnSend !== false;
   var workspaceContextKey = wbcWorkspaceContextKey(chatId, projectId);
   var [draft, setDraft] = useWbcState(function () { return wbcLoadDraft(chatId, draftNs); });
@@ -65,6 +94,33 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var agentOptions = agentCatalog.options;
   var agentOptionsLoaded = agentCatalog.loaded;
   var [contextState, setContextState] = useWbcState(null);
+  var [contextCatalogLoading, setContextCatalogLoading] = useWbcState(false);
+  var [contextCatalogLoaded, setContextCatalogLoaded] = useWbcState(false);
+  var [contextStateRevision, setContextStateRevision] = useWbcState(0);
+  var contextCatalogPayload = contextState && contextState.catalog && typeof contextState.catalog === "object"
+    ? contextState.catalog : null;
+  var contextOptions = contextState && contextState.options && typeof contextState.options === "object"
+    ? contextState.options : null;
+  var contextResponseAvailable = composerContextAvailable && !!contextCatalogPayload && !!contextOptions;
+  var soulAvailable = soulMarkerAvailable && contextResponseAvailable
+    && contextOptions.soul && contextOptions.soul.available === true;
+  var workspaceAvailable = contextResponseAvailable
+    && contextOptions.workspace && contextOptions.workspace.available === true;
+  var remoteAvailable = remoteMarkerAvailable && contextResponseAvailable
+    && contextOptions.remoteDevices && contextOptions.remoteDevices.available === true;
+  var mcpAvailable = mcpMarkerAvailable && contextResponseAvailable
+    && Array.isArray(contextCatalogPayload.mcpServers);
+  var skillsAvailable = skillsMarkerAvailable && contextResponseAvailable
+    && Array.isArray(contextCatalogPayload.skills);
+  var pluginPacksAvailable = contextResponseAvailable
+    && Array.isArray(contextCatalogPayload.pluginPacks);
+  var contextCatalog = {
+    mcpServers: mcpAvailable ? wbcContextCatalogItems(contextCatalogPayload, "mcpServers") : [],
+    skills: skillsAvailable ? wbcContextCatalogItems(contextCatalogPayload, "skills") : [],
+    pluginPacks: pluginPacksAvailable ? wbcContextCatalogItems(contextCatalogPayload, "pluginPacks") : [],
+  };
+  var remoteDevices = remoteAvailable
+    ? wbcContextCatalogItems(contextCatalogPayload, "remoteDevices") : [];
   var [soulActive, setSoulActive] = useWbcState(function () {
     return chat && typeof chat.soulActive === "boolean" ? chat.soulActive : true;
   });
@@ -75,16 +131,12 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     return String(chat && chat.workspaceOverride || "").trim()
       || wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);
   });
-  var [remoteDevices, setRemoteDevices] = useWbcState([]);
   var [remoteDeviceIds, setRemoteDeviceIds] = useWbcState(function () {
     return chat && Array.isArray(chat.remoteDeviceIds) ? chat.remoteDeviceIds.slice() : [];
   });
   var [contextActivations, setContextActivations] = useWbcState(function () {
     return wbcNormalizeContextActivations(chat && chat.contextActivations);
   });
-  var [contextCatalog, setContextCatalog] = useWbcState({ mcpServers: [], skills: [], pluginPacks: [] });
-  var [contextCatalogLoading, setContextCatalogLoading] = useWbcState(false);
-  var [contextCatalogLoaded, setContextCatalogLoaded] = useWbcState(false);
   var [contextCatalogPanel, setContextCatalogPanel] = useWbcState("");
   var taRef = useWbcRef(null);
   var composerBoxRef = useWbcRef(null);
@@ -96,7 +148,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var workspaceOverrideRef = useWbcRef(workspaceOverride);
   var remoteDeviceIdsRef = useWbcRef(remoteDeviceIds);
   var contextActivationsRef = useWbcRef(contextActivations);
-  var pendingRemoteContextRef = useWbcRef({});
   var prevWorkspaceContextKeyRef = useWbcRef(workspaceContextKey);
   var draftSaveTimerRef = useWbcRef(0);
   var pendingDraftSaveRef = useWbcRef(null);
@@ -200,32 +251,64 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   useWbcEffect(function () { contextActivationsRef.current = contextActivations; });
 
   useWbcEffect(function () {
+    if (!composerContextAvailable) {
+      setToolsOpen(false);
+      setCommand("");
+    }
+  }, [composerContextAvailable]);
+
+  useWbcEffect(function () {
+    if (!soulAvailable) {
+      setSoulActive(false);
+      return;
+    }
+    setSoulActive(chat && typeof chat.soulActive === "boolean"
+      ? chat.soulActive : contextOptions.soul.selected === true);
+  }, [soulAvailable, chatId, contextState]);
+
+  useWbcEffect(function () {
+    var next = wbcNormalizeContextActivations(chat && chat.contextActivations);
+    WBC_CONTEXT_ACTIVATION_KEYS.forEach(function (key) {
+      var allowed = wbcAvailableContextIds(contextCatalog[key]);
+      next[key] = next[key].filter(function (identity) { return allowed.has(identity); });
+    });
+    contextActivationsRef.current = next;
+    setContextActivations(next);
+    var allowedRemoteIds = wbcAvailableContextIds(remoteDevices);
+    var requestedRemoteIds = chat && Array.isArray(chat.remoteDeviceIds)
+      ? chat.remoteDeviceIds
+      : contextOptions && contextOptions.remoteDevices && Array.isArray(contextOptions.remoteDevices.selectedIds)
+        ? contextOptions.remoteDevices.selectedIds : [];
+    var nextRemoteIds = remoteAvailable
+      ? requestedRemoteIds.map(function (item) { return String(item || ""); })
+          .filter(function (identity) { return allowedRemoteIds.has(identity); })
+      : [];
+    remoteDeviceIdsRef.current = nextRemoteIds;
+    setRemoteDeviceIds(nextRemoteIds);
+    if (!workspaceAvailable) {
+      setWorkspaceActive(false);
+      setWorkspaceOverride("");
+    } else {
+      setWorkspaceActive(chat && typeof chat.workspaceActive === "boolean"
+        ? chat.workspaceActive : contextOptions.workspace.selected === true);
+      setWorkspaceOverride(String(chat && chat.workspaceOverride || "").trim()
+        || wbcLoadWorkspaceOverride(workspaceContextKey, draftNs));
+    }
+    if ((!mcpAvailable && !skillsAvailable && !pluginPacksAvailable) ||
+        (contextCatalogPanel === "mcpServers" && !mcpAvailable) ||
+        (contextCatalogPanel === "skills" && !skillsAvailable) ||
+        (contextCatalogPanel === "pluginPacks" && !pluginPacksAvailable)) {
+      setContextCatalogPanel("");
+    }
+  }, [chatId, contextState, workspaceAvailable, remoteAvailable, mcpAvailable, skillsAvailable, pluginPacksAvailable]);
+
+  useWbcEffect(function () {
     if (builtinContextCapabilities) return;
     var empty = wbcNormalizeContextActivations(null);
     contextActivationsRef.current = empty;
     setContextActivations(empty);
     setContextCatalogPanel("");
   }, [builtinContextCapabilities]);
-
-  useWbcEffect(function () {
-    if (!toolsOpen || !builtinContextCapabilities || contextCatalogLoaded || contextCatalogLoading) return undefined;
-    var cancelled = false;
-    setContextCatalogLoading(true);
-    workbenchServices.api().json("/api/workbench/context-capabilities", { toast: false }).then(function (payload) {
-      if (cancelled) return;
-      setContextCatalog({
-        mcpServers: Array.isArray(payload && payload.mcpServers) ? payload.mcpServers : [],
-        skills: Array.isArray(payload && payload.skills) ? payload.skills : [],
-        pluginPacks: Array.isArray(payload && payload.pluginPacks) ? payload.pluginPacks : [],
-      });
-      setContextCatalogLoaded(true);
-    }).catch(function (err) {
-      if (!cancelled) workbenchServices.api().toastError(err, wbcT("workbenchChat.contextCapabilitiesLoadFailed", "Failed to load context capabilities: "));
-    }).finally(function () {
-      if (!cancelled) setContextCatalogLoading(false);
-    });
-    return function () { cancelled = true; };
-  }, [toolsOpen, builtinContextCapabilities, contextCatalogLoaded]);
 
   useWbcEffect(function () {
     if (!builtinContextCapabilities || (draft.indexOf("/") !== 0 && !toolsOpen) || slashCommandCatalogLoaded || slashCommandCatalogLoading) return undefined;
@@ -236,7 +319,11 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       { toast: false }
     ).then(function (payload) {
       if (cancelled) return;
-      setSlashCommandCatalog(Array.isArray(payload && payload.commands) ? payload.commands : []);
+      var commands = Array.isArray(payload && payload.commands) ? payload.commands : [];
+      setSlashCommandCatalog(commands);
+      if (command && !commands.some(function (item) { return item && item.id === command; })) {
+        setCommand("");
+      }
       setSlashCommandCatalogLoaded(true);
     }).catch(function (err) {
       if (!cancelled) workbenchServices.api().toastError(err, wbcT("workbenchChat.slashCommandsLoadFailed", "Failed to load commands: "));
@@ -250,6 +337,29 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     setSlashCommandCatalog([]);
     setSlashCommandCatalogLoaded(false);
   }, [projectId]);
+
+  useWbcEffect(function () {
+    function invalidateComposerContext() {
+      setContextState(null);
+      setContextCatalogLoaded(false);
+      setContextCatalogPanel("");
+      setContextStateRevision(function (current) { return current + 1; });
+      setSlashCommandCatalog([]);
+      setSlashCommandCatalogLoaded(false);
+    }
+    function onPlatformEvent(event) {
+      if (event && event.type === "remote_devices_changed") invalidateComposerContext();
+    }
+    var unsubscribe;
+    try { unsubscribe = workbenchServices.events().subscribe(onPlatformEvent); } catch (error) {}
+    window.addEventListener("cyrene:plugins-changed", invalidateComposerContext);
+    window.addEventListener("cyrene:remote-devices-changed", invalidateComposerContext);
+    return function () {
+      window.removeEventListener("cyrene:plugins-changed", invalidateComposerContext);
+      window.removeEventListener("cyrene:remote-devices-changed", invalidateComposerContext);
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
 
   useWbcEffect(function () {
     if (draft.indexOf("/") !== 0 && !toolsOpen && !command && slashCommandCatalogLoaded) {
@@ -338,11 +448,15 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       setDraft(wbcLoadDraft(chatId, draftNs));
       setAttachments(wbcLoadAttachments(chatId, draftNs));
       setMode(wbcNormalizePermissionMode(chat && chat.permissionMode, "auto"));
-      setSoulActive(chat && typeof chat.soulActive === "boolean" ? chat.soulActive : true);
-      setWorkspaceActive(chat && typeof chat.workspaceActive === "boolean" ? chat.workspaceActive : true);
+      setSoulActive(soulAvailable && (chat && typeof chat.soulActive === "boolean"
+        ? chat.soulActive : contextOptions.soul.selected === true));
+      setWorkspaceActive(workspaceAvailable && (chat && typeof chat.workspaceActive === "boolean"
+        ? chat.workspaceActive : contextOptions.workspace.selected === true));
       setReasoningEffort(String(chat && chat.reasoningEffort || "").trim().toLowerCase());
-      setRemoteDeviceIds(chat && Array.isArray(chat.remoteDeviceIds) ? chat.remoteDeviceIds.slice() : []);
       var nextContextActivations = wbcNormalizeContextActivations(chat && chat.contextActivations);
+      if (!mcpAvailable) nextContextActivations.mcpServers = [];
+      if (!skillsAvailable) nextContextActivations.skills = [];
+      if (!pluginPacksAvailable) nextContextActivations.pluginPacks = [];
       setContextActivations(nextContextActivations);
       contextActivationsRef.current = nextContextActivations;
       setContextCatalogPanel("");
@@ -359,13 +473,13 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     var prevKey = prevWorkspaceContextKeyRef.current;
     if (prevKey === workspaceContextKey) return;
     var currentOverride = workspaceOverrideRef.current;
-    wbcSaveWorkspaceOverride(prevKey, currentOverride, draftNs);
-    var nextOverride = String(chat && chat.workspaceOverride || "").trim()
-      || wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);
+    if (workspaceAvailable) wbcSaveWorkspaceOverride(prevKey, currentOverride, draftNs);
+    var nextOverride = workspaceAvailable ? (String(chat && chat.workspaceOverride || "").trim()
+      || wbcLoadWorkspaceOverride(workspaceContextKey, draftNs)) : "";
     setWorkspaceOverride(nextOverride);
     workspaceOverrideRef.current = nextOverride;
     prevWorkspaceContextKeyRef.current = workspaceContextKey;
-  }, [workspaceContextKey]);
+  }, [workspaceContextKey, workspaceAvailable]);
 
   // Track running→false transitions where an error occurred to restore the draft
   // that was optimistically cleared in submit() — only for the main chat surface
@@ -386,73 +500,33 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }, [running, error, errorKind]);
 
   useWbcEffect(function () {
-    function onChatCreated(event) {
-      var detail = (event && event.detail) || {};
-      if (String(detail.projectId || "") !== String(projectId || "") || !detail.chatId) return;
-      var nextKey = wbcWorkspaceContextKey(detail.chatId, projectId);
-      wbcSaveWorkspaceOverride(nextKey, workspaceOverrideRef.current, draftNs);
-      if (remoteDeviceIdsRef.current.length) {
-        var selectedIds = remoteDeviceIdsRef.current.slice();
-        pendingRemoteContextRef.current[detail.chatId] = selectedIds;
-        wbcSaveRemoteContext(detail.chatId, selectedIds).finally(function () {
-          delete pendingRemoteContextRef.current[detail.chatId];
-        });
-      }
+    if (!composerContextAvailable) {
+      setContextState(null);
+      setContextCatalogLoaded(false);
+      setContextCatalogLoading(false);
+      return undefined;
     }
-    window.addEventListener("cyrene:wbc-chat-created", onChatCreated);
-    return function () { window.removeEventListener("cyrene:wbc-chat-created", onChatCreated); };
-  }, [projectId]);
-
-  function wbcRefreshCtxState() {
-    workbenchServices.api().json("/api/context/state", { toast: false }).then(function (s) {
-      setContextState(s);
-    }).catch(function () {});
-  }
-
-  useWbcEffect(function () {
     var cancelled = false;
-    workbenchServices.api().json("/api/context/state", { toast: false }).then(function (s) {
-      if (!cancelled) setContextState(s);
-    }).catch(function () {});
-    return function () { cancelled = true; };
-  }, [projectId, projectWorkspacePath]);
-
-  useWbcEffect(function () {
-    return WbcRemoteDeviceCatalog.subscribe(function (catalog) {
-      var nextDevices = Array.isArray(catalog.devices) ? catalog.devices : [];
-      setRemoteDevices(nextDevices);
-      // The first catalog snapshot is intentionally empty while its request is
-      // still pending. Do not treat that placeholder as a real revocation pass.
-      if (Number(catalog.revision) < 0) return;
-      setRemoteDeviceIds(function (current) {
-        var nextIds = current.filter(function (deviceId) {
-          var device = nextDevices.find(function (item) { return item.device_id === deviceId; });
-          return !!(device && device.eligible && !device.revoked_at);
-        });
-        if (nextIds.length !== current.length && chatId) {
-          remoteDeviceIdsRef.current = nextIds;
-          wbcSaveRemoteContext(chatId, nextIds).catch(function () {});
-        }
-        return nextIds;
-      });
+    var controller = new AbortController();
+    setContextCatalogLoading(true);
+    setContextCatalogLoaded(false);
+    workbenchServices.api().json("/api/context/state", { toast: false, signal: controller.signal }).then(function (s) {
+      if (cancelled) return;
+      var valid = s && typeof s === "object"
+        && s.catalog && typeof s.catalog === "object"
+        && s.options && typeof s.options === "object";
+      setContextState(valid ? s : null);
+      setContextCatalogLoaded(true);
+    }).catch(function (err) {
+      if (cancelled || (err && err.name === "AbortError")) return;
+      setContextState(null);
+      setContextCatalogLoaded(true);
+      workbenchServices.api().toastError(err, wbcT("workbenchChat.contextCapabilitiesLoadFailed", "Failed to load context capabilities: "));
+    }).finally(function () {
+      if (!cancelled) setContextCatalogLoading(false);
     });
-  }, [chatId]);
-
-  useWbcEffect(function () {
-    if (!chatId) {
-      setRemoteDeviceIds([]);
-      return undefined;
-    }
-    var pendingIds = pendingRemoteContextRef.current[chatId];
-    if (Array.isArray(pendingIds)) {
-      setRemoteDeviceIds(pendingIds);
-      return undefined;
-    }
-    // Session summaries now carry this field. Keeping it as the single source
-    // prevents a second GET from changing the badge after the chat is painted.
-    setRemoteDeviceIds(chat && Array.isArray(chat.remoteDeviceIds) ? chat.remoteDeviceIds.slice() : []);
-    return undefined;
-  }, [chatId]);
+    return function () { cancelled = true; controller.abort(); };
+  }, [projectId, projectWorkspacePath, composerContextAvailable, contextStateRevision]);
 
   function flushPendingDraftSave() {
     if (draftSaveTimerRef.current) {
@@ -495,10 +569,20 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     if (parsedSlash) text = parsedSlash.message;
     if (!text && attachments.length === 0 && !submittedCommand) return;
     var submittedContextActivations = wbcNormalizeContextActivations(contextActivationsRef.current);
+    if (!mcpAvailable) submittedContextActivations.mcpServers = [];
+    if (!skillsAvailable) submittedContextActivations.skills = [];
+    if (!pluginPacksAvailable) submittedContextActivations.pluginPacks = [];
     if (submittedDescriptor && submittedDescriptor.activation) {
       var activationKind = String(submittedDescriptor.activation.kind || "");
       var activationId = String(submittedDescriptor.activation.id || "");
-      if (submittedContextActivations[activationKind] && activationId && submittedContextActivations[activationKind].indexOf(activationId) < 0) {
+      var activationOwnerAvailable = (activationKind === "mcpServers" && mcpAvailable)
+        || (activationKind === "skills" && skillsAvailable)
+        || (activationKind === "pluginPacks" && pluginPacksAvailable);
+      if (activationOwnerAvailable
+          && wbcAvailableContextIds(contextCatalog[activationKind]).has(activationId)
+          && submittedContextActivations[activationKind]
+          && activationId
+          && submittedContextActivations[activationKind].indexOf(activationId) < 0) {
         submittedContextActivations[activationKind] = submittedContextActivations[activationKind].concat([activationId]);
         contextActivationsRef.current = submittedContextActivations;
         setContextActivations(submittedContextActivations);
@@ -511,11 +595,16 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       command: submittedCommand,
       model: agentManagedModels ? "" : selectedModelId,
       reasoningEffort: agentManagedModels ? "" : reasoningEffort,
-      workspaceOverride: workspaceOverride,
-      soulActive: personaOn,
-      workspaceActive: workspaceOn,
-      contextActivations: submittedContextActivations,
     };
+    if (soulAvailable) payload.soulActive = personaOn;
+    if (workspaceAvailable) {
+      payload.workspaceOverride = workspaceOverride;
+      payload.workspaceActive = workspaceOn;
+    }
+    if (composerContextAvailable) {
+      payload.remoteDeviceIds = remoteAvailable ? remoteDeviceIdsRef.current.slice() : [];
+      payload.contextActivations = submittedContextActivations;
+    }
     // Optimistically clear on send; restored in the running-transition effect
     // if the send fails (error). The quick-chat surface passes clearOnSend=false
     // and manages its own draft lifecycle.
@@ -610,11 +699,15 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     var label = String(declared.label || declared.id || "");
     var desc = String(declared.description || "");
     if (declared.group === "pluginPack" && declared.activation) {
-      label = wbcT("toolName." + declared.activation.id, label);
-      desc = wbcT("pluginPackDesc." + declared.activation.id, desc);
+      label = wbcAuthoredContextTranslation(declared, "name")
+        || wbcT("toolName." + declared.activation.id, label);
+      desc = wbcAuthoredContextTranslation(declared, "description")
+        || wbcT("pluginPackDesc." + declared.activation.id, desc);
     }
     return { ...declared, label: label, desc: desc };
-  }).filter(function (item) { return !!item.id; });
+  }).filter(function (item) {
+    return !!item.id && (item.group !== "pluginPack" || pluginPacksAvailable);
+  });
   var translatedModes = WBC_MODES.map(function (m) { return wbcModeMeta(m.id); });
   // Slash commands come from the Agent's declared command list when a
   // capability snapshot exists; the built-in Agent keeps its native set.
@@ -640,17 +733,17 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var showToolsMenu = (toolsOpen || slashDraftOpen) && !running && !awaitingAnswer;
   var activeCommand = command ? (slashPool.find(function (item) { return item.id === command; }) || wbcCommandMeta(command) || { id: command, label: command, desc: "" }) : null;
   var currentMode = wbcModeMeta(mode);
-  var personaOn = soulActive !== false;
-  var workspaceOn = workspaceActive !== false;
+  var personaOn = soulAvailable && soulActive !== false;
+  var workspaceOn = workspaceAvailable && workspaceActive !== false;
   var activeContextCapabilityCount = WBC_CONTEXT_ACTIVATION_KEYS.reduce(function (count, key) {
     return count + contextActivations[key].length;
   }, 0);
   var enabledContentCount = (personaOn ? 1 : 0) + (workspaceOn ? 1 : 0) + remoteDeviceIds.length + activeContextCapabilityCount;
   var contextCapabilityCategories = [
-    { key: "mcpServers", label: wbcT("workbenchChat.contextMcp", "MCP servers"), icon: WBC_ICONS.layers, items: contextCatalog.mcpServers },
-    { key: "skills", label: wbcT("workbenchChat.contextSkills", "Skills"), icon: WBC_ICONS.book, items: contextCatalog.skills },
-    { key: "pluginPacks", label: wbcT("workbenchChat.contextPluginPacks", "Plugin packs"), icon: WBC_ICONS.tool, items: contextCatalog.pluginPacks },
-  ];
+    mcpAvailable && { key: "mcpServers", label: wbcT("workbenchChat.contextMcp", "MCP servers"), icon: WBC_ICONS.layers, items: contextCatalog.mcpServers },
+    skillsAvailable && { key: "skills", label: wbcT("workbenchChat.contextSkills", "Skills"), icon: WBC_ICONS.book, items: contextCatalog.skills },
+    pluginPacksAvailable && { key: "pluginPacks", label: wbcT("workbenchChat.contextPluginPacks", "Plugin packs"), icon: WBC_ICONS.tool, items: contextCatalog.pluginPacks },
+  ].filter(Boolean);
 
   useWbcEffect(function () {
     setSlashActiveIndex(function (current) {
@@ -723,6 +816,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     : wbcSupportedReasoningEfforts(selectedModel);
 
   function wbcTogglePersona() {
+    if (!soulAvailable) return;
     var previous = personaOn;
     var next = !previous;
     setSoulActive(next);
@@ -736,6 +830,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }
 
   function wbcAddWorkspace(path) {
+    if (!workspaceAvailable) return;
     var selectedPath = String(path || "").trim();
     var previousOverride = workspaceOverride;
     var previousActive = workspaceOn;
@@ -763,6 +858,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }
 
   function wbcRemoveWorkspace() {
+    if (!workspaceAvailable) return;
     var previous = workspaceOn;
     setWorkspaceActive(false);
     if (!chatId) return;
@@ -776,6 +872,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }
 
   function wbcPickWorkspace() {
+    if (!workspaceAvailable) return;
     setToolsOpen(false);
     if (
       window.cyrene &&
@@ -796,19 +893,23 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }
 
   function wbcSaveRemoteContext(targetChatId, nextDeviceIds) {
-    var normalized = Array.from(new Set(nextDeviceIds || []));
+    if (!remoteAvailable) {
+      remoteDeviceIdsRef.current = [];
+      setRemoteDeviceIds([]);
+      return Promise.resolve();
+    }
+    var allowed = wbcAvailableContextIds(remoteDevices);
+    var normalized = Array.from(new Set((nextDeviceIds || []).map(function (item) {
+      return String(item || "");
+    }).filter(function (identity) { return allowed.has(identity); })));
+    remoteDeviceIdsRef.current = normalized;
     setRemoteDeviceIds(normalized);
     if (!targetChatId) {
       return Promise.resolve();
     }
-    return workbenchServices.api().fetch(
-      "/api/workbench/chats/" + encodeURIComponent(targetChatId) + "/remote-context",
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ device_ids: normalized }),
-      }
-    ).then(function () {}, function (err) {
+    return model.updateChatPreferences(targetChatId, { remoteDeviceIds: normalized }).then(function (nextChat) {
+      if (chat && chat.id === targetChatId && nextChat) Object.assign(chat, nextChat);
+    }, function (err) {
       workbenchServices.api().toastError(err, wbcT("workbenchChat.remoteContextFailed", "Failed to update remote context: "));
       throw err;
     });
@@ -821,20 +922,17 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       ? remoteDeviceIds.filter(function (item) { return item !== deviceId; })
       : remoteDeviceIds.concat([deviceId]);
     wbcSaveRemoteContext(chatId, nextIds).catch(function () {
-      setRemoteDeviceIds(previousIds);
-    });
-  }
-
-  function wbcRemoveRemoteDevice(deviceId) {
-    var previousIds = remoteDeviceIds.slice();
-    var nextIds = remoteDeviceIds.filter(function (item) { return item !== deviceId; });
-    wbcSaveRemoteContext(chatId, nextIds).catch(function () {
+      remoteDeviceIdsRef.current = previousIds;
       setRemoteDeviceIds(previousIds);
     });
   }
 
   function wbcToggleContextActivation(kind, identity) {
     if (WBC_CONTEXT_ACTIVATION_KEYS.indexOf(kind) < 0 || !identity) return;
+    if ((kind === "mcpServers" && !mcpAvailable)
+        || (kind === "skills" && !skillsAvailable)
+        || (kind === "pluginPacks" && !pluginPacksAvailable)) return;
+    if (!wbcAvailableContextIds(contextCatalog[kind]).has(identity)) return;
     var previous = wbcNormalizeContextActivations(contextActivationsRef.current);
     var next = wbcNormalizeContextActivations(previous);
     var active = next[kind].indexOf(identity) >= 0;
@@ -1069,7 +1167,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           )}
           {!compact && (
             <span className="wbc-pop-anchor wbc-tools-anchor" ref={toolsPickerRef}>
-              <button
+              {composerContextAvailable ? <button
                 type="button"
                 data-tour="chat_tools"
                 className={"wbc-composer-icon wbc-tools-trigger" + (enabledContentCount > 0 ? " has-content" : "") + (showToolsMenu ? " active" : "")}
@@ -1085,7 +1183,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
               >
                 <span className="wbc-tools-trigger-icon" aria-hidden="true">{WBC_ICONS.layers}</span>
                 {enabledContentCount > 0 ? <span className="wbc-tools-trigger-count" aria-hidden="true">{enabledContentCount}</span> : null}
-              </button>
+              </button> : null}
               {showToolsMenu && (
                 <div className="wbc-popmenu wbc-tools-menu" role={toolsOpen ? "menu" : "presentation"}>
                   {toolsOpen && <>
@@ -1097,15 +1195,15 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                       {wbcT("workbenchChat.contentItems", "Content")}
                     </div>
                     <div className="wbc-tools-content-list">
-                      <button type="button" className={"wbc-tools-enabled-row" + (personaOn ? " active" : "")} role="menuitemcheckbox" aria-checked={personaOn} onClick={wbcTogglePersona}>
+                      {soulAvailable ? <button type="button" className={"wbc-tools-enabled-row" + (personaOn ? " active" : "")} role="menuitemcheckbox" aria-checked={personaOn} onClick={wbcTogglePersona}>
                         <span className="wbc-tools-row-icon">{WBC_ICONS.spark}</span>
                         <span className="wbc-tools-row-copy">
                           <span>{wbcT("workbenchChat.persona", "Persona")}</span>
                           <small>{wbcT("workbenchChat.personaDescription", "Cyrene persona settings")}</small>
                         </span>
                         {personaOn ? <span className="wbc-tools-row-check">{WBC_ICONS.check}</span> : null}
-                      </button>
-                      {workspaceOptions.map(function (option) {
+                      </button> : null}
+                      {workspaceAvailable && workspaceOptions.map(function (option) {
                         var selected = workspaceOn && option.path === wsDir;
                         return (
                           <button key={option.path} type="button" className={"wbc-tools-enabled-row" + (selected ? " active" : "")} role="menuitemcheckbox" aria-checked={selected} onClick={function () {
@@ -1121,23 +1219,22 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                           </button>
                         );
                       })}
-                      <button type="button" className="wbc-tools-enabled-row wbc-tools-choose-row" role="menuitem" onClick={wbcPickWorkspace}>
+                      {workspaceAvailable ? <button type="button" className="wbc-tools-enabled-row wbc-tools-choose-row" role="menuitem" onClick={wbcPickWorkspace}>
                         <span className="wbc-tools-row-icon">{WBC_ICONS.plus}</span>
                         <span className="wbc-tools-row-copy"><span>{wbcT("workbenchChat.chooseDirectory", "Choose directory…")}</span></span>
-                      </button>
-                      {remoteDevices.map(function (device) {
-                        var selected = remoteDeviceIds.indexOf(device.device_id) >= 0;
-                        var eligible = !!device.eligible;
-                        var stateLabel = device.state === "syncing_grants"
-                          ? wbcT("workbenchChat.remoteDeviceSyncing", "Syncing permissions…")
-                          : device.state === "offline"
-                            ? wbcT("workbenchChat.remoteDeviceOffline", "Offline · available when reconnected")
-                            : wbcT("workbenchChat.remoteDeviceHint", "{count} granted capabilities", { count: (device.received_capabilities || []).length });
+                      </button> : null}
+                      {remoteAvailable && remoteDevices.map(function (device) {
+                        var deviceId = String(device.id || "");
+                        var selected = remoteDeviceIds.indexOf(deviceId) >= 0;
+                        var eligible = device.available === true;
+                        var stateLabel = eligible
+                          ? wbcT("workbenchChat.remoteDeviceHint", "{count} granted capabilities", { count: (device.capabilities || []).length })
+                          : wbcT("workbenchChat.contextCapabilityDisabled", "Disabled in settings");
                         return (
-                          <button key={device.device_id} type="button" disabled={!eligible} className={"wbc-tools-enabled-row" + (selected ? " active" : "")} role="menuitemcheckbox" aria-checked={selected} onClick={function () { wbcToggleRemoteDevice(device.device_id); }}>
+                          <button key={deviceId} type="button" disabled={!eligible} className={"wbc-tools-enabled-row" + (selected ? " active" : "")} role="menuitemcheckbox" aria-checked={selected} onClick={function () { wbcToggleRemoteDevice(deviceId); }}>
                             <span className="wbc-tools-row-icon">{WBC_ICONS.device}</span>
                             <span className="wbc-tools-row-copy">
-                              <span>{device.display_name || device.device_id}</span>
+                              <span>{device.name || deviceId}</span>
                               <small>{stateLabel}</small>
                             </span>
                             {selected ? <span className="wbc-tools-row-check">{WBC_ICONS.check}</span> : null}
@@ -1146,7 +1243,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                       })}
                     </div>
                   </section>
-                  <section className="wbc-tools-section wbc-tools-context-capabilities" aria-label={wbcT("workbenchChat.contextCapabilities", "Context capabilities")}>
+                  {composerContextAvailable ? <section className="wbc-tools-section wbc-tools-context-capabilities" aria-label={wbcT("workbenchChat.contextCapabilities", "Context capabilities")}>
                     <div className="wbc-tools-section-title">
                       {wbcT("workbenchChat.contextCapabilities", "Context capabilities")}
                     </div>
@@ -1154,10 +1251,13 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                       <div className="wbc-tools-empty">{wbcT("workbenchChat.contextCapabilitiesBuiltinOnly", "Context capabilities are available with the built-in Cyrene Agent.")}</div>
                     ) : contextCatalogLoading && !contextCatalogLoaded ? (
                       <div className="wbc-tools-context-loading" role="status"><span className="wb-spinner small" />{wbcT("workbenchChat.contextCapabilitiesLoading", "Loading capabilities…")}</div>
+                    ) : !contextResponseAvailable ? (
+                      <div className="wbc-tools-empty">{wbcT("workbenchChat.contextCapabilitiesEmpty", "Nothing available in this category.")}</div>
                     ) : (
                       <div className="wbc-tools-context-categories">
                         {contextCapabilityCategories.map(function (category) {
                           var activeCount = contextActivations[category.key].length;
+                          var availableCount = category.items.filter(function (item) { return item && item.available === true; }).length;
                           var expanded = contextCatalogPanel === category.key;
                           return (
                             <div className="wbc-tools-context-category" key={category.key}>
@@ -1167,7 +1267,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                                   <span>{category.label}</span>
                                   <small>{activeCount
                                     ? wbcT("workbenchChat.contextCapabilitiesActive", "{count} active", { count: activeCount })
-                                    : wbcT("workbenchChat.contextCapabilitiesAvailable", "{count} available", { count: category.items.length })}</small>
+                                    : wbcT("workbenchChat.contextCapabilitiesAvailable", "{count} available", { count: availableCount })}</small>
                                 </span>
                                 <span className="wbc-tools-context-chevron" aria-hidden="true">{expanded ? WBC_ICONS.chevronDown : WBC_ICONS.chevronRight}</span>
                               </button>
@@ -1177,15 +1277,15 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                                     var identity = String(item.id || "");
                                     var selected = contextActivations[category.key].indexOf(identity) >= 0;
                                     var itemLabel = category.key === "pluginPacks"
-                                      ? wbcT("toolName." + identity, item.name || identity)
+                                      ? wbcAuthoredContextTranslation(item, "name") || wbcT("toolName." + identity, item.name || identity)
                                       : String(item.name || identity);
                                     var itemDescription = category.key === "pluginPacks"
-                                      ? wbcT("pluginPackDesc." + identity, item.description || "")
+                                      ? wbcAuthoredContextTranslation(item, "description") || wbcT("pluginPackDesc." + identity, item.description || "")
                                       : String(item.description || item.status || "");
                                     return (
-                                      <button key={identity} type="button" disabled={!item.enabled && !selected} className={"wbc-tools-enabled-row wbc-tools-context-option" + (selected ? " active" : "")} role="menuitemcheckbox" aria-checked={selected} title={itemDescription} onClick={function () { wbcToggleContextActivation(category.key, identity); }}>
+                                      <button key={identity} type="button" disabled={item.available !== true} className={"wbc-tools-enabled-row wbc-tools-context-option" + (selected ? " active" : "")} role="menuitemcheckbox" aria-checked={selected} title={itemDescription} onClick={function () { wbcToggleContextActivation(category.key, identity); }}>
                                         <span className="wbc-tools-row-icon">{category.icon}</span>
-                                        <span className="wbc-tools-row-copy"><span>{itemLabel}</span><small>{itemDescription || (!item.enabled ? wbcT("workbenchChat.contextCapabilityDisabled", "Disabled in settings") : identity)}</small></span>
+                                        <span className="wbc-tools-row-copy"><span>{itemLabel}</span><small>{itemDescription || (item.available !== true ? wbcT("workbenchChat.contextCapabilityDisabled", "Disabled in settings") : identity)}</small></span>
                                         {selected ? <span className="wbc-tools-row-check">{WBC_ICONS.check}</span> : null}
                                       </button>
                                     );
@@ -1197,7 +1297,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                         })}
                       </div>
                     )}
-                  </section>
+                  </section> : null}
                   </>}
                   <section
                     className="wbc-tools-section wbc-tools-commands"

@@ -28,6 +28,13 @@
   border-bottom: 0;
 }
 
+/* Usage is one of the densest settings surfaces. Let it use the available
+   workspace width so its data cards can reflow instead of being locked to the
+   generic settings-panel measure. */
+.settings-overlay .settings-panel.wb-usage-settings {
+  width: min(100%, 1120px);
+}
+
 .settings-overlay .wb-usage-settings > .wb-section-block > .wb-section-block-head {
   display: block;
   margin-bottom: 12px;
@@ -246,7 +253,7 @@
 
 .wb-budget-model-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
   gap: 12px;
 }
 
@@ -354,7 +361,7 @@
 
 .wb-provider-usage-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
   gap: 12px;
   align-items: start;
 }
@@ -387,6 +394,7 @@
 .wb-provider-usage-card-head strong {
   color: var(--wb-text);
   font-size: calc(14px * var(--wb-ui-font-scale, 1));
+  overflow-wrap: anywhere;
 }
 
 .wb-provider-usage-card-head small,
@@ -404,6 +412,7 @@
   background: color-mix(in srgb, var(--wb-line) 62%, transparent);
   font-size: calc(10px * var(--wb-ui-font-scale, 1));
   font-weight: 650;
+  white-space: nowrap;
 }
 
 .wb-provider-usage-state.is-ok {
@@ -423,7 +432,7 @@
 
 .wb-provider-balance-list {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 6rem), 1fr));
   gap: 10px;
   margin-top: 14px;
 }
@@ -453,6 +462,7 @@
 
 .wb-provider-balance small {
   color: var(--wb-muted);
+  overflow-wrap: anywhere;
 }
 
 .wb-provider-quota-list {
@@ -474,19 +484,28 @@
 
 .wb-provider-quota-label {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 6px;
 }
 
+.wb-provider-quota-label span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .wb-provider-quota-label strong {
+  flex: 0 0 auto;
   color: var(--wb-text);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .wb-provider-quota-window small {
   display: block;
   margin-top: 5px;
+  overflow-wrap: anywhere;
 }
 
 .wb-provider-usage-card > .wb-hint,
@@ -514,10 +533,6 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .wb-budget-model-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .wb-budget-model-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -526,7 +541,6 @@
     height: 260px;
   }
 
-  .wb-provider-usage-grid,
   .wb-provider-balance-list {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1549,11 +1563,6 @@ html[data-density="compact"] .wbc-page {
   color: var(--wb-green);
 }
 
-.wb-init-back-board {
-  flex: 0 0 auto;
-  align-self: flex-start;
-}
-
 @media (max-width: 1320px) {
   .workbench-grid.is-task-board {
     grid-template-columns: var(--wb-rail-w) minmax(0, 1fr);
@@ -1600,4 +1609,3 @@ html[data-density="compact"] .wbc-page {
     width: 100%;
   }
 }
-

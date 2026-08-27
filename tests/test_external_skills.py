@@ -1,5 +1,5 @@
 def test_external_skill_prompt_discloses_only_names_and_ids(monkeypatch):
-    from cyrene.learning import skills
+    from agent.plugin.plugin_impl.cyrene_skills import skills
 
     first = "A" * 25_000
     second = "B" * 25_000
@@ -37,7 +37,7 @@ def test_external_skill_prompt_discloses_only_names_and_ids(monkeypatch):
 
 
 def test_read_skill_text_defaults_to_the_complete_file(tmp_path):
-    from cyrene.learning.skills import read_skill_text
+    from agent.plugin.plugin_impl.cyrene_skills.skills import read_skill_text
 
     content = "技能说明" * 10_000
     path = tmp_path / "SKILL.md"

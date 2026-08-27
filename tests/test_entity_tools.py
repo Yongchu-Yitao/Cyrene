@@ -109,6 +109,46 @@ async def test_seeded_entity_pack_owns_session_and_application_backend(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_entity_pack_mounts_attention_context_only_for_proactive_runs(tmp_path):
+    from agent.context import ContextStoreRouter
+    from agent.plugin import PluginSetupContext
+    from agent.plugin.plugin_impl.cyrene_entity import setup
+
+    class Entities:
+        async def query(self, **_filters):
+            return [{"title": "Publish release"}]
+
+        async def list(self, **_filters):
+            return [{
+                "title": "Choose rollout strategy",
+                "type": "decision",
+                "last_referenced_at": "2000-01-01T00:00:00+00:00",
+                "metadata": {},
+            }]
+
+    store = ContextStoreRouter(tmp_path / "context")
+    tree = store.create_tree(tree_id="proactive", root_id="root")
+    hooks = store.hooks_for(tree.id)
+    setup(PluginSetupContext(
+        data_directory=tmp_path / "data",
+        plugin_directory=tmp_path / "plugins",
+        workspace=tmp_path,
+        tree=store,
+        tree_id=tree.id,
+        root_id=tree.root_id,
+        hooks=hooks,
+        data={},
+        services={"entities": Entities()},
+    ))
+
+    assert await hooks.session_start({"metadata": {}}) == ""
+    mounted = await hooks.session_start({"metadata": {"proactive": True}})
+    assert "Publish release" in mounted
+    assert "Choose rollout strategy" in mounted
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_entity_pack_follows_toolbox_chain_and_shares_service_data(tmp_path):
     from agent.plugin import PluginContext, PluginRegistry, PluginRuntime
     from agent.plugin.plugin_impl.cyrene_entity import plugin_pack
@@ -229,10 +269,18 @@ async def test_entity_pack_follows_toolbox_chain_and_shares_service_data(tmp_pat
 async def test_entity_service_coordinates_reminders_and_candidate_scope(tmp_path):
     from cyrene.runtime.database import init_db
     from agent.plugin.plugin_impl.cyrene_entity.service import EntityService
+    from agent.plugin.plugin_impl.cyrene_schedule.service import ScheduleRuntimeService
 
     db_path = str(tmp_path / "entities.db")
     await init_db(db_path)
-    service = EntityService(db_path, reminder_chat_id=42, origin_session_id="session-2")
+    schedules = ScheduleRuntimeService(db_path)
+    await schedules.ensure_ready()
+    service = EntityService(
+        db_path,
+        reminder_chat_id=42,
+        origin_session_id="session-2",
+        reminders=schedules,
+    )
 
     entity = await service.create(
         type="task",
@@ -256,12 +304,12 @@ async def test_entity_service_coordinates_reminders_and_candidate_scope(tmp_path
 
     updated = await service.update(entity["id"], due_date="2030-02-03T04:05:06+00:00")
     assert updated is not None
-    reminder = await service.scheduler.get(task_id)
+    reminder = await schedules.reminder(task_id)
     assert reminder is not None
     assert reminder.next_run == "2030-02-03T04:05:06+00:00"
 
     assert await service.delete(entity["id"]) is True
-    reminder = await service.scheduler.get(task_id)
+    reminder = await schedules.reminder(task_id)
     assert reminder is not None
     assert reminder.status == "cancelled"
 
@@ -281,10 +329,10 @@ async def test_entity_service_coordinates_reminders_and_candidate_scope(tmp_path
     assert promoted[0]["project_id"] == "project-scope"
 
     class FailingScheduler:
-        async def create(self, **_values):
+        async def create_reminder(self, **_values):
             raise RuntimeError("scheduler unavailable")
 
-    failing_service = EntityService(db_path, scheduler=FailingScheduler())
+    failing_service = EntityService(db_path, reminders=FailingScheduler())
     with pytest.raises(RuntimeError, match="scheduler unavailable"):
         await failing_service.create(
             type="task",
@@ -294,3 +342,24 @@ async def test_entity_service_coordinates_reminders_and_candidate_scope(tmp_path
             project_id="project-scope",
         )
     assert await failing_service.query("不能留下半条记录") == []
+
+
+@pytest.mark.asyncio
+async def test_entity_reminder_rejects_when_schedule_plugin_is_unavailable(
+    tmp_path,
+    monkeypatch,
+):
+    from agent.plugin.plugin_impl.cyrene_entity.service import EntityService
+
+    monkeypatch.setattr("agent.plugin.active_plugin_service", lambda _name: None)
+    service = EntityService(str(tmp_path / "entities.db"))
+    await service.startup()
+
+    with pytest.raises(RuntimeError, match="unavailable or disabled"):
+        await service.create(
+            type="task",
+            title="没有 Schedule 插件的提醒",
+            source="explicit",
+            due_date="2031-01-01T00:00:00+00:00",
+        )
+    assert await service.query("没有 Schedule 插件的提醒") == []

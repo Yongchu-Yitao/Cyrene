@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from types import ModuleType
 from typing import Any
 
-from agent.plugin import Plugin, PluginPack
+from agent.plugin import Plugin, PluginApplicationContext, PluginPack
 
 from . import (
     analysis,
@@ -20,7 +20,11 @@ from . import (
     show_shell,
     start_shell,
 )
-from .services import setup
+from .services import setup, setup_application
+
+
+def application_setup(context: PluginApplicationContext) -> None:
+    setup_application(context)
 
 
 def _plugin(
@@ -76,8 +80,9 @@ plugin_pack = PluginPack(
     plugins=tuple(_module_plugin(module) for module in _shell_modules)
     + tuple(_plugin(definition, handler) for definition, handler in _declarations),
     setup=setup,
+    application_setup=application_setup,
 )
 if len(plugin_pack.plugins) != 19:
     raise RuntimeError("code pack must contain exactly 19 Plugins")
 
-__all__ = ["plugin_pack"]
+__all__ = ["application_setup", "plugin_pack"]

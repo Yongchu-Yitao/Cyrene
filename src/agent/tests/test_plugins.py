@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import httpx
+import pytest
 
 from agent.context import ContextStoreRouter
 from agent.hook import POST_TOOL_USE
@@ -19,6 +20,8 @@ from agent.plugin import (
     PluginRegistry,
     PluginRuntime,
     PluginCustomizationState,
+    PluginUnavailableError,
+    ensure_model_router,
 )
 from agent.plugin.core_impl import PermissionReviewPlugin
 
@@ -72,7 +75,7 @@ def test_tool_customization_keeps_stable_identity_and_controls_discovery():
         )
         assert updated is not None
         assert updated.plugin.canonical_name == "WeatherNow"
-        assert updated.plugin.localized("zh") == ("当前天气", "读取天气")
+        assert updated.plugin.localized("zh") == ("当前天气", "Use the local station")
         assert {
             item["function"]["name"]
             for item in registry.direct_tool_definitions()
@@ -81,6 +84,9 @@ def test_tool_customization_keeps_stable_identity_and_controls_discovery():
         assert "weather" not in listing.value["packs"]
         called = await runtime.call("LocalWeather", {})
         assert called.success is True and called.value == "sunny"
+        canonical_called = await runtime.call_canonical("WeatherNow", {})
+        assert canonical_called.success is True
+        assert canonical_called.value == "sunny"
 
         registry.set_plugin_enabled("WeatherNow", False)
         assert registry.plugin_enabled("LocalWeather") is False
@@ -92,6 +98,73 @@ def test_tool_customization_keeps_stable_identity_and_controls_discovery():
         )
 
     run(scenario())
+
+
+def test_plugin_activation_defaults_come_from_contribution_metadata():
+    async def handler(_arguments, _context):
+        return "ok"
+
+    registry = PluginRegistry(include_core=False)
+    registry.register_pack(
+        PluginPack(
+            id="default_off",
+            description="default off",
+            plugins=(Plugin(
+                name="OptInTool",
+                description="opt in",
+                input_schema={"type": "object", "properties": {}},
+                handler=handler,
+                metadata={"default_enabled": False},
+            ),),
+        ),
+        source="test",
+    )
+
+    assert registry.plugin_configured_enabled("OptInTool") is False
+    assert registry.plugin_enabled("OptInTool") is False
+    registry.configure_activation(plugins={"OptInTool": True}, packs={})
+    assert registry.plugin_enabled("OptInTool") is True
+
+
+def test_user_model_plugins_are_mutable_but_core_model_router_stays_locked():
+    async def handler(_arguments, _context):
+        return {}
+
+    registry = PluginRegistry()
+    ensure_model_router(registry)
+    provider = Plugin(
+        name="MutableProvider",
+        description="provider",
+        input_schema={"type": "object", "additionalProperties": True},
+        handler=handler,
+        kind="model",
+        metadata={"provider": {"id": "mutable"}},
+    )
+    registry.register_pack(
+        PluginPack(
+            id="mutable_models",
+            description="models",
+            plugins=(provider,),
+        ),
+        source="test",
+    )
+
+    assert registry.plugin_locked("CyreneModelRouter") is True
+    assert registry.plugin_locked("MutableProvider") is False
+    assert registry.pack_locked("mutable_models") is False
+    registry.set_plugin_enabled("MutableProvider", False)
+    assert registry.plugin_enabled("MutableProvider") is False
+    registry.set_plugin_enabled("MutableProvider", True)
+    customized = registry.customize_tool(
+        "MutableProvider",
+        {"name": "CustomizedProvider", "description": "customized"},
+    )
+    assert customized is not None
+    assert customized.plugin.name == "CustomizedProvider"
+    assert registry.customize_tool(
+        "MutableProvider",
+        {"deleted": True},
+    ) is None
 
 
 def test_registry_includes_core_and_loads_user_tool_pack(tmp_path):
@@ -160,6 +233,47 @@ def test_bad_user_pack_isolated_as_load_failure(tmp_path):
     assert registry.list_packs() == ()
 
 
+def test_reload_failure_quarantines_stale_session_registry_until_it_refreshes(
+    tmp_path,
+):
+    root = tmp_path / "plugin_impl"
+    root.mkdir()
+    standalone = root / "shared.py"
+
+    def write_plugin(value: str) -> None:
+        standalone.write_text(
+            f'''\
+from agent.plugin import Plugin
+plugin = Plugin(
+    name="SharedTool",
+    description="shared",
+    input_schema={{"type": "object", "properties": {{}}}},
+    handler=lambda _arguments, _context: "{value}",
+)
+''',
+            encoding="utf-8",
+        )
+
+    write_plugin("old")
+    application_registry = PluginRegistry(include_core=False)
+    session_registry = PluginRegistry(include_core=False)
+    assert application_registry.load_directory(root) == ()
+    assert session_registry.load_directory(root) == ()
+
+    standalone.write_text("plugin = None\n", encoding="utf-8")
+    assert len(application_registry.refresh_directory(root)) == 1
+    assert application_registry.list_plugins() == ()
+    with pytest.raises(PluginUnavailableError, match="Plugin is disabled: SharedTool"):
+        session_registry.resolve("SharedTool")
+
+    write_plugin("new")
+    assert application_registry.refresh_directory(root) == ()
+    with pytest.raises(PluginUnavailableError, match="Plugin is disabled: SharedTool"):
+        session_registry.resolve("SharedTool")
+    assert session_registry.refresh_directory(root) == ()
+    assert session_registry.resolve("SharedTool").handler({}, None) == "new"
+
+
 def test_registry_ignores_bytecode_only_retired_pack_directory(tmp_path):
     retired = tmp_path / "plugin_impl" / "retired_pack" / "__pycache__"
     retired.mkdir(parents=True)
@@ -187,10 +301,13 @@ def test_registry_registers_standalone_plugins_without_a_pack():
 
     registry.register_plugin(first, source="standalone-test")
     registered = registry.registered("Standalone")
-    assert registered.plugin is first
+    assert registered.plugin.name == first.name
+    assert registered.plugin.description == first.description
     assert registered.pack_id is None
     registry.register_plugin(second, source="standalone-test", replace=True)
-    assert registry.resolve("Standalone") is second
+    resolved = registry.resolve("Standalone")
+    assert resolved.name == second.name
+    assert resolved.description == second.description
     assert registry.unregister_plugin("Standalone") is True
     assert registry.unregister_plugin("Standalone") is False
 
@@ -310,16 +427,16 @@ plugin = Plugin(
         standalone.write_text("plugin = None\n", encoding="utf-8")
         failed_update = await runtime.call("toolbox", {"operation": "list"})
         assert failed_update.success is True
-        assert failed_update.value["standalone_tools"][0] == "RenamedTool"
+        assert failed_update.value["standalone_tools"] == []
         assert failed_update.value["refresh_errors"][0]["path"] == str(standalone)
 
-        stale_description = await runtime.call(
+        unavailable_description = await runtime.call(
             "toolbox",
             {"operation": "describe", "name": "RenamedTool"},
         )
-        assert stale_description.success is False
-        assert "refusing to use the stale loaded version" in stale_description.error
-        stale_call = await runtime.call(
+        assert unavailable_description.success is False
+        assert unavailable_description.error == "插件执行失败。"
+        unavailable_call = await runtime.call(
             "toolbox",
             {
                 "operation": "invoke",
@@ -327,8 +444,13 @@ plugin = Plugin(
                 "arguments": {"value": "must-not-run"},
             },
         )
-        assert stale_call.success is False
-        assert "refusing to use the stale loaded version" in stale_call.error
+        assert unavailable_call.success is False
+        assert unavailable_call.error == "插件执行失败。"
+
+        write_plugin(4, "RepairedTool")
+        repaired = await runtime.call("toolbox", {"operation": "list"})
+        assert repaired.success is True
+        assert repaired.value["standalone_tools"] == ["RepairedTool"]
 
         standalone.unlink()
         removed = await runtime.call("toolbox", {"operation": "list"})
@@ -339,16 +461,16 @@ plugin = Plugin(
             "toolbox",
             {
                 "operation": "invoke",
-                "name": "RenamedTool",
+                "name": "RepairedTool",
                 "arguments": {"value": "three"},
             },
         )
         assert unavailable.success is False
-        assert "Plugin is not registered: RenamedTool" in unavailable.error
+        assert unavailable.error == "插件执行失败。"
 
         old_search = await runtime.call("toolbox", {"operation": "search"})
         assert old_search.success is False
-        assert "is not one of ['list', 'describe', 'invoke']" in old_search.error
+        assert old_search.error == "插件参数无效。"
 
     run(scenario())
 
@@ -384,11 +506,11 @@ def test_runtime_validates_the_resolved_plugins_current_schema():
         valid = await runtime.call("Live", {"value": "ok"})
 
         assert missing.success is False
-        assert "'value' is a required property" in missing.error
+        assert missing.error == "插件参数无效。"
         assert wrong_type.success is False
-        assert "is not of type 'string'" in wrong_type.error
+        assert wrong_type.error == "插件参数无效。"
         assert unknown.success is False
-        assert "Additional properties are not allowed" in unknown.error
+        assert unknown.error == "插件参数无效。"
         assert valid.success is True
         assert valid.value == "ok"
 
@@ -467,7 +589,7 @@ def test_runtime_revalidates_arguments_modified_by_hooks():
         )
 
         assert result.success is False
-        assert "Additional properties are not allowed" in result.error
+        assert result.error == "插件参数无效。"
         assert executed is False
 
     run(scenario())
@@ -574,7 +696,7 @@ plugin_pack = PluginPack(
             },
         )
         assert unavailable.success is False
-        assert "Plugin is not registered: LiveTool" in unavailable.error
+        assert unavailable.error == "插件执行失败。"
 
     run(scenario())
 
@@ -916,7 +1038,7 @@ def test_tool_plugin_defines_its_runtime_timeout():
         )[0]
 
         assert result.success is False
-        assert result.error == "Plugin timed out after 0.01 seconds"
+        assert result.error == "插件在 0.01 秒后超时。"
 
     run(scenario())
 
@@ -1039,7 +1161,7 @@ def test_filesystem_plugins_follow_toolbox_list_describe_invoke_chain(tmp_path):
             context,
         )
         assert edited.success is True
-        assert edited.value["result"] == f"Edited {target}. Replacements: 1"
+        assert edited.value["result"] == f"已编辑 {target}。替换次数：1"
         assert "return 'hello plugin'" in target.read_text(encoding="utf-8")
 
     run(scenario())

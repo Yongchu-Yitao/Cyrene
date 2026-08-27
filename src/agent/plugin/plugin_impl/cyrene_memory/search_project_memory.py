@@ -7,7 +7,7 @@ from typing import Any
 from agent.plugin import PluginContext
 from ._native import create_tool, service as memory_service
 from .definitions import get_native_tool_def
-from agent.plugin.native_runtime import json_result
+from agent.plugin.native_runtime import json_result, plugin_localized
 
 TOOL_NAME = "search_project_memory"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -23,7 +23,11 @@ async def _tool_search_project_memory(
         return json_result({
             "status": "error",
             "type": "invalid_arguments",
-            "message": "query is required",
+            "message": plugin_localized(
+                context,
+                "query is required",
+                "必须提供 query",
+            ),
         })
 
     category = str(args.get("category", "") or "").strip().lower()
@@ -37,7 +41,11 @@ async def _tool_search_project_memory(
         return json_result({
             "status": "error",
             "type": "not_found",
-            "message": "Project memory is only available inside a Workbench project task/chat.",
+            "message": plugin_localized(
+                context,
+                "Project memory is only available inside a Workbench project task/chat.",
+                "项目记忆仅可在 Workbench 项目任务或对话中使用。",
+            ),
         })
 
     from .structured import search_project_memories
@@ -62,7 +70,13 @@ async def _tool_search_project_memory(
         "count": len(memories),
         "memories": memories,
         **(
-            {"note": "No project memory matches found for the given filters."}
+            {
+                "note": plugin_localized(
+                    context,
+                    "No project memories match the requested filters.",
+                    "没有匹配当前筛选条件的项目记忆。",
+                )
+            }
             if not memories else {}
         ),
     })

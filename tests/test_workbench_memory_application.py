@@ -75,9 +75,17 @@ def test_workspace_memory_application_maps_invalid_and_missing_mutations():
     with pytest.raises(memory.MemoryApplicationError) as create_error:
         service.create("project-a", memory.MemoryCreateDTO(content="  "))
     exc = create_error.value
-    assert (str(exc), exc.status_code, exc.code) == ("content is required", 400, None)
+    assert (str(exc), exc.status_code, exc.code) == (
+        "Memory content is required",
+        400,
+        "memory_content_required",
+    )
 
     with pytest.raises(memory.MemoryApplicationError) as delete_error:
         service.delete("project-a", "missing")
     exc = delete_error.value
-    assert (str(exc), exc.status_code, exc.code) == ("memory not found", 404, None)
+    assert (str(exc), exc.status_code, exc.code) == (
+        "Memory not found",
+        404,
+        "memory_not_found",
+    )

@@ -147,7 +147,7 @@ async def _benchmark_terminal(
     *,
     now_iso: Callable[[], str] = _utc_now_iso,
 ) -> dict[str, Any]:
-    from cyrene.terminal.manager import TerminalManager, TerminalSession
+    from agent.plugin.plugin_impl.cyrene_code.terminal.manager import TerminalManager, TerminalSession
 
     manager = TerminalManager(
         output_limit=max(16 * 1024 * 1024, config.terminal_chunks * config.terminal_chunk_bytes),
@@ -373,11 +373,17 @@ async def _benchmark_scheduled_tasks(
     config: FeatureBenchmarkConfig, root: Path
 ) -> dict[str, Any]:
     from cyrene.runtime import database
-    from cyrene.runtime.persistence.scheduler import SchedulerRepository
+    from agent.plugin.plugin_impl.cyrene_schedule.migrations import (
+        initialize_schedule_database,
+    )
+    from agent.plugin.plugin_impl.cyrene_schedule.repository import (
+        ScheduleRepository,
+    )
 
     db_path = root / "scheduled-tasks.db"
     await database.init_db(str(db_path))
-    repository = SchedulerRepository(str(db_path))
+    await initialize_schedule_database(str(db_path))
+    repository = ScheduleRepository(str(db_path))
     task_count = max(1, config.scheduled_tasks)
     next_run = datetime.now(timezone.utc).isoformat()
 

@@ -224,7 +224,7 @@ async def test_native_search_errors_are_safe_and_do_not_include_api_key(monkeypa
 
 async def test_deep_search_rejects_disabled_search(monkeypatch):
     from agent.plugin.plugin_impl.cyrene_content import search_backend as search
-    from cyrene.runtime.search_settings import SearchRuntimeSettings
+    from agent.plugin.plugin_impl.cyrene_content.search_settings import SearchRuntimeSettings
 
     monkeypatch.setattr(search, "runtime_settings", lambda: SearchRuntimeSettings(False, ()))
 
@@ -238,7 +238,7 @@ async def test_deep_search_rejects_disabled_search(monkeypatch):
 
 async def test_deep_search_uses_first_enabled_provider(monkeypatch):
     from agent.plugin.plugin_impl.cyrene_content import search_backend as search
-    from cyrene.runtime.search_settings import SearchRuntimeSettings
+    from agent.plugin.plugin_impl.cyrene_content.search_settings import SearchRuntimeSettings
 
     calls = []
 
@@ -261,7 +261,7 @@ async def test_deep_search_uses_first_enabled_provider(monkeypatch):
 
 async def test_deep_search_falls_back_after_empty_or_unusable_provider(monkeypatch):
     from agent.plugin.plugin_impl.cyrene_content import search_backend as search
-    from cyrene.runtime.search_settings import SearchRuntimeSettings
+    from agent.plugin.plugin_impl.cyrene_content.search_settings import SearchRuntimeSettings
 
     calls = []
 
@@ -286,7 +286,7 @@ async def test_deep_search_falls_back_after_empty_or_unusable_provider(monkeypat
 
 async def test_deep_search_reports_all_provider_failures(monkeypatch):
     from agent.plugin.plugin_impl.cyrene_content import search_backend as search
-    from cyrene.runtime.search_settings import SearchRuntimeSettings
+    from agent.plugin.plugin_impl.cyrene_content.search_settings import SearchRuntimeSettings
 
     async def run(provider, _topic, **_kwargs):
         raise search.SearchBackendUnavailable(f"{provider} unavailable")
@@ -324,7 +324,7 @@ async def test_provider_boundary_converts_unexpected_failure_for_fallback(monkey
         raise AssertionError("expected SearchBackendUnavailable")
 
 
-async def test_tool_passes_run_context_to_search(monkeypatch):
+async def test_tool_passes_run_context_to_search():
     from agent.plugin import PluginContext
     from agent.plugin.plugin_impl.cyrene_content import web_search
 
@@ -334,16 +334,21 @@ async def test_tool_passes_run_context_to_search(monkeypatch):
         captured.append((query, kwargs))
         return "ok"
 
-    monkeypatch.setattr(web_search, "deep_search", fake_search)
+    class SearchService:
+        search = staticmethod(fake_search)
+
     result = await web_search._tool_websearch(
         {"query": "facts", "detail": "preview", "max_results": 3},
-        PluginContext(data={
-            "db_path": "runtime.db",
-            "run_context": {
-                "session_id": "session-context",
-                "round_id": "round-context",
+        PluginContext(
+            data={
+                "db_path": "runtime.db",
+                "run_context": {
+                    "session_id": "session-context",
+                    "round_id": "round-context",
+                },
             },
-        }),
+            services={"content": object(), "web_search": SearchService()},
+        ),
     )
 
     assert result == "ok"

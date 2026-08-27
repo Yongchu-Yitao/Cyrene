@@ -19,7 +19,7 @@ from typing import Any
 
 from agent.context import ContextStoreRouter, TreeNotFoundError
 from agent.workbench.chat_runtime import workbench_agent_data_directory
-from agent.workbench.conversation_runtime import ConversationRuntime
+from cyrene.localization import localized
 from cyrene.workbench import store
 from cyrene.workbench.conversation_context_service import AgentContextRepository
 
@@ -37,9 +37,16 @@ _USAGE_KEYS = (
 class WorkbenchSessionError(RuntimeError):
     """A public session operation failed with a stable HTTP-style status."""
 
-    def __init__(self, message: str, status_code: int = 400) -> None:
+    def __init__(
+        self,
+        message: str,
+        status_code: int = 400,
+        code: str = "conversation_operation_failed",
+    ) -> None:
         super().__init__(message)
+        self.message = str(message)
         self.status_code = int(status_code)
+        self.code = str(code or "conversation_operation_failed")
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,23 +297,17 @@ def _markdown(chat: Mapping[str, Any], messages: list[dict[str, Any]]) -> str:
 class WorkbenchSessionPresentation:
     """Project Workbench chats and their ContextTrees into UI session records."""
 
-    def __init__(self, db_path: str | Path, *, memory_service: Any = None) -> None:
+    def __init__(self, db_path: str | Path) -> None:
         self.db_path = str(Path(db_path).expanduser().resolve())
-        self.memory_service = memory_service
         self.context_directory = (
             workbench_agent_data_directory(self.db_path) / "context"
         )
-        self._conversation_runtime = ConversationRuntime(self.db_path)
 
     def _agent_state(self, chat_id: str) -> dict[str, Any]:
         if not (self.context_directory / "index.sqlite3").is_file():
             return {}
         try:
-            state = AgentContextRepository(self.context_directory).read(chat_id)
-            checkpoint = self._conversation_runtime.context_checkpoint(chat_id)
-            if isinstance(checkpoint, Mapping):
-                state["checkpoint"] = dict(checkpoint)
-            return state
+            return AgentContextRepository(self.context_directory).read(chat_id)
         except Exception:
             logger.debug(
                 "Could not project ContextTree for Workbench chat %s",
@@ -386,12 +387,29 @@ class WorkbenchSessionPresentation:
             self.db_path,
             _empty_chat_store,
         )
-        sessions = [
-            self._summary(chat, self._agent_state(str(chat.get("id") or "")))
+        source_chats = [
+            chat
             for chat in chats
             if isinstance(chat, Mapping)
             and str(chat.get("kind") or "chat") == "chat"
             and str(chat.get("id") or "").strip()
+        ]
+        try:
+            states = AgentContextRepository(self.context_directory).read_many(
+                tuple(str(chat.get("id") or "") for chat in source_chats)
+            )
+        except Exception:
+            logger.debug(
+                "Could not batch-project Workbench ContextTrees",
+                exc_info=True,
+            )
+            states = {}
+        sessions = [
+            self._summary(
+                chat,
+                states.get(str(chat.get("id") or ""), {}),
+            )
+            for chat in source_chats
         ]
         sessions.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
         return sessions
@@ -400,7 +418,11 @@ class WorkbenchSessionPresentation:
         target = str(chat_id or "").strip()
         chat = store.read_chat(self.db_path, target, _empty_chat_store)
         if not isinstance(chat, dict) or str(chat.get("kind") or "chat") != "chat":
-            raise WorkbenchSessionError("conversation not found", 404)
+            raise WorkbenchSessionError(
+                localized("Conversation not found.", "未找到对话。"),
+                404,
+                "conversation_not_found",
+            )
         return chat, self._agent_state(target)
 
     def _ensure_mutable(
@@ -418,8 +440,12 @@ class WorkbenchSessionPresentation:
             checkpoint,
         ) == "running":
             raise WorkbenchSessionError(
-                "cancel the running conversation before clearing it",
+                localized(
+                    "Cancel the running conversation before clearing it.",
+                    "请先取消正在运行的对话，再清空内容。",
+                ),
                 409,
+                "conversation_running",
             )
 
     def _delete_context_tree(self, chat_id: str) -> None:
@@ -469,14 +495,20 @@ class WorkbenchSessionPresentation:
             return None
 
     def _delete_memory_archive(self, chat: Mapping[str, Any]) -> int:
-        service = self.memory_service
+        from agent.plugin import active_plugin_service
+
+        service = active_plugin_service("memory")
         if service is None:
             return 0
         delete_archive = getattr(service, "delete_session_archive", None)
         if not callable(delete_archive):
             raise WorkbenchSessionError(
-                "memory Plugin does not support Workbench archive deletion",
+                localized(
+                    "The Memory Plugin does not support deleting Workbench archives.",
+                    "Memory 插件不支持删除工作台归档。",
+                ),
                 503,
+                "memory_archive_delete_unavailable",
             )
         return int(
             bool(
@@ -513,7 +545,11 @@ class WorkbenchSessionPresentation:
             _empty_chat_store,
         )
         if result is None:
-            raise WorkbenchSessionError("conversation not found", 404)
+            raise WorkbenchSessionError(
+                localized("Conversation not found.", "未找到对话。"),
+                404,
+                "conversation_not_found",
+            )
         return (
             self._summary(
                 {
@@ -541,7 +577,11 @@ class WorkbenchSessionPresentation:
             )
         ]
         if len(payload["chats"]) == before:
-            raise WorkbenchSessionError("conversation not found", 404)
+            raise WorkbenchSessionError(
+                localized("Conversation not found.", "未找到对话。"),
+                404,
+                "conversation_not_found",
+            )
         store.write_chat_bundle(self.db_path, payload, _empty_chat_store)
         return deleted_archives
 
@@ -598,7 +638,14 @@ class WorkbenchSessionPresentation:
             media_type = "application/json; charset=utf-8"
             extension = "json"
         else:
-            raise WorkbenchSessionError("format must be markdown or json", 400)
+            raise WorkbenchSessionError(
+                localized(
+                    "Export format must be Markdown or JSON.",
+                    "导出格式必须是 Markdown 或 JSON。",
+                ),
+                400,
+                "unsupported_export_format",
+            )
         title = re.sub(r"[^A-Za-z0-9._-]+", "-", str(chat.get("title") or ""))
         filename = (title.strip("-.") or str(chat_id) or "conversation")[:80]
         return WorkbenchSessionExport(

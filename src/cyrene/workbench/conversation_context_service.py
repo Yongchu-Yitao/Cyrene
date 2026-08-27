@@ -6,9 +6,12 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+
+from agent.plugin import plugin_public_session_snapshot
+from cyrene.localization import localized
 
 logger = logging.getLogger(__name__)
 
@@ -310,6 +313,23 @@ def _agent_ephemeral_tokens(
     )
 
 
+def _agent_ephemeral_is_mounted(
+    state: Mapping[str, Any],
+    ephemeral_context: str,
+) -> bool:
+    """Return whether the durable Hook mount already contains this turn tail."""
+
+    extra = str(ephemeral_context or "").strip()
+    if not extra:
+        return False
+    mounts = state.get("contextMounts")
+    return any(
+        extra in str(mount.get("content") or "")
+        for mount in (mounts if isinstance(mounts, list) else ())
+        if isinstance(mount, Mapping)
+    )
+
+
 def _agent_path_plugin_usage(nodes: list[Any]) -> tuple[list[str], list[str]]:
     packs: list[str] = []
     standalone: list[str] = []
@@ -380,36 +400,72 @@ class AgentContextRepository:
         self.context_directory = Path(context_directory).expanduser().resolve()
 
     def read(self, tree_id: str) -> dict[str, Any]:
+        target = str(tree_id or "").strip()
+        return self.read_many((target,)).get(target, {})
+
+    def read_many(self, tree_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
+        """Read existing trees with one index pass and one shared router."""
+
         if not (self.context_directory / "index.sqlite3").is_file():
             return {}
         from agent.context import ContextStoreRouter, TreeNotFoundError
 
-        router = ContextStoreRouter(self.context_directory)
-        try:
-            tree = router.get_tree(str(tree_id))
-            nodes = list(router.get_subtree(tree.id, tree.root_id))
-            dialogue = [
-                node
-                for node in nodes
-                if isinstance(node.value, Mapping)
-                and node.value.get("role")
-                in {
-                    "system",
-                    "user",
-                    "context",
-                    "assistant",
-                    "tool_results",
-                    "context_compaction",
-                }
-            ]
-            if not dialogue:
-                return {}
-            leaf = max(dialogue, key=lambda item: (item.created_at, item.id))
-            path = list(router.get_path(tree.id, leaf.id))
-        except TreeNotFoundError:
+        targets = tuple(
+            dict.fromkeys(
+                target
+                for tree_id in tree_ids
+                if (target := str(tree_id or "").strip())
+            )
+        )
+        if not targets:
             return {}
-        finally:
-            router.close()
+        states: dict[str, dict[str, Any]] = {}
+        with ContextStoreRouter(self.context_directory) as router:
+            existing = router.existing_tree_ids(targets)
+            for tree_id in targets:
+                if tree_id not in existing:
+                    continue
+                try:
+                    states[tree_id] = self._read_tree(router, tree_id)
+                except TreeNotFoundError:
+                    # The index and tree database can change between the batch
+                    # lookup and projection; a concurrent deletion is benign.
+                    continue
+                except Exception:
+                    logger.debug(
+                        "Could not project ContextTree %s",
+                        tree_id,
+                        exc_info=True,
+                    )
+        return states
+
+    def _read_tree(self, router: Any, tree_id: str) -> dict[str, Any]:
+        tree = router.get_tree(tree_id)
+        nodes = list(router.get_subtree(tree.id, tree.root_id))
+        dialogue = [
+            node
+            for node in nodes
+            if isinstance(node.value, Mapping)
+            and node.value.get("role")
+            in {
+                "system",
+                "user",
+                "context",
+                "assistant",
+                "tool_results",
+                "context_compaction",
+            }
+        ]
+        if not dialogue:
+            return {}
+        leaf = max(dialogue, key=lambda item: (item.created_at, item.id))
+        by_id = {node.id: node for node in nodes}
+        path = []
+        current = leaf
+        while current is not None:
+            path.append(current)
+            current = by_id.get(str(current.parent_id or ""))
+        path.reverse()
 
         latest_model_node = next(
             (
@@ -472,7 +528,7 @@ class AgentContextRepository:
             if isinstance(node.value, Mapping)
         ]
         root_value = path[0].value if path and isinstance(path[0].value, Mapping) else {}
-        raw_subagents = root_value.get("_cyrene_subagents")
+        raw_subagents = plugin_public_session_snapshot(root_value).get("subagents")
         subagents = {
             str(agent_id): dict(record)
             for agent_id, record in raw_subagents.items()
@@ -504,7 +560,7 @@ class AgentContextRepository:
             and isinstance(latest_compaction.value, Mapping)
             else {}
         )
-        return {
+        state = {
             "treeId": tree.id,
             "rootId": tree.root_id,
             "leafId": leaf.id,
@@ -548,6 +604,12 @@ class AgentContextRepository:
                 default=leaf.updated_at,
             ).isoformat(),
         }
+        from agent.workbench.conversation_runtime import context_checkpoint_from_nodes
+
+        checkpoint = context_checkpoint_from_nodes(nodes)
+        if isinstance(checkpoint, Mapping):
+            state["checkpoint"] = dict(checkpoint)
+        return state
 
 
 def _message_layer(
@@ -569,7 +631,7 @@ def _message_layer(
         return None
     return {
         "id": "messages",
-        "label": "Conversation Messages",
+        "label": localized("Conversation Messages", "对话消息"),
         "sublabel": None,
         "blocks": blocks,
         "totalTokens": total,
@@ -821,7 +883,7 @@ class ConversationContextQueryService:
         ] if isinstance(raw_messages, list) else []
         segments = _agent_context_segments(messages, self.approx_token_count)
         ephemeral = str(state.get("ephemeralContext") or "").strip()
-        if ephemeral:
+        if ephemeral and not _agent_ephemeral_is_mounted(state, ephemeral):
             segments["system"] = int(segments.get("system") or 0) + (
                 _agent_ephemeral_tokens(
                     messages,
@@ -941,13 +1003,13 @@ class ConversationContextQueryService:
                 system_blocks.extend(context_blocks)
                 layers.append({
                     "id": "system_prefix",
-                    "label": "System Prefix",
+                    "label": localized("System Prefix", "系统前缀"),
                     "sublabel": None,
                     "blocks": system_blocks,
                     "totalTokens": system_tokens,
                 })
         ephemeral = str(state.get("ephemeralContext") or "").strip()
-        if ephemeral:
+        if ephemeral and not _agent_ephemeral_is_mounted(state, ephemeral):
             tokens = _agent_ephemeral_tokens(
                 messages,
                 ephemeral,
@@ -955,7 +1017,7 @@ class ConversationContextQueryService:
             )
             layers.append({
                 "id": "ephemeral",
-                "label": "Ephemeral Tail",
+                "label": localized("Ephemeral Tail", "临时上下文尾部"),
                 "sublabel": None,
                 "blocks": [{
                     "id": "ephemeral.run",

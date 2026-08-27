@@ -9,9 +9,15 @@ import sys
 import pytest
 
 from agent.plugin import PluginContext
-from cyrene.runtime.remote_control import DEFAULT_REMOTE_CAPABILITIES, RemoteControlStore
-from cyrene.runtime.remote_commands import RemoteCommandExecutor
-from cyrene.runtime.remote_workspace import RemoteJobManager, RemoteWorkspaceFiles
+from agent.plugin.plugin_impl.cyrene_remote.commands import RemoteCommandExecutor
+from agent.plugin.plugin_impl.cyrene_remote.control import (
+    DEFAULT_REMOTE_CAPABILITIES,
+    RemoteControlStore,
+)
+from agent.plugin.plugin_impl.cyrene_remote.workspace import (
+    RemoteJobManager,
+    RemoteWorkspaceFiles,
+)
 
 
 @pytest.fixture
@@ -31,11 +37,11 @@ def paired_stores(monkeypatch, tmp_path):
 
 def _bind_workspace(monkeypatch, workspace):
     monkeypatch.setattr(
-        "cyrene.runtime.remote_workspace.find_workbench_project_lightweight",
+        "agent.plugin.plugin_impl.cyrene_remote.workspace.find_workbench_project_lightweight",
         lambda project_id: {"id": project_id, "workspacePath": str(workspace)},
     )
     monkeypatch.setattr(
-        "cyrene.runtime.remote_workspace.resolve_project_workspace_dir",
+        "agent.plugin.plugin_impl.cyrene_remote.workspace.resolve_project_workspace_dir",
         lambda _project: str(workspace),
     )
 

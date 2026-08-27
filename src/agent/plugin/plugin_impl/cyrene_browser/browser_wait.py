@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 from agent.plugin import PluginContext
+from agent.plugin.native_runtime import plugin_localized
 
 TOOL_NAME = "browser_wait"
 TOOL_DEF = {
@@ -28,8 +29,8 @@ TOOL_DEF = {
 }
 
 
-async def _tool_browser_wait(args: dict[str, Any], _context: PluginContext) -> str:
-    from cyrene.browser import wait_for_page
+async def _tool_browser_wait(args: dict[str, Any], context: PluginContext) -> str:
+    from .runtime import wait_for_page
 
     selector = str(args.get("selector") or "").strip()
     text = str(args.get("text") or "").strip()
@@ -39,11 +40,33 @@ async def _tool_browser_wait(args: dict[str, Any], _context: PluginContext) -> s
     except (TypeError, ValueError):
         timeout_ms = 5000
     if not selector and not text and not url_contains:
-        return "Wait failed: provide selector, text, or url_contains."
+        return plugin_localized(
+            context,
+            "Wait failed: provide selector, text, or url_contains.",
+            "等待失败：请提供 selector、text 或 url_contains。",
+        )
     result = await wait_for_page(selector=selector, text=text, url_contains=url_contains, timeout_ms=timeout_ms)
     if result.get("ok"):
-        return f"Wait condition met.\nURL: {result.get('url', '—')}\nTitle: {result.get('title', '—')}"
-    return f"Wait failed: {result.get('error', 'unknown error')}"
+        return plugin_localized(
+            context,
+            "Wait condition met.\nURL: {url}\nTitle: {title}",
+            "等待条件已满足。\n网址：{url}\n标题：{title}",
+            url=result.get("url", "—"),
+            title=result.get("title", "—"),
+        )
+    from .browser_output import browser_error_text
+
+    return plugin_localized(
+        context,
+        "Wait failed: {error}",
+        "等待失败：{error}",
+        error=browser_error_text(
+            result,
+            context,
+            "The wait condition was not met.",
+            "等待条件未满足。",
+        ),
+    )
 
 
 handler = _tool_browser_wait

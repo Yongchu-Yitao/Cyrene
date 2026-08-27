@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from cyrene.config import WORKSPACE_DIR
+from cyrene.localization import localized
 from cyrene.observability.context_trace import approx_token_count
 from cyrene.workbench.chat_service import ChatService
 from cyrene.workbench import project_runtime
@@ -31,8 +32,6 @@ class ChatRouteContext:
     service: ChatService
     conversation_context: ConversationContextQueryService
     conversation_inbox: ConversationInboxQueryService
-    knowledge: Any = None
-    memory: Any = None
 
     @classmethod
     def create(
@@ -40,8 +39,6 @@ class ChatRouteContext:
         *,
         bot: Any,
         db_path: str,
-        knowledge_service: Any = None,
-        memory_service: Any = None,
     ) -> "ChatRouteContext":
         service = ChatService(db_path)
         from cyrene.workbench import chat_groups, pinned_resources
@@ -77,6 +74,11 @@ class ChatRouteContext:
                 or (project or {}).get("workspacePath")
                 or WORKSPACE_DIR
             )
+            input_context = service.resolve_composer_input_context(
+                chat,
+                workspace_dir,
+                strict=True,
+            )
             compact_config = ConversationConfig(
                 session_id=str(chat_id),
                 workspace_dir=workspace_dir,
@@ -84,10 +86,12 @@ class ChatRouteContext:
                 bot=bot,
                 project_id=project_id,
                 session_title=str(chat.get("title") or ""),
-                remote_device_ids=tuple(
-                    str(item or "").strip()
-                    for item in (chat.get("remoteDeviceIds") or ())
-                    if str(item or "").strip()
+                remote_device_ids=tuple(input_context["remoteDeviceIds"]),
+                soul_enabled=bool(input_context["soulActive"]),
+                workspace_enabled=bool(input_context["workspaceActive"]),
+                context_activations=dict(input_context["contextActivations"]),
+                resolved_context_activations=dict(
+                    input_context["resolvedContextActivations"]
                 ),
                 completed_turn_count=max(
                     0,
@@ -130,12 +134,21 @@ class ChatRouteContext:
                 utc_now=service.utc_now_iso,
                 agent_messages=agent_inbox_messages,
             ),
-            knowledge=knowledge_service,
-            memory=memory_service,
         )
         context._configure_shell_wake()
-        context._configure_media_wake()
         return context
+
+    @property
+    def knowledge(self) -> Any:
+        from agent.plugin import active_plugin_service
+
+        return active_plugin_service("knowledge")
+
+    @property
+    def memory(self) -> Any:
+        from agent.plugin import active_plugin_service
+
+        return active_plugin_service("memory")
 
     def runtime(self):
         """Return the explicit route dependency object used by old call sites."""
@@ -204,9 +217,10 @@ class ChatRouteContext:
         session_id: str,
         items: list[dict[str, Any]],
     ) -> None:
-        if self.knowledge is None:
+        knowledge = self.knowledge
+        if knowledge is None:
             return
-        register = getattr(self.knowledge, "register_attachments", None)
+        register = getattr(knowledge, "register_attachments", None)
         if not callable(register):
             return
         try:
@@ -220,10 +234,51 @@ class ChatRouteContext:
             )
 
     @staticmethod
-    def attachment_prompt_block(items: list[dict[str, Any]]) -> str:
-        from cyrene.workbench.chat_attachment_service import attachment_prompt_block
-
-        return attachment_prompt_block(items)
+    def attachment_prompt_block(
+        items: list[dict[str, Any]],
+        *,
+        language: Any = None,
+    ) -> str:
+        if not items:
+            return ""
+        lines = [
+            "",
+            localized(
+                "[Uploaded attachments]",
+                "[已上传附件]",
+                language=language,
+            ),
+            localized(
+                "The user uploaded the following files into the local runtime data directory, which is accessible from the workspace.",
+                "用户已将以下文件上传到工作区可访问的本地运行时数据目录。",
+                language=language,
+            ),
+            localized(
+                "Before answering questions about these files, inspect every relevant attachment with the attachment-analysis Plugin.",
+                "回答与这些文件有关的问题前，请使用附件分析 Plugin 检查每个相关附件。",
+                language=language,
+            ),
+            localized(
+                "Do not infer file contents from a filename, extension, or metadata alone.",
+                "不要仅根据文件名、扩展名或元数据推断文件内容。",
+                language=language,
+            ),
+            localized(
+                "If an attachment is missing or unavailable, stop and ask the user to upload it again.",
+                "如果附件缺失或不可用，请停止处理并让用户重新上传。",
+                language=language,
+            ),
+            localized(
+                "Do not scan unrelated device directories for a replacement copy.",
+                "不要扫描设备上无关的目录来寻找替代副本。",
+                language=language,
+            ),
+        ]
+        lines.extend(
+            f'- {item["name"]} ({item["content_type"]}): {item["path"]}'
+            for item in items
+        )
+        return "\n".join(lines)
 
     def pending_question_for(self, chat_id: str) -> dict[str, Any] | None:
         checkpoint = self.service.run_manager.conversation_runtime.context_checkpoint(
@@ -273,7 +328,12 @@ class ChatRouteContext:
         project = self.find_project_lightweight(project_id)
         return workbench_project_data_key(project) if project else project_id
 
-    async def check_budget_gate(self, session_id: str) -> dict[str, Any] | None:
+    async def check_budget_gate(
+        self,
+        session_id: str,
+        *,
+        language: Any = None,
+    ) -> dict[str, Any] | None:
         """Apply the application spending guard without the retired Agent."""
 
         from cyrene.observability import debug
@@ -299,7 +359,11 @@ class ChatRouteContext:
             )
             return None
         return {
-            "error": str(result.get("message") or "Budget exhausted"),
+            "error": localized(
+                "The monthly budget has been exhausted.",
+                "本月预算已用尽。",
+                language=language,
+            ),
             "code": str(result.get("code") or "budget_exhausted"),
         }
 
@@ -307,9 +371,10 @@ class ChatRouteContext:
         self,
         project_id: str,
     ) -> dict[str, Any] | None:
-        if self.memory is None:
+        memory = self.memory
+        if memory is None:
             return None
-        loader = getattr(self.memory, "current_snapshot", None)
+        loader = getattr(memory, "current_snapshot", None)
         if not callable(loader):
             return None
         try:
@@ -323,9 +388,10 @@ class ChatRouteContext:
         return dict(value) if isinstance(value, dict) else None
 
     async def delete_chat_memory(self, chat_id: str) -> None:
-        if self.memory is None:
+        memory = self.memory
+        if memory is None:
             return
-        delete = getattr(self.memory, "delete_chat", None)
+        delete = getattr(memory, "delete_chat", None)
         if not callable(delete):
             return
         result = delete(str(chat_id or ""))
@@ -343,10 +409,11 @@ class ChatRouteContext:
         workspace = str(body.get("ownerProjectId") or nested.get("ownerProjectId") or "")
         if source_kind != "library" or not item_id or not workspace:
             return body
-        if self.knowledge is None:
+        knowledge = self.knowledge
+        if knowledge is None:
             return body
         try:
-            return await self.knowledge.resolve_library_file_payload(body)
+            return await knowledge.resolve_library_file_payload(body)
         except Exception:
             logger.exception(
                 "Failed to resolve dragged library item %s in %s",
@@ -380,23 +447,5 @@ class ChatRouteContext:
                 self.service.run_manager.get(str(chat_id)) is not None
             ),
         )
-
-    def _configure_media_wake(self) -> None:
-        from cyrene.media.wake import get_media_wake_bridge
-
-        async def dispatch(wake: dict[str, Any]) -> str:
-            return await self.service.dispatch_media_wake_run(
-                wake,
-                bot=self.bot,
-                db_path=self.db_path,
-            )
-
-        get_media_wake_bridge().configure(
-            dispatcher=dispatch,
-            is_busy=lambda chat_id: (
-                self.service.run_manager.get(str(chat_id)) is not None
-            ),
-        )
-
 
 __all__ = ["ChatRouteContext"]

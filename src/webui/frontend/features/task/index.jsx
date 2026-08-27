@@ -1086,7 +1086,9 @@ function AgentQuestionCard({ session, controller }) {
   var permissionText = isPermission
     ? workbenchServices.i18n().permissionQuestionText(pq)
     : "";
-  var treeOptions = isPermission && !options.length ? ["确认", "拒绝"] : options;
+  var treeOptions = isPermission && !options.length
+    ? [wbT("workbenchChat.approve", "Confirm"), wbT("workbenchChat.reject", "Reject")]
+    : options;
   var customState = useWorkbenchState("");
   var customText = customState[0], setCustomText = customState[1];
   var optionSignature = JSON.stringify(treeOptions);
@@ -1166,8 +1168,8 @@ function AgentQuestionCard({ session, controller }) {
         // Authorization: a simple binary. Buttons read 确认/拒绝 but send the
         // backend-recognized option text (options[0] = allow, last = deny).
         <WbActions>
-          <WbBtn kind="primary" disabled={controller.busy} onClick={function () { controller.answer(pq.id, options[0] || "确认"); }}>{wbT("workbenchChat.approve", "Confirm")}</WbBtn>
-          <WbBtn kind="ghost" disabled={controller.busy} onClick={function () { controller.answer(pq.id, options.length ? options[options.length - 1] : "拒绝"); }}>{wbT("workbenchChat.reject", "Reject")}</WbBtn>
+          <WbBtn kind="primary" disabled={controller.busy} onClick={function () { controller.answer(pq.id, options[0] || wbT("workbenchChat.approve", "Confirm")); }}>{wbT("workbenchChat.approve", "Confirm")}</WbBtn>
+          <WbBtn kind="ghost" disabled={controller.busy} onClick={function () { controller.answer(pq.id, options.length ? options[options.length - 1] : wbT("workbenchChat.reject", "Reject")); }}>{wbT("workbenchChat.reject", "Reject")}</WbBtn>
         </WbActions>
       ) : (
         <React.Fragment>
@@ -1195,7 +1197,7 @@ function AgentQuestionCard({ session, controller }) {
 // waiting_for_approval — the 需要你确认 card before a sensitive run.
 function ConfirmCard({ session, controller, onRightTab }) {
   var summary = workbenchServices.model().confirmSummary(session);
-  var riskTone = summary.risk === "高" ? "red" : summary.risk === "中" ? "amber" : "green";
+  var riskTone = summary.riskLevel === "high" ? "red" : summary.riskLevel === "medium" ? "amber" : "green";
   return (
     <WbCard tone="confirm" icon={ICONS.shield} title={wbT("workbenchChat.questionTitle", "Confirmation needed")}
       badge={<span className={"wb-risk " + riskTone}>{wbT("task.risk", "Risk {risk}", { risk: summary.risk })}</span>}>
@@ -1548,12 +1550,12 @@ function StepEditor({ session, step, steps, controller }) {
     model.checkWorkspacePath(session.id, p)
       .then(function (res) {
         if (!res || !res.exists) {
-          setHint((res && res.error) ? res.error : "工作区中找不到该文件");
+          setHint((res && res.error) ? res.error : wbT("task.context.fileNotFound", "The file was not found in the workspace."));
           return;
         }
         var rel = res.path || p;
         var dup = contextFiles.some(function (f) { return f && f.source !== "upload" && f.path === rel; });
-        if (dup) { setHint("该文件已添加"); return; }
+        if (dup) { setHint(wbT("task.context.fileAlreadyAdded", "This file has already been added.")); return; }
         controller.patchStep(step.id, { contextFiles: contextFiles.concat([{ source: "workspace", path: rel, name: rel.split("/").pop() }]) });
         setPathInput("");
       })
@@ -1570,7 +1572,7 @@ function StepEditor({ session, step, steps, controller }) {
         var tagged = (uploaded || []).map(function (u) { return Object.assign({}, u, { source: "upload" }); });
         controller.patchStep(step.id, { contextFiles: contextFiles.concat(tagged) });
       })
-      .catch(function (err) { setHint("上传失败：" + ((err && err.message) || String(err))); })
+      .catch(function (err) { setHint(wbT("task.context.uploadFailed", "Upload failed: {error}", { error: (err && err.message) || String(err) })); })
       .finally(function () { setUploading(false); if (fileRef.current) fileRef.current.value = ""; });
   }
   function removeFile(target) {
@@ -1636,9 +1638,9 @@ function StepEditor({ session, step, steps, controller }) {
                 var label = isUpload ? (f.name || "file") : String((f && (f.path || f.name)) || "").split("/").pop();
                 return (
                   <span key={(f && (f.path || f.id || f.name) || "") + "_" + i} className={"wbp-ctx-chip" + (isUpload ? " upload" : "")} title={(f && (f.path || f.name)) || ""}>
-                    <span className="wbp-ctx-tag">{isUpload ? "上传" : "工作区"}</span>
+                    <span className="wbp-ctx-tag">{isUpload ? wbT("task.context.source.upload", "Upload") : wbT("task.context.source.workspace", "Workspace")}</span>
                     <span className="wbp-ctx-name">{label}</span>
-                    <button type="button" className="wbp-ctx-x" onClick={function () { removeFile(f); }} aria-label="移除文件">{ICONS.x}</button>
+                    <button type="button" className="wbp-ctx-x" onClick={function () { removeFile(f); }} aria-label={wbT("task.context.removeFile", "Remove file")}>{ICONS.x}</button>
                   </span>
                 );
               })}
@@ -1650,15 +1652,15 @@ function StepEditor({ session, step, steps, controller }) {
                 type="text"
                 className="wbp-ctx-input"
                 value={pathInput}
-                placeholder="工作区相对路径，如 src/app.py"
+                placeholder={wbT("task.context.pathPlaceholder", "Workspace-relative path, such as src/app.py")}
                 onChange={function (e) { setPathInput(e.target.value); }}
                 onKeyDown={function (e) { if (e.key === "Enter") { e.preventDefault(); addWorkspaceFile(); } }}
               />
-              <button type="button" className="wbp-tiny-btn" disabled={adding || !pathInput.trim()} onClick={addWorkspaceFile}>{adding ? "校验中…" : "添加"}</button>
+              <button type="button" className="wbp-tiny-btn" disabled={adding || !pathInput.trim()} onClick={addWorkspaceFile}>{adding ? wbT("task.context.validating", "Validating…") : wbT("common.add", "Add")}</button>
             </div>
             <button type="button" className="wbp-tiny-btn wbp-ctx-upload" disabled={uploading} onClick={pickUpload}>
               <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 10.5V3.5" /><path d="M5 6l3-3 3 3" /><path d="M3 11v1.5A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5V11" /></svg>
-              {uploading ? "上传中…" : "上传文件"}
+              {uploading ? wbT("task.context.uploading", "Uploading…") : wbT("task.context.uploadFile", "Upload file")}
             </button>
             <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={onUploadPick} />
           </div>
@@ -1847,7 +1849,7 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
               }}
             >
               <div className="wbp-rail">
-                <button type="button" className={"wbp-node " + state} onClick={function () { onToggleStep(step.id); }} aria-label={expanded ? "收起步骤" : "展开步骤"}>
+                <button type="button" className={"wbp-node " + state} onClick={function () { onToggleStep(step.id); }} aria-label={expanded ? wbT("task.step.collapse", "Collapse step") : wbT("task.step.expand", "Expand step")}>
                   {doneStep ? ICONS.checkSmall : null}
                 </button>
                 {!isLast && <span className={"wbp-line" + (doneStep ? " done" : "")} />}

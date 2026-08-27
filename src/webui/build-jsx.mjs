@@ -63,6 +63,20 @@ const PROVIDER_ICON_FILES = [
   [join(SIMPLE_ICONS_DIR, 'ollama.svg'), 'ollama.svg'],
   [join(SIMPLE_ICONS_DIR, 'onnx.svg'), 'onnx.svg'],
 ]
+const EXTENSION_ICON_FILES = [
+  [join(SIMPLE_ICONS_DIR, 'python.svg'), 'python.svg'],
+  [join(SIMPLE_ICONS_DIR, 'uv.svg'), 'uv.svg'],
+  [join(TABLER_ICONS_DIR, 'tex.svg'), 'tex.svg'],
+  [join(SIMPLE_ICONS_DIR, 'nodedotjs.svg'), 'nodejs.svg'],
+  [join(SIMPLE_ICONS_DIR, 'bun.svg'), 'bun.svg'],
+  [join(SIMPLE_ICONS_DIR, 'github.svg'), 'github.svg'],
+  [join(SIMPLE_ICONS_DIR, 'go.svg'), 'go.svg'],
+  [join(SIMPLE_ICONS_DIR, 'openjdk.svg'), 'java.svg'],
+  [join(SIMPLE_ICONS_DIR, 'rust.svg'), 'rust.svg'],
+  [join(SIMPLE_ICONS_DIR, 'deno.svg'), 'deno.svg'],
+  [join(ASSETS_DIR, 'extension-icons/ripgrep.svg'), 'ripgrep.svg'],
+  [join(ASSETS_DIR, 'extension-icons/jq.svg'), 'jq.svg'],
+]
 const VENDOR_DIR = resolve(__dirname, 'vendor')
 const OFFICE_OUT_DIR = resolve(APP_DIR, 'office')
 const OFFICE_ENTRIES = [
@@ -138,7 +152,7 @@ function svgMarkup(file) {
   return readFileSync(file, 'utf8').trim()
 }
 
-function inlineIconAssets(settingsIconFiles, providerIconFiles) {
+function inlineIconAssets(settingsIconFiles, providerIconFiles, extensionIconFiles) {
   const settings = Object.fromEntries(settingsIconFiles.map((file) => [
     basename(file, extname(file)),
     svgMarkup(file),
@@ -147,9 +161,13 @@ function inlineIconAssets(settingsIconFiles, providerIconFiles) {
     basename(outputName, extname(outputName)),
     svgMarkup(file),
   ]))
+  const extensions = Object.fromEntries(extensionIconFiles.map(([file, outputName]) => [
+    basename(outputName, extname(outputName)),
+    svgMarkup(file),
+  ]))
   // Escape '<' so trusted local SVG markup cannot accidentally terminate the
   // inline script. JavaScript restores the original character at parse time.
-  const payload = JSON.stringify({ settings, providers }).replace(/</g, '\\u003c')
+  const payload = JSON.stringify({ settings, providers, extensions }).replace(/</g, '\\u003c')
   return `<script>window.CyreneIconAssets=Object.freeze(${payload});</script>`
 }
 
@@ -212,13 +230,14 @@ async function build() {
     OFFICE_ENTRIES.map(([entry]) => entry),
     settingsIconFiles,
     providerIconFiles,
+    EXTENSION_ICON_FILES.map(([source]) => source),
     [resolve(__dirname, 'package-lock.json')],
   )
   const revision = frontendRevision(revisionSources, cssFiles, assetFiles, indexTemplate)
   const indexHtml = indexTemplate
     .replace(
       '<!-- CYRENE_ICON_ASSETS -->',
-      inlineIconAssets(settingsIconFiles, PROVIDER_ICON_FILES),
+      inlineIconAssets(settingsIconFiles, PROVIDER_ICON_FILES, EXTENSION_ICON_FILES),
     )
     .replace(
       /(\?v=)[A-Za-z0-9.+-]+/g,

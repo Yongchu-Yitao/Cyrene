@@ -54,7 +54,10 @@ function wbcPaneCardDetachDescriptor(context, cardId, paneOverride) {
     descriptor.title = descriptor.agent && (descriptor.agent.title || descriptor.agent.sourceQuote)
       || wbcT("workbenchChat.sideAgent.tab", "Side questions");
   } else if (pane.kind === "plugin-view") {
-    descriptor.title = String(pane.payload && pane.payload.title || pane.payload && pane.payload.viewId || "Plugin");
+    descriptor.title = String(
+      pane.payload && (pane.payload.title || pane.payload.viewId || pane.payload.view_id)
+      || "Plugin"
+    );
   }
   return descriptor;
 }

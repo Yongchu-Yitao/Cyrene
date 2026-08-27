@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from cyrene.model_runtime import opencv_runtime
+from agent.plugin.plugin_impl.cyrene_knowledge import opencv_runtime
 
 
 @pytest.mark.parametrize(

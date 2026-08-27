@@ -4,6 +4,24 @@
 (function (root) {
   "use strict";
 
+  function rendererT(key, fallback, params) {
+    var resolved = fallback;
+    try {
+      var i18n = root.CyreneUI && root.CyreneUI.require("i18n");
+      resolved = i18n && typeof i18n.t === "function" ? i18n.t(key, params || null, fallback) : fallback;
+    } catch (error) {
+      resolved = fallback;
+    }
+    // The standalone renderer is also used before the i18n service is
+    // registered (and by the Node-side contract tests). Keep its fallback
+    // human-readable by expanding the same simple `{name}` placeholders as
+    // the Workbench translator does.
+    Object.keys(params || {}).forEach(function (name) {
+      resolved = String(resolved).split("{" + name + "}").join(String(params[name]));
+    });
+    return resolved;
+  }
+
   function installCjkAutolinkBoundary() {
     if (
       !root.marked
@@ -216,7 +234,7 @@
               + specHtml + "</div>\n";
           }
           if (token.blockType === "button") {
-            // The fallback renders a readable "[按钮: label]" line instead of
+            // The fallback renders a readable localized label instead of
             // the raw spec; the mount script swaps in the real <button>.
             var buttonSpec = root.CyreneUI.chartSpec;
             var buttonBody = String(token.specBody || "");
@@ -225,7 +243,11 @@
                 var buttonPayload = buttonSpec.buildButtonPayload(buttonBody);
                 return '<div class="wbc-button"' + sourceAttr + ' data-wbc-button="' + escapeHtml(buttonPayload.json)
                   + '"><pre class="wbc-button-spec">['
-                  + escapeHtml("按钮: " + buttonPayload.spec.label) + "]</pre></div>\n";
+                  + escapeHtml(rendererT(
+                    "workbenchChat.buttonSpecFallback",
+                    "Button: {label}",
+                    { label: buttonPayload.spec.label }
+                  )) + "]</pre></div>\n";
               } catch (error) {
                 return '<div class="wbc-button wbc-button-error"' + sourceAttr + ' data-wbc-button-error="'
                   + escapeHtml((error && error.message) || "invalid button spec")

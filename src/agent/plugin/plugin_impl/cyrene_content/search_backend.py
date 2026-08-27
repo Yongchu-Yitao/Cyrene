@@ -8,6 +8,7 @@ Architecture:
 import asyncio
 import ipaddress
 import logging
+import os
 import re
 import time
 from urllib.parse import urlparse
@@ -15,9 +16,10 @@ from urllib.parse import urlparse
 import httpx
 import requests
 
-from cyrene.config import SEARXNG_URL
+from cyrene.localization import accept_language, locale_tag
 from cyrene.observability.trace import new_trace_id, trace_span
-from cyrene.runtime.search_settings import provider_api_key, runtime_settings
+from .search_settings import provider_api_key, runtime_settings
+from .runtime_config import SEARXNG_URL
 from .deepseek_web_search import (
     DeepSeekWebSearchError,
     find_official_deepseek_search_candidate,
@@ -41,7 +43,10 @@ def _proxied_session() -> requests.Session:
     # Cyrene address (notably on macOS) or resurrect a proxy rejected as
     # unreachable by the policy layer.
     s.trust_env = False
-    s.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": accept_language(),
+    })
     proxy_url = get_effective_search_proxy()
     if proxy_url:
         s.proxies = {"http": proxy_url, "https": proxy_url}
@@ -52,6 +57,16 @@ _HTTP_TIMEOUT = 30.0
 _MAX_CONCURRENT = 20
 _EVIDENCE_EXCERPT_CHARS = 1_500
 _PREVIEW_REMAINING_TIMEOUT = 5.0
+
+
+def _simplexng_language() -> str:
+    """Return an explicit search override or Cyrene's effective locale tag."""
+
+    for key in ("CYRENE_SEARCH_LOCALE", "SEARXNG_LANGUAGE"):
+        override = str(os.environ.get(key) or "").strip()
+        if override:
+            return override
+    return locale_tag()
 
 
 def _get_simplexng_url() -> str:
@@ -93,7 +108,11 @@ async def _search_simplexng(query: str, *, max_results: int = 5) -> list[dict]:
     if not base_url:
         raise SearchBackendUnavailable("Web search backend is not running or configured.")
     url = f"{base_url.rstrip('/')}/search"
-    headers = {"Accept": "application/json"}
+    search_language = _simplexng_language()
+    headers = {
+        "Accept": "application/json",
+        "Accept-Language": accept_language(search_language),
+    }
 
     def _fetch() -> list[dict]:
         if _is_loopback_url(base_url):
@@ -109,7 +128,7 @@ async def _search_simplexng(query: str, *, max_results: int = 5) -> list[dict]:
                 params={
                     "q": query,
                     "format": "json",
-                    "language": "zh-CN",
+                    "language": search_language,
                     "safesearch": "0",
                 },
                 headers=headers,
@@ -222,7 +241,8 @@ async def _fetch_preview_pages(
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36"
-            )
+            ),
+            "Accept-Language": accept_language(),
         },
         proxy=proxy_url or None,
         trust_env=False,

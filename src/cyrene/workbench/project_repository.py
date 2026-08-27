@@ -8,7 +8,8 @@ import threading
 from typing import Any
 
 from cyrene.config import DB_PATH, WORKSPACE_DIR
-from cyrene.workbench import artifact_runtime, planning_runtime, project_runtime, task_context
+from cyrene.localization import localized
+from cyrene.workbench import artifact_runtime, planning_runtime, project_runtime
 from cyrene.workbench.store import patch_project_bundle_fields, read_project_bundle, summarize_task_session, write_project_bundle
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,6 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> bool:
         project.setdefault('model', project_runtime._get_model())
         project.setdefault('accountTier', 'Pro')
         project.setdefault('context', {'summary': '', 'stack': [], 'decisions': [], 'knowledgeDocumentIds': []})
-        task_context.ensure_shared_context(project)
         project.setdefault('createdAt', now)
         project.setdefault('updatedAt', now)
         relocated_root = artifact_runtime._workbench_workspace_root(project)
@@ -220,12 +220,21 @@ def _workbench_find_session(payload: dict[str, Any], session_id: str) -> tuple[d
     return (None, None)
 
 def _task_plan_event_body(operation: str, event_source: str, reason: str) -> str:
-    action = {'add': '新增执行步骤。', 'update': '更新执行步骤。', 'set_dependencies': '更新步骤依赖。', 'delete': '删除执行步骤。', 'reorder': '调整执行步骤顺序。'}.get(operation, '更新执行计划。')
+    action = {
+        'add': localized('Added an execution step.', '新增执行步骤。'),
+        'update': localized('Updated an execution step.', '更新执行步骤。'),
+        'set_dependencies': localized('Updated step dependencies.', '更新步骤依赖。'),
+        'delete': localized('Deleted an execution step.', '删除执行步骤。'),
+        'reorder': localized('Reordered the execution steps.', '调整执行步骤顺序。'),
+    }.get(operation, localized('Updated the execution plan.', '更新执行计划。'))
     if event_source != 'user':
-        action = 'Agent 根据当前输入' + action
+        action = localized(
+            f'The Agent {action[0].lower() + action[1:]}',
+            'Agent 根据当前输入' + action,
+        )
     reason_text = str(reason or '').strip()
     if reason_text:
-        action += ' 原因：' + reason_text[:500]
+        action += localized(' Reason: ', ' 原因：') + reason_text[:500]
     return action
 
 def update_task_plan_for_session(session_id: str, operation: str, *, step_id: str='', step: dict[str, Any] | None=None, fields: dict[str, Any] | None=None, ordered_step_ids: list[Any] | None=None, depends_on: list[Any] | None=None, reason: str='', event_source: str='agent') -> dict[str, Any]:
@@ -238,14 +247,14 @@ def update_task_plan_for_session(session_id: str, operation: str, *, step_id: st
     sid = str(session_id or '').strip()
     op = str(operation or '').strip().lower()
     if not sid:
-        return {'ok': False, 'error': 'no active task session', 'code': 'no_session'}
+        return {'ok': False, 'error': localized('No active task session.', '没有活动的任务会话。'), 'code': 'no_session'}
     with _WORKBENCH_STORE_LOCK:
         payload = _read_workbench_store()
         project, session = _workbench_find_session(payload, sid)
         if not session or not project:
-            return {'ok': False, 'error': 'session not found', 'code': 'session_not_found'}
+            return {'ok': False, 'error': localized('Session not found.', '未找到会话。'), 'code': 'session_not_found'}
         if str(session.get('kind') or 'task') != 'task':
-            return {'ok': False, 'error': 'only Workbench task sessions support task plans', 'code': 'not_task_session'}
+            return {'ok': False, 'error': localized('Only Workbench task sessions support task plans.', '只有工作台任务会话支持任务计划。'), 'code': 'not_task_session'}
         current_revision = int(session.get('planDefinitionRevision') or 0)
         plan = planning_runtime._workbench_normalize_plan(session.get('plan'), task_id=sid)
         by_id = {str(item.get('id') or ''): item for item in plan if isinstance(item, dict)}
@@ -254,14 +263,14 @@ def update_task_plan_for_session(session_id: str, operation: str, *, step_id: st
         if op == 'update' and any((field in field_values for field in ('title', 'description', 'dependsOn'))):
             structure_operation = True
         if structure_operation and planning_runtime._workbench_plan_has_started(plan):
-            return {'ok': False, 'error': '计划已经开始执行，只能编辑尚未运行步骤的命令和上下文。', 'code': 'plan_started'}
+            return {'ok': False, 'error': localized('The plan has started. Only the commands and context of pending steps can be edited.', '计划已经开始执行，只能编辑尚未运行步骤的命令和上下文。'), 'code': 'plan_started'}
         if op == 'add':
             step_input = step if isinstance(step, dict) else {}
             title = str(step_input.get('title') or '').strip()
             if not title:
-                return {'ok': False, 'error': '步骤标题不能为空。', 'code': 'empty_step_title'}
+                return {'ok': False, 'error': localized('Step title cannot be empty.', '步骤标题不能为空。'), 'code': 'empty_step_title'}
             if len(plan) >= 12:
-                return {'ok': False, 'error': '执行计划最多包含 12 个步骤。', 'code': 'plan_too_large'}
+                return {'ok': False, 'error': localized('An execution plan can contain at most 12 steps.', '执行计划最多包含 12 个步骤。'), 'code': 'plan_too_large'}
             new_step = planning_runtime._workbench_new_plan_step(title[:160], str(step_input.get('description') or '').strip()[:4000], len(plan) + 1, sid)
             new_step['dependsOn'] = planning_runtime._workbench_dependency_ids(step_input.get('dependsOn'))
             plan.append(new_step)
@@ -269,16 +278,16 @@ def update_task_plan_for_session(session_id: str, operation: str, *, step_id: st
             target_id = str(step_id or '').strip()
             target = by_id.get(target_id)
             if not target:
-                return {'ok': False, 'error': '步骤不存在。', 'code': 'step_not_found'}
+                return {'ok': False, 'error': localized('Step not found.', '步骤不存在。'), 'code': 'step_not_found'}
             allowed_fields = {'title', 'description', 'dependsOn', 'promptOverride', 'contextFiles'}
             if any((field not in allowed_fields for field in field_values)):
-                return {'ok': False, 'error': '包含不允许修改的步骤字段。', 'code': 'invalid_step_fields'}
+                return {'ok': False, 'error': localized('The request contains a step field that cannot be changed.', '包含不允许修改的步骤字段。'), 'code': 'invalid_step_fields'}
             if str(target.get('status') or 'pending') != 'pending':
-                return {'ok': False, 'error': '只能编辑尚未运行的步骤。', 'code': 'step_started'}
+                return {'ok': False, 'error': localized('Only pending steps can be edited.', '只能编辑尚未运行的步骤。'), 'code': 'step_started'}
             if 'title' in field_values:
                 title = str(field_values.get('title') or '').strip()
                 if not title:
-                    return {'ok': False, 'error': '步骤标题不能为空。', 'code': 'empty_step_title'}
+                    return {'ok': False, 'error': localized('Step title cannot be empty.', '步骤标题不能为空。'), 'code': 'empty_step_title'}
                 target['title'] = title[:160]
             if 'description' in field_values:
                 target['description'] = str(field_values.get('description') or '').strip()[:4000]
@@ -289,33 +298,33 @@ def update_task_plan_for_session(session_id: str, operation: str, *, step_id: st
             if 'contextFiles' in field_values:
                 context_files = field_values.get('contextFiles')
                 if not isinstance(context_files, list):
-                    return {'ok': False, 'error': 'contextFiles must be a list', 'code': 'invalid_context_files'}
+                    return {'ok': False, 'error': localized('contextFiles must be a list.', 'contextFiles 必须是列表。'), 'code': 'invalid_context_files'}
                 target['contextFiles'] = context_files[:30]
         elif op == 'set_dependencies':
             target_id = str(step_id or '').strip()
             target = by_id.get(target_id)
             if not target:
-                return {'ok': False, 'error': '步骤不存在。', 'code': 'step_not_found'}
+                return {'ok': False, 'error': localized('Step not found.', '步骤不存在。'), 'code': 'step_not_found'}
             target['dependsOn'] = planning_runtime._workbench_dependency_ids(depends_on)
         elif op == 'delete':
             target_id = str(step_id or '').strip()
             target = by_id.get(target_id)
             if not target:
-                return {'ok': False, 'error': '步骤不存在。', 'code': 'step_not_found'}
+                return {'ok': False, 'error': localized('Step not found.', '步骤不存在。'), 'code': 'step_not_found'}
             if str(target.get('status') or 'pending') != 'pending':
-                return {'ok': False, 'error': '只能删除尚未运行的步骤。', 'code': 'step_started'}
+                return {'ok': False, 'error': localized('Only pending steps can be deleted.', '只能删除尚未运行的步骤。'), 'code': 'step_started'}
             dependent_titles = [str(item.get('title') or '') for item in plan if target_id in planning_runtime._workbench_dependency_ids(item.get('dependsOn'))]
             if dependent_titles:
-                return {'ok': False, 'error': '该步骤仍被以下步骤依赖：' + '、'.join(dependent_titles), 'code': 'step_has_dependents'}
+                return {'ok': False, 'error': localized('This step is still required by: ', '该步骤仍被以下步骤依赖：') + localized(', ', '、').join(dependent_titles), 'code': 'step_has_dependents'}
             plan = [item for item in plan if str(item.get('id') or '') != target_id]
         elif op == 'reorder':
             ordered_ids = planning_runtime._workbench_dependency_ids(ordered_step_ids)
             current_ids = [str(item.get('id') or '') for item in plan]
             if len(ordered_ids) != len(current_ids) or set(ordered_ids) != set(current_ids):
-                return {'ok': False, 'error': '步骤顺序与当前计划不一致。', 'code': 'invalid_reorder'}
+                return {'ok': False, 'error': localized('The step order does not match the current plan.', '步骤顺序与当前计划不一致。'), 'code': 'invalid_reorder'}
             plan = [by_id[item_id] for item_id in ordered_ids]
         else:
-            return {'ok': False, 'error': 'unsupported plan operation', 'code': 'unsupported_operation'}
+            return {'ok': False, 'error': localized('Unsupported plan operation.', '不支持此计划操作。'), 'code': 'unsupported_operation'}
         plan = planning_runtime._workbench_normalize_plan(plan, task_id=sid)
         valid, error_message, error_code = planning_runtime._workbench_validate_plan_graph(plan)
         if not valid:
@@ -327,7 +336,10 @@ def update_task_plan_for_session(session_id: str, operation: str, *, step_id: st
         session['approvedPlanDefinitionRevision'] = None
         if str(session.get('status') or '') == 'waiting_for_approval':
             session['status'] = 'planning'
-            session['agentReply'] = '计划已修改，请重新确认后执行。'
+            session['agentReply'] = localized(
+                'The plan changed. Review it again before running it.',
+                '计划已修改，请重新确认后执行。',
+            )
         event_body = _task_plan_event_body(op, event_source, reason)
         session['events'] = list(session.get('events') or []) + [{'id': project_runtime._short_id('event'), 'type': 'PlanUpdatedEvent', 'createdAt': now, 'body': event_body}]
         session['updatedAt'] = now

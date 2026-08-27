@@ -68,7 +68,7 @@ def _configuration(api_key: str = "sk-private") -> dict:
 
 
 def test_runtime_candidate_merges_connection_and_profile_transport_options():
-    from cyrene.runtime.model_configuration import (
+    from agent.plugin.plugin_impl.cyrene_model.configuration import (
         candidate_for_profile,
         normalize_model_configuration,
     )
@@ -95,7 +95,7 @@ def test_runtime_candidate_merges_connection_and_profile_transport_options():
 
 
 def test_model_connection_proxy_opt_in_survives_normalization_and_runtime_projection():
-    from cyrene.runtime.model_configuration import (
+    from agent.plugin.plugin_impl.cyrene_model.configuration import (
         candidate_for_profile,
         normalize_model_configuration,
         public_model_configuration,
@@ -115,7 +115,7 @@ def test_model_connection_proxy_opt_in_survives_normalization_and_runtime_projec
 def test_save_redacts_secrets_and_persists_only_the_canonical_graph(
     isolated_model_store,
 ):
-    from cyrene.runtime.model_configuration import (
+    from agent.plugin.plugin_impl.cyrene_model.configuration import (
         public_model_configuration,
         save_model_configuration,
     )
@@ -159,7 +159,7 @@ def test_save_redacts_secrets_and_persists_only_the_canonical_graph(
 
 
 def test_blank_secret_is_retained_and_clear_is_explicit(isolated_model_store):
-    from cyrene.runtime.model_configuration import (
+    from agent.plugin.plugin_impl.cyrene_model.configuration import (
         get_model_configuration,
         save_model_configuration,
     )
@@ -178,11 +178,103 @@ def test_blank_secret_is_retained_and_clear_is_explicit(isolated_model_store):
     assert get_model_configuration()["connections"][0]["api_key"] == ""
 
 
+def test_user_model_plugin_is_projected_as_an_editable_provider_connection():
+    from agent.plugin.plugin_impl.cyrene_model.configuration import normalize_model_configuration
+    from agent.plugin.plugin_impl.cyrene_model.routes import _public_configuration_with_plugins
+
+    class CatalogService:
+        @staticmethod
+        def catalog():
+            return [
+                {
+                    "id": "deleted_builtin",
+                    "name": "Deleted built-in",
+                    "adapter": "openai",
+                    "default_base_url": "https://builtin.example/v1",
+                    "plugin_name": "DeletedBuiltin",
+                    "pack_id": "cyrene_model",
+                },
+                {
+                    "id": "user_cloud",
+                    "name": "User Cloud",
+                    "adapter": "openai_compatible",
+                    "default_base_url": "https://user-cloud.example/v1",
+                    "plugin_name": "UserCloud",
+                    "pack_id": "my_model_pack",
+                },
+            ]
+
+    configuration = normalize_model_configuration(_configuration(api_key=""))
+    original_connection_ids = [
+        connection["id"] for connection in configuration["connections"]
+    ]
+
+    payload = _public_configuration_with_plugins(
+        configuration,
+        service=CatalogService(),
+    )
+    connections = {connection["id"]: connection for connection in payload["connections"]}
+
+    assert "deleted_builtin" not in connections
+    assert connections["user_cloud"] == {
+        "id": "user_cloud",
+        "name": "User Cloud",
+        "adapter": "openai_compatible",
+        "enabled": True,
+        "use_proxy": False,
+        "base_url": "https://user-cloud.example/v1",
+        "api_key": "",
+        "api_key_configured": False,
+        "secret_configured": False,
+        "options": {"provider_preset": "user_cloud"},
+        "_plugin_unconfigured": True,
+    }
+    assert [connection["id"] for connection in configuration["connections"]] == (
+        original_connection_ids
+    )
+
+
+def test_configured_user_model_plugin_connection_is_not_duplicated():
+    from agent.plugin.plugin_impl.cyrene_model.configuration import normalize_model_configuration
+    from agent.plugin.plugin_impl.cyrene_model.routes import _public_configuration_with_plugins
+
+    class CatalogService:
+        @staticmethod
+        def catalog():
+            return [
+                {
+                    "id": "user_cloud",
+                    "name": "User Cloud",
+                    "adapter": "openai_compatible",
+                    "default_base_url": "https://user-cloud.example/v1",
+                    "plugin_name": "UserCloud",
+                    "pack_id": "",
+                }
+            ]
+
+    raw = _configuration(api_key="")
+    raw["connections"][0]["options"] = {"provider_preset": "user_cloud"}
+
+    payload = _public_configuration_with_plugins(
+        normalize_model_configuration(raw),
+        service=CatalogService(),
+    )
+
+    assert sum(
+        connection.get("options", {}).get("provider_preset") == "user_cloud"
+        for connection in payload["connections"]
+    ) == 1
+    assert all(
+        connection.get("_plugin_unconfigured") is not True
+        for connection in payload["connections"]
+    )
+
+
 @pytest.mark.asyncio
 async def test_embedding_profile_test_checks_the_exact_discovered_model(monkeypatch):
     from agent.plugin import Plugin, PluginRegistry
     import agent.plugin.model_catalog as model_catalog
-    from route.settings.model_configuration import _test_model
+    from agent.plugin.plugin_impl.cyrene_model.routes import _test_model
 
     captured = {}
 
@@ -228,7 +320,7 @@ async def test_embedding_profile_test_checks_the_exact_discovered_model(monkeypa
 async def test_model_discovery_dispatches_through_provider_plugin(monkeypatch):
     from agent.plugin import Plugin, PluginContext, PluginRegistry
     import agent.plugin.model_catalog as model_catalog
-    from route.settings.model_configuration import _discover
+    from agent.plugin.plugin_impl.cyrene_model.routes import _discover
 
     captured = {}
 
@@ -283,7 +375,7 @@ async def test_model_discovery_dispatches_through_provider_plugin(monkeypatch):
 def test_default_provider_connections_include_managed_local_provider(
     isolated_model_store,
 ):
-    from cyrene.runtime.model_configuration import (
+    from agent.plugin.plugin_impl.cyrene_model.configuration import (
         CONFIG_VERSION,
         get_model_configuration,
         save_model_configuration,
@@ -446,7 +538,7 @@ def test_default_provider_connections_include_managed_local_provider(
 
 
 def test_managed_connections_can_be_deleted_and_readded(isolated_model_store):
-    from cyrene.runtime.model_configuration import (
+    from agent.plugin.plugin_impl.cyrene_model.configuration import (
         get_model_configuration,
         save_model_configuration,
     )
@@ -506,7 +598,7 @@ def test_managed_connections_can_be_deleted_and_readded(isolated_model_store):
 
 
 def test_profile_route_validation_rejects_dangling_references():
-    from cyrene.runtime.model_configuration import normalize_model_configuration
+    from agent.plugin.plugin_impl.cyrene_model.configuration import normalize_model_configuration
 
     raw = _configuration()
     raw["routes"]["primary"] = ["missing-profile"]
@@ -515,7 +607,7 @@ def test_profile_route_validation_rejects_dangling_references():
 
 
 def test_selectable_models_include_non_default_chat_profiles_only():
-    from cyrene.runtime.model_configuration import (
+    from agent.plugin.plugin_impl.cyrene_model.configuration import (
         normalize_model_configuration,
         selectable_model_candidates,
     )
@@ -548,7 +640,7 @@ def test_selectable_models_include_non_default_chat_profiles_only():
 def test_deleting_connection_persists_the_canonical_graph(
     isolated_model_store,
 ):
-    from cyrene.runtime.model_configuration import (
+    from agent.plugin.plugin_impl.cyrene_model.configuration import (
         get_model_configuration,
         save_model_configuration,
     )
@@ -596,7 +688,7 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert 'workbenchServices.modelSettings().ServicesPage' in overlay
     assert 'workbenchServices.modelSettings().UsagePage' in overlay
     assert '"settings.modelUsage": "模型配置"' in i18n
-    assert 'v.label(v.props, "settings.adapter", "协议")' in settings
+    assert 'v.label(v.props, "settings.adapter", "Adapter")' in settings
     assert '"settings.adapter": "Adapter"' in i18n
     assert '"settings.adapter": "协议"' in i18n
     assert '"settings.modelConnectionFailed": "Model connection failed."' in i18n
@@ -604,7 +696,7 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert '"settings.modelDiscoveryFailed": "Model discovery failed."' in i18n
     assert '"settings.modelDiscoveryFailed": "获取模型列表失败。"' in i18n
     assert "localizedModelConfigurationError(error, props)" in settings
-    assert 'h("h4", { id: "wb-mcfg-profiles-heading" }, "模型列表")' in settings
+    assert 'h("h4", { id: "wb-mcfg-profiles-heading" }, v.label(v.props, "settings.modelList", "Model list"))' in settings
     assert "档案描述一个可被多个用途引用的远端模型。" not in settings
     assert "连接配置与模型档案" not in settings
     assert 'v.selectedDescription ? h("p", null, v.selectedDescription) : null' in settings
@@ -623,25 +715,25 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert 'body: JSON.stringify(configPayload(draft))' in settings
     assert 'role: "combobox"' in settings
     assert 'aria-autocomplete": "list"' in settings
-    assert '"刷新模型"' in settings
-    assert 'label(props, "settings.inputPrice", "输入价格")' in settings
-    assert 'label(props, "settings.outputPrice", "输出价格")' in settings
-    assert 'label(props, "settings.cachePrice", "缓存价格")' in settings
+    assert '"settings.refreshModels"' in settings
+    assert 'label(props, "settings.inputPrice", "Input price")' in settings
+    assert 'label(props, "settings.outputPrice", "Output price")' in settings
+    assert 'label(props, "settings.cachePrice", "Cache price")' in settings
     assert 'props.onChange("price", updateProfilePriceField' in settings
-    assert 'h("span", null, "能力")' in settings
+    assert 'label(props, "settings.modelCapabilities", "Model capabilities")' in settings
     assert 'h("button", {' in settings
     assert 'className: "wb-mcfg-profile-summary"' in settings
     assert '"aria-expanded": expanded' in settings
     assert 'h("span", { className: "wb-btn wb-mcfg-profile-details-button"' in settings
     assert 'className: "wb-workbench-searchbox wb-mcfg-searchbox"' in settings
-    assert 'placeholder: "搜索模型服务…"' in settings
+    assert 'placeholder: v.label(v.props, "settings.searchModelServicesPlaceholder", "Search model services…")' in settings
     assert "config.connections.filter(matchesConnectionQuery)" in settings
     assert 'className: "wb-mcfg-filter"' not in settings
     assert 'return presetIcons[preset] || (isLocalConnection(connection) ? "onnx" : "")' in settings
     assert 'settingsGlyph("server", 17)' in settings
     assert ".wb-mcfg-toggle.is-on span {\n  transform: translateX(18px);\n  background: #fff;\n}" in styles
     assert 'label: "Adapter"' not in settings
-    assert 'return "本地模型"' in settings
+    assert 'label(props, "settings.localModels", "Local models")' in settings
     assert 'var serviceLabel = local ? "Local"' in settings
     assert 'localModels.filter(function (model) { return model.ready === true; }).length' in settings
     assert "localConnectionSignature" not in settings
@@ -651,13 +743,13 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert 'adapterId === "local_onnx"' in settings
     assert "!connections.some(isCodexConnection)" in settings
     assert "!connections.some(isLocalConnection)" in settings
-    assert 'next.name === "新服务商"' in settings
+    assert 'next.name === label(props, "settings.newProvider", "New provider")' in settings
     assert 'value === "local_onnx" ? "Local ONNX"' in settings
     assert 'className: "wb-model-card wb-local-model wb-mcfg-local-row"' in settings
     assert 'label(props, "settings.localModelActive"' in settings
     assert '!v.isLocalConnection(selected) ? h("section", { className: "wb-mcfg-form-section"' in settings
     assert 'hideHeader: true' in settings
-    assert 'title: "嵌入模型", titleKey: "settings.embeddingRouteTitle"' in settings
+    assert 'title: "Embedding model", titleKey: "settings.embeddingRouteTitle"' in settings
     assert 'label(props, "settings.selectModelProfile", "Select model profile…")' in settings
     assert 'capabilityText(profile, props)' in settings
     for key in (
@@ -678,7 +770,7 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert "store.save(snapshot, true, {" in settings
     assert "saveQueueInFlight.current" in settings
     assert '"保存配置"' not in settings
-    assert "并立即保存。" in settings
+    assert "saved immediately." in settings
     assert chat.index("var activeModel = String(runtime") < chat.index(
         "var liveModel = String(liveData"
     )
@@ -739,7 +831,7 @@ def test_settings_and_provider_icons_are_inlined_before_first_render():
     assert "<!-- CYRENE_ICON_ASSETS -->" in index
     assert "function inlineIconAssets(" in build
     assert "function svgMarkup(" in build
-    assert "inlineIconAssets(settingsIconFiles, PROVIDER_ICON_FILES)" in build
+    assert "inlineIconAssets(settingsIconFiles, PROVIDER_ICON_FILES, EXTENSION_ICON_FILES)" in build
     assert "window.CyreneIconAssets" in overlay
     assert "settingsIconMarkup(item.icon)" in overlay
     assert 'className: "settings-overlay-tab-glyph is-inline"' in overlay
@@ -755,15 +847,15 @@ def test_model_service_credentials_are_agent_write_only_and_r3():
 
     assert '"data-cyrene-agent-secret-input": "true"' in settings
     assert '"data-cyrene-risk": "R3"' in settings
-    assert '"aria-label": "API 密钥（只写）"' in settings
+    assert '"aria-label": v.label(v.props, "settings.apiKeyWriteOnly", "API key (write only)")' in settings
     assert "if (modelPanel) return;" not in surface
     assert 'action_id: "set_secret", kind: "set_value", risk: risk' in surface
     assert 'input_schema: { secret_value: "text<=4000" }' in surface
     assert 'String(input.secret_value || "")' in surface
     assert 'element.classList.contains("is-danger")' in surface
-    assert '"aria-label": "连接名称"' in settings
-    assert '"aria-label": "模型 ID"' in settings
-    assert '"aria-label": "模型服务 API 地址"' in settings
+    assert '"aria-label": v.label(v.props, "settings.connectionName", "Connection name")' in settings
+    assert 'label(props, "settings.modelId", "Model ID")' in settings
+    assert '"aria-label": v.label(v.props, "settings.modelServiceApiEndpoint", "Model service API endpoint")' in settings
 
 
 def test_model_service_api_row_has_per_connection_proxy_switch():
@@ -811,7 +903,7 @@ def test_services_autosave_is_single_flight_retryable_and_current_only():
     assert "saveQueueBlockedVersion.current = -1;" in retry
     assert "editVersion.current" not in retry
     assert '"立即保存"' not in services
-    assert 'onClick: retryQueuedSave }, "重试保存"' in services
+    assert 'onClick: retryQueuedSave }, label(props, "settings.retrySave", "Retry save")' in services
     assert 'className: "wb-mcfg-status is-error wb-mcfg-save-error"' in services
     assert ".wb-mcfg-save-error" in styles
 

@@ -25,20 +25,16 @@ async def test_scheduler_uses_independent_maintenance_cadences(
     tmp_path,
     monkeypatch,
 ):
-    from cyrene.runtime import scheduler
+    from agent.plugin import background
     from cyrene.workbench import notifications as workbench_notifications
 
-    monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
-    monkeypatch.setattr(scheduler, "_get_heartbeat_interval", lambda: 1800)
-    monkeypatch.setattr(scheduler, "SCHEDULER_INTERVAL", 60)
-    monkeypatch.setattr(scheduler, "PATTERN_DETECTION_INTERVAL", 600)
-    monkeypatch.setattr(scheduler, "STEWARD_INTERVAL", 3600)
     monkeypatch.setenv("CYRENE_PLUGIN_IMPL_DIR", str(tmp_path / "plugin_impl"))
     monkeypatch.setenv("SCHEDULER_INTERVAL", "60")
-    monkeypatch.setattr(scheduler, "_workbench_db_path", "")
     monkeypatch.setattr(workbench_notifications, "configure_store", lambda _path: None)
 
-    instance = scheduler.setup_scheduler(None, str(tmp_path / "cyrene.runtime.database"))
+    instance = background.setup_background_plugin_scheduler(
+        str(tmp_path / "cyrene.runtime.database")
+    )
     jobs = {job.id: job for job in instance.get_jobs()}
 
     assert set(jobs) == {
@@ -57,30 +53,76 @@ async def test_scheduler_uses_independent_maintenance_cadences(
 
 
 async def test_due_task_job_invokes_hidden_plugin_not_maintenance(monkeypatch, tmp_path):
-    from cyrene.runtime import scheduler
+    from agent.plugin import background
     from cyrene.workbench import notifications as workbench_notifications
 
-    proactive = AsyncMock()
-    learning = AsyncMock()
     monkeypatch.setenv("CYRENE_PLUGIN_IMPL_DIR", str(tmp_path / "plugin_impl"))
-    monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
     monkeypatch.setattr(workbench_notifications, "configure_store", lambda _path: None)
-    monkeypatch.setattr(scheduler, "_heartbeat_proactive_check", proactive)
-    monkeypatch.setattr(scheduler, "_behavior_learning_tick", learning)
-    scheduler.setup_scheduler(None, str(tmp_path / "runtime.sqlite3"))
-    host = scheduler._background_plugin_host
-    assert host is not None
+    scheduler = background.setup_background_plugin_scheduler(
+        str(tmp_path / "runtime.sqlite3")
+    )
+    scheduled_job = scheduler.get_job("scheduled_tasks")
+    assert scheduled_job is not None
+    host = scheduled_job.func.__self__
     plugin_call = AsyncMock(
         return_value=SimpleNamespace(success=True, error="")
     )
-    monkeypatch.setattr(host.runtime, "call", plugin_call)
+    monkeypatch.setattr(background.PluginRuntime, "call", plugin_call)
 
-    await host._invoke("schedule.tick", {}, "scheduled_tasks")
+    binding = host._installed["scheduled_tasks"]
+    await host._invoke(
+        "schedule.tick",
+        {},
+        "scheduled_tasks",
+        binding.pack_id,
+        binding.source,
+        binding.handler_identity,
+    )
 
     plugin_call.assert_awaited_once()
     assert plugin_call.await_args.args[0] == "schedule.tick"
-    proactive.assert_not_awaited()
-    learning.assert_not_awaited()
+
+
+async def test_disabled_background_packs_are_not_scheduled_or_invoked(
+    monkeypatch, tmp_path
+):
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from agent.plugin.background import BackgroundPluginHost
+
+    monkeypatch.setenv("CYRENE_PLUGIN_IMPL_DIR", str(tmp_path / "plugin_impl"))
+    scheduler = AsyncIOScheduler()
+    host = BackgroundPluginHost(scheduler)
+    host.registry.configure_activation(
+        plugins={},
+        packs={
+            "cyrene_schedule": False,
+            "cyrene_proactive": False,
+            "cyrene_skills": False,
+            "cyrene_memory": False,
+        },
+    )
+    host.attach()
+
+    jobs = {job.id for job in scheduler.get_jobs()}
+    assert "scheduled_tasks" not in jobs
+    assert "proactive_heartbeat" not in jobs
+    assert "behavior_learning" not in jobs
+    assert "steward" not in jobs
+    assert "short_term_cleanup" not in jobs
+    assert "plugin_registry_sync" in jobs
+
+    plugin_call = AsyncMock()
+    monkeypatch.setattr("agent.plugin.background.PluginRuntime.call", plugin_call)
+    for plugin_name, job_id in (
+        ("schedule.tick", "scheduled_tasks"),
+        ("proactive.heartbeat", "proactive_heartbeat"),
+        ("skills.learning.tick", "behavior_learning"),
+        ("memory.steward.tick", "steward"),
+        ("memory.short_term.cleanup", "short_term_cleanup"),
+    ):
+        await host._invoke(plugin_name, {}, job_id, None, "disabled", 0)
+    plugin_call.assert_not_awaited()
 
 
 def test_steward_reads_recent_workbench_session_archives(tmp_path, monkeypatch):
@@ -162,8 +204,10 @@ async def test_steward_processes_workbench_archive_without_owner_id(
         data_directory=tmp_path,
         conversations_directory=tmp_path / "conversations",
         recent_conversations=AsyncMock(return_value=""),
-        read_soul=lambda: "",
-        apply_soul_update=lambda _commands: [],
+    )
+    soul_service = SimpleNamespace(
+        read=lambda: "# Independent Soul",
+        apply_update=lambda _commands: [],
     )
     monkeypatch.setattr(plugin_runtime, "active_plugin_service", lambda _name: None)
 
@@ -172,28 +216,31 @@ async def test_steward_processes_workbench_archive_without_owner_id(
         interval=3600,
         now=100_000,
         model_runner=model_runner,
+        soul_application=soul_service,
     )
 
     assert ran is True
     model_runner.assert_awaited_once_with(
         "Workbench conversation text",
-        "",
+        "# Independent Soul",
         None,
     )
     assert (tmp_path / "memory_steward.json").exists()
 
 
-async def test_scheduler_steward_tick_only_delegates_to_memory_plugin(monkeypatch):
-    from cyrene.runtime import scheduler
+async def test_steward_background_plugin_delegates_to_memory_service():
+    from agent.plugin import PluginContext
+    from agent.plugin.plugin_impl import cyrene_memory
 
     run_steward = AsyncMock(return_value=True)
     service = SimpleNamespace(run_steward_if_needed=run_steward)
-    monkeypatch.setattr(scheduler, "_memory_service", lambda: service)
-    monkeypatch.setattr(scheduler, "STEWARD_INTERVAL", 4321)
 
-    await scheduler._steward_tick(None, "ignored.db")
+    result = await cyrene_memory._steward_tick(
+        {}, PluginContext(services={"memory": service})
+    )
 
-    run_steward.assert_awaited_once_with(interval=4321)
+    assert result == {"ok": True, "ran": True}
+    run_steward.assert_awaited_once_with(interval=cyrene_memory.STEWARD_INTERVAL)
 
 
 

@@ -6,8 +6,8 @@ from agent.plugin import PluginContext
 from cyrene.runtime import config_store
 from cyrene.runtime.host_bridge import HostBridgeError, call_host
 from cyrene.runtime.settings_service import (
-    SPEC_BY_KEY,
     SettingsServiceError,
+    setting_spec_by_key,
     update,
     validate_changes,
 )
@@ -35,7 +35,8 @@ TOOL_METADATA = {"read_only": False, "resource_keys": ("cyrene:settings",), "req
 
 
 def _operation_for_changes(changes: dict[str, Any]) -> tuple[str, frozenset[str]]:
-    risks = {SPEC_BY_KEY[key].risk for key in changes if key in SPEC_BY_KEY}
+    specs = setting_spec_by_key()
+    risks = {specs[key].risk for key in changes if key in specs}
     if "shortcut_bindings" in changes:
         return "cyrene.settings.shortcuts", frozenset({"R2"})
     if "enabled_plugin_packs" in changes or "enabled_plugins" in changes:
@@ -105,6 +106,23 @@ async def handler(args: dict[str, Any], _context: PluginContext) -> str:
                 expected_revision=int(args["expected_revision"]),
                 approved_risks=approved_risks,
             )
+            if {
+                "enabled_plugins",
+                "enabled_plugin_packs",
+            } & set(changes):
+                from agent.plugin import active_plugin_application_host
+                from cyrene.runtime import settings_store
+
+                host = active_plugin_application_host()
+                if host is None:
+                    raise SettingsServiceError(
+                        "Plugin activation host became unavailable"
+                    )
+                host.registry.configure_activation(
+                    plugins=settings_store.get_enabled_plugins(),
+                    packs=settings_store.get_enabled_plugin_packs(),
+                )
+                await host.reconcile_activation()
         result = envelope(
             "success", operation_id, "Cyrene settings updated atomically.",
             revision=outcome["revision"], apply_mode=outcome["apply_mode"],

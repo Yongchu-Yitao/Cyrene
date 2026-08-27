@@ -40,6 +40,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncGenerator, Awaitable, Callable
 from uuid import uuid4
 
+from cyrene.localization import localized
 from cyrene.observability.trace import trace_span
 from cyrene.runtime.run_coordinator import RunCoordinator, RunLease, run_coordinator_for
 from cyrene.workbench.chat_application import (
@@ -386,7 +387,10 @@ class ChatRunEventStore:
                     "runId": str(row["run_id"]),
                     "type": "error",
                     "code": "process_restarted",
-                    "message": "The Cyrene process restarted before this run completed.",
+                    "message": localized(
+                        "The Cyrene process restarted before this run completed.",
+                        "Cyrene 进程在本次运行完成前已重启。",
+                    ),
                 }
                 self._append_locked(conn, str(row["run_id"]), event)
                 conn.execute(
@@ -640,6 +644,16 @@ class ChatRun:
         the live exchange; durable replay flushes in the background so SQLite
         contention cannot delay or fail the Agent result.
         """
+        try:
+            from cyrene.workbench.usage_events import publish_usage_event
+
+            await publish_usage_event(event, session_id=self.chat_id)
+        except Exception:
+            logger.debug(
+                "Failed to publish Workbench usage event for %s",
+                self.chat_id,
+                exc_info=True,
+            )
         if (
             self._persist_live_message is not None
             and str(event.get("type") or "") == "intermediate_message"
@@ -1003,7 +1017,10 @@ class ChatRunManager:
                         "error": "chat_run_driver_failed",
                         "code": "chat_run_driver_failed",
                         "detail_key": "workbenchChat.error.driverFailed",
-                        "message": "The agent run stopped unexpectedly. Please retry.",
+                        "message": localized(
+                            "The agent run stopped unexpectedly. Please retry.",
+                            "智能体运行意外停止，请重试。",
+                        ),
                     })
                 except Exception:
                     logger.exception("Failed to publish chat driver error for %s", run.chat_id)

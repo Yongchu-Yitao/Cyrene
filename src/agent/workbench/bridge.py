@@ -671,14 +671,14 @@ class _PublisherBinding:
     def _receive(self, event: AgentSessionEvent) -> None:
         if event.run_id != self._run_id:
             return
-        manager = self._session.subagent_manager
-        pending_subagents = bool(
-            manager is not None and manager.has_pending_work
+        driver = self._session.session_driver
+        pending_driver = bool(
+            driver is not None and driver.has_pending_work
         )
-        if pending_subagents and event.type == "assistant.completed":
+        if pending_driver and event.type == "assistant.completed":
             return
         if (
-            pending_subagents
+            pending_driver
             and event.type == "session.state"
             and str(event.data.get("status") or "") == "idle"
         ):

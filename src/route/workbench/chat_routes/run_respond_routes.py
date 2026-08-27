@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
 
 from route import schemas as api_models
+from route.errors import localized_error_response
 from route.workbench.chat_routes.context import ChatRouteContext
 
 
@@ -21,15 +21,16 @@ def register_run_respond_routes(router: APIRouter, context: ChatRouteContext) ->
         """Forward a dynamic Agent-owned permission or elicitation response."""
         chat = await asyncio.to_thread(service.repository.get, chat_id)
         if not chat:
-            return JSONResponse({"error": "chat not found"}, status_code=404)
+            return localized_error_response(
+                "Chat not found.", "未找到对话。", 404, "chat_not_found"
+            )
         if service.run_manager.get(chat_id) is None:
-            return JSONResponse(
-                {
-                    "error": "the Agent request is no longer active",
-                    "code": "request_expired",
-                    "failureKind": "request_expired",
-                },
-                status_code=409,
+            return localized_error_response(
+                "The Agent request is no longer active.",
+                "该 Agent 请求已失效。",
+                409,
+                "request_expired",
+                failureKind="request_expired",
             )
         from cyrene.agent_runtime import (
             AgentRuntimeError,
@@ -44,7 +45,37 @@ def register_run_respond_routes(router: APIRouter, context: ChatRouteContext) ->
                 body.get("response") if isinstance(body.get("response"), dict) else {},
             )
         except AgentRuntimeError as exc:
-            return JSONResponse(
-                {"ok": False, "error": str(exc), **exc.to_public_dict()},
-                status_code=409 if exc.kind == "request_expired" else 400,
+            messages = {
+                "request_expired": (
+                    "The Agent request is no longer active.",
+                    "该 Agent 请求已失效。",
+                ),
+                "capability_missing": (
+                    "This Agent does not support that response.",
+                    "此 Agent 不支持该响应。",
+                ),
+                "agent_disabled": (
+                    "The Agent is disabled.",
+                    "该 Agent 已停用。",
+                ),
+                "agent_crashed": (
+                    "The Agent stopped unexpectedly. Start it again and retry.",
+                    "Agent 意外停止，请重新启动后再试。",
+                ),
+            }
+            en, zh = messages.get(
+                exc.kind,
+                (
+                    "The Agent response could not be submitted.",
+                    "无法提交 Agent 响应。",
+                ),
+            )
+            return localized_error_response(
+                en,
+                zh,
+                409 if exc.kind == "request_expired" else 400,
+                exc.kind,
+                failureKind=exc.kind,
+                retryable=exc.retryable,
+                ok=False,
             )

@@ -7,7 +7,7 @@ from typing import Any
 
 from agent.plugin import PluginContext
 from .definitions import get_native_tool_def
-from cyrene.learning.skills import build_skills
+from .skills import build_skills
 
 TOOL_NAME = 'ListSkills'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)

@@ -8,14 +8,31 @@ from conftest import (
 )
 import io
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from cyrene.voice import engine
-from cyrene.voice import minimax as minimax_tts
-from route import voice as voice_routes
+from agent.plugin.plugin_impl.cyrene_voice import engine
+from agent.plugin.plugin_impl.cyrene_voice import minimax as minimax_tts
+from agent.plugin.plugin_impl.cyrene_voice import routes as voice_routes
+
+
+def _patch_voice_model_service(monkeypatch, ready, *, model_dir=None):
+    """Install the Knowledge Plugin's local-model service port for a test."""
+    service = SimpleNamespace(
+        is_local_model_ready=lambda model_id: bool(ready(model_id)),
+        local_model_dir=lambda _model_id: model_dir or Path("/tmp/cyrene-voice-model"),
+        local_model_provider=lambda _model_id: "cpu",
+        register_local_model_resetter=lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        engine,
+        "active_plugin_service",
+        lambda name: service if name == "knowledge" else None,
+    )
+    return service
 
 
 def test_voice_status_uses_bundled_preset_without_custom_profile(monkeypatch):
@@ -30,7 +47,10 @@ def test_voice_status_uses_bundled_preset_without_custom_profile(monkeypatch):
         "voice_preset": engine.DEFAULT_PRESET_ID,
     })
     monkeypatch.setattr(engine, "_profile_ready", lambda _settings=None: False)
-    monkeypatch.setattr(engine.local_models, "is_ready", lambda model_id: model_id == engine.PRESET_TTS_MODEL_ID)
+    _patch_voice_model_service(
+        monkeypatch,
+        lambda model_id: model_id == engine.PRESET_TTS_MODEL_ID,
+    )
 
     payload = engine.status()
 
@@ -101,7 +121,7 @@ def test_custom_voice_profile_save_status_synthesis_and_delete(monkeypatch, tmp_
     monkeypatch.setattr(engine.config_store, "get_setting", lambda key, default=None: dict(settings))
     monkeypatch.setattr(engine.config_store, "set_setting", lambda key, value: settings.update(value))
     monkeypatch.setattr(engine, "_runtime_available", lambda: True)
-    monkeypatch.setattr(engine.local_models, "is_ready", lambda _model_id: True)
+    _patch_voice_model_service(monkeypatch, lambda _model_id: True)
     monkeypatch.setattr(engine, "_preset_ready", lambda: True)
 
     source = io.BytesIO()
@@ -155,7 +175,10 @@ def test_kokoro_preset_selection_is_saved_and_used_for_generation(monkeypatch):
     monkeypatch.setattr(engine.config_store, "get_setting", lambda key, default=None: dict(settings))
     monkeypatch.setattr(engine.config_store, "set_setting", lambda key, value: settings.update(value))
     monkeypatch.setattr(engine, "_runtime_available", lambda: True)
-    monkeypatch.setattr(engine.local_models, "is_ready", lambda model_id: model_id == engine.PRESET_TTS_MODEL_ID)
+    _patch_voice_model_service(
+        monkeypatch,
+        lambda model_id: model_id == engine.PRESET_TTS_MODEL_ID,
+    )
 
     selected = "kokoro-zf_001"
     payload = engine.update_settings(voice_mode="preset", voice_preset=selected)
@@ -202,8 +225,11 @@ def test_zipvoice_default_preset_is_available_and_uses_bundled_reference(monkeyp
     monkeypatch.setattr(engine.config_store, "get_setting", lambda key, default=None: dict(settings))
     monkeypatch.setattr(engine.config_store, "set_setting", lambda key, value: settings.update(value))
     monkeypatch.setattr(engine, "_runtime_available", lambda: True)
-    monkeypatch.setattr(engine.local_models, "is_ready", lambda model_id: model_id == engine.CUSTOM_TTS_MODEL_ID)
-    monkeypatch.setattr(engine.local_models, "model_dir", lambda _model_id: model_root)
+    _patch_voice_model_service(
+        monkeypatch,
+        lambda model_id: model_id == engine.CUSTOM_TTS_MODEL_ID,
+        model_dir=model_root,
+    )
 
     payload = engine.status()
     assert payload["tts_model"] == engine.CUSTOM_TTS_MODEL_ID
@@ -235,7 +261,7 @@ def test_zipvoice_default_preset_is_available_and_uses_bundled_reference(monkeyp
 
 def test_auto_tts_prefers_configured_minimax_without_local_runtime(monkeypatch):
     monkeypatch.setattr(engine, "_runtime_available", lambda: False)
-    monkeypatch.setattr(engine.local_models, "is_ready", lambda _model_id: False)
+    _patch_voice_model_service(monkeypatch, lambda _model_id: False)
     monkeypatch.setattr(engine.minimax_tts, "is_configured", lambda: True)
     monkeypatch.setattr(engine, "_settings", lambda: {
         "auto_read": True,
@@ -288,7 +314,7 @@ def test_explicit_minimax_tts_reuses_model_service_and_returns_wav(monkeypatch):
 
 def test_minimax_adapter_uses_configured_connection_and_decodes_hex(monkeypatch):
     requested = {}
-    monkeypatch.setattr(minimax_tts, "get_model_configuration", lambda: {
+    model_service = SimpleNamespace(get_model_configuration=lambda: {
         "connections": [{
             "id": "minimax",
             "name": "MiniMax",
@@ -298,6 +324,12 @@ def test_minimax_adapter_uses_configured_connection_and_decodes_hex(monkeypatch)
             "options": {"provider_preset": "minimax"},
         }],
     })
+    import agent.plugin as plugin_api
+    monkeypatch.setattr(
+        plugin_api,
+        "active_plugin_service",
+        lambda name: model_service if name == "model_configuration" else None,
+    )
 
     class FakeResponse:
         status_code = 200
@@ -343,7 +375,10 @@ def test_custom_voice_profile_restores_previous_audio_when_settings_save_fails(m
     reference_audio.write_bytes(b"previous-reference")
     monkeypatch.setattr(engine, "VOICE_ROOT", voice_root)
     monkeypatch.setattr(engine, "REFERENCE_AUDIO", reference_audio)
-    monkeypatch.setattr(engine.local_models, "is_ready", lambda model_id: model_id == engine.CUSTOM_TTS_MODEL_ID)
+    _patch_voice_model_service(
+        monkeypatch,
+        lambda model_id: model_id == engine.CUSTOM_TTS_MODEL_ID,
+    )
     monkeypatch.setattr(engine, "_settings", lambda: {
         "auto_read": False,
         "auto_send_after_asr": False,
@@ -494,7 +529,7 @@ def test_voice_controls_follow_existing_chat_layout():
     assert 'if (tab === "voice") return;' in settings
     assert "wbcStartVoiceRecorder().then" in settings
     assert "autoStopOnSilence: true" not in settings.split("function startVoiceReferenceRecording", 1)[1].split("useEffectSt(function ()", 1)[0]
-    capabilities_call = settings.split('(tab === "voice" || tab === "tools") && CapabilitiesPanel({', 1)[1].split("}),", 1)[0]
+    capabilities_call = settings.split('tab === "voice" && CapabilitiesPanel({', 1)[1].split("}),", 1)[0]
     capabilities_props = settings.split("function CapabilitiesPanel(p)", 1)[1].split("} = p;", 1)[0]
     assert "voiceReferencePhase, voiceReferenceElapsed" in capabilities_call
     assert "voiceReferencePhase, voiceReferenceElapsed" in capabilities_props
@@ -614,21 +649,24 @@ def test_voice_stream_refreshes_status_once_per_reply_instead_of_per_delta():
 
 
 def test_local_model_card_hides_stale_error_and_localizes_backend_errors():
-    settings = workbench_settings_source()
+    settings = frontend_module_source("settings-model-configuration.jsx")
+    voice = frontend_module_source("features/settings/capabilities.jsx")
     translations = workbench_i18n_source()
-    models_panel = settings.split("function ModelsPanel(p) {", 1)[1].split("function modelDraftField", 1)[0]
+    models_panel = settings.split("function LocalModelsSection(props) {", 1)[1].split("function ModelIdCombobox", 1)[0]
 
     # Readiness takes precedence over a stale download error: the error is only
     # surfaced for models that are not ready, and the raw backend string is
     # never rendered as the card's primary error label.
-    assert "var hasError = !item.ready && !!item.error;" in models_panel
-    assert "hasError && React.createElement(\"small\", { className: \"wb-local-model-error\" }, localizeLocalModelError(item.error, t))" in models_panel
-    assert '"wb-local-model-error" }, item.error)' not in models_panel
-    assert "item.error ? t(\"settings.localModelError\")" not in models_panel
+    assert "var hasError = !model.ready && !!model.error;" in models_panel
+    assert "var statusText = hasError" in models_panel
+    assert 'label(props, "settings.localModelError", "Error")' in models_panel
+    assert "localizedLocalModelError(model.error, props)" in models_panel
+    assert 'className: "wb-local-model-error wb-mcfg-error-text"' in models_panel
+    assert 'className: "wb-local-model-error" }, model.error' not in models_panel
 
     # A ready model clears stale error state so later status reads stay clean.
-    assert "if (item && item.ready) return { ...item, error: \"\" };" in settings
-    assert "normalizeLocalModels(payload.models || [])" in settings
+    assert 'setLocalError("");' in settings
+    assert "setLocalModels(payload.models || []);" in settings
 
     # Known download/extraction/checksum/network failures map to localized keys.
     assert '"archive output is missing or invalid"' in settings
@@ -638,10 +676,12 @@ def test_local_model_card_hides_stale_error_and_localizes_backend_errors():
     assert "settings.localModelErrorChecksum" in settings
     assert "settings.localModelErrorNetwork" in settings
     assert "settings.localModelErrorGeneric" in settings
+    assert '"settings.localModelReady"' in voice
+    assert '"settings.localModelNotDownloaded"' in voice
 
     # Retry still triggers a fresh download for a failed, non-ready model.
-    assert 'manageLocalModel(item.id, item.ready ? "delete" : "download")' in models_panel
-    assert 't("settings.retry")' in models_panel
+    assert 'props.onManage(model, model.ready ? "delete" : "download")' in models_panel
+    assert 'label(props, "settings.retry", "Retry")' in models_panel
 
     # Every new key ships in both the English and Chinese dictionaries.
     for key in (

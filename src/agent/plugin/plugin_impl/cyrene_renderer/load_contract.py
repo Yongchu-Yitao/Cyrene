@@ -6,6 +6,7 @@ from collections.abc import Collection, Mapping
 from typing import Any
 
 from agent.plugin import Plugin, PluginContext
+from agent.plugin.native_runtime import plugin_localized
 
 TOOL_NAME = "LoadRendererContract"
 _FORMATS = ("details", "card", "chart", "button", "layout")
@@ -127,16 +128,33 @@ async def handler(
         else ()
     )
     if "interactive_blocks" not in supported:
-        return "Tool unavailable: the current client does not support interactive response blocks."
+        return plugin_localized(
+            context,
+            "Tool unavailable: the current client does not support interactive response blocks.",
+            "工具不可用：当前客户端不支持交互式响应块。",
+        )
     requested = args.get("formats")
     if not isinstance(requested, list):
-        return "Tool failed: formats must be an array."
+        return plugin_localized(
+            context,
+            "Tool failed: formats must be an array.",
+            "工具失败：formats 必须是数组。",
+        )
     formats = list(dict.fromkeys(str(item or "").strip() for item in requested))
     unknown = [item for item in formats if item not in _CONTRACTS]
     if unknown:
-        return "Tool failed: unsupported renderer format(s): " + ", ".join(unknown)
+        return plugin_localized(
+            context,
+            "Tool failed: unsupported renderer format(s): {formats}",
+            "工具失败：不支持的渲染格式：{formats}",
+            formats=", ".join(unknown),
+        )
     if not formats:
-        return "Tool failed: select at least one renderer format."
+        return plugin_localized(
+            context,
+            "Tool failed: select at least one renderer format.",
+            "工具失败：请至少选择一种渲染格式。",
+        )
     sections = [_CONTRACTS[item] for item in formats]
     return "\n\n".join([
         "[Trusted Workbench renderer contract]",

@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from cyrene.localization import app_language, localized
 from cyrene.workbench.chat_external_turn_service import ExternalTurnProjection
 from cyrene.workbench.notifications import append_notification
 
@@ -255,15 +256,29 @@ class ChatReplyFinalizationApplicationService:
     ) -> None:
         if request.command or request.retry or request.is_side_agent:
             return
+        language = app_language()
+        chat_title = chat.get('title') or localized(
+            "New chat", "新对话", language=language
+        )
         append_notification(
-            title="Agent 回复完成",
-            body=f"Agent 在「{chat.get('title') or '新对话'}」中回复了你。",
+            title=localized(
+                "Agent reply completed", "Agent 回复完成", language=language
+            ),
+            body=localized(
+                'The Agent replied to you in "{title}".',
+                'Agent 在「{title}」中回复了你。',
+                language=language,
+                title=chat_title,
+            ),
             tab="mention",
             project_ref=request.project_id,
             source="workbench_chat_reply",
-            source_label="对话",
+            source_label=localized(
+                "Conversation", "对话", language=language
+            ),
             link_label=str(chat.get("title") or ""),
             meta={"chatId": request.chat_id},
+            language=language,
         )
 
 

@@ -51,9 +51,40 @@ function wbcSubscribeTerminalRefresh(projectId, refreshTerminals) {
   };
 }
 
+function wbcCompleteBrowserTakeover(activeChat, payload, handleAnswer) {
+  var pending = activeChat && activeChat.pendingQuestion;
+  if (!pending || !pending.id) {
+    return Promise.reject(new Error(wbcT(
+      "workbenchChat.takeover.noLongerPending",
+      "The sign-in confirmation is no longer pending."
+    )));
+  }
+  var takeoverQuestionId = String(payload && payload.questionId || "");
+  if (takeoverQuestionId && String(pending.id || "") !== takeoverQuestionId) {
+    return Promise.reject(new Error(wbcT(
+      "workbenchChat.takeover.updated",
+      "The sign-in confirmation changed. Use the latest confirmation in the conversation."
+    )));
+  }
+  handleAnswer(
+    pending.id,
+    (payload && payload.text) || wbcT("browser.takeover.completeLogin", "I completed sign-in")
+  );
+  return Promise.resolve();
+}
+
 function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest, taskWorkspace, pinnedSessions, onActiveChatChange, onActiveChatIdChange, onChatsChange, navCollapsed, onToggleNavCollapsed, collapseControl, moduleDock }) {
   workbenchServices.i18n().use();
-  workbenchServices.data().useVersion();
+  var dataStore = workbenchServices.data();
+  dataStore.useVersion();
+  var pluginModules = Array.isArray(dataStore.state.pluginModules)
+    ? dataStore.state.pluginModules : [];
+  var codeAvailable = pluginModules.indexOf("code") >= 0;
+  var agentsAvailable = pluginModules.indexOf("agents") >= 0;
+  var mapAvailable = pluginModules.indexOf("map") >= 0;
+  var browserAvailable = pluginModules.indexOf("browser") >= 0;
+  var memoryAvailable = pluginModules.indexOf("memory") >= 0;
+  var knowledgeAvailable = pluginModules.indexOf("knowledge") >= 0;
   taskWorkspace = taskWorkspace || {};
   pinnedSessions = pinnedSessions || {};
   var tasks = taskWorkspace.tasks;
@@ -74,7 +105,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   var model = WorkbenchChatModel;
   var projectId = project ? project.id : "";
   var terminalModule = workbenchServices.terminal();
-  var terminalCatalog = useWbcTerminalCatalog(projectId);
+  var terminalCatalog = useWbcTerminalCatalog(projectId, codeAvailable);
   var terminalClient = terminalCatalog.client;
   var terminals = terminalCatalog.terminals;
   var setTerminals = terminalCatalog.setTerminals;
@@ -121,7 +152,14 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     return wbcLoadDraftAgentBinding(projectId);
   });
   var draftAgentBindingRef = useWbcRef(draftAgentBinding);
+  if (!agentsAvailable) draftAgentBindingRef.current = null;
   useWbcEffect(function () { draftAgentBindingRef.current = draftAgentBinding; }, [draftAgentBinding]);
+  useWbcEffect(function () {
+    if (agentsAvailable) return;
+    draftAgentBindingRef.current = null;
+    setDraftAgentBinding(null);
+    wbcSaveDraftAgentBinding(projectId, null);
+  }, [agentsAvailable, projectId]);
   function handleDraftAgentChange(binding) {
     setDraftAgentBinding(binding || null);
     wbcSaveDraftAgentBinding(projectId, binding || null);
@@ -224,12 +262,12 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     setRailMode("chat");
     pendingTerminalRestoreRef.current = { projectId: "", terminalId: "" };
     refreshTerminals();
-  }, [projectId]);
+  }, [projectId, codeAvailable]);
 
   useWbcEffect(function () {
-    if (!projectId || !isActive) return undefined;
+    if (!codeAvailable || !projectId || !isActive) return undefined;
     return wbcSubscribeTerminalRefresh(projectId, refreshTerminals);
-  }, [projectId, isActive]);
+  }, [projectId, isActive, codeAvailable]);
 
   useWbcEffect(function () {
     var pending = pendingTerminalRestoreRef.current;
@@ -550,6 +588,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   // of the same session. Keep only the floating presentation state here so the
   // WebContentsView is never mounted in two places at once.
   var [browserWindowModeByChat, setBrowserWindowModeByChat] = useWbcState({});
+  var knowledgeReadControllersRef = useWbcRef(new Set());
   var [viewerFile, setViewerFile] = useWbcState(null);
   var [subagentData, setSubagentData] = useWbcState({ rounds: [], activeRoundId: "", agents: [], messages: [] });
   var [subagentLoading, setSubagentLoading] = useWbcState(false);
@@ -679,6 +718,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
       setViewerFile: setViewerFile, setSideTab: setSideTab, setSideVisible: setSideVisible,
       setBrowserActiveByChat: setBrowserActiveByChat,
       setBrowserWindowModeByChat: setBrowserWindowModeByChat,
+      knowledgeAvailable: knowledgeAvailable,
+      knowledgeReadControllersRef: knowledgeReadControllersRef,
       setSubagentData: setSubagentData, setSubagentLoading: setSubagentLoading,
       setError: setError, selectResourceSplit: selectResourceSplit,
       openPaneContent: openPaneContent,
@@ -1093,6 +1134,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   // 为当前对话的浏览器。
   var browserRestoredRef = useWbcRef({});
   useWbcEffect(function () {
+    if (!browserAvailable) return undefined;
     function handleCopiedBrowser(event) {
       var targetChatId = String(event && event.detail && event.detail.targetChatId || "");
       if (!targetChatId) return;
@@ -1108,16 +1150,19 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     return function () {
       window.removeEventListener("cyrene:browser-copied-to-chat", handleCopiedBrowser);
     };
-  }, []);
+  }, [browserAvailable]);
 
   useWbcEffect(function () {
+    if (!browserAvailable) return;
     var bridge = window.cyrene && window.cyrene.browser;
     if (!bridge || typeof bridge.getState !== "function") return;
+    var cancelled = false;
     var chatId = activeChatId || "";
     if (!chatId) return;
     if (browserRestoredRef.current[chatId]) return;
     browserRestoredRef.current[chatId] = true;
     bridge.getState(chatId).then(function (state) {
+      if (cancelled) return;
       if (String(state && state.sessionId || "") !== String(chatId)) return;
       if (!state || !state.tabs || !Array.isArray(state.tabs) || !state.tabs.length) return;
       setBrowserActiveByChat(function (prev) {
@@ -1129,7 +1174,52 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         return Object.assign({}, prev, { [chatId]: "pip" });
       });
     }).catch(function (err) { console.error("getState failed", err); });
-  }, [activeChatId]);
+    return function () { cancelled = true; };
+  }, [activeChatId, browserAvailable]);
+
+  useWbcEffect(function () {
+    if (!knowledgeAvailable) {
+      knowledgeReadControllersRef.current.forEach(function (controller) { controller.abort(); });
+      knowledgeReadControllersRef.current.clear();
+    }
+  }, [knowledgeAvailable]);
+
+  useWbcEffect(function () {
+    if (mapAvailable && browserAvailable) return;
+    var blockedKinds = new Set([].concat(mapAvailable ? [] : ["map"], browserAvailable ? [] : ["browser"]));
+    setResourceSplitByChat(function (current) {
+      var next = {};
+      var changed = false;
+      Object.keys(current).forEach(function (key) {
+        var value = current[key];
+        if (value && blockedKinds.has(value.type)) changed = true;
+        else next[key] = value;
+      });
+      return changed ? next : current;
+    });
+    setPaneLayoutsByChat(function (current) {
+      var next = Object.assign({}, current);
+      var changed = false;
+      Object.keys(current).forEach(function (key) {
+        var layout = current[key] || {};
+        var left = (layout.left || []).filter(function (card) { return !blockedKinds.has(card && card.kind); });
+        var right = (layout.right || []).filter(function (card) { return !blockedKinds.has(card && card.kind); });
+        if (left.length === (layout.left || []).length && right.length === (layout.right || []).length) return;
+        if (!left.length && right.length) { left = right; right = []; }
+        next[key] = left.length || right.length
+          ? Object.assign({}, layout, { left: left, right: right })
+          : wbcDefaultPaneLayout(String(key).indexOf("project:") === 0 ? "" : key);
+        changed = true;
+      });
+      return changed ? next : current;
+    });
+    if ((!mapAvailable && sideTab === "map") || (!browserAvailable && sideTab === "browser")) setSideTab("");
+    if (!browserAvailable) {
+      browserRestoredRef.current = {};
+      setBrowserActiveByChat({});
+      setBrowserWindowModeByChat({});
+    }
+  }, [mapAvailable, browserAvailable]);
 
   function ensureChat() {
     if (activeChatId) return Promise.resolve(activeChatId);
@@ -1925,7 +2015,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   }
 
   function handleGenerateMemory() {
-    if (!activeChat || memoryLearningBusy) return;
+    if (!memoryAvailable || !activeChat || memoryLearningBusy) return;
     setMemoryLearningBusy(true);
     setErrorKind("memory");
     setError("");
@@ -2011,7 +2101,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   }) || null;
   var activeBrowserState = wbcBrowserStateForChat(activeChatId);
   var browserMarkedActive = !!(browserActiveByChat && browserActiveByChat[activeChatId]);
-  var hasActiveBrowser = !!((activeBrowserState && activeBrowserState.active) || browserMarkedActive);
+  var hasActiveBrowser = browserAvailable && !!((activeBrowserState && activeBrowserState.active) || browserMarkedActive);
   var browserWindowMode = browserWindowModeByChat[activeChatId] || "pip";
   var splitResource = resourceSplitByChat[activeChatId] || null;
   var browserTabOpen = !!(
@@ -2044,8 +2134,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         : (viewerItems.find(function (item) { return wbcArtifactFileKey(item && item.file) === String(splitResource.payload || ""); }) || {}).file
     )
     : null;
-  var splitMap = splitResource && splitResource.type === "map" ? splitResource.payload : null;
-  var splitBrowserTabId = splitResource && splitResource.type === "browser" ? String(splitResource.payload || "") : "";
+  var splitMap = mapAvailable && splitResource && splitResource.type === "map" ? splitResource.payload : null;
+  var splitBrowserTabId = browserAvailable && splitResource && splitResource.type === "browser" ? String(splitResource.payload || "") : "";
   var splitSubagents = !!(splitResource && splitResource.type === "subagents");
   // Dragging a rail chat onto the right panel opens that conversation here.
   var splitChatId = splitResource && splitResource.type === "chat" ? String(splitResource.payload || "") : "";
@@ -2137,6 +2227,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
 
   function renderConversationPanel(floating) {
     function openPanelContent(type, payload) {
+      if ((type === "map" && !mapAvailable) || (type === "browser" && !browserAvailable)) return;
       if (type === "viewer" && payload) setViewerFile(payload);
       if (type === "browser") setActiveBrowserWindowMode("pip");
       openPaneContent(type === "artifact" ? "file" : type, payload, {
@@ -2189,17 +2280,12 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         onSelectTerminal={function (terminalId) { openTerminal(terminalId, "right"); }}
         onToggleSide={onToggleSide}
         onBrowserTakeoverComplete={function (payload) {
-          var pending = activeChat && activeChat.pendingQuestion;
-          if (!pending || !pending.id) return Promise.reject(new Error("登录确认已不在等待中。"));
-          var takeoverQuestionId = String(payload && payload.questionId || "");
-          if (takeoverQuestionId && String(pending.id || "") !== takeoverQuestionId) {
-            return Promise.reject(new Error("登录确认已更新，请使用对话中的最新确认。"));
-          }
-          handleAnswer(pending.id, (payload && payload.text) || "我已完成登录");
-          return Promise.resolve();
+          return wbcCompleteBrowserTakeover(activeChat, payload, handleAnswer);
         }}
         browserActiveByChat={browserActiveByChat}
         browserSuppressed={browserWindowMode === "maximized"}
+        mapAvailable={mapAvailable}
+        browserAvailable={browserAvailable}
         floating={floating}
         widthResizable={!floating && paneCardCount === 1}
         onCloseFloating={function () { setFloatingConversationPanelOpen(false); }}
@@ -2261,19 +2347,12 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         onBrowserMaximize={function () { setActiveBrowserWindowMode("maximized"); }}
         onBrowserRestore={function () { setActiveBrowserWindowMode("pip"); }}
         draftAgent={draftAgentBinding}
-        onDraftAgentChange={handleDraftAgentChange}
-        onSwitchAgent={handleSwitchAgent}
-        onOpenAgentDetail={handleOpenAgentDetail}
+        onDraftAgentChange={agentsAvailable ? handleDraftAgentChange : null}
+        onSwitchAgent={agentsAvailable ? handleSwitchAgent : null}
+        onOpenAgentDetail={agentsAvailable ? handleOpenAgentDetail : null}
         horizontalSessionWheelGesture={horizontalSessionWheelRef.current}
         onBrowserTakeoverComplete={function (payload) {
-          var pending = activeChat && activeChat.pendingQuestion;
-          if (!pending || !pending.id) return Promise.reject(new Error("登录确认已不在等待中。"));
-          var takeoverQuestionId = String(payload && payload.questionId || "");
-          if (takeoverQuestionId && String(pending.id || "") !== takeoverQuestionId) {
-            return Promise.reject(new Error("登录确认已更新，请使用对话中的最新确认。"));
-          }
-          handleAnswer(pending.id, (payload && payload.text) || "我已完成登录");
-          return Promise.resolve();
+          return wbcCompleteBrowserTakeover(activeChat, payload, handleAnswer);
         }}
       />
     );
@@ -2418,6 +2497,21 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         }}
         onClose={close}
       /> : null;
+    } else if (card.kind === "plugin-view") {
+      grip = <WbcSplitGripBar
+        dragSource={card.id}
+        menuDisabled={singlePane}
+        menuType="content"
+        onToggleSide={move}
+        onClose={close}
+        onNewConversation={columnLength === 1 ? function () { createPaneConversation(card.id); } : null}
+        onSplitPointerDown={pointerDown}
+        onSplitDragStart={dragStart}
+        onSplitDragEnd={handlePaneCardDragEnd}
+      />;
+      content = <section className="wbc-plugin-view-pane" aria-label={String(card.payload && card.payload.title || "Plugin")}>
+        <PluginView projectId={projectId} payload={card.payload} />
+      </section>;
     } else {
       grip = <WbcSplitGripBar
         dragSource={card.id}
@@ -2451,14 +2545,15 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
           onSelect={function (nextChange) { updatePaneCard(card.id, function (current) { return Object.assign({}, current, { payload: nextChange }); }); }}
           onClose={close}
         />;
-      } else if (card.kind === "map") {
+      } else if (card.kind === "map" && mapAvailable) {
         content = <WbcMapPaneContent
           chatId={card.ownerChatId || activeChatId}
           item={card.payload}
+          available={mapAvailable}
           onSelect={function (nextItem) { updatePaneCard(card.id, function (current) { return Object.assign({}, current, { payload: nextItem }); }); }}
           onClose={close}
         />;
-      } else if (card.kind === "browser") {
+      } else if (card.kind === "browser" && browserAvailable) {
         var cardBrowserState = wbcBrowserStateForChat(card.ownerChatId || activeChatId);
         content = <WbcBrowserSplit
           active={true}
@@ -2478,10 +2573,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
       } else if (card.kind === "terminal") {
         var TerminalPane = terminalModule.Pane;
         content = <TerminalPane terminalId={String(card.payload || "")} onState={updateTerminalSummary} />;
-      } else if (card.kind === "plugin-view") {
-        content = <section className="wbc-plugin-view-pane" aria-label={String(card.payload && card.payload.title || "Plugin")}>
-          <PluginView projectId={projectId} payload={card.payload} />
-        </section>;
       }
     }
     if (!content) return null;
@@ -2632,6 +2723,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         </div>
       ) : null}
       <WbcRail
+        codeAvailable={codeAvailable}
         projectId={projectId}
         projectName={project && project.name || ""}
         chats={chats}
@@ -2736,7 +2828,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         toTaskBusy={toTaskBusy}
         onCompact={handleCompact}
         compactBusy={compactBusy}
-        onGenerateMemory={handleGenerateMemory}
+        onGenerateMemory={memoryAvailable ? handleGenerateMemory : null}
         memoryLearningBusy={memoryLearningBusy}
       />
       <WbcRenameDialog
@@ -2798,8 +2890,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         onSplitDragStart={handleSplitDragStart}
         onSplitDragEnd={handleSplitDragEnd}
       />
-      <WbcMapSplitHost
+      {mapAvailable ? <WbcMapSplitHost
         chatId={activeChatId}
+        available={mapAvailable}
         item={splitMap}
         width={sideAgentSplitWidth}
         onSelect={function (next) { selectResourceSplit("map", next); }}
@@ -2809,8 +2902,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         onToggleSide={toggleSplitSide}
         onSplitDragStart={handleSplitDragStart}
         onSplitDragEnd={handleSplitDragEnd}
-      />
-      <WbcBrowserSplitHost
+      /> : null}
+      {browserAvailable ? <WbcBrowserSplitHost
         tabId={splitBrowserTabId}
         browserState={activeBrowserState}
         browserSessionId={activeChatId || ""}
@@ -2819,16 +2912,13 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         onResize={resizeSideAgentSplit}
         onClose={closeResourceSplit}
         onTakeoverComplete={function (payload) {
-          var pending = activeChat && activeChat.pendingQuestion;
-          if (!pending || !pending.id) return Promise.reject(new Error("登录确认已不在等待中。"));
-          handleAnswer(pending.id, (payload && payload.text) || "我已完成登录");
-          return Promise.resolve();
+          return wbcCompleteBrowserTakeover(activeChat, payload, handleAnswer);
         }}
         splitSide={splitSide}
         onToggleSide={toggleSplitSide}
         onSplitDragStart={handleSplitDragStart}
         onSplitDragEnd={handleSplitDragEnd}
-      />
+      /> : null}
       <WbcSubagentsSplitHost
         open={splitSubagents}
         data={subagentData}

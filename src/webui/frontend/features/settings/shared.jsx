@@ -133,7 +133,9 @@ async function readSettingsResponse(response) {
   try {
     payload = await response.json();
   } catch (e) {
-    if (response.ok) throw new Error("Invalid JSON response");
+    if (response.ok) {
+      throw new Error(workbenchServices.i18n().t("settings.invalidJsonResponse"));
+    }
   }
   if (!response.ok) {
     var responseError = new Error(
@@ -146,7 +148,21 @@ async function readSettingsResponse(response) {
 }
 
 async function settingsFetch(input, init) {
-  var response = await window.fetch(input, init);
+  var response;
+  try {
+    response = await window.fetch(input, init);
+  } catch (reason) {
+    var raw = String(reason && reason.message || reason || "").trim();
+    if (!raw
+      || raw === "Load failed"
+      || raw === "Failed to fetch"
+      || raw === "NetworkError when attempting to fetch resource.") {
+      var networkError = new Error(workbenchServices.i18n().t("settings.networkError"));
+      networkError.code = "network_error";
+      throw networkError;
+    }
+    throw reason;
+  }
   if (response.ok) return response;
   var payload = {};
   try {
@@ -178,6 +194,12 @@ function renderSettingsMarkdown(value) {
     errorFallback: "escaped-breaks",
     sanitizeOptions: { ADD_ATTR: ["data-line", "data-language"] },
   });
+}
+
+function ExternalChevron() {
+  return React.createElement("svg", { width: "18", height: "18", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.4", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+    React.createElement("path", { d: "m9 18 6-6-6-6" })
+  );
 }
 
 function AutomationIcon() {
@@ -280,6 +302,7 @@ export {
   settingsFetch,
   showSettingsToast,
   renderSettingsMarkdown,
+  ExternalChevron,
   AutomationIcon,
   AboutRelatedIcon,
   SectionTitle,

@@ -1,5 +1,5 @@
 // Search strings extracted from the former classic i18n catalog unchanged.
-window.CyreneUI.require("i18n").registerTranslations({
+const ADDITIONAL_TRANSLATIONS = {
   en: {
     "chat.diff.title": "Diff",
     "chat.diff.loading": "Loading diff...",
@@ -10,7 +10,7 @@ window.CyreneUI.require("i18n").registerTranslations({
     "search.noResults": "No matching items found.",
     "search.noResultsArchive": "No matching conversations found.",
     "search.error": "Search failed.",
-    "search.resultsCount": "{n} result(s)",
+    "search.resultsCount": "{n} {{result|results}}",
     "search.close": "Close search (Esc)",
     "search.closeShortcut": "ESC",
     "search.filterLabel": "Search filters",
@@ -44,6 +44,10 @@ window.CyreneUI.require("i18n").registerTranslations({
     "search.result.memory": "Memory",
     "search.result.schedule": "Schedule",
     "search.result.conversation": "Conversation",
+    "search.default.workspace": "Workspace",
+    "search.default.memory": "Memory",
+    "search.default.newTask": "New task",
+    "search.default.newChat": "New chat",
     "search.commandGroup": "Commands",
     "search.settingsGroup": "Settings",
     "search.newButton": "New",
@@ -58,8 +62,8 @@ window.CyreneUI.require("i18n").registerTranslations({
     "search.command.openSettingsHint": "Open the settings overlay",
     "search.command.openShortcuts": "Keyboard shortcuts",
     "search.command.openShortcutsHint": "View and rebind keyboard shortcuts",
-    "search.command.openPluginRegistry": "Plugin Registry",
-    "search.command.openPluginRegistryHint": "Inspect Plugin packs, standalone Plugins, and load failures",
+    "search.command.openPluginRegistry": "Plugin Center",
+    "search.command.openPluginRegistryHint": "Inspect loaded Plugins or add Skills, MCP servers, and CLI tools",
     "search.command.openBudget": "Usage budget",
     "search.command.openBudgetHint": "Check usage and set budget limits",
     "search.command.openAbout": "About Cyrene",
@@ -113,6 +117,10 @@ window.CyreneUI.require("i18n").registerTranslations({
     "search.result.memory": "记忆",
     "search.result.schedule": "日程",
     "search.result.conversation": "归档",
+    "search.default.workspace": "工作区",
+    "search.default.memory": "记忆",
+    "search.default.newTask": "新任务",
+    "search.default.newChat": "新对话",
     "search.commandGroup": "命令",
     "search.settingsGroup": "设置",
     "search.newButton": "新建",
@@ -127,8 +135,8 @@ window.CyreneUI.require("i18n").registerTranslations({
     "search.command.openSettingsHint": "打开设置面板",
     "search.command.openShortcuts": "键盘快捷键",
     "search.command.openShortcutsHint": "查看并自定义键盘快捷键",
-    "search.command.openPluginRegistry": "插件注册表",
-    "search.command.openPluginRegistryHint": "查看插件包、独立插件与加载失败",
+    "search.command.openPluginRegistry": "插件中心",
+    "search.command.openPluginRegistryHint": "查看已加载插件，或添加 Skill、MCP 服务和 CLI 工具",
     "search.command.openBudget": "用量预算",
     "search.command.openBudgetHint": "查看用量并设置预算上限",
     "search.command.openAbout": "关于 Cyrene",
@@ -138,4 +146,10 @@ window.CyreneUI.require("i18n").registerTranslations({
     "search.command.toggleSidebar": "切换侧边栏",
     "search.command.toggleSidebarHint": "显示或隐藏侧边栏",
   },
-});
+};
+
+if (typeof window !== "undefined" && window.CyreneUI) {
+  window.CyreneUI.require("i18n").registerTranslations(ADDITIONAL_TRANSLATIONS);
+}
+
+export { ADDITIONAL_TRANSLATIONS }

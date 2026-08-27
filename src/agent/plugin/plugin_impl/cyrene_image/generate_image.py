@@ -14,7 +14,7 @@ from cyrene.model_runtime.image_generation import (
     generate_image,
 )
 from .definitions import get_native_tool_def
-from agent.plugin.native_runtime import json_result
+from agent.plugin.native_runtime import json_result, plugin_localized
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +29,15 @@ TOOL_METADATA = {
 
 async def _tool_generate_image(
     args: dict[str, Any],
-    _context: PluginContext,
+    context: PluginContext,
 ) -> str:
     prompt = str(args.get("prompt") or "").strip()
     if not prompt:
-        return "Error: 'prompt' is required."
+        return plugin_localized(
+            context,
+            "Error: 'prompt' is required.",
+            "错误：必须提供 'prompt'。",
+        )
     try:
         generated = await generate_image(
             prompt=prompt,
@@ -41,11 +45,20 @@ async def _tool_generate_image(
             quality=str(args.get("quality") or "medium"),
             output_format=str(args.get("output_format") or "png"),
         )
-    except ImageGenerationError as exc:
-        return f"Error: {exc}"
-    except (OSError, RuntimeError, TimeoutError) as exc:
-        logger.warning("Image generation failed: %s", exc)
-        return f"Error: image generation failed: {exc}"
+    except ImageGenerationError:
+        logger.warning("Image generation provider rejected the request", exc_info=True)
+        return plugin_localized(
+            context,
+            "Error: image generation failed.",
+            "错误：图像生成失败。",
+        )
+    except (OSError, RuntimeError, TimeoutError):
+        logger.warning("Image generation failed", exc_info=True)
+        return plugin_localized(
+            context,
+            "Error: image generation failed.",
+            "错误：图像生成失败。",
+        )
 
     display_name = str(args.get("name") or "").strip()
     if not display_name:
@@ -56,7 +69,11 @@ async def _tool_generate_image(
             {
                 "path": str(generated.path),
                 "name": display_name,
-                "text": "Generated image.",
+                "text": plugin_localized(
+                    context,
+                    "Generated image.",
+                    "已生成图像。",
+                ),
             },
             review=False,
         )

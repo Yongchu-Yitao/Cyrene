@@ -48,7 +48,7 @@ def _load_engine():
             # Prefer that managed runtime, but accept an OpenCV already
             # importable in this environment (dev venv / system packages) so
             # local OCR never requires the download when cv2 exists.
-            from cyrene.model_runtime import opencv_runtime
+            from . import opencv_runtime
 
             try:
                 opencv_runtime.ensure()

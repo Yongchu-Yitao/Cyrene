@@ -1,12 +1,15 @@
 """Editable durable-entity Plugin pack."""
 
 from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 
+from agent.hook import SESSION_START, HookEvent
 from agent.plugin import (
     PluginApplicationContext,
     PluginPack,
     PluginSetupContext,
 )
+from cyrene.localization import app_language, localized
 
 from .delete_entity import plugin as delete_plugin
 from .list_entities import plugin as list_plugin
@@ -26,23 +29,121 @@ def _session_id(data: Mapping[str, object]) -> str:
 
 
 def setup(context: PluginSetupContext) -> None:
-    """Publish a session-scoped service created from this editable pack."""
+    """Publish entity operations and their proactive context contribution."""
 
-    if context.services.get("entities") is not None:
-        return
-    db_path = str(context.data.get("db_path") or "").strip()
-    if not db_path:
-        return
-    from .service import EntityService
+    service = context.services.get("entities")
+    if service is None:
+        db_path = str(context.data.get("db_path") or "").strip()
+        if not db_path:
+            return
+        from .service import EntityService
 
-    context.provide(
-        "entities",
-        EntityService(
+        run_context = context.data.get("run_context")
+        explicit_language = (
+            run_context.get("language")
+            if isinstance(run_context, Mapping)
+            else None
+        ) or context.data.get("language")
+        service = EntityService(
             db_path,
             reminder_chat_id=context.data.get("chat_id"),
             origin_session_id=_session_id(context.data),
-        ),
-    )
+            language=app_language(explicit_language),
+        )
+        context.provide("entities", service)
+    if context.hooks is None:
+        return
+
+    async def mount_proactive_entities(event: HookEvent) -> dict[str, str]:
+        details = event.payload if isinstance(event.payload, Mapping) else {}
+        metadata = details.get("metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        if not bool(metadata.get("proactive")):
+            return {}
+        run_context = context.data.get("run_context")
+        language = app_language(
+            (
+                run_context.get("language")
+                if isinstance(run_context, Mapping)
+                else None
+            )
+            or context.data.get("language")
+        )
+
+        now = datetime.now(timezone.utc)
+        due_cutoff = (now + timedelta(hours=24)).isoformat()
+        stale_cutoff = (now - timedelta(days=7)).isoformat()
+        try:
+            due_soon = await service.query(due_before=due_cutoff, status="active")
+            active = await service.list(status="active", limit=200)
+        except Exception:
+            return {}
+        stale = [
+            item
+            for item in active
+            if str(item.get("last_referenced_at") or "") < stale_cutoff
+        ]
+        open_decisions = [
+            item
+            for item in active
+            if str(item.get("type") or "") == "decision"
+            and not (
+                item.get("metadata", {}).get("outcome")
+                if isinstance(item.get("metadata"), Mapping)
+                else False
+            )
+        ]
+        lines: list[str] = []
+        if due_soon:
+            titles = ", ".join(
+                str(item.get("title") or "") for item in due_soon[:3]
+            )
+            lines.append(localized(
+                "- Due within 24 hours: {titles}",
+                "- 24 小时内到期：{titles}",
+                language=language,
+                titles=titles,
+            ))
+        if stale:
+            lines.append(localized(
+                "- Not referenced recently: {title}",
+                "- 最近未提及：{title}",
+                language=language,
+                title=stale[0].get("title", ""),
+            ))
+        if open_decisions:
+            lines.append(
+                localized(
+                    "- Open decision to follow up: {title}",
+                    "- 待跟进的未决事项：{title}",
+                    language=language,
+                    title=open_decisions[0].get("title", ""),
+                )
+            )
+        if not lines:
+            return {}
+        return {
+            "context": localized(
+                "## Items needing attention\n{items}",
+                "## 需要关注的事务\n{items}",
+                language=language,
+                items="\n".join(lines),
+            )
+        }
+
+    hook_id = "cyrene-entity-proactive-session-start"
+    plugin_id = "cyrene_entity.proactive_context"
+    if hook_id in {hook.id for hook in context.hooks.list()}:
+        context.hooks.bind_plugin(plugin_id, mount_proactive_entities, replace=True)
+    else:
+        context.hooks.register(
+            SESSION_START,
+            mount_proactive_entities,
+            plugin_id=plugin_id,
+            hook_id=hook_id,
+            root_only=True,
+            failure_policy="open",
+        )
 
 
 def application_setup(context: PluginApplicationContext) -> None:
@@ -63,6 +164,18 @@ plugin_pack = PluginPack(
     ),
     setup=setup,
     application_setup=application_setup,
+    metadata={
+        "i18n": {
+            "en": {
+                "name": "Entities",
+                "description": "Track, search, update and delete durable entities.",
+            },
+            "zh": {
+                "name": "事务",
+                "description": "跟踪、搜索、更新和删除持久事务。",
+            },
+        }
+    },
 )
 
 

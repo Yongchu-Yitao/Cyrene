@@ -31,9 +31,6 @@ def build_project_application_service(
     *,
     agent_runtime: TaskAgentRuntime,
     validate_workspace: Callable[..., Path],
-    knowledge_service: Any = None,
-    memory_service: Any = None,
-    schedule_service: Any = None,
 ) -> ProjectApplicationService:
     """Bind project ports to their concrete application owners."""
     chats = ChatRepository()
@@ -41,10 +38,43 @@ def build_project_application_service(
     conversations = ConversationRuntime(db_path)
     coordinator = run_coordinator_for(db_path)
 
-    async def preserve_unloaded_schedule_data(_project_id: str) -> int:
-        # Schedule data belongs to the Plugin. If that Plugin did not attach,
-        # the core project service must not reach into its persistence tables.
-        return 0
+    async def delete_project_schedules(project_id: str) -> int:
+        # Resolve the Plugin at call time: enable/disable changes must take
+        # effect without rebuilding the core project application service.
+        from agent.plugin import active_plugin_service
+
+        active_schedule = active_plugin_service("schedules")
+        if active_schedule is None:
+            return 0
+        return int(await active_schedule.delete_project(project_id))
+
+    def delete_project_knowledge(resource_key: str) -> None:
+        from agent.plugin import active_plugin_service
+
+        service = active_plugin_service("knowledge")
+        if service is not None:
+            service.delete_workspace(resource_key)
+
+    def delete_memory_workspace(resource_key: str) -> None:
+        from agent.plugin import active_plugin_service
+
+        service = active_plugin_service("memory")
+        if service is not None:
+            service.delete_workspace(resource_key)
+
+    async def cancel_memory_jobs(project_id: str) -> None:
+        from agent.plugin import active_plugin_service
+
+        service = active_plugin_service("memory")
+        if service is not None:
+            await service.cancel_project_jobs(project_id)
+
+    def delete_project_memory(project_id: str, chat_ids: list[str]) -> None:
+        from agent.plugin import active_plugin_service
+
+        service = active_plugin_service("memory")
+        if service is not None:
+            service.delete_project(project_id, chat_ids)
 
     def list_project_chat_ids(project_id: str) -> list[str]:
         return [
@@ -141,43 +171,17 @@ def build_project_application_service(
             remove_project=remove_project_chats,
         ),
         knowledge=KnowledgeProjectPort(
-            delete_database=(
-                knowledge_service.delete_workspace
-                if knowledge_service is not None
-                else lambda _workspace: None
-            ),
+            delete_database=delete_project_knowledge,
         ),
         memory=MemoryProjectPort(
-            delete_workspace=(
-                memory_service.delete_workspace
-                if memory_service is not None
-                else lambda _workspace: None
-            ),
-            cancel_jobs=(
-                memory_service.cancel_project_jobs
-                if memory_service is not None
-                else _noop_cancel_memory_jobs
-            ),
-            delete_project=(
-                memory_service.delete_project
-                if memory_service is not None
-                else lambda _project_id, _chat_ids: None
-            ),
+            delete_workspace=delete_memory_workspace,
+            cancel_jobs=cancel_memory_jobs,
+            delete_project=delete_project_memory,
         ),
         schedules=ScheduleProjectPort(
-            delete_project_tasks=(
-                schedule_service.delete_project
-                if schedule_service is not None
-                else preserve_unloaded_schedule_data
-            ),
+            delete_project_tasks=delete_project_schedules,
         ),
         lightweight_store=dependencies.lightweight_store,
         persist_selection=dependencies.persist_selection,
     )
-
-
-async def _noop_cancel_memory_jobs(_project_id: str) -> None:
-    return None
-
-
 __all__ = ["build_project_application_service"]

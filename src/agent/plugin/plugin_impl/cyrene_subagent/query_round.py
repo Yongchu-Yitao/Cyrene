@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.plugin import PluginContext
+from agent.plugin.native_runtime import plugin_localized
 
 from ._service import current_agent_id, result_text, subagent_manager
 from .definitions import get_native_tool_def
@@ -19,7 +20,11 @@ def _tool_query_round(
 ) -> str:
     """Query live round status for the main agent."""
     if current_agent_id(context) != "main":
-        return "Only the main agent can inspect live round status."
+        return plugin_localized(
+            context,
+            "Only the main agent can inspect live round status.",
+            "只有主 Agent 可以查看实时轮次状态。",
+        )
     result = subagent_manager(context).query(
         round_id=str(args.get("round_id", "")).strip()
     )

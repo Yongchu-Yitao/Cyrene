@@ -21,11 +21,11 @@ function isRunningStepStatus(status) {
 
 function stepExecutionPrompt(session, step) {
   var lines = [
-    "请为当前任务计划中的这个步骤生成一个 subagent 执行，并在完成后汇总结果。",
-    "当前任务：" + String((session && (session.goal || session.title)) || "").trim(),
-    "步骤：" + String((step && step.title) || "").trim(),
+    wbT("task.prompt.executeStep", "Create a subagent to execute this step in the current task plan, then summarize the result when it finishes."),
+    wbT("task.prompt.currentTask", "Current task: {task}", { task: String((session && (session.goal || session.title)) || "").trim() }),
+    wbT("task.prompt.step", "Step: {step}", { step: String((step && step.title) || "").trim() }),
   ];
-  if (step && step.description) lines.push("步骤说明：" + String(step.description).trim());
+  if (step && step.description) lines.push(wbT("task.prompt.stepDescription", "Step description: {description}", { description: String(step.description).trim() }));
   return lines.filter(Boolean).join("\n");
 }
 
@@ -54,7 +54,7 @@ function effectiveStepPrompt(session, step) {
       .map(function (f) { return "- " + String((f && (f.path || f.name)) || "").trim(); })
       .filter(function (row) { return row !== "- "; });
     if (rows.length) {
-      base += "\n\n请重点参考以下工作区文件（先用 read_file 等工具阅读再动手）：\n" + rows.join("\n");
+      base += "\n\n" + wbT("task.prompt.workspaceFiles", "Pay particular attention to these workspace files (read them with read_file or equivalent tools before making changes):") + "\n" + rows.join("\n");
     }
   }
   return base;
@@ -97,10 +97,10 @@ function stepMetaText(step) {
   var duration = stepDurationText(step);
   if (duration) return duration;
   if (!step) return "";
-  if (isRunningStepStatus(step.status)) return "进行中";
-  if (isDoneStepStatus(step.status)) return "已完成";
-  if (step.status === "failed") return "需处理";
-  if (step.status === "paused") return "已暂停";
+  if (isRunningStepStatus(step.status)) return wbT("status.running", "Running");
+  if (isDoneStepStatus(step.status)) return wbT("status.done", "Done");
+  if (step.status === "failed") return wbT("status.failed", "Needs attention");
+  if (step.status === "paused") return wbT("status.paused", "Paused");
   return "";
 }
 
@@ -161,7 +161,7 @@ function useTaskController(session, onRefresh, runtime) {
     }
     return model.patchSession(sid, {
       approvedPlanDefinitionRevision: definitionRevision,
-      events: model.withEvent(current, "PlanApproved", "用户确认执行当前版本的计划。"),
+      events: model.withEvent(current, "PlanApproved", wbT("task.event.planVersionApproved", "The user approved the current version of the plan.")),
     })
       .then(function (store) {
         apply(store);
@@ -178,8 +178,8 @@ function useTaskController(session, onRefresh, runtime) {
     return model.patchSession(sid, {
       status: "failed",
       plan: model.markStepById(basePlan, stepId, "failed", msg),
-      agentReply: "步骤执行失败：" + msg,
-      events: model.withEvent(baseSession, "ExecutionFailed", "步骤「" + stepTitle + "」执行失败：" + msg, { stepId: stepId || "" }),
+      agentReply: wbT("task.reply.stepFailed", "Step failed: {error}", { error: msg }),
+      events: model.withEvent(baseSession, "ExecutionFailed", wbT("task.event.stepFailed", "Step \"{step}\" failed: {error}", { step: stepTitle, error: msg }), { stepId: stepId || "" }),
     }).then(apply);
   }
   function runStepCore(baseSession, stepId, options) {
@@ -191,10 +191,10 @@ function useTaskController(session, onRefresh, runtime) {
     var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
     runAbortRef.current = ac;
     var index = basePlan.findIndex(function (item) { return item && item.id === stepId; });
-    var stepTitle = String(step.title || ("步骤 " + (index + 1))).trim();
-    var startPlan = model.markStepById(basePlan, stepId, "running", "正在启动 subagent，等待模型思考…");
-    var startEvents = model.withEvent(baseSession, "ExecutionStarted", "开始执行步骤：" + stepTitle, { stepId: step.id || "" });
-    return model.patchSession(sid, { status: "running", plan: startPlan, agentReply: "正在执行步骤：" + stepTitle, events: startEvents })
+    var stepTitle = String(step.title || wbT("task.step.numbered", "Step {number}", { number: index + 1 })).trim();
+    var startPlan = model.markStepById(basePlan, stepId, "running", wbT("task.progress.startingSubagent", "Starting the subagent and waiting for model reasoning…"));
+    var startEvents = model.withEvent(baseSession, "ExecutionStarted", wbT("task.event.stepStarted", "Started step: {step}", { step: stepTitle }), { stepId: step.id || "" });
+    return model.patchSession(sid, { status: "running", plan: startPlan, agentReply: wbT("task.reply.executingStep", "Executing step: {step}", { step: stepTitle }), events: startEvents })
       .then(apply)
       .then(function (patched) {
         var patchedSession = sessionFromStore(patched, baseSession);
@@ -220,7 +220,7 @@ function useTaskController(session, onRefresh, runtime) {
         // the tools already ran used to strand the task in `running` forever.
         var completedStep = stepById(s2.plan, stepId);
         if (!completedStep || !isDoneStepStatus(completedStep.status)) {
-          throw new Error("服务端未能提交步骤完成状态，请刷新后重试。");
+          throw new Error(wbT("task.error.stepCompletionNotSaved", "The server could not save the completed step state. Refresh and try again."));
         }
         if (runtime && runtime.clearAttachments) runtime.clearAttachments();
         return next;
@@ -252,7 +252,7 @@ function useTaskController(session, onRefresh, runtime) {
       var input = (text != null ? String(text) : "").trim();
       var hasAttach = (((runtime && runtime.attachments) || []).length > 0);
       if (!input && !hasAttach) return Promise.resolve();
-      return runAgentic({ kind: "dispatch", label: "正在理解你的输入…" }, model.dispatch(sid, input, {
+      return runAgentic({ kind: "dispatch", label: wbT("task.busy.understanding", "Understanding your request…") }, model.dispatch(sid, input, {
         attachments: (runtime && runtime.attachments) || [],
         mode: (runtime && runtime.mode) || undefined,
         model: (runtime && runtime.model) || undefined,
@@ -278,8 +278,8 @@ function useTaskController(session, onRefresh, runtime) {
           goal: goal,
           plan: model.buildPlanSteps(goal, session.constraints || []),
           acceptanceCriteria: model.buildAcceptance(goal, session.constraints || []),
-          agentReply: "处理服务暂时不可用，我先给出一份基础计划，你可以编辑后逐步执行，或稍后重试。",
-          events: model.withEvent(session, "PlanGenerated", "生成基础执行计划（兜底）。"),
+          agentReply: wbT("task.reply.fallbackPlanEditable", "The processing service is temporarily unavailable. I created a basic plan that you can edit and run step by step, or you can try again later."),
+          events: model.withEvent(session, "PlanGenerated", wbT("task.event.fallbackPlanGenerated", "Generated a fallback execution plan.")),
         });
       }));
     },
@@ -293,7 +293,7 @@ function useTaskController(session, onRefresh, runtime) {
       if (!qid || !ans) return Promise.resolve();
       interruptedRef.current = false;
       setBusy(true);
-      setAgentBusy({ kind: "answer", label: "正在继续…", startedAt: new Date().toISOString() });
+      setAgentBusy({ kind: "answer", label: wbT("task.busy.continuing", "Continuing…"), startedAt: new Date().toISOString() });
       return model.answer(sid, qid, ans)
         .then(apply)
         .then(function (store) {
@@ -314,9 +314,9 @@ function useTaskController(session, onRefresh, runtime) {
     promoteToPlan: function () {
       var goal = (session.goal || "").trim();
       if (!goal) { focusComposer(); return Promise.resolve(); }
-      return runAgentic({ kind: "plan", label: "正在把它整理成执行计划…" }, model.generatePlan(sid, goal, { basePlanRevision: Number(session.planRevision || 0) }).catch(function (err) {
+      return runAgentic({ kind: "plan", label: wbT("task.busy.organizingPlan", "Turning it into an execution plan…") }, model.generatePlan(sid, goal, { basePlanRevision: Number(session.planRevision || 0) }).catch(function (err) {
         rethrowPlanConflict(err);
-        return patch({ status: "planning", goal: goal, plan: model.buildPlanSteps(goal, session.constraints || []), acceptanceCriteria: model.buildAcceptance(goal, session.constraints || []), agentReply: "计划生成服务暂时不可用，已生成基础计划。", events: model.withEvent(session, "PlanGenerated", "生成基础执行计划（兜底）。") });
+        return patch({ status: "planning", goal: goal, plan: model.buildPlanSteps(goal, session.constraints || []), acceptanceCriteria: model.buildAcceptance(goal, session.constraints || []), agentReply: wbT("task.reply.fallbackPlan", "The planning service is temporarily unavailable, so a basic plan was created."), events: model.withEvent(session, "PlanGenerated", wbT("task.event.fallbackPlanGenerated", "Generated a fallback execution plan.")) });
       }));
     },
 
@@ -326,7 +326,7 @@ function useTaskController(session, onRefresh, runtime) {
     start: function (goalText) {
       var goal = (goalText != null ? String(goalText) : (session.goal || "")).trim();
       if (!goal) return Promise.resolve();
-      return runAgentic({ kind: "plan", label: "正在分析任务并生成执行计划…" }, model.generatePlan(sid, goal, { basePlanRevision: Number(session.planRevision || 0) }).catch(function (err) {
+      return runAgentic({ kind: "plan", label: wbT("task.busy.generatingPlan", "Analyzing the task and generating an execution plan…") }, model.generatePlan(sid, goal, { basePlanRevision: Number(session.planRevision || 0) }).catch(function (err) {
         rethrowPlanConflict(err);
         var constraints = session.constraints || [];
         return patch({
@@ -334,8 +334,8 @@ function useTaskController(session, onRefresh, runtime) {
           goal: goal,
           plan: model.buildPlanSteps(goal, constraints),
           acceptanceCriteria: model.buildAcceptance(goal, constraints),
-          agentReply: "计划生成服务暂时不可用，已生成基础计划，你可以编辑后逐步执行，或稍后重试。",
-          events: model.withEvent(session, "PlanGenerated", "生成基础执行计划（兜底）。"),
+          agentReply: wbT("task.reply.fallbackPlanEditable", "The processing service is temporarily unavailable. I created a basic plan that you can edit and run step by step, or you can try again later."),
+          events: model.withEvent(session, "PlanGenerated", wbT("task.event.fallbackPlanGenerated", "Generated a fallback execution plan.")),
         });
       }));
     },
@@ -346,15 +346,15 @@ function useTaskController(session, onRefresh, runtime) {
     // with a project-derived default goal (passed in from the card so it follows
     // the UI language).
     autoStart: function () {
-      return runAgentic({ kind: "plan", label: "正在阅读项目并规划…" }, model.generatePlan(sid, "", { autoStart: true, basePlanRevision: Number(session.planRevision || 0) }).catch(function (err) {
+      return runAgentic({ kind: "plan", label: wbT("task.busy.readingProject", "Reading the project and planning…") }, model.generatePlan(sid, "", { autoStart: true, basePlanRevision: Number(session.planRevision || 0) }).catch(function (err) {
         rethrowPlanConflict(err);
-        var basis = (session.goal || "").trim() || "推进本项目当前最该做的工作";
+        var basis = (session.goal || "").trim() || wbT("task.defaultGoal", "Advance the most important current work in this project");
         return patch({
           status: "planning",
           plan: model.buildPlanSteps(basis, session.constraints || []),
           acceptanceCriteria: model.buildAcceptance(basis, session.constraints || []),
-          agentReply: "计划生成服务暂时不可用，已生成一份基础计划，你可以编辑后逐步执行，或稍后重试。",
-          events: model.withEvent(session, "PlanGenerated", "自动生成执行计划（兜底）。"),
+          agentReply: wbT("task.reply.fallbackPlanEditable", "The processing service is temporarily unavailable. I created a basic plan that you can edit and run step by step, or you can try again later."),
+          events: model.withEvent(session, "PlanGenerated", wbT("task.event.autoFallbackPlanGenerated", "Automatically generated a fallback execution plan.")),
         });
       }));
     },
@@ -368,11 +368,11 @@ function useTaskController(session, onRefresh, runtime) {
       var plan = Array.isArray(session.plan) ? session.plan : [];
       if (model.hasUnresolvedStartedSteps(plan)) {
         return run(patch({
-          agentReply: "已记录你的补充：\n" + text + "\n（任务已在执行中，计划未重置；如需重排可点「重新生成」。）",
-          events: model.withEvent(session, "PlanRevised", "执行中补充：" + text),
+          agentReply: wbT("task.reply.guidanceRecorded", "Your guidance was recorded:\n{text}\n(The task is already running, so the plan was not reset. Choose Regenerate if you need to reorder it.)", { text: text }),
+          events: model.withEvent(session, "PlanRevised", wbT("task.event.guidanceDuringRun", "Guidance added during execution: {text}", { text: text })),
         }));
       }
-      return runAgentic({ kind: "plan", label: "正在结合你的补充重新规划…" }, model.generatePlan(sid, goal, { feedback: text, operation: "auto", basePlanRevision: Number(session.planRevision || 0) }).catch(function (err) {
+      return runAgentic({ kind: "plan", label: wbT("task.busy.replanningWithGuidance", "Replanning with your guidance…") }, model.generatePlan(sid, goal, { feedback: text, operation: "auto", basePlanRevision: Number(session.planRevision || 0) }).catch(function (err) {
         rethrowPlanConflict(err);
         var keepPlan = Array.isArray(session.plan) && session.plan.length ? session.plan : model.buildPlanSteps(goal, session.constraints || []);
         var keepAcceptance = Array.isArray(session.acceptanceCriteria) && session.acceptanceCriteria.length
@@ -382,16 +382,16 @@ function useTaskController(session, onRefresh, runtime) {
           status: "planning",
           plan: keepPlan,
           acceptanceCriteria: keepAcceptance,
-          agentReply: "计划生成服务暂时不可用，已保留原计划并记录你的调整：\n" + text,
-          events: model.withEvent(session, "PlanRevised", "按用户要求调整计划：" + text),
+          agentReply: wbT("task.reply.planServiceUnavailableGuidance", "The planning service is temporarily unavailable. The original plan was kept and your adjustment was recorded:\n{text}", { text: text }),
+          events: model.withEvent(session, "PlanRevised", wbT("task.event.planAdjusted", "Plan adjustment requested by the user: {text}", { text: text })),
         });
       }));
     },
 
     regeneratePlan: function () {
       var goal = (session.goal || "").trim();
-      return runAgentic({ kind: "plan", label: "正在重新生成执行计划…" }, model.generatePlan(sid, goal, {
-        feedback: "请基于当前任务目标生成一份全新的执行计划，不保留原计划步骤。",
+      return runAgentic({ kind: "plan", label: wbT("task.busy.regeneratingPlan", "Regenerating the execution plan…") }, model.generatePlan(sid, goal, {
+        feedback: wbT("task.prompt.regeneratePlan", "Create a completely new execution plan from the current task goal without retaining any steps from the old plan."),
         operation: "replace",
         basePlanRevision: Number(session.planRevision || 0),
       }).catch(function (err) {
@@ -400,8 +400,8 @@ function useTaskController(session, onRefresh, runtime) {
           status: "planning",
           plan: Array.isArray(session.plan) ? session.plan : [],
           acceptanceCriteria: Array.isArray(session.acceptanceCriteria) ? session.acceptanceCriteria : [],
-          agentReply: "重新生成失败，原计划保持不变，请稍后重试。",
-          events: model.withEvent(session, "PlanGenerated", "重新生成执行计划失败，保留原计划。"),
+          agentReply: wbT("task.reply.regenerateFailed", "The plan could not be regenerated. The original plan is unchanged; try again later."),
+          events: model.withEvent(session, "PlanGenerated", wbT("task.event.regenerateFailed", "Plan regeneration failed; kept the original plan.")),
         });
       }));
     },
@@ -409,11 +409,11 @@ function useTaskController(session, onRefresh, runtime) {
     // planning → waiting_for_approval — the 需要你确认 gate before any change.
     approvePlan: function () {
       if (!requirePlan(session)) return Promise.resolve();
-      var events = model.withEvent(session, "PlanApproved", "用户批准执行计划。");
+      var events = model.withEvent(session, "PlanApproved", wbT("task.event.planApproved", "The user approved the execution plan."));
       return run(patch({
         status: "waiting_for_approval",
         approvedPlanDefinitionRevision: Number(session.planDefinitionRevision || 0),
-        agentReply: "执行前请确认下面的操作。",
+        agentReply: wbT("task.reply.confirmActions", "Confirm the actions below before execution."),
         events: events,
       }));
     },
@@ -423,7 +423,7 @@ function useTaskController(session, onRefresh, runtime) {
       if (!requirePlan(session)) return Promise.resolve();
       return model.patchSession(sid, {
         approvedPlanDefinitionRevision: Number(session.planDefinitionRevision || 0),
-        events: model.withEvent(session, "PlanApproved", "用户批准计划并连续执行全部步骤。"),
+        events: model.withEvent(session, "PlanApproved", wbT("task.event.planApprovedRunAll", "The user approved the plan and chose to run all steps continuously.")),
       }).then(apply).then(function (store) {
         return ctrl.executeAll({ baseSession: sessionFromStore(store, session) });
       });
@@ -448,8 +448,8 @@ function useTaskController(session, onRefresh, runtime) {
     },
 
     reject: function () {
-      var events = model.withEvent(session, "ActionRejected", "用户拒绝了当前操作。");
-      return run(patch({ status: "planning", agentReply: "操作已取消。你可以修改要求，或让我重新规划。", events: events }));
+      var events = model.withEvent(session, "ActionRejected", wbT("task.event.actionRejected", "The user rejected the current action."));
+      return run(patch({ status: "planning", agentReply: wbT("task.reply.actionCancelled", "The action was cancelled. You can revise the request or ask me to replan."), events: events }));
     },
 
     // Honest execution: run the NEXT dependency-ready step for real. Delegates
@@ -465,14 +465,14 @@ function useTaskController(session, onRefresh, runtime) {
           if (!remaining.length) {
             return run(model.patchSession(sid, {
               status: "review",
-              agentReply: "所有步骤已完成，请验收。",
-              events: model.withEvent(approvedSession, "ExecutionFinished", "全部步骤已完成，等待你验收。"),
+              agentReply: wbT("task.reply.allStepsComplete", "All steps are complete. Please review the result."),
+              events: model.withEvent(approvedSession, "ExecutionFinished", wbT("task.event.allStepsComplete", "All steps are complete and awaiting your review.")),
             }));
           }
           return run(model.patchSession(sid, {
             status: "blocked",
-            agentReply: "没有可执行的步骤，请先完成或调整被阻塞步骤的前置依赖。",
-            events: model.withEvent(approvedSession, "ExecutionBlocked", "步骤依赖尚未满足，任务已阻塞。"),
+            agentReply: wbT("task.reply.noRunnableSteps", "No steps can run. Complete or adjust the prerequisites of the blocked steps first."),
+            events: model.withEvent(approvedSession, "ExecutionBlocked", wbT("task.event.dependenciesBlocked", "Step dependencies are not satisfied, so the task is blocked.")),
           }));
         }
         setBusy(true);
@@ -498,8 +498,8 @@ function useTaskController(session, onRefresh, runtime) {
       return approvalPromise.then(function (approvedSession) {
         currentSession = approvedSession;
         if (options.continuing) return { activeSession: approvedSession };
-        var startedEvents = model.withEvent(approvedSession, "ExecutionStarted", "开始连续执行全部剩余步骤。");
-        return model.patchSession(sid, { status: "running", agentReply: "正在按依赖顺序执行全部剩余步骤。", events: startedEvents });
+        var startedEvents = model.withEvent(approvedSession, "ExecutionStarted", wbT("task.event.runAllStarted", "Started continuous execution of all remaining steps."));
+        return model.patchSession(sid, { status: "running", agentReply: wbT("task.reply.runningAll", "Running all remaining steps in dependency order."), events: startedEvents });
       })
         .then(apply)
         .then(function (next) {
@@ -513,15 +513,15 @@ function useTaskController(session, onRefresh, runtime) {
               if (remaining.length) {
                 return model.patchSession(sid, {
                   status: "blocked",
-                  agentReply: "没有可执行的步骤，请先完成或调整被阻塞步骤的前置依赖。",
-                  events: model.withEvent(currentSession, "ExecutionBlocked", "步骤依赖尚未满足，连续执行已停止。"),
+                  agentReply: wbT("task.reply.noRunnableSteps", "No steps can run. Complete or adjust the prerequisites of the blocked steps first."),
+                  events: model.withEvent(currentSession, "ExecutionBlocked", wbT("task.event.runAllDependenciesBlocked", "Step dependencies are not satisfied, so continuous execution stopped.")),
                 }).then(apply);
               }
               return model.patchSession(sid, {
                 status: "review",
-                agentReply: "所有步骤已完成，请验收。",
+                agentReply: wbT("task.reply.allStepsComplete", "All steps are complete. Please review the result."),
                 artifacts: model.ensureArtifacts(currentSession),
-                events: model.withEvent(currentSession, "ExecutionFinished", "全部步骤已完成，等待你验收。"),
+                events: model.withEvent(currentSession, "ExecutionFinished", wbT("task.event.allStepsComplete", "All steps are complete and awaiting your review.")),
               }).then(apply);
             }
             return runStepCore(currentSession, nextStep.id, { continueAll: true })
@@ -560,18 +560,18 @@ function useTaskController(session, onRefresh, runtime) {
       var now = new Date().toISOString();
       var stoppedPlan = Array.isArray(session.plan) ? session.plan.map(function (s) {
         if (!s || s.status !== "running") return s;
-        return Object.assign({}, s, { status: "pending", startedAt: null, currentAction: "已停止，可重新执行。", updatedAt: now });
+        return Object.assign({}, s, { status: "pending", startedAt: null, currentAction: wbT("task.progress.stopped", "Stopped; ready to run again."), updatedAt: now });
       }) : session.plan;
       return model.patchSession(sid, {
         status: "paused",
         plan: stoppedPlan,
-        agentReply: "执行已被你中断，可继续或调整后重试。",
-        events: model.withEvent(session, "Paused", "用户中断了执行。"),
+        agentReply: wbT("task.reply.interrupted", "You interrupted execution. Continue now or adjust the task before retrying."),
+        events: model.withEvent(session, "Paused", wbT("task.event.interrupted", "The user interrupted execution.")),
       }).then(apply).catch(fail);
     },
 
     pause: function () {
-      return run(patch({ status: "paused", events: model.withEvent(session, "Paused", "任务已暂停。") }));
+      return run(patch({ status: "paused", events: model.withEvent(session, "Paused", wbT("task.event.paused", "The task was paused.")) }));
     },
 
     runStep: function (step) {
@@ -623,7 +623,7 @@ function useTaskController(session, onRefresh, runtime) {
       if (session.goalLoop && ["paused", "blocked"].indexOf(session.goalLoop.status) >= 0) {
         return run(model.resumeGoalLoop(sid));
       }
-      return model.patchSession(sid, { events: model.withEvent(session, "Resumed", "继续执行任务。") })
+      return model.patchSession(sid, { events: model.withEvent(session, "Resumed", wbT("task.event.resumed", "Task execution resumed.")) })
         .then(apply).then(function () { return ctrl.execute(); });
     },
 
@@ -635,14 +635,17 @@ function useTaskController(session, onRefresh, runtime) {
     continueModify: function () {
       var criteria = Array.isArray(session.acceptanceCriteria) ? session.acceptanceCriteria : [];
       var failed = criteria.filter(function (item) { return item && item.status === "failed"; });
-      var lines = ["请参考最近一次验收结果，继续修改并完成当前 session 的任务。请保留已通过的验收标准，优先修复未通过项。"];
+      var lines = [wbT("task.prompt.repairFromReview", "Use the latest review results to continue modifying and complete the current session task. Preserve the acceptance criteria that passed and prioritize the failed items.")];
       failed.slice(0, 8).forEach(function (item) {
         var text = String(item.text || "").trim();
         var evidence = String(item.evidence || "").trim();
-        if (text) lines.push("- 未通过：" + text + (evidence ? "；验收依据：" + evidence : ""));
+        if (text) lines.push(wbT("task.prompt.failedCriterion", "- Failed: {criterion}{evidence}", {
+          criterion: text,
+          evidence: evidence ? wbT("task.prompt.acceptanceEvidence", "; evidence: {evidence}", { evidence: evidence }) : "",
+        }));
       });
-      if (session.verifyReason) lines.push("验收结论：" + String(session.verifyReason));
-      return runAgentic({ kind: "repair", label: "正在参考验收结果继续修改…" }, model.continueAcceptanceRepair(sid, lines.join("\n"), {
+      if (session.verifyReason) lines.push(wbT("task.prompt.reviewConclusion", "Review conclusion: {conclusion}", { conclusion: String(session.verifyReason) }));
+      return runAgentic({ kind: "repair", label: wbT("task.busy.repairingFromReview", "Continuing the work from the review results…") }, model.continueAcceptanceRepair(sid, lines.join("\n"), {
         attachments: (runtime && runtime.attachments) || [],
         mode: (runtime && runtime.mode) || undefined,
         model: (runtime && runtime.model) || undefined,
@@ -672,16 +675,18 @@ function useTaskController(session, onRefresh, runtime) {
         }
       }
       var skippedStepId = idx >= 0 && plan[idx] ? plan[idx].id : "";
-      var skipped = skippedStepId ? model.markStepById(plan, skippedStepId, "skipped", "已跳过该步骤。") : plan;
+      var skipped = skippedStepId ? model.markStepById(plan, skippedStepId, "skipped", wbT("task.progress.stepSkipped", "This step was skipped.")) : plan;
       var remaining = skipped.filter(function (s) { return !isResolvedStepStatus(s && s.status); }).length;
       var runnable = model.findNextRunnableStep(skipped);
-      var events = model.withEvent(session, "StepSkipped", "跳过该步骤。");
+      var events = model.withEvent(session, "StepSkipped", wbT("task.event.stepSkipped", "Skipped the step."));
       return run(patch({
         status: remaining > 0 ? (runnable ? "paused" : "blocked") : "review",
         plan: skipped,
         agentReply: remaining > 0
-          ? (runnable ? "已跳过该步骤，可继续执行不依赖它的剩余步骤。" : "该步骤已跳过，其后续依赖步骤已被阻塞。")
-          : "已跳过该步骤，剩余步骤已处理完，请验收。",
+          ? (runnable
+            ? wbT("task.reply.stepSkippedContinue", "The step was skipped. You can continue with the remaining steps that do not depend on it.")
+            : wbT("task.reply.stepSkippedBlocked", "The step was skipped, and its dependent steps are now blocked."))
+          : wbT("task.reply.stepSkippedReview", "The step was skipped and all remaining steps are resolved. Please review the result."),
         events: events,
       }));
     },
@@ -693,21 +698,21 @@ function useTaskController(session, onRefresh, runtime) {
       var passed = items.map(function (a) {
         return (a && a.status === "failed") ? a : Object.assign({}, a, { status: "passed" });
       });
-      var events = model.withEvent(session, "TaskCompleted", "用户确认任务完成。");
+      var events = model.withEvent(session, "TaskCompleted", wbT("task.event.completedByUser", "The user confirmed that the task is complete."));
       return run(patch({ status: "completed", acceptanceCriteria: passed, events: events }));
     },
 
     // Deep reflection over the task's accumulated history → session.reflection.
     reflect: function (focus) {
-      return runAgentic({ kind: "reflect", label: "正在深度反思整个任务…" }, model.reflect(sid, { focus: focus || "" }));
+      return runAgentic({ kind: "reflect", label: wbT("task.busy.reflecting", "Reflecting deeply on the entire task…") }, model.reflect(sid, { focus: focus || "" }));
     },
     // Independent acceptance agent verifies criteria against the real results.
     verify: function () {
-      return runAgentic({ kind: "verify", label: "正在独立核验验收标准…" }, model.verify(sid));
+      return runAgentic({ kind: "verify", label: wbT("task.busy.verifying", "Independently verifying the acceptance criteria…") }, model.verify(sid));
     },
     // Reflect on a failed task, then fork a fresh session carrying the packet.
     reflectAndFork: function () {
-      return runAgentic({ kind: "reflect", label: "正在反思并另起新任务…" }, model.reflectAndFork(sid));
+      return runAgentic({ kind: "reflect", label: wbT("task.busy.reflectingAndForking", "Reflecting and creating a new task…") }, model.reflectAndFork(sid));
     },
     // Accept a sibling-reflection hint → merge its packet into this session.
     acceptHint: function (hintId) {
@@ -719,17 +724,17 @@ function useTaskController(session, onRefresh, runtime) {
     },
 
     reopen: function () {
-      var events = model.withEvent(session, "Reopened", "重新打开任务。");
-      return run(patch({ status: "planning", agentReply: "任务已重新打开，请确认计划后继续。", events: events }));
+      var events = model.withEvent(session, "Reopened", wbT("task.event.reopened", "Reopened the task."));
+      return run(patch({ status: "planning", agentReply: wbT("task.reply.reopened", "The task was reopened. Confirm the plan to continue."), events: events }));
     },
 
     cancel: function () {
-      return workbenchServices.feedback().confirmModal({ body: "确定取消这个任务吗？当前进度会被保留。", danger: true }).then(function (ok) {
+      return workbenchServices.feedback().confirmModal({ body: wbT("task.confirm.cancel", "Cancel this task? Its current progress will be preserved."), danger: true }).then(function (ok) {
         if (!ok) return undefined;
         if (session.goalLoop && ["running", "waiting_for_user", "paused", "blocked"].indexOf(session.goalLoop.status) >= 0) {
           return run(model.cancelGoalLoop(sid));
         }
-        return run(patch({ status: "cancelled", events: model.withEvent(session, "Cancelled", "任务已取消。") }));
+        return run(patch({ status: "cancelled", events: model.withEvent(session, "Cancelled", wbT("task.event.cancelled", "The task was cancelled.")) }));
       });
     },
 

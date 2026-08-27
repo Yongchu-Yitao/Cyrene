@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from cyrene.localization import localized
 from cyrene.workbench import chat_groups
 from cyrene.workbench.chat_events import publish_chat_changed
 from cyrene.workbench.chat_external_turn_service import (
@@ -38,6 +39,7 @@ from cyrene.workbench.chat_session_naming_service import (
     ChatSessionNamingDependencies,
 )
 from route import schemas as api_models
+from route.errors import localized_error_payload, localized_error_response
 from route.workbench.chat_routes.context import ChatRouteContext
 from route.workbench.chat_routes.shared import (
     schedule_workspace_changes_finalize,
@@ -45,6 +47,17 @@ from route.workbench.chat_routes.shared import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _composer_context_service():
+    from agent.plugin import active_plugin_service
+
+    service = active_plugin_service("composer_context")
+    if service is None:
+        raise RuntimeError(
+            "Required Plugin application service is unavailable: composer_context"
+        )
+    return service
 
 
 class ChatSendController:
@@ -70,7 +83,7 @@ class ChatSendController:
                 publish_chat_changed=publish_chat_changed,
                 load_chat_summary=self._load_chat_summary,
                 public_message=service.public_message,
-                error_message=service.chat_run_error_message,
+                error_message=self._public_run_error_message,
                 error_metadata=service.chat_error_metadata,
             )
         )
@@ -100,6 +113,14 @@ class ChatSendController:
     def _load_chat_summary(self, chat_id: str) -> dict[str, Any]:
         chat = self.service.repository.get(chat_id)
         return self.service.public_chat_light(chat) if chat else {}
+
+    @staticmethod
+    def _public_run_error_message(_exc: Exception, language: str = "") -> str:
+        return localized(
+            "The Agent run failed. Please try again.",
+            "Agent 运行失败，请重试。",
+            language=language,
+        )
 
     def _schedule_workspace_finalize(self, **kwargs: Any) -> None:
         schedule_workspace_changes_finalize(self.service, **kwargs)
@@ -204,8 +225,17 @@ class _SendOperation:
         self.normalized = self.routes.normalize_attachments(attachments)
         self.public_attachments = [self.routes.build_public_attachment_payload(item) for item in self.normalized]
         if not self.retry and not self.message and not self.normalized and not self.command:
-            return JSONResponse({"error": "message is required"}, status_code=400)
-        budget_error = await self.context.check_budget_gate(self.chat_id)
+            return localized_error_response(
+                "A message or attachment is required.",
+                "请输入消息或添加附件。",
+                400,
+                "message_required",
+                language=self.lang,
+            )
+        budget_error = await self.context.check_budget_gate(
+            self.chat_id,
+            language=self.lang,
+        )
         if budget_error:
             return JSONResponse(budget_error, status_code=403)
         return None
@@ -213,7 +243,13 @@ class _SendOperation:
     async def _load_chat(self, permission_modes):
         self.chat = await asyncio.to_thread(self.service.repository.get, self.chat_id)
         if not self.chat:
-            return JSONResponse({"error": "chat not found"}, status_code=404)
+            return localized_error_response(
+                "Chat not found.",
+                "未找到对话。",
+                404,
+                "chat_not_found",
+                language=self.lang,
+            )
         self.base_chat = copy.deepcopy(self.chat)
         from cyrene.agent_runtime.builtin import normalize_agent_binding
 
@@ -239,7 +275,13 @@ class _SendOperation:
                     self.command = str(parsed.get("command") or "")
                     self.message = str(parsed.get("arguments") or "")
             if self.command and declared_commands and self.command not in declared_commands:
-                return JSONResponse({"error": "Agent command is not available"}, status_code=400)
+                return localized_error_response(
+                    "This Agent command is not available.",
+                    "此 Agent 命令不可用。",
+                    400,
+                    "agent_command_unavailable",
+                    language=self.lang,
+                )
         else:
             from cyrene.workbench.slash_commands import resolve_slash_command
 
@@ -257,12 +299,17 @@ class _SendOperation:
                 if parsed and parsed.get("matched"):
                     self.message = str(parsed.get("arguments") or "")
             elif self.command:
-                return JSONResponse({"error": "unknown Cyrene command"}, status_code=400)
+                return localized_error_response(
+                    "Unknown Cyrene command.",
+                    "未知的 Cyrene 命令。",
+                    400,
+                    "unknown_command",
+                    language=self.lang,
+                )
         if self.command and not self.public_message:
             self.public_message = "/" + self.command
 
-        from cyrene.workbench.composer_context import resolve_context_activations
-
+        composer_context = _composer_context_service()
         requested_activations = (
             self.requested_context_activations
             if self.requested_context_activations is not None
@@ -271,9 +318,7 @@ class _SendOperation:
         if self.dynamic_command and isinstance(
             self.dynamic_command.get("activation"), dict
         ):
-            from cyrene.workbench.composer_context import normalize_context_activations
-
-            requested_activations = normalize_context_activations(requested_activations)
+            requested_activations = composer_context.normalize(requested_activations)
             activation = self.dynamic_command["activation"]
             activation_kind = str(activation.get("kind") or "")
             activation_id = str(activation.get("id") or "")
@@ -283,24 +328,25 @@ class _SendOperation:
                 and activation_id not in requested_activations[activation_kind]
             ):
                 requested_activations[activation_kind].append(activation_id)
-        self.context_activations = resolve_context_activations(
-            requested_activations
-        )
+        self.context_activations = composer_context.normalize(requested_activations)
+        self.resolved_context_activations = {}
         if self.is_external_agent and any(self.context_activations.values()):
-            return JSONResponse(
-                {"error": "Composer context capabilities require the built-in Cyrene Agent"},
-                status_code=400,
+            return localized_error_response(
+                "Composer context capabilities require the built-in Cyrene Agent.",
+                "编辑器上下文能力需要使用 Cyrene 内置 Agent。",
+                400,
+                "builtin_agent_required",
+                language=self.lang,
             )
-        self.chat["contextActivations"] = self.context_activations
         requested_agent = self.body.get("agent") if isinstance(self.body.get("agent"), dict) else None
         installation_id = str((requested_agent or {}).get("installationId") or "").strip()
         if installation_id and installation_id != binding.installation_id:
-            return JSONResponse(
-                {
-                    "error": "Agent binding cannot be changed from the message endpoint",
-                    "code": "agent_binding_locked",
-                },
-                status_code=409,
+            return localized_error_response(
+                "The Agent binding cannot be changed while sending a message.",
+                "发送消息时不能更改 Agent 绑定。",
+                409,
+                "agent_binding_locked",
+                language=self.lang,
             )
         self.is_side_agent = str(self.chat.get("kind") or "") == "side-agent"
         self.completed_turn_count_before = self.service.completed_turn_count(self.chat)
@@ -321,6 +367,10 @@ class _SendOperation:
             self.chat["soulActive"] = bool(self.body.get("soulActive"))
         if "workspaceActive" in self.body:
             self.chat["workspaceActive"] = bool(self.body.get("workspaceActive"))
+        if "remoteDeviceIds" in self.body:
+            self.chat["remoteDeviceIds"] = list(
+                self.body.get("remoteDeviceIds") or ()
+            )
         self.project_id = str(self.chat.get("projectId") or "")
         attention = VoiceCommandAttention(
             enabled=self.voice_command,
@@ -338,12 +388,29 @@ class _SendOperation:
         project_store = await asyncio.to_thread(self.routes.read_store)
         self.project = self.routes.find_project(project_store, self.project_id)
         if not self.project:
-            return JSONResponse({"error": "project not found"}, status_code=404)
+            return localized_error_response(
+                "Project not found.",
+                "未找到项目。",
+                404,
+                "project_not_found",
+                language=self.lang,
+            )
         if "workspaceOverride" in self.body:
             try:
                 workspace = self.service.normalize_workspace_override(self.body.get("workspaceOverride"))
-            except ValueError as exc:
-                return JSONResponse({"error": str(exc)}, status_code=400)
+            except ValueError:
+                logger.warning(
+                    "Invalid workspace override for chat %s",
+                    self.chat_id,
+                    exc_info=True,
+                )
+                return localized_error_response(
+                    "The workspace override is invalid.",
+                    "工作区覆盖路径无效。",
+                    400,
+                    "invalid_workspace_override",
+                    language=self.lang,
+                )
             if workspace:
                 self.chat["workspaceOverride"] = workspace
             else:
@@ -354,8 +421,64 @@ class _SendOperation:
                 self.project,
                 self.routes.resolve_workspace_dir,
             )
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+        except ValueError:
+            logger.warning(
+                "Invalid workspace configuration for chat %s",
+                self.chat_id,
+                exc_info=True,
+            )
+            return localized_error_response(
+                "The workspace configuration is invalid.",
+                "工作区配置无效。",
+                400,
+                "invalid_workspace",
+                language=self.lang,
+            )
+        try:
+            resolved_input = self.service.resolve_composer_input_context(
+                {
+                    **self.chat,
+                    "contextActivations": self.context_activations,
+                },
+                self.workspace_dir,
+                strict=True,
+            )
+        except (ValueError, RuntimeError) as exc:
+            logger.warning(
+                "Composer input context is unavailable for chat %s: %s",
+                self.chat_id,
+                exc,
+            )
+            invalid = isinstance(exc, ValueError)
+            return localized_error_response(
+                (
+                    "The context configuration is invalid."
+                    if invalid
+                    else "The selected input context is unavailable."
+                ),
+                "上下文配置无效。" if invalid else "所选输入框上下文当前不可用。",
+                400 if invalid else 503,
+                (
+                    "invalid_context_configuration"
+                    if invalid
+                    else "composer_context_unavailable"
+                ),
+                language=self.lang,
+            )
+        self.context_activations = dict(
+            resolved_input["contextActivations"]
+        )
+        self.resolved_context_activations = dict(
+            resolved_input["resolvedContextActivations"]
+        )
+        self.chat["contextActivations"] = self.context_activations
+        self.chat["soulActive"] = bool(resolved_input["soulActive"])
+        self.chat["workspaceActive"] = bool(
+            resolved_input["workspaceActive"]
+        )
+        self.chat["remoteDeviceIds"] = list(
+            resolved_input["remoteDeviceIds"]
+        )
         return await self._select_model()
 
     async def _select_model(self):
@@ -364,9 +487,10 @@ class _SendOperation:
         self.agent_owns_models = self.is_external_agent and str((self.chat.get("modelAccess") or {}).get("mode") or "") == "agent_managed"
         selected_key = "" if self.agent_owns_models else self.requested_model or str(self.chat.get("modelSelectionId") or "").strip()
         if selected_key:
-            from cyrene.runtime.model_configuration import selectable_model_candidates
+            from agent.plugin import active_plugin_service
 
-            selectable_candidates = selectable_model_candidates()
+            model_service = active_plugin_service("model_configuration")
+            selectable_candidates = model_service.selectable_model_candidates() if model_service is not None else []
 
             self.selected_candidate = next(
                 (
@@ -383,13 +507,14 @@ class _SendOperation:
             )
             if self.selected_candidate is None:
                 if self.requested_model:
-                    return JSONResponse(
-                        {"error": "configured model not found"},
-                        status_code=400,
+                    return localized_error_response(
+                        "The configured model was not found.",
+                        "未找到已配置的模型。",
+                        400,
+                        "model_not_found",
+                        language=self.lang,
                     )
-                from cyrene.runtime.model_configuration import candidates_for_route
-
-                models = candidates_for_route("primary")
+                models = model_service.candidates_for_route("primary") if model_service is not None else []
                 self.selected_candidate = models[0] if models else None
                 if self.selected_candidate is not None:
                     recovered_stale_selection = True
@@ -397,12 +522,12 @@ class _SendOperation:
         if self.selected_candidate is not None:
             self._persist_model_selection(selected_key, recovered_stale_selection)
         if self.service.run_manager.get(self.chat_id) is not None:
-            return JSONResponse(
-                {
-                    "error": "chat already has a running reply",
-                    "code": "chat_run_in_progress",
-                },
-                status_code=409,
+            return localized_error_response(
+                "This chat already has a reply in progress.",
+                "此对话已有回复正在生成。",
+                409,
+                "chat_run_in_progress",
+                language=self.lang,
             )
         return None
 
@@ -433,7 +558,13 @@ class _SendOperation:
                 -1,
             )
             if last_user_index < 0:
-                return JSONResponse({"error": "nothing to retry"}, status_code=400)
+                return localized_error_response(
+                    "There is no message to retry.",
+                    "没有可重试的消息。",
+                    400,
+                    "nothing_to_retry",
+                    language=self.lang,
+                )
             self.user_entry = messages[last_user_index]
             self.truncate_after_id = str(self.user_entry.get("id") or "")
             self.retry_replaced_message_ids = {str(item.get("id") or "") for item in messages[last_user_index + 1 :] if isinstance(item, dict) and str(item.get("id") or "")}
@@ -490,7 +621,7 @@ class _SendOperation:
             locked_agent = dict(self.chat.get("agent") or {})
             locked_agent["bindingLocked"] = True
             self.chat["agent"] = locked_agent
-        if is_first_message and self.chat.get("title") in ("", "新对话", None) and self.public_message:
+        if is_first_message and self.chat.get("title") in ("", "New chat", "新对话", None) and self.public_message:
             self.chat["title"] = self.public_message.replace("\n", " ")[:24]
         if is_first_message and bool(self.public_message) and not bool(self.chat.get("titleLocked")) and not self.chat.get("titleNamingStatus"):
             self.should_generate_title = True
@@ -507,9 +638,12 @@ class _SendOperation:
                     self.chat_id,
                 )
                 await self._restore_retry_state_async()
-                return JSONResponse(
-                    {"error": "chat group context could not be prepared"},
-                    status_code=503,
+                return localized_error_response(
+                    "The chat group context could not be prepared.",
+                    "无法准备对话群组上下文。",
+                    503,
+                    "chat_group_context_unavailable",
+                    language=self.lang,
                 )
         self.chat["status"] = "running"
         if self.selected_candidate is None and not self.agent_owns_models:
@@ -546,19 +680,38 @@ class _SendOperation:
             self.agent_message = "/" + self.command + ((" " + self.message) if self.message else "")
         if self.is_side_agent:
             source_quote = str(self.chat.get("sourceQuote") or "").strip()
-            self.agent_message = (
-                "你是主对话旁的独立 Side Agent。以下 main_conversation 是提问"
-                "发生时主对话的完整公开内容；结合全部对话理解问题，并把"
-                " selected_quote 作为用户当前关注的重点。不要假装上下文中未提供"
-                "的事实。\n\n<main_conversation>\n"
-                + (self.parent_transcript or "(empty)")
-                + "\n</main_conversation>\n\n<selected_quote>\n"
-                + (source_quote or "(none)")
-                + "\n</selected_quote>\n\n用户问题：\n"
-                + self.message
+            self.agent_message = localized(
+                "You are an independent Side Agent attached to the main conversation. "
+                "main_conversation contains the complete public conversation at the "
+                "time of the question. Use the whole conversation to understand the "
+                "request, with selected_quote as the user's current focus. Do not "
+                "invent facts absent from the supplied context.\n\n"
+                "<main_conversation>\n{conversation}\n</main_conversation>\n\n"
+                "<selected_quote>\n{quote}\n</selected_quote>\n\n"
+                "User question:\n{question}",
+                "你是主对话旁的独立 Side Agent。以下 main_conversation 是提问发生时"
+                "主对话的完整公开内容；请结合全部对话理解问题，并把 selected_quote "
+                "作为用户当前关注的重点。不要假装上下文中未提供的事实。\n\n"
+                "<main_conversation>\n{conversation}\n</main_conversation>\n\n"
+                "<selected_quote>\n{quote}\n</selected_quote>\n\n"
+                "用户问题：\n{question}",
+                language=self.lang,
+                conversation=self.parent_transcript
+                or localized("(empty)", "（空）", language=self.lang),
+                quote=source_quote
+                or localized("(none)", "（无）", language=self.lang),
+                question=self.message,
             )
         if self.normalized:
-            self.agent_message = (self.agent_message or "[Attachment upload]") + self.routes.attachment_prompt_block(self.normalized)
+            self.agent_message = (
+                self.agent_message
+                or localized(
+                    "[Attachment upload]", "[附件上传]", language=self.lang
+                )
+            ) + self.routes.attachment_prompt_block(
+                self.normalized,
+                language=self.lang,
+            )
 
     def _attachment_path_map(self) -> dict[str, str]:
         from pathlib import Path
@@ -607,7 +760,6 @@ class _SendOperation:
             )
         from cyrene.runtime.host_bridge import resolve_conversation_source
 
-        from cyrene.workbench.composer_context import build_context_activation_prompt
         from agent.commands import command_system_prompt
 
         memory_snapshot = (
@@ -616,7 +768,6 @@ class _SendOperation:
             else None
         )
         turn_system_extras = [
-            build_context_activation_prompt(self.context_activations),
             command_system_prompt(self.command),
             self.dynamic_command_prompt,
         ]
@@ -647,6 +798,8 @@ class _SendOperation:
             ),
             soul_enabled=self.service.chat_soul_active(self.chat),
             workspace_enabled=self.service.chat_workspace_active(self.chat),
+            context_activations=self.context_activations,
+            resolved_context_activations=self.resolved_context_activations,
             system_extra="\n\n".join(
                 part for part in turn_system_extras if part
             ),
@@ -1027,7 +1180,11 @@ class _SendOperation:
                 {
                     "type": "error",
                     "error": "agent_run_failed",
-                    "message": self.service.chat_run_error_message(exc, self.lang),
+                    "message": localized(
+                        "The Agent run failed. Please try again.",
+                        "Agent 运行失败，请重试。",
+                        language=self.lang,
+                    ),
                     **self.service.chat_error_metadata(exc),
                 }
             )
@@ -1088,10 +1245,12 @@ class _SendOperation:
         )
         if not is_new:
             return self._builtin_dispatch_response(
-                payload={
-                    "error": "chat already has a running reply",
-                    "code": "chat_run_in_progress",
-                },
+                payload=localized_error_payload(
+                    "This chat already has a reply in progress.",
+                    "此对话已有回复正在生成。",
+                    "chat_run_in_progress",
+                    language=self.lang,
+                ),
                 status_code=409,
             )
         await publish_chat_changed(
@@ -1124,12 +1283,19 @@ class _SendOperation:
             exc = outcome.get("exc")
             if not isinstance(exc, Exception):
                 exc = RuntimeError("agent run failed")
+            metadata = dict(self.service.chat_error_metadata(exc))
+            code = str(metadata.pop("code", "") or "agent_run_failed")
+            metadata.pop("detail", None)
+            metadata.pop("message", None)
+            metadata.pop("error", None)
             return self._builtin_dispatch_response(
-                payload={
-                    "error": "agent run failed",
-                    "detail": str(exc),
-                    **self.service.chat_error_metadata(exc),
-                },
+                payload=localized_error_payload(
+                    "The Agent run failed. Please try again.",
+                    "Agent 运行失败，请重试。",
+                    code,
+                    language=self.lang,
+                    **metadata,
+                ),
                 status_code=502,
             )
         payload = outcome.get("payload")
@@ -1137,7 +1303,12 @@ class _SendOperation:
             payload=(
                 payload
                 if isinstance(payload, dict)
-                else {"error": "agent run ended without an outcome"}
+                else localized_error_payload(
+                    "The Agent run ended without a result.",
+                    "Agent 运行结束，但未产生结果。",
+                    "agent_outcome_missing",
+                    language=self.lang,
+                )
             ),
             status_code=200 if isinstance(payload, dict) else 500,
         )
@@ -1209,8 +1380,31 @@ class _SendOperation:
                 headers={"Cache-Control": "no-cache"},
             )
         if lifecycle.status_code != 200:
+            payload = dict(lifecycle.payload or {})
+            code = str(
+                payload.get("code")
+                or payload.get("failureKind")
+                or "agent_run_failed"
+            )
+            metadata = {
+                key: value
+                for key, value in payload.items()
+                if key
+                not in {
+                    "code",
+                    "detail",
+                    "error",
+                    "message",
+                }
+            }
             return JSONResponse(
-                lifecycle.payload or {},
+                localized_error_payload(
+                    "The Agent run failed. Please try again.",
+                    "Agent 运行失败，请重试。",
+                    code,
+                    language=self.lang,
+                    **metadata,
+                ),
                 status_code=lifecycle.status_code,
             )
         return lifecycle.payload or {}

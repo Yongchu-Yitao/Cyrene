@@ -11,6 +11,7 @@ from agent.plugin import PluginContext
 from .definitions import get_native_tool_def
 from agent.plugin.native_runtime import (
     json_result,
+    plugin_localized,
     publish_runtime_event,
     resolve_exportable_path,
     run_context_value,
@@ -29,14 +30,14 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 async def _tool_send_file(args: dict[str, Any], context: PluginContext) -> str:
     path_arg = str(args.get("path", "") or "").strip()
     if not path_arg:
-        return "Error: 'path' is required."
+        return plugin_localized(context, "Error: 'path' is required.", "错误：必须提供 path。")
 
     if str(run_context_value(context, "agent_id", "main")) != "main":
-        return "Only the main agent can send a file to the WebUI."
+        return plugin_localized(context, "Only the main Agent can send a file to the Web UI.", "只有主 Agent 可以向 Web UI 发送文件。")
 
     path = resolve_exportable_path(path_arg)
     if not path.exists() or not path.is_file():
-        return f"Error: file not found: {path}"
+        return plugin_localized(context, "Error: file not found: {path}", "错误：未找到文件：{path}", path=path)
 
     text = str(args.get("text", "") or "").strip()
     registered = register_generated_attachment(str(path), display_name=str(args.get("name", "") or "").strip() or None)

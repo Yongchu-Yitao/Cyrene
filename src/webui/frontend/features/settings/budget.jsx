@@ -14,6 +14,7 @@ import {
 
 function UsageTrendChart(p) {
   var { t } = p;
+  var i18n = workbenchServices.i18n();
   var items = Array.isArray(p.items) ? p.items : [];
   var currencySymbol = String(p.currencySymbol || "");
   var chartRef = useRefSt(null);
@@ -134,7 +135,7 @@ function UsageTrendChart(p) {
           lineStyle: { width: 2, type: "solid" },
           itemStyle: { color: tokenColor },
           emphasis: { focus: "series" },
-          tooltip: { valueFormatter: function (value) { return Number(value || 0).toLocaleString(); } },
+          tooltip: { valueFormatter: function (value) { return i18n.formatNumber(value || 0); } },
         }, {
           name: t("settings.usageTrendRequests"),
           type: "line",
@@ -146,7 +147,7 @@ function UsageTrendChart(p) {
           lineStyle: { width: 2, type: "dashed" },
           itemStyle: { color: requestColor },
           emphasis: { focus: "series" },
-          tooltip: { valueFormatter: function (value) { return Number(value || 0).toLocaleString(); } },
+          tooltip: { valueFormatter: function (value) { return i18n.formatNumber(value || 0); } },
         }, {
           name: t("settings.usageTrendCost"),
           type: "line",
@@ -195,6 +196,7 @@ function UsageTrendChart(p) {
 // ── Budget Panel ──
 function BudgetPanel(p) {
   var { t, config } = p;
+  var i18n = workbenchServices.i18n();
   var mode = p.mode === "usage" ? "usage" : "budget";
   var dataStore = workbenchServices.data();
   dataStore.useVersion();
@@ -309,6 +311,7 @@ function BudgetPanel(p) {
   var [maxRequestTokens, setMaxRequestTokens] = useStateSt(0);
   var [maxRequestCost, setMaxRequestCost] = useStateSt(0);
   var [budgetLoading, setBudgetLoading] = useStateSt(true);
+  var usageRefreshReady = useRefSt(false);
 
   function fetchStats() {
     settingsFetch("/api/settings/budget/stats")
@@ -334,6 +337,14 @@ function BudgetPanel(p) {
       if (providerRefreshTimer.current) clearTimeout(providerRefreshTimer.current);
     };
   }, []);
+
+  useEffectSt(function () {
+    if (!usageRefreshReady.current) {
+      usageRefreshReady.current = true;
+      return;
+    }
+    if (mode === "usage") fetchStats();
+  }, [mode, profileUsage.requests, profileUsage.total_tokens]);
 
   var budgetNum = Number(budgetMonthly) || 0;
   var budgetRatio = budgetNum > 0 ? Math.min(totalCost / budgetNum, 1) : 0;
@@ -384,21 +395,19 @@ function BudgetPanel(p) {
   if (codexQuota.connected === true) providerUsageItems.push(codexUsageItem);
 
   function formatCost(val) {
-    return currencySymbol + val.toFixed(2);
+    return currencySymbol + i18n.formatNumber(val, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
   function formatTokens(n) {
     n = Number(n) || 0;
-    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
-    if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
-    return String(n);
+    return i18n.formatNumber(n, { notation: "compact", maximumFractionDigits: 1 });
   }
 
   function formatPeakDate(item) {
     if (!item || !item.day) return "";
     var value = new Date(String(item.day) + "T00:00:00");
     return t("settings.usagePeakDate", {
-      date: isNaN(value.getTime()) ? String(item.day) : value.toLocaleDateString(),
+      date: isNaN(value.getTime()) ? String(item.day) : i18n.formatDate(value, { dateStyle: "medium" }),
     });
   }
 
@@ -414,7 +423,7 @@ function BudgetPanel(p) {
     var number = Number(value);
     if (!isFinite(number)) return String(value || "0") + " " + currency;
     try {
-      return new Intl.NumberFormat(undefined, {
+      return new Intl.NumberFormat(i18n.getLocale(), {
         style: "currency", currency: currency || "CNY", minimumFractionDigits: 2,
       }).format(number);
     } catch (error) {
@@ -498,7 +507,7 @@ function BudgetPanel(p) {
               }),
             ),
             React.createElement("small", null, windowData.reset_at
-              ? t("settings.providerUsageResets", { time: new Date(windowData.reset_at).toLocaleString() })
+              ? t("settings.providerUsageResets", { time: i18n.formatDate(windowData.reset_at, { dateStyle: "medium", timeStyle: "short" }) })
               : t("settings.providerUsageResetUnknown")),
             windowData.ambiguous && React.createElement("small", { className: "wb-provider-quota-warning" },
               t("settings.providerUsageStatusUnknownHint")
@@ -507,7 +516,7 @@ function BudgetPanel(p) {
         }),
         !visibleWindows.length && React.createElement("p", { className: "wb-hint" }, t("settings.providerUsageNoQuota")),
       ),
-      item.refreshed_at && React.createElement("footer", null, t("settings.providerUsageUpdated", { time: new Date(item.refreshed_at).toLocaleString() })),
+      item.refreshed_at && React.createElement("footer", null, t("settings.providerUsageUpdated", { time: i18n.formatDate(item.refreshed_at, { dateStyle: "medium", timeStyle: "short" }) })),
     );
   }
 
@@ -522,7 +531,7 @@ function BudgetPanel(p) {
     mode === "usage" && SectionBlock(t("settings.profileUsageSnapshot"), t("settings.profileUsageSnapshotHint"),
       React.createElement("div", { className: "wb-usage-metrics is-profile" },
         usageMetric(formatCost(profileSpend), t("profile.spend")),
-        usageMetric(Number(profileUsage.requests || 0).toLocaleString(), t("profile.requests")),
+        usageMetric(i18n.formatNumber(profileUsage.requests || 0), t("profile.requests")),
         usageMetric(formatTokens(profileTotalTokens), t("profile.tokens")),
         usageMetric(formatTokens(profilePromptTokens), t("settings.usageInputTokens")),
         usageMetric(formatTokens(profileCompletionTokens), t("settings.usageOutputTokens")),
@@ -534,7 +543,7 @@ function BudgetPanel(p) {
       React.createElement("div", { className: "wb-budget-summary" },
         React.createElement("div", { className: "wb-usage-metrics is-period" },
           usageMetric(formatCost(totalCost), t("settings.budgetSpend")),
-          usageMetric(totalRequests.toLocaleString(), t("settings.budgetRequests")),
+          usageMetric(i18n.formatNumber(totalRequests), t("settings.budgetRequests")),
           usageMetric(formatTokens(periodTotalTokens), t("settings.budgetTokens")),
           usageMetric(formatTokens(periodPromptTokens), t("settings.usageInputTokens")),
           usageMetric(
@@ -548,7 +557,7 @@ function BudgetPanel(p) {
             totalRequests > 0 ? t("settings.usageMaxRequestCost", { cost: formatCost(maxRequestCost) }) : ""
           ),
           usageMetric(peakUsageDay ? formatTokens(peakUsageDay.total_tokens) : "—", t("settings.usagePeakUsage"), formatPeakDate(peakUsageDay)),
-          usageMetric(peakCallsDay ? Number(peakCallsDay.requests || 0).toLocaleString() : "—", t("settings.usagePeakCalls"), formatPeakDate(peakCallsDay)),
+          usageMetric(peakCallsDay ? i18n.formatNumber(peakCallsDay.requests || 0) : "—", t("settings.usagePeakCalls"), formatPeakDate(peakCallsDay)),
         ),
         React.createElement(UsageTrendChart, { t: t, items: budgetDaily, currencySymbol: currencySymbol }),
       ),
@@ -654,7 +663,7 @@ function BudgetPanel(p) {
             React.createElement("dl", { className: "wb-budget-model-stats" },
               React.createElement("div", null,
                 React.createElement("dt", null, t("settings.budgetRequests")),
-                React.createElement("dd", null, Number(item.requests || 0).toLocaleString()),
+                React.createElement("dd", null, i18n.formatNumber(item.requests || 0)),
               ),
               React.createElement("div", null,
                 React.createElement("dt", null, t("settings.usageInputTokens")),

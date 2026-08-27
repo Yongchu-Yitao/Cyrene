@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import mimetypes
 import os
 import tempfile
@@ -17,6 +18,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypedDict
 
+from cyrene.localization import localized
+
+logger = logging.getLogger(__name__)
 
 class ProjectFileEntryDTO(TypedDict):
     name: str
@@ -92,17 +96,34 @@ class ProjectFileService:
         target = self._resolve_code_path(requested_path, write=False)
         if not target.exists():
             raise ProjectFileError(
-                f"File not found: {requested_path}", 404, "file_not_found"
+                localized(
+                    "File not found: {path}",
+                    "未找到文件：{path}",
+                    path=requested_path,
+                ),
+                404,
+                "file_not_found",
             )
         if not target.is_file():
             raise ProjectFileError(
-                f"Not a file: {requested_path}", 400, "not_a_file"
+                localized(
+                    "The path is not a file: {path}",
+                    "该路径不是文件：{path}",
+                    path=requested_path,
+                ),
+                400,
+                "not_a_file",
             )
         try:
             content = await asyncio.to_thread(target.read_text, encoding="utf-8")
         except UnicodeDecodeError as exc:
             raise ProjectFileError(
-                "File is not UTF-8 text", 400, "not_utf8_text"
+                localized(
+                    "The file is not UTF-8 text.",
+                    "该文件不是 UTF-8 文本。",
+                ),
+                400,
+                "not_utf8_text",
             ) from exc
         stat = await asyncio.to_thread(target.stat)
         return {
@@ -125,20 +146,39 @@ class ProjectFileService:
         try:
             size = await asyncio.to_thread(write)
         except OSError as exc:
-            raise ProjectFileError(str(exc), 500, "file_write_failed") from exc
+            logger.warning("Project code file write failed", exc_info=True)
+            raise ProjectFileError(
+                localized(
+                    "The file could not be written.",
+                    "无法写入文件。",
+                ),
+                500,
+                "file_write_failed",
+            ) from exc
         return {"status": "ok", "path": str(target), "size": size}
 
     async def read_diff_text(self, requested_path: str) -> str:
         target = self._resolve_code_path(requested_path, write=False)
         if not target.exists():
             raise ProjectFileError(
-                f"File not found: {requested_path}", 404, "file_not_found"
+                localized(
+                    "File not found: {path}",
+                    "未找到文件：{path}",
+                    path=requested_path,
+                ),
+                404,
+                "file_not_found",
             )
         try:
             return await asyncio.to_thread(target.read_text, encoding="utf-8")
         except UnicodeDecodeError as exc:
             raise ProjectFileError(
-                "Files must be UTF-8 text", 400, "not_utf8_text"
+                localized(
+                    "Files must be UTF-8 text.",
+                    "文件必须是 UTF-8 文本。",
+                ),
+                400,
+                "not_utf8_text",
             ) from exc
 
     def resolve_code_path(self, requested_path: str) -> Path:
@@ -153,7 +193,15 @@ class ProjectFileService:
         try:
             return resolver(requested_path)
         except ValueError as exc:
-            raise ProjectFileError(str(exc), 403, "workspace_path_forbidden") from exc
+            logger.info("Workspace path was rejected", exc_info=True)
+            raise ProjectFileError(
+                localized(
+                    "The requested path is outside the active workspace.",
+                    "请求的路径位于当前工作区之外。",
+                ),
+                403,
+                "workspace_path_forbidden",
+            ) from exc
 
     async def list_files(
         self,
@@ -167,10 +215,19 @@ class ProjectFileService:
         candidate = (root / requested).resolve(strict=False)
         if candidate != root and root not in candidate.parents:
             raise ProjectFileError(
-                "Path escapes the project workspace", 400, "invalid_workspace_path"
+                localized(
+                    "The path is outside the project workspace.",
+                    "该路径位于项目工作区之外。",
+                ),
+                400,
+                "invalid_workspace_path",
             )
         if not candidate.is_dir():
-            raise ProjectFileError("Directory not found", 404, "directory_not_found")
+            raise ProjectFileError(
+                localized("Directory not found.", "未找到目录。"),
+                404,
+                "directory_not_found",
+            )
 
         normalized_query = str(query or "").strip().casefold()
 
@@ -256,7 +313,10 @@ class ProjectFileService:
         expected = str(expected_version or "").strip()
         if expected and expected != current["version"] and not force:
             raise ProjectFileError(
-                "The file changed after it was opened",
+                localized(
+                    "The file changed after it was opened.",
+                    "文件在打开后已发生更改。",
+                ),
                 409,
                 "text_file_conflict",
                 {
@@ -270,7 +330,10 @@ class ProjectFileService:
             encoded = b"\xef\xbb\xbf" + encoded
         if len(encoded) > self.max_editable_text_bytes:
             raise ProjectFileError(
-                "Text file is too large to save",
+                localized(
+                    "The text file is too large to save.",
+                    "文本文件过大，无法保存。",
+                ),
                 413,
                 "text_file_too_large",
                 {"maxBytes": self.max_editable_text_bytes},
@@ -313,12 +376,21 @@ class ProjectFileService:
         try:
             result = await asyncio.to_thread(atomic_write)
         except OSError as exc:
+            logger.warning("Editable project file save failed", exc_info=True)
             raise ProjectFileError(
-                "The project file could not be saved", 403, "text_file_not_writable"
+                localized(
+                    "The project file could not be saved.",
+                    "无法保存项目文件。",
+                ),
+                403,
+                "text_file_not_writable",
             ) from exc
         if result.get("conflict"):
             raise ProjectFileError(
-                "The file changed while it was being saved",
+                localized(
+                    "The file changed while it was being saved.",
+                    "文件在保存期间已发生更改。",
+                ),
                 409,
                 "text_file_conflict",
                 {
@@ -331,14 +403,23 @@ class ProjectFileService:
     def _project(self, project_id: str) -> dict[str, Any]:
         project = self._find_project(project_id)
         if project is None:
-            raise ProjectFileError("Project not found", 404, "project_not_found")
+            raise ProjectFileError(
+                localized("Project not found.", "未找到项目。"),
+                404,
+                "project_not_found",
+            )
         return project
 
     async def _workspace_root_async(self, project: dict[str, Any]) -> Path:
         raw_root = await self._resolve_workspace_async(project)
         if not raw_root:
             raise ProjectFileError(
-                "Project has no workspace", 404, "workspace_unavailable"
+                localized(
+                    "The project has no workspace.",
+                    "该项目没有工作区。",
+                ),
+                404,
+                "workspace_unavailable",
             )
         return Path(raw_root).expanduser().resolve()
 
@@ -347,7 +428,12 @@ class ProjectFileService:
         raw_root = self._resolve_workspace(project)
         if not raw_root:
             raise ProjectFileError(
-                "Project has no workspace", 404, "workspace_unavailable"
+                localized(
+                    "The project has no workspace.",
+                    "该项目没有工作区。",
+                ),
+                404,
+                "workspace_unavailable",
             )
         root = Path(raw_root).expanduser().resolve()
         return self._resolve_file(root, file_path, symlink_action="accessed")
@@ -357,7 +443,9 @@ class ProjectFileService:
         requested = str(file_path or "").replace("\\", "/").strip()
         if not requested:
             raise ProjectFileError(
-                "File path is required", 400, "invalid_workspace_path"
+                localized("File path is required.", "必须提供文件路径。"),
+                400,
+                "invalid_workspace_path",
             )
         cursor = root
         for part in Path(requested).parts:
@@ -366,7 +454,10 @@ class ProjectFileService:
             cursor = cursor / part
             if cursor.is_symlink():
                 raise ProjectFileError(
-                    f"Symbolic links cannot be {symlink_action}",
+                    localized(
+                        "Symbolic links cannot be used for this operation.",
+                        "此操作不能使用符号链接。",
+                    ),
                     403,
                     "symlink_not_allowed",
                 )
@@ -374,21 +465,38 @@ class ProjectFileService:
             target = (root / requested).resolve(strict=False)
         except (OSError, RuntimeError) as exc:
             raise ProjectFileError(
-                "Invalid project file path", 400, "invalid_workspace_path"
+                localized(
+                    "The project file path is invalid.",
+                    "项目文件路径无效。",
+                ),
+                400,
+                "invalid_workspace_path",
             ) from exc
         if target != root and root not in target.parents:
             raise ProjectFileError(
-                "Path escapes the project workspace", 400, "invalid_workspace_path"
+                localized(
+                    "The path is outside the project workspace.",
+                    "该路径位于项目工作区之外。",
+                ),
+                400,
+                "invalid_workspace_path",
             )
         if not target.is_file():
-            raise ProjectFileError("File not found", 404, "file_not_found")
+            raise ProjectFileError(
+                localized("File not found.", "未找到文件。"),
+                404,
+                "file_not_found",
+            )
         return target
 
     def _editable_text_payload(self, target: Path) -> EditableProjectFileDTO:
         stat = target.stat()
         if stat.st_size > self.max_editable_text_bytes:
             raise ProjectFileError(
-                "Text file is too large to edit",
+                localized(
+                    "The text file is too large to edit.",
+                    "文本文件过大，无法编辑。",
+                ),
                 413,
                 "text_file_too_large",
                 {"maxBytes": self.max_editable_text_bytes},
@@ -402,7 +510,10 @@ class ProjectFileService:
             or normalized_name in self.editable_text_names
         ):
             raise ProjectFileError(
-                "This file type is not editable as text",
+                localized(
+                    "This file type cannot be edited as text.",
+                    "此文件类型不能作为文本编辑。",
+                ),
                 415,
                 "text_file_type_unsupported",
             )
@@ -412,7 +523,10 @@ class ProjectFileService:
             content = raw.decode("utf-8-sig" if has_bom else "utf-8")
         except UnicodeDecodeError as exc:
             raise ProjectFileError(
-                "Only UTF-8 text files can be edited",
+                localized(
+                    "Only UTF-8 text files can be edited.",
+                    "只能编辑 UTF-8 文本文件。",
+                ),
                 415,
                 "text_file_encoding_unsupported",
             ) from exc

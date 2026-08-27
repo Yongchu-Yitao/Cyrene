@@ -13,6 +13,10 @@ var TERMINAL_LINE_HEIGHT = 1.14;
 var TERMINAL_CURSOR_HEIGHT_RATIO = 0.74;
 var TERMINAL_TAIL_COMPACT_LINES = 1;
 var TERMINAL_SCROLLBACK_LINES = 100000;
+
+function terminalT(key, fallback, params) {
+  return workbenchServices.i18n().t(key, params || null, fallback);
+}
 var DARK_TERMINAL_THEME = {
   background: "#171819",
   foreground: "#F1F1F4",
@@ -80,7 +84,7 @@ function terminalAppearance(host) {
 
 function terminalError(response) {
   return response.json().catch(function () { return {}; }).then(function (payload) {
-    throw new Error(String(payload.detail || payload.error || response.statusText || "Terminal request failed"));
+    throw new Error(String(payload.detail || payload.error || response.statusText || terminalT("terminal.requestFailed", "Terminal request failed")));
   });
 }
 
@@ -202,18 +206,22 @@ function terminalWebSocketUrl(terminalId, cursor) {
 function terminalExitMessage(terminal) {
   var code = terminal && terminal.exitCode;
   var reason = String(terminal && terminal.exitReason || "");
-  if (reason === "signal") return "PTY 被系统信号终止" + (code == null ? "。" : "（" + code + "）。");
-  if (reason === "pty_lost") return "PTY 连接意外丢失，滚动记录仍然保留。";
-  if (reason === "recovery_failed" || reason === "restart_failed") return "终端恢复失败，滚动记录仍然保留。";
-  if (reason.indexOf("_interrupted") >= 0) return "应用或 Daemon 更新时终端进程被中断。";
-  return "终端进程已退出" + (code == null ? "。" : "（退出代码 " + code + "）。");
+  if (reason === "signal") return code == null
+    ? terminalT("terminal.exit.signal", "The PTY was terminated by a system signal.")
+    : terminalT("terminal.exit.signalWithCode", "The PTY was terminated by system signal {code}.", { code: code });
+  if (reason === "pty_lost") return terminalT("terminal.exit.ptyLost", "The PTY connection was lost unexpectedly. Scrollback has been preserved.");
+  if (reason === "recovery_failed" || reason === "restart_failed") return terminalT("terminal.exit.recoveryFailed", "Terminal recovery failed. Scrollback has been preserved.");
+  if (reason.indexOf("_interrupted") >= 0) return terminalT("terminal.exit.updateInterrupted", "The terminal process was interrupted while the app or daemon was updating.");
+  return code == null
+    ? terminalT("terminal.exit.generic", "The terminal process exited.")
+    : terminalT("terminal.exit.withCode", "The terminal process exited with code {code}.", { code: code });
 }
 
 function terminalRecoveryMessage(terminal) {
   var reason = String(terminal && terminal.recoveryReason || "");
-  if (reason === "app_upgrade") return "应用升级后已重新连接；名称、目录和滚动记录已保留，交互 Shell 已重新启动。";
-  if (reason === "daemon_restart") return "Terminal Daemon 中断后已恢复；名称、目录和滚动记录已保留，交互 Shell 已重新启动。";
-  if (reason === "pty_restart") return "终端已重新启动；原名称、工作目录和滚动记录均已保留。";
+  if (reason === "app_upgrade") return terminalT("terminal.recovery.appUpgrade", "Reconnected after the app upgrade. The name, directory, and scrollback were preserved, and the interactive shell was restarted.");
+  if (reason === "daemon_restart") return terminalT("terminal.recovery.daemonRestart", "Recovered after the terminal daemon interruption. The name, directory, and scrollback were preserved, and the interactive shell was restarted.");
+  if (reason === "pty_restart") return terminalT("terminal.recovery.ptyRestart", "The terminal was restarted. Its name, working directory, and scrollback were preserved.");
   return "";
 }
 
@@ -238,7 +246,7 @@ function showTerminalRecoveryToast(terminal) {
   if (!recoveredAt || !message) return;
   var key = String(terminal && terminal.id || "") + ":" + recoveredAt;
   if (shownTerminalRecoveryNotices.has(key)) return;
-  if (showTerminalToast("终端已恢复", "success", { duration: 5200 })) {
+  if (showTerminalToast(terminalT("terminal.recovered", "Terminal recovered"), "success", { duration: 5200 })) {
     shownTerminalRecoveryNotices.add(key);
   }
 }
@@ -254,17 +262,22 @@ function showTerminalExitToast(terminal, onRestart) {
   if (shownTerminalExitNotices.has(key)) return;
   var recoverable = Boolean(terminal.recoverable) && typeof onRestart === "function";
   if (showTerminalToast(
-    "终端已退出：" + terminalExitMessage(terminal),
+    terminalT("terminal.exitedWithReason", "Terminal exited: {reason}", { reason: terminalExitMessage(terminal) }),
     "warning",
     {
       duration: recoverable ? 0 : 6000,
-      actionLabel: recoverable ? "重新启动" : "",
+      actionLabel: recoverable ? terminalT("terminal.restart", "Restart") : "",
       onAction: recoverable ? onRestart : null,
     },
   )) shownTerminalExitNotices.add(key);
 }
 
 function TerminalPane({ terminalId, onState }) {
+  var dataStore = workbenchServices.data();
+  dataStore.useVersion();
+  var pluginModules = Array.isArray(dataStore.state.pluginModules)
+    ? dataStore.state.pluginModules : [];
+  var codeAvailable = pluginModules.indexOf("code") >= 0;
   var paneRef = React.useRef(null);
   var hostRef = React.useRef(null);
   var terminalRef = React.useRef(null);
@@ -285,7 +298,7 @@ function TerminalPane({ terminalId, onState }) {
 
   React.useEffect(function () {
     var host = hostRef.current;
-    if (!host || !terminalId) return undefined;
+    if (!codeAvailable || !host || !terminalId) return undefined;
     var disposed = false;
     var reconnectTimer = 0;
     var resizeTimer = 0;
@@ -620,7 +633,7 @@ function TerminalPane({ terminalId, onState }) {
         var interactive = statusRef.current === "running";
         if (interactive && reconnectRef.current > 0) {
           showTerminalToast(
-            "终端连接已恢复，断线期间的输出已经补齐。",
+            terminalT("terminal.connectionRecovered", "The terminal connection was restored and output from the interruption has been replayed."),
             "success",
             { duration: 4200 },
           );
@@ -891,10 +904,10 @@ function TerminalPane({ terminalId, onState }) {
       terminalRef.current = null;
       fitRef.current = null;
     };
-  }, [terminalId]);
+  }, [terminalId, codeAvailable]);
 
   function restartTerminal() {
-    if (restartBusy) return;
+    if (!codeAvailable || restartBusy) return;
     setRestartBusy(true);
     setRestartError("");
     TerminalClient.restart(terminalId).then(function (terminal) {
@@ -906,7 +919,7 @@ function TerminalPane({ terminalId, onState }) {
         terminalRef.current.scrollToBottom();
       }
     }).catch(function (error) {
-      setRestartError(String(error && error.message || "终端重启失败"));
+      setRestartError(String(error && error.message || terminalT("terminal.restartFailed", "Terminal restart failed")));
       setConnection("exited");
     }).finally(function () {
       setRestartBusy(false);
@@ -914,18 +927,20 @@ function TerminalPane({ terminalId, onState }) {
   }
 
   var notice = null;
-  if (restartError) {
-    notice = { kind: "error", title: "终端恢复失败", detail: restartError, retry: true };
+  if (!codeAvailable) {
+    notice = null;
+  } else if (restartError) {
+    notice = { kind: "error", title: terminalT("terminal.recoveryFailed", "Terminal recovery failed"), detail: restartError, retry: true };
   } else if (connection === "connecting") {
-    notice = { kind: "loading", title: "正在连接终端…" };
+    notice = { kind: "loading", title: terminalT("terminal.connecting", "Connecting to the terminal…") };
   } else if (connection === "replaying") {
-    notice = { kind: "loading", title: "正在恢复终端现场…", detail: "输入将在恢复完成后启用。" };
+    notice = { kind: "loading", title: terminalT("terminal.restoring", "Restoring the terminal session…"), detail: terminalT("terminal.restoringInputHint", "Input will be enabled after restoration finishes.") };
   } else if (connection === "disconnected") {
-    notice = { kind: "warning", title: "终端连接已中断", detail: "正在第 " + reconnectAttempt + " 次自动重连；当前画面和滚动位置已保留。", reconnect: true };
+    notice = { kind: "warning", title: terminalT("terminal.disconnected", "Terminal connection interrupted"), detail: terminalT("terminal.reconnectingAttempt", "Automatic reconnect attempt {attempt}; the current view and scroll position are preserved.", { attempt: reconnectAttempt }), reconnect: true };
   } else if (connection === "offline") {
-    notice = { kind: "warning", title: "网络不可用", detail: "网络恢复后会自动重连，也可以立即重试。", reconnect: true };
+    notice = { kind: "warning", title: terminalT("common.networkUnavailable", "Network unavailable"), detail: terminalT("terminal.offlineHint", "The terminal will reconnect when the network returns, or you can retry now."), reconnect: true };
   } else if (connection === "missing") {
-    notice = { kind: "error", title: "终端不存在", detail: "该终端可能已在其他窗口中被删除。" };
+    notice = { kind: "error", title: terminalT("terminal.missing", "Terminal not found"), detail: terminalT("terminal.missingHint", "This terminal may have been deleted in another window.") };
   }
 
   React.useEffect(function () {
@@ -940,13 +955,13 @@ function TerminalPane({ terminalId, onState }) {
       return;
     }
     var actionLabel = notice.reconnect
-      ? "立即重试"
-      : (notice.retry ? (restartBusy ? "正在重启…" : "重新启动") : "");
+      ? terminalT("common.retryNow", "Retry now")
+      : (notice.retry ? (restartBusy ? terminalT("terminal.restarting", "Restarting…") : terminalT("terminal.restart", "Restart")) : "");
     var onAction = notice.reconnect
       ? function () { if (retryNowRef.current) retryNowRef.current(); }
       : (notice.retry && !restartBusy ? restartTerminal : null);
     statusToastRef.current = feedback.showToast(
-      notice.title + (notice.detail ? "：" + notice.detail : ""),
+      notice.title + (notice.detail ? ": " + notice.detail : ""),
       notice.kind === "loading" ? "info" : notice.kind,
       {
         key: "terminal-status:" + String(terminalId || ""),
@@ -955,7 +970,7 @@ function TerminalPane({ terminalId, onState }) {
         onAction: onAction,
       },
     );
-  }, [terminalId, connection, reconnectAttempt, restartError, restartBusy]);
+  }, [terminalId, connection, reconnectAttempt, restartError, restartBusy, codeAvailable]);
 
   React.useEffect(function () {
     return function () {
@@ -969,6 +984,8 @@ function TerminalPane({ terminalId, onState }) {
       statusToastRef.current = 0;
     };
   }, [terminalId]);
+
+  if (!codeAvailable) return null;
 
   return <section
     ref={paneRef}

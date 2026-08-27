@@ -22,7 +22,7 @@ var SEARCH_COMMANDS = [
   { id: "new-project", labelKey: "search.command.newProject", hintKey: "search.command.newProjectHint", keywords: ["新项目", "项目", "project", "new project"] },
   { id: "open-settings", labelKey: "search.command.openSettings", hintKey: "search.command.openSettingsHint", keywords: ["设置", "settings", "偏好"] },
   { id: "open-shortcuts", labelKey: "search.command.openShortcuts", hintKey: "search.command.openShortcutsHint", keywords: ["快捷键", "shortcuts", "按键"] },
-  { id: "open-plugin-registry", labelKey: "search.command.openPluginRegistry", hintKey: "search.command.openPluginRegistryHint", keywords: ["插件", "plugin", "registry", "MCP"] },
+  { id: "open-plugin-registry", labelKey: "search.command.openPluginRegistry", hintKey: "search.command.openPluginRegistryHint", keywords: ["插件中心", "插件", "plugin center", "registry", "Skill", "MCP", "CLI"] },
   { id: "open-budget", labelKey: "search.command.openBudget", hintKey: "search.command.openBudgetHint", keywords: ["预算", "budget", "额度"] },
   { id: "open-about", labelKey: "search.command.openAbout", hintKey: "search.command.openAboutHint", keywords: ["关于", "about", "版本", "更新"] },
   { id: "toggle-theme", labelKey: "search.command.toggleTheme", hintKey: "search.command.toggleThemeHint", keywords: ["主题", "theme", "深色", "浅色"] },
@@ -213,7 +213,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
         abortRef.current = null;
       }
     };
-  }, [query, activeType, archiveMode]);
+  }, [query, activeType, archiveMode, pluginModules.join("|")]);
 
   function finishSearchRequest(controller) {
     if (controller.__cyreneTimeoutId) {
@@ -326,8 +326,26 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
     // Guard the shape: a stale/partial settings-index build may register the
     // module without items/tabs; treat missing keys as empty lists (same
     // guard pattern as settingTabLabel).
-    var tabs = SETTINGS_INDEX.tabs || [];
-    var items = SETTINGS_INDEX.items || [];
+    function settingTabAvailable(tab) {
+      var requirements = {
+        search: ["search"], "model-usage": ["model"], models: ["model"], media: ["media"],
+        agents: ["soul", "proactive", "skills", "subagent"], voice: ["voice"], channels: ["channels"],
+        remote: ["remote"], integrations: ["office", "knowledge"],
+      };
+      return !requirements[tab] || requirements[tab].some(function (marker) { return pluginModules.indexOf(marker) >= 0; });
+    }
+    function settingItemAvailable(item) {
+      if (item.id === "setting-agent-proxy") return pluginModules.indexOf("extensions") >= 0;
+      if (item.id === "setting-map-provider") return pluginModules.indexOf("map") >= 0;
+      if (item.id === "setting-zotero") return pluginModules.indexOf("knowledge") >= 0;
+      return true;
+    }
+    var tabs = (SETTINGS_INDEX.tabs || []).filter(function (tab) {
+      return settingTabAvailable(tab.id);
+    });
+    var items = (SETTINGS_INDEX.items || []).filter(function (item) {
+      return settingTabAvailable(item.tab) && settingItemAvailable(item);
+    });
     var tabsById = {};
     tabs.forEach(function (tab) { tabsById[tab.id] = tab; });
     var itemHits = items.filter(function (item) {
@@ -434,7 +452,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
 
   function renderMeta(result) {
     var parts = [];
-    if (result.projectName && result.projectName !== "Workspace") {
+    if (result.projectName && !result.projectNameDefault) {
       parts.push(result.projectName);
     }
     var label = resultTypeLabel(result.type);
@@ -444,11 +462,15 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
       try {
         var d = new Date(time);
         if (!isNaN(d.getTime())) {
-          parts.push(d.toLocaleDateString(lang === "zh" ? "zh-CN" : undefined));
+          parts.push(workbenchServices.i18n().formatDate(d, { dateStyle: "medium" }));
         }
       } catch (e) {}
     }
     return parts.join(" · ");
+  }
+
+  function resultTitle(result) {
+    return result.titleKey ? t(result.titleKey) : (result.title || "—");
   }
 
   function renderArchiveResult(result, index) {
@@ -493,7 +515,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
         className: "search-result-item",
         tabIndex: 0,
         role: "button",
-        "aria-label": (result.title || resultTypeLabel(result.type)) + ", " + (result.snippet || ""),
+        "aria-label": (resultTitle(result) || resultTypeLabel(result.type)) + ", " + (result.snippet || ""),
         onClick: function () { handleResultClick(result); },
         onKeyDown: function (e) { handleResultKeyDown(e, result); },
       },
@@ -501,7 +523,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
           React.createElement("span", { className: "search-result-type" }, resultTypeLabel(result.type)),
           React.createElement("span", { className: "search-result-context" }, renderMeta(result)),
         ),
-        React.createElement("div", { className: "search-result-title-line" }, result.title || "—"),
+        React.createElement("div", { className: "search-result-title-line" }, resultTitle(result)),
         React.createElement("div", { className: "search-result-snippet" },
           highlightSnippet(result.snippet || "")
         )

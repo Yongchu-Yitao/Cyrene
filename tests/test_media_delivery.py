@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from cyrene.media.delivery import MediaDelivery
+from agent.plugin.plugin_impl.cyrene_media.delivery import MediaDelivery
 
 
 @pytest.mark.asyncio
@@ -13,10 +13,10 @@ async def test_reclaimed_worker_resumes_remote_job_with_original_model_and_deliv
     tmp_path,
     monkeypatch,
 ):
-    from cyrene.media.manager import MediaJobManager
-    from cyrene.media.models import MediaArtifact, MediaProviderResult
-    from cyrene.media import providers
-    from cyrene.media import worker as worker_module
+    from agent.plugin.plugin_impl.cyrene_media.manager import MediaJobManager
+    from agent.plugin.plugin_impl.cyrene_media.models import MediaArtifact, MediaProviderResult
+    from agent.plugin.plugin_impl.cyrene_media import providers
+    from agent.plugin.plugin_impl.cyrene_media import worker as worker_module
 
     manager = MediaJobManager(tmp_path / "media.sqlite3")
     batch = manager.create_batch(

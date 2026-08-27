@@ -11,6 +11,7 @@ from typing import Any
 from cyrene.agent_runtime.capabilities import normalize_capabilities
 from cyrene.agent_runtime.errors import AgentRuntimeError
 from cyrene.agent_runtime.models import AgentBinding, AgentDescriptor, ModelAccess
+from cyrene.localization import localized
 
 BUILTIN_AGENT_ID = "cyrene"
 BUILTIN_INSTALLATION_ID = "agent_cyrene_builtin"
@@ -208,9 +209,9 @@ class BuiltinAgentDriver:
     async def connect(self, request: Any) -> Any:
         raise AgentRuntimeError(
             kind="capability_missing",
-            message=(
-                "the built-in Cyrene Agent runs in-process through the Plugin "
-                "runtime; no external driver connection applies"
+            message=localized(
+                "the built-in Cyrene Agent runs in-process through the Plugin runtime; no external driver connection applies",
+                "内置 Cyrene 智能体通过插件运行时在进程内运行，不适用外部驱动连接",
             ),
         )
 

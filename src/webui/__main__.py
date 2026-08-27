@@ -9,12 +9,9 @@ from cyrene.config import (
 from cyrene.observability.logging_setup import setup_persistent_logging
 from cyrene.runtime.bootstrap import (
     initialize_runtime,
-    start_external_services,
     start_update_check,
-    stop_external_services_async,
     stop_runtime_tasks,
 )
-from cyrene.runtime.scheduler import setup_scheduler
 from webui.server import run_web, WebBot
 
 logging.basicConfig(
@@ -28,16 +25,10 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     await initialize_runtime(
         events=True,
-        learning=True,
         include_temp=True,
         clean_temp=True,
     )
-    await start_external_services(mcp=False)
-
     bot = WebBot()
-    scheduler = setup_scheduler(bot, str(DB_PATH))
-    scheduler.start()
-    logger.info("Scheduler started")
 
     update_check_task = start_update_check()
 
@@ -47,8 +38,6 @@ async def main() -> None:
         logger.info("Shutting down...")
     finally:
         await stop_runtime_tasks(update_check_task)
-        scheduler.shutdown()
-        await stop_external_services_async(mcp=False)
 
 
 if __name__ == "__main__":

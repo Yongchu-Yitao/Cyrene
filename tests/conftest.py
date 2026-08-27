@@ -146,8 +146,13 @@ _WORKBENCH_SETTINGS_SOURCE_FILES = (
     "features/settings/capabilities.jsx",
     "features/settings/data.jsx",
     "features/settings/about.jsx",
+    "features/settings/plugin-center-add.jsx",
+    "features/settings/plugin-center-admin.jsx",
+    "features/settings/plugin-center-agents.jsx",
+    "features/settings/plugin-center-catalog.jsx",
+    "features/settings/plugin-center-cli-hooks.jsx",
+    "features/settings/plugin-center-mcp.jsx",
     "features/settings/custom-plugins.jsx",
-    "features/settings/extensions.jsx",
     "features/settings/shortcuts.jsx",
     "features/settings/budget.jsx",
     "features/settings/media.jsx",
@@ -206,7 +211,12 @@ def workbench_chat_route_source() -> str:
         src / "chat_routes" / "chats.py",
         src / "chat_routes" / "pinned_routes.py",
         src / "chat_routes" / "collection_routes.py",
-        src / "chat_routes" / "voice_routes.py",
+        source_root
+        / "agent"
+        / "plugin"
+        / "plugin_impl"
+        / "cyrene_voice"
+        / "workbench_routes.py",
         src / "chat_routes" / "side_agents_routes.py",
         src / "chat_routes" / "detail_routes.py",
         src / "chat_routes" / "agent_config_routes.py",
@@ -243,7 +253,7 @@ def real_pillow_modules():
     sys.modules["PIL"] = _REAL_PIL
     sys.modules["PIL.Image"] = _REAL_PIL_IMAGE
     _REAL_PIL.Image = _REAL_PIL_IMAGE
-    from agent.plugin import mcp_content
+    from agent.plugin.plugin_impl.cyrene_mcp import content as mcp_content
 
     previous_mcp_image = mcp_content.Image
     mcp_content.Image = _REAL_PIL_IMAGE

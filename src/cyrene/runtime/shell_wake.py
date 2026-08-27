@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from importlib import import_module
 import logging
 import os
 from typing import Any, Awaitable, Callable, Literal
@@ -64,9 +63,13 @@ class TerminalWakeBridge:
                 await task
 
     async def _daemon_poll_loop(self) -> None:
-        client = import_module(
-            "cyrene.terminal.client"
-        ).get_terminal_daemon_client()
+        # The Terminal Daemon client is owned by the code Plugin pack.  Keep
+        # this core bridge importable when that optional pack is disabled.
+        from agent.plugin import active_plugin_service
+
+        client = active_plugin_service("terminal_client")
+        if client is None:
+            return
         while True:
             try:
                 if self._dispatcher is None:
@@ -112,7 +115,16 @@ _SERVICE = TerminalWakeBridge()
 
 
 def get_shell_wake_service() -> TerminalWakeBridge:
-    """Keep the historical accessor while returning the daemon-only bridge."""
+    """Return the code pack's bridge, with an inert core fallback."""
+    try:
+        from agent.plugin import active_plugin_service
+
+        service = active_plugin_service("terminal_wake")
+        if service is not None and callable(getattr(service, "configure", None)):
+            return service
+    except Exception:
+        # Core startup and disabled-pack imports must not depend on plugins.
+        pass
     return _SERVICE
 
 

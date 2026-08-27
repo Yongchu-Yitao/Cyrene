@@ -209,7 +209,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
               <span className="wb-ob-eyebrow-dot" />
               {ob.isAbsoluteFreshStart ? T("welcome.setup.fresh", null, "Fresh install detected") : T("welcome.setup.incomplete", null, "Setup incomplete")}
             </div>
-            <h1>{T("welcome.setup.title", null, "Set up Cyrene")}<span className="wb-wel-wave" role="img" aria-label="wave">👋</span></h1>
+            <h1>{T("welcome.setup.title", null, "Set up Cyrene")}<span className="wb-wel-wave" aria-hidden="true">👋</span></h1>
             <p>{T("welcome.setup.subtitle", null, "Connect a model and pick a personality. You can change both later in settings.")}</p>
           </header>
 

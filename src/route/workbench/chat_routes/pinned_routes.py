@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
 
 from cyrene.workbench import pinned_resources
+from route.errors import localized_error_response
 from route.workbench.chat_routes.context import ChatRouteContext
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_pinned_file_path(body: dict[str, Any]) -> None:
@@ -41,9 +44,22 @@ def register_pinned_routes(router: APIRouter, context: ChatRouteContext) -> None
 
     @router.post("/api/workbench/pinned-resources")
     async def api_workbench_pin_resource(request: Request):
-        body = await request.json()
+        try:
+            body = await request.json()
+        except ValueError:
+            return localized_error_response(
+                "The request body is not valid JSON.",
+                "请求正文不是有效的 JSON。",
+                400,
+                "invalid_json",
+            )
         if not isinstance(body, dict):
-            return JSONResponse({"error": "object body required"}, status_code=400)
+            return localized_error_response(
+                "The request body must be an object.",
+                "请求正文必须是对象。",
+                400,
+                "object_body_required",
+            )
         if str(body.get("kind") or "") == "file":
             body = await _resolve_library_file_payload(body)
             file_payload = body.get("file") if isinstance(body.get("file"), dict) else {}
@@ -54,13 +70,21 @@ def register_pinned_routes(router: APIRouter, context: ChatRouteContext) -> None
                 _resolve_pinned_file_path(body)
         try:
             item = await asyncio.to_thread(pinned_resources.upsert_resource, body)
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+        except ValueError:
+            logger.warning("Invalid pinned-resource request", exc_info=True)
+            return localized_error_response(
+                "The pinned resource is invalid.",
+                "置顶资源无效。",
+                400,
+                "invalid_pinned_resource",
+            )
         return {"ok": True, "resource": _public_pinned_resource(item)}
 
     @router.delete("/api/workbench/pinned-resources/{resource_id}")
     async def api_workbench_unpin_resource(resource_id: str):
         removed = await asyncio.to_thread(pinned_resources.remove_resource, resource_id)
         if not removed:
-            return JSONResponse({"error": "resource not found"}, status_code=404)
+            return localized_error_response(
+                "Resource not found.", "未找到资源。", 404, "resource_not_found"
+            )
         return {"ok": True}

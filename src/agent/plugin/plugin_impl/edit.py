@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.plugin import Plugin, PluginContext
+from agent.plugin.native_runtime import plugin_localized
 
 
 def _resolve_path(raw_path: Any, context: PluginContext) -> Path:
@@ -51,7 +52,13 @@ async def edit(arguments: dict[str, Any], context: PluginContext) -> str:
         str(arguments["new_string"]),
         bool(arguments.get("replace_all", False)),
     )
-    return f"Edited {path}. Replacements: {replacements}"
+    return plugin_localized(
+        context,
+        "Edited {path}. Replacements: {count}",
+        "已编辑 {path}。替换次数：{count}",
+        path=path,
+        count=replacements,
+    )
 
 
 plugin = Plugin(

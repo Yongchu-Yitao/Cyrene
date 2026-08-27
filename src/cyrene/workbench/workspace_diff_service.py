@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from cyrene.localization import localized
 from cyrene.workbench.project_files import ProjectFileService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -48,13 +52,29 @@ class WorkspaceDiffService:
                 relative = str(resolved.relative_to(self.workspace_root))
             except ValueError as exc:
                 raise WorkspaceDiffError(
-                    "Path escapes the git workspace", 403, "workspace_path_forbidden"
+                    localized(
+                        "The path is outside the Git workspace.",
+                        "该路径位于 Git 工作区之外。",
+                    ),
+                    403,
+                    "workspace_path_forbidden",
                 ) from exc
             command.extend(["--", relative])
         return_code, stdout, stderr = await self._run_git(command, timeout=30.0)
         if return_code not in (0, 1):
-            detail = stderr.decode("utf-8", errors="replace") or "git diff failed"
-            raise WorkspaceDiffError(detail, 400, "git_diff_failed")
+            logger.warning(
+                "Git diff failed [return_code=%s stderr=%s]",
+                return_code,
+                stderr.decode("utf-8", errors="replace")[:1000],
+            )
+            raise WorkspaceDiffError(
+                localized(
+                    "Git could not calculate the requested diff.",
+                    "Git 无法计算请求的差异。",
+                ),
+                400,
+                "git_diff_failed",
+            )
         diff = stdout.decode("utf-8", errors="replace")
         if resolved is not None and not staged and not diff.strip():
             diff = await self._untracked_file_diff(resolved, relative)
@@ -99,11 +119,15 @@ class WorkspaceDiffService:
             )
         except asyncio.TimeoutError as exc:
             raise WorkspaceDiffError(
-                "git diff timed out", 504, "git_diff_timeout"
+                localized("Git diff timed out.", "Git 差异计算超时。"),
+                504,
+                "git_diff_timeout",
             ) from exc
         except FileNotFoundError as exc:
             raise WorkspaceDiffError(
-                "git not available", 500, "git_unavailable"
+                localized("Git is unavailable.", "Git 不可用。"),
+                500,
+                "git_unavailable",
             ) from exc
         return int(process.returncode or 0), stdout, stderr
 

@@ -3,13 +3,20 @@
 import asyncio
 import ast
 import json
+import logging
 
 from agent.plugin import PluginContext
-from agent.plugin.native_runtime import resolve_workspace_path
+from agent.plugin.native_runtime import (
+    plugin_localized,
+    plugin_localized_plural,
+    resolve_workspace_path,
+)
+
+logger = logging.getLogger(__name__)
 
 # ── Ruff helpers ──
 
-async def _run_ruff_check(path: str) -> list[dict]:
+async def _run_ruff_check(path: str, context: PluginContext) -> list[dict]:
     """Run ruff check on a path and return structured results."""
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -23,14 +30,35 @@ async def _run_ruff_check(path: str) -> list[dict]:
         try:
             return json.loads(stdout.decode("utf-8", errors="replace"))
         except json.JSONDecodeError:
-            return [{"error": "ruff parse error", "detail": stdout.decode("utf-8", errors="replace")[:500]}]
+            detail = (stderr or stdout).decode("utf-8", errors="replace")[:500]
+            return [{
+                "error": plugin_localized(
+                    context,
+                    "Ruff returned output that could not be parsed.",
+                    "Ruff 返回了无法解析的输出。",
+                ),
+                "detail": detail,
+            }]
     except FileNotFoundError:
-        return [{"error": "ruff not installed"}]
-    except Exception as e:
-        return [{"error": str(e)}]
+        return [{"error": plugin_localized(
+            context,
+            "Ruff is not installed or is unavailable.",
+            "Ruff 未安装或当前不可用。",
+        )}]
+    except Exception:
+        logger.warning("Ruff lint execution failed", exc_info=True)
+        return [{"error": plugin_localized(
+            context,
+            "Ruff could not lint the requested path.",
+            "Ruff 无法检查所请求的路径。",
+        )}]
 
 
-async def _run_ruff_format(path: str, check_only: bool = False) -> dict:
+async def _run_ruff_format(
+    path: str,
+    context: PluginContext,
+    check_only: bool = False,
+) -> dict:
     """Run ruff format on a path."""
     args = ["ruff", "format"]
     if check_only:
@@ -53,9 +81,18 @@ async def _run_ruff_format(path: str, check_only: bool = False) -> dict:
             "error": stderr_s if proc.returncode != 0 and not check_only else "",
         }
     except FileNotFoundError:
-        return {"error": "ruff not installed"}
-    except Exception as e:
-        return {"error": str(e)}
+        return {"error": plugin_localized(
+            context,
+            "Ruff is not installed or is unavailable.",
+            "Ruff 未安装或当前不可用。",
+        )}
+    except Exception:
+        logger.warning("Ruff format execution failed", exc_info=True)
+        return {"error": plugin_localized(
+            context,
+            "Ruff could not format the requested path.",
+            "Ruff 无法格式化所请求的路径。",
+        )}
 
 
 # ── AST analysis ──
@@ -66,12 +103,23 @@ def analyze_structure(path: str, context: PluginContext) -> dict:
     try:
         source = resolved.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        return {"error": f"Cannot read file: {path}"}
+        return {"error": plugin_localized(
+            context,
+            "Cannot read file: {path}",
+            "无法读取文件：{path}",
+            path=path,
+        )}
 
     try:
         tree = ast.parse(source)
     except SyntaxError as e:
-        return {"error": f"Syntax error: {e}"}
+        location = f"{path}:{e.lineno or '?'}:{e.offset or '?'}"
+        return {"error": plugin_localized(
+            context,
+            "Syntax error in {location}.",
+            "{location} 中存在语法错误。",
+            location=location,
+        )}
 
     functions = []
     classes = []
@@ -131,9 +179,13 @@ async def _tool_lint_code(
     path = str(args.get("path", "."))
     try:
         resolved = resolve_workspace_path(path, context)
-    except ValueError as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
-    results = await _run_ruff_check(str(resolved))
+    except (RuntimeError, ValueError):
+        return json.dumps({"error": plugin_localized(
+            context,
+            "The requested path is outside the active workspace.",
+            "请求的路径不在当前工作区内。",
+        )}, ensure_ascii=False)
+    results = await _run_ruff_check(str(resolved), context)
     return json.dumps({"status": "ok", "file": str(resolved), "issues": results}, ensure_ascii=False)
 
 
@@ -145,9 +197,17 @@ async def _tool_format_code(
     check_only = bool(args.get("check_only", False))
     try:
         resolved = resolve_workspace_path(path, context)
-    except ValueError as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
-    result = await _run_ruff_format(str(resolved), check_only=check_only)
+    except (RuntimeError, ValueError):
+        return json.dumps({"error": plugin_localized(
+            context,
+            "The requested path is outside the active workspace.",
+            "请求的路径不在当前工作区内。",
+        )}, ensure_ascii=False)
+    result = await _run_ruff_format(
+        str(resolved),
+        context,
+        check_only=check_only,
+    )
     return json.dumps({"status": "ok", "file": str(resolved), **result}, ensure_ascii=False)
 
 
@@ -158,12 +218,16 @@ async def _tool_code_review(
     path = str(args.get("path", "."))
     try:
         resolved = resolve_workspace_path(path, context)
-    except ValueError as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    except (RuntimeError, ValueError):
+        return json.dumps({"error": plugin_localized(
+            context,
+            "The requested path is outside the active workspace.",
+            "请求的路径不在当前工作区内。",
+        )}, ensure_ascii=False)
 
     # Run lint, format check, and structure analysis in parallel
-    lint_task = _run_ruff_check(str(resolved))
-    format_task = _run_ruff_format(str(resolved), check_only=True)
+    lint_task = _run_ruff_check(str(resolved), context)
+    format_task = _run_ruff_format(str(resolved), context, check_only=True)
 
     lint_results, format_results = await asyncio.gather(lint_task, format_task)
 
@@ -172,12 +236,27 @@ async def _tool_code_review(
 
     suggestions = []
     if lint_results:
-        suggestions.append(f"Found {len(lint_results)} lint issue(s)")
+        suggestions.append(plugin_localized_plural(
+            context,
+            "Found {count} lint issue.",
+            "Found {count} lint issues.",
+            "发现 {count} 个代码检查问题。",
+            count=len(lint_results),
+        ))
     if format_results.get("changed"):
-        suggestions.append("Code needs formatting (ruff format)")
+        suggestions.append(plugin_localized(
+            context,
+            "Code needs formatting (ruff format).",
+            "代码需要格式化（ruff format）。",
+        ))
     if structure.get("long_functions"):
         names = [f["name"] for f in structure["long_functions"]]
-        suggestions.append(f"Long functions (>50 lines): {', '.join(names)}")
+        suggestions.append(plugin_localized(
+            context,
+            "Long functions (>50 lines): {names}",
+            "过长函数（超过 50 行）：{names}",
+            names=", ".join(names),
+        ))
 
     return json.dumps({
         "status": "ok",

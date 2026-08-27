@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import json
+import logging
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from agent.plugin import (
     PluginContext,
     PluginRegistry,
     default_plugin_impl_directory,
+    plugin_child_context_ids,
 )
 from agent.plugin.model_router import (
     MODEL_ROUTER_PLUGIN,
@@ -38,6 +40,29 @@ from agent.workbench.bridge import (
     WorkbenchSessionBridge,
 )
 from agent.workbench.chat_runtime import workbench_agent_data_directory
+from cyrene.localization import app_language, localized
+
+logger = logging.getLogger(__name__)
+
+
+_INDEPENDENT_TASK_CONTEXT = (
+    "You are an independent read-only Task analyst. Inspect the real "
+    "workspace with Plugin tools when useful. Do not modify files or Task "
+    "state. Your final response must be exactly one JSON object."
+)
+
+
+def _l(en: str, zh: str, **values: Any) -> str:
+    return localized(en, zh, **values)
+
+
+def _output_language_instruction(language: str | None = None) -> str:
+    return localized(
+        "Write every user-visible text field in English unless the task explicitly "
+        "requests another language.",
+        "除非任务明确要求其他语言，否则所有用户可见的文本字段都使用简体中文。",
+        language=language,
+    )
 
 
 class TaskAgentRuntimeError(RuntimeError):
@@ -50,8 +75,9 @@ class TaskAgentRuntimeError(RuntimeError):
         code: str = "task_agent_failed",
         status_code: int = 502,
     ) -> None:
-        super().__init__(str(message or "Task Agent failed"))
-        self.message = str(message or "Task Agent failed")
+        fallback = _l("Task Agent failed", "任务 Agent 执行失败")
+        super().__init__(str(message or fallback))
+        self.message = str(message or fallback)
         self.code = str(code or "task_agent_failed")
         self.status_code = int(status_code)
 
@@ -278,23 +304,8 @@ def _pending_question(
                 if isinstance(decoded.get("allow_custom"), bool)
                 else bool(arguments.get("allow_custom", True))
             )
-            if tool_name == "enter_plan_mode" or kind == "plan_confirmation":
-                kind = "plan_confirmation"
-                text = text or "计划已准备好，是否同意并开始执行？"
-                if not options:
-                    options = ["同意并开始", "拒绝"]
-            elif (
-                tool_name == "browser_request_takeover"
-                or decoded.get("takeover") is True
-            ):
-                kind = kind or "browser_takeover"
-                text = text or "请在浏览器窗口完成操作，然后确认继续。"
-                if not options:
-                    options = ["我已完成"]
-                allow_custom = False
-            else:
-                kind = kind or "clarification"
-                text = text or "需要你确认后才能继续。"
+            kind = kind or "clarification"
+            text = text or "需要你确认后才能继续。"
             question_id = str(decoded.get("question_id") or "").strip()
             if not question_id:
                 question_id = f"question_{str(result.get('call_id') or uuid4().hex)[:24]}"
@@ -370,6 +381,7 @@ def _task_system_extra(
         "JSON as host-owned task context. Use the editable Plugin tools for all "
         "actions and keep the final answer concise and task-focused.",
         json.dumps(context, ensure_ascii=False, sort_keys=True, default=str),
+        _output_language_instruction(),
     ]
     if str(instruction or "").strip():
         parts.append(str(instruction).strip())
@@ -409,13 +421,10 @@ class TaskAgentRuntime:
 
     @staticmethod
     def _plugin_services() -> dict[str, Any]:
-        from agent.plugin import active_plugin_service
+        from agent.plugin import active_plugin_application_host
 
-        return {
-            name: service
-            for name in ("knowledge", "maps", "memory", "schedules")
-            if (service := active_plugin_service(name)) is not None
-        }
+        host = active_plugin_application_host()
+        return host.active_services if host is not None else {}
 
     def _open_bridge(
         self,
@@ -444,8 +453,19 @@ class TaskAgentRuntime:
         if normalized_mode not in {"default", "auto", "plan", "full_access"}:
             normalized_mode = "default"
 
-        async def event_writer(_event: Mapping[str, Any]) -> None:
-            return None
+        async def event_writer(event: Mapping[str, Any]) -> None:
+            from cyrene.workbench.usage_events import publish_usage_event
+
+            awaitable = publish_usage_event(event, session_id=session_id)
+            try:
+                current = asyncio.get_running_loop()
+            except RuntimeError:
+                current = None
+            if current is owner_loop:
+                await awaitable
+                return
+            future = asyncio.run_coroutine_threadsafe(awaitable, owner_loop)
+            await asyncio.wrap_future(future)
 
         def submit_background(awaitable: Any):
             try:
@@ -489,6 +509,7 @@ class TaskAgentRuntime:
             "user_request_text": "",
             "conversation_source": "webui",
             "round_id": str(run_id or ""),
+            "language": app_language(),
             "session_id": session_id,
             "ui_instance_id": str(ui_instance_id or ""),
             "workspace_dir": str(self._workspace(project)),
@@ -500,7 +521,14 @@ class TaskAgentRuntime:
             "reply_stream_writer": event_writer,
             "runtime_event_writer": event_writer,
         }
-        memory_service = self._plugin_services().get("memory")
+        plugin_services = self._plugin_services()
+        project_memory_snapshot = None
+        memory_service = plugin_services.get("memory")
+        snapshot_loader = getattr(memory_service, "current_snapshot", None)
+        if callable(snapshot_loader):
+            loaded = snapshot_loader(str(project.get("id") or ""))
+            if isinstance(loaded, Mapping):
+                project_memory_snapshot = dict(loaded)
         return WorkbenchSessionBridge.open(
             self.data_directory,
             self._workspace(project),
@@ -517,21 +545,17 @@ class TaskAgentRuntime:
             },
             plugin_context_data={
                 "session_id": session_id,
-                "system_extra": str(system_extra or ""),
                 "project_id": str(project.get("id") or ""),
-                "project_memory_snapshot": None,
+                "project_memory_snapshot": project_memory_snapshot,
                 "session_title": str(session.get("title") or ""),
                 "memory_write_enabled": True,
                 "memory_trigger_enabled": True,
                 "memory_archive_enabled": True,
-                "memory_data_directory": str(
-                    getattr(memory_service, "data_directory", self.data_directory)
-                ),
                 "background_submitter": submit_background,
                 "owner_call": call_on_owner,
                 "run_context": run_context,
             },
-            plugin_services=self._plugin_services(),
+            plugin_services=plugin_services,
             max_model_calls=self.max_model_calls,
         )
 
@@ -554,7 +578,10 @@ class TaskAgentRuntime:
     ) -> TaskAgentResult:
         normalized_text = str(text or "").strip()
         if not normalized_text:
-            normalized_text = "Please inspect the attached files and complete the task."
+            normalized_text = _l(
+                "Please inspect the attached files and complete the task.",
+                "请检查附加文件并完成任务。",
+            )
         normalized_run_id = str(run_id or f"run_{uuid4().hex}")
         system_extra = _task_system_extra(
             project,
@@ -600,19 +627,38 @@ class TaskAgentRuntime:
                         "command": str(command or ""),
                         "client_request_id": str(client_request_id or ""),
                         **dict(metadata or {}),
+                        # Persist the exact host context that SessionStart must
+                        # mount.  Reopened runs must not rebuild it from mutable
+                        # Task state such as plan/status fields.
+                        "ephemeral_context": system_extra,
                     },
                     cancel_on_caller_cancel=cancel_on_caller_cancel,
                 )
         except AgentSessionCancelledError as exc:
+            logger.info("Task Agent run was cancelled: %s", exc)
             raise TaskAgentRuntimeError(
-                str(exc), code="task_agent_cancelled", status_code=409
+                _l("The task run was cancelled.", "任务运行已取消。"),
+                code="task_agent_cancelled",
+                status_code=409,
             ) from exc
         except AgentSessionRunError as exc:
-            raise TaskAgentRuntimeError(str(exc)) from exc
+            logger.warning("Task Agent run failed", exc_info=True)
+            raise TaskAgentRuntimeError(
+                _l(
+                    "The Task Agent could not complete this run.",
+                    "任务 Agent 未能完成本次运行。",
+                )
+            ) from exc
         except TaskAgentRuntimeError:
             raise
         except Exception as exc:
-            raise TaskAgentRuntimeError(str(exc)) from exc
+            logger.exception("Unexpected Task Agent runtime failure")
+            raise TaskAgentRuntimeError(
+                _l(
+                    "The Task Agent could not be started.",
+                    "无法启动任务 Agent。",
+                )
+            ) from exc
         finally:
             if bridge is not None:
                 bridge.close()
@@ -657,7 +703,7 @@ class TaskAgentRuntime:
         normalized_run_id = str(run_id or "").strip()
         if not normalized_run_id:
             raise TaskAgentRuntimeError(
-                "Pending Agent run id is required",
+                _l("Pending Agent run id is required", "缺少待处理的 Agent 运行 ID"),
                 code="task_answer_run_missing",
                 status_code=409,
             )
@@ -688,7 +734,10 @@ class TaskAgentRuntime:
             status = str(snapshot.get("status") or "")
             if restored_run_id != normalized_run_id:
                 raise TaskAgentRuntimeError(
-                    "Pending Agent run no longer owns this ContextTree",
+                    _l(
+                        "The pending Agent run no longer owns this context.",
+                        "待处理的 Agent 运行已不再拥有此上下文。",
+                    ),
                     code="task_answer_run_mismatch",
                     status_code=409,
                 )
@@ -709,15 +758,30 @@ class TaskAgentRuntime:
                     cancel_on_caller_cancel=cancel_on_caller_cancel
                 )
         except AgentSessionCancelledError as exc:
+            logger.info("Task Agent answer run was cancelled: %s", exc)
             raise TaskAgentRuntimeError(
-                str(exc), code="task_agent_cancelled", status_code=409
+                _l("The task run was cancelled.", "任务运行已取消。"),
+                code="task_agent_cancelled",
+                status_code=409,
             ) from exc
         except AgentSessionRunError as exc:
-            raise TaskAgentRuntimeError(str(exc)) from exc
+            logger.warning("Task Agent answer run failed", exc_info=True)
+            raise TaskAgentRuntimeError(
+                _l(
+                    "The Task Agent could not complete this answer.",
+                    "任务 Agent 未能完成本次答复。",
+                )
+            ) from exc
         except TaskAgentRuntimeError:
             raise
         except Exception as exc:
-            raise TaskAgentRuntimeError(str(exc)) from exc
+            logger.exception("Unexpected Task Agent answer failure")
+            raise TaskAgentRuntimeError(
+                _l(
+                    "The Task Agent could not process this answer.",
+                    "任务 Agent 无法处理本次答复。",
+                )
+            ) from exc
         finally:
             if bridge is not None:
                 bridge.close()
@@ -818,6 +882,44 @@ class TaskAgentRuntime:
                 "messages": messages,
                 "max_tokens": max(1, int(max_tokens)),
             }
+            session_context = await bridge.session.build_session_context(
+                {
+                    "run_id": run_id,
+                    "agent_id": bridge.session.agent_id,
+                    "parent_agent_id": bridge.session.parent_agent_id,
+                    "user_request": "",
+                    "metadata": {
+                        "ephemeral_context": _task_system_extra(
+                            project,
+                            session,
+                            purpose=purpose,
+                            instruction="",
+                            attachments=(),
+                        )
+                    },
+                }
+            )
+            if session_context:
+                contextualized = [dict(message) for message in messages]
+                system = next(
+                    (
+                        message
+                        for message in contextualized
+                        if str(message.get("role") or "") == "system"
+                    ),
+                    None,
+                )
+                if system is None:
+                    contextualized.insert(
+                        0,
+                        {"role": "system", "content": session_context},
+                    )
+                else:
+                    current = str(system.get("content") or "").strip()
+                    system["content"] = "\n\n".join(
+                        part for part in (current, session_context) if part
+                    )
+                arguments["messages"] = contextualized
             if response_format is not None:
                 arguments["response_format"] = dict(response_format)
             result = await bridge.session.runtime.call(
@@ -829,7 +931,7 @@ class TaskAgentRuntime:
                     tree_id=bridge.session.tree.id,
                     node_id=str(bridge.snapshot().get("leaf_id") or ""),
                     data=data,
-                    services=bridge.session.plugin_services,
+                    services=bridge.session.active_plugin_services(),
                 ),
                 call_id=run_id,
             )
@@ -894,13 +996,7 @@ class TaskAgentRuntime:
             except TreeNotFoundError:
                 return False
             value = root.value if isinstance(root.value, Mapping) else {}
-            records = value.get("_cyrene_subagents")
-            if isinstance(records, Mapping):
-                children = [
-                    str(record.get("tree_id") or "")
-                    for record in records.values()
-                    if isinstance(record, Mapping) and str(record.get("tree_id") or "")
-                ]
+            children = list(plugin_child_context_ids(value))
             for child_id in children:
                 try:
                     router.delete_tree(child_id)
@@ -945,11 +1041,7 @@ class TaskAgentRuntime:
                 command="",
                 client_request_id="",
                 ui_instance_id="",
-                system_extra=(
-                    "You are an independent read-only Task analyst. Inspect the real "
-                    "workspace with Plugin tools when useful. Do not modify files or Task "
-                    "state. Your final response must be exactly one JSON object."
-                ),
+                system_extra=_INDEPENDENT_TASK_CONTEXT,
                 attachments=(),
                 owner_loop=owner_loop,
                 tree_id=tree_id,
@@ -957,17 +1049,34 @@ class TaskAgentRuntime:
             completed = await bridge.submit_result(
                 str(prompt or ""),
                 run_id=run_id,
-                metadata={"task": True, "purpose": purpose, "auxiliary": True},
+                metadata={
+                    "task": True,
+                    "purpose": purpose,
+                    "auxiliary": True,
+                    "ephemeral_context": _INDEPENDENT_TASK_CONTEXT,
+                },
             )
             parsed = _json_object(completed.text)
             if not parsed:
                 raise TaskAgentRuntimeError(
-                    f"{purpose} Agent returned no JSON object",
+                    _l(
+                        "The {purpose} Agent returned no JSON object.",
+                        "{purpose} Agent 未返回 JSON 对象。",
+                        purpose=purpose,
+                    ),
                     code="task_auxiliary_response_format",
                 )
             return parsed
         except (AgentSessionCancelledError, AgentSessionRunError) as exc:
-            raise TaskAgentRuntimeError(str(exc)) from exc
+            logger.warning("Auxiliary Task Agent failed for %s", purpose, exc_info=True)
+            raise TaskAgentRuntimeError(
+                _l(
+                    "The {purpose} Agent could not complete its run.",
+                    "{purpose} Agent 未能完成运行。",
+                    purpose=purpose,
+                ),
+                code="task_auxiliary_failed",
+            ) from exc
         finally:
             if bridge is not None:
                 bridge.close()
@@ -1047,6 +1156,8 @@ class TaskAgentRuntime:
                         ensure_ascii=False,
                         default=str,
                     )
+                    + "\n\n"
+                    + _output_language_instruction()
                 ),
             }],
             purpose="task_reflection",
@@ -1094,6 +1205,8 @@ class TaskAgentRuntime:
                             ensure_ascii=False,
                             default=str,
                         )
+                        + "\n\n"
+                        + _output_language_instruction()
                     ),
                 }],
                 purpose="task_reflection_hints",
@@ -1141,6 +1254,8 @@ class TaskAgentRuntime:
                         ensure_ascii=False,
                         default=str,
                     )
+                    + "\n\n"
+                    + _output_language_instruction()
                 ),
             )
         except Exception:
@@ -1179,6 +1294,8 @@ class TaskAgentRuntime:
                     ensure_ascii=False,
                     default=str,
                 )
+                + "\n\n"
+                + _output_language_instruction()
             ),
         )
         expected = {str(item.get("id") or "") for item in criteria}
@@ -1199,7 +1316,10 @@ class TaskAgentRuntime:
             })
         if seen != expected:
             raise TaskAgentRuntimeError(
-                "Acceptance verifier omitted one or more criteria",
+                _l(
+                    "The acceptance verifier omitted one or more criteria.",
+                    "验收验证器遗漏了一个或多个验收条件。",
+                ),
                 code="task_acceptance_response_format",
             )
         return {
@@ -1224,9 +1344,8 @@ class TaskAgentRuntime:
             {"id": f"project_{str(project.get('id') or 'new')}_init", "kind": "init"},
         )
         base = project_runtime._workbench_default_init_form(dict(project))
-        language = {"en": "English", "ja": "日本語"}.get(
-            str(lang or "").lower(), "简体中文"
-        )
+        language_code = app_language(lang)
+        language = "English" if language_code == "en" else "简体中文"
         try:
             parsed = await self._independent_json_agent(
                 project=project,
@@ -1250,6 +1369,8 @@ class TaskAgentRuntime:
                         ensure_ascii=False,
                         default=str,
                     )
+                    + "\n\n"
+                    + _output_language_instruction(language_code)
                 ),
             )
         except Exception:
@@ -1299,6 +1420,8 @@ class TaskAgentRuntime:
                 ensure_ascii=False,
                 default=str,
             )
+            + "\n\n"
+            + _output_language_instruction()
         )
         attempts: list[dict[str, Any]] = []
         attempt_limit = max(1, int(max_attempts or 1))
@@ -1315,7 +1438,10 @@ class TaskAgentRuntime:
                 )
                 if not plan:
                     raise TaskAgentRuntimeError(
-                        "Initialization model returned no usable tasks",
+                        _l(
+                            "The initialization model returned no usable tasks.",
+                            "初始化模型未返回可用任务。",
+                        ),
                         code="task_initialization_response_format",
                     )
                 return plan, True, None
@@ -1327,7 +1453,10 @@ class TaskAgentRuntime:
                 })
         last = attempts[-1] if attempts else {
             "category": "model",
-            "message": "Initialization plan generation failed",
+            "message": _l(
+                "Initialization plan generation failed.",
+                "初始化计划生成失败。",
+            ),
         }
         return None, False, {
             "code": "init_plan_generation_failed",
@@ -1393,7 +1522,10 @@ class TaskAgentRuntime:
                     "content": (
                         "Extract only explicit execution constraints from the following "
                         "request. Do not invent constraints. Return JSON only as "
-                        '{"constraints":["..."]}, at most 8 items.\n\n' + str(text)
+                        '{"constraints":["..."]}, at most 8 items.\n\n'
+                        + str(text)
+                        + "\n\n"
+                        + _output_language_instruction()
                     ),
                 }],
                 purpose="task_constraint_extraction",
@@ -1426,9 +1558,10 @@ class TaskAgentRuntime:
                     {
                         "role": "system",
                         "content": (
-                            "Generate a concise Task title in the user's language. "
+                            "Generate a concise Task title. "
                             "Return only one plain-text line, no quotes or punctuation, "
-                            "at most 24 Chinese characters or 12 words."
+                            "at most 24 Chinese characters or 12 words. "
+                            + _output_language_instruction()
                         ),
                     },
                     {"role": "user", "content": str(text or "")},
@@ -1481,6 +1614,8 @@ class TaskAgentRuntime:
                 ensure_ascii=False,
                 default=str,
             )
+            + "\n\n"
+            + _output_language_instruction()
         )
         try:
             parsed = await self._independent_json_agent(
@@ -1491,7 +1626,12 @@ class TaskAgentRuntime:
             )
             generated = planning_runtime._workbench_coerce_plan_steps(parsed, session)
             if not generated:
-                raise ValueError("model returned no plan steps")
+                raise ValueError(
+                    _l(
+                        "The model returned no plan steps.",
+                        "模型未返回计划步骤。",
+                    )
+                )
             operation = str(
                 parsed.get("operation") or parsed.get("revisionMode") or ""
             ).strip().lower()

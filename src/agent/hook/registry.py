@@ -122,6 +122,7 @@ class HookSet:
         self._thread: threading.Thread | None = None
         self._wake_enqueued = False
         self._closed = False
+        self._before_dispatch: Callable[[], Any] | None = None
         log_operation(
             logger,
             "hook.set",
@@ -201,8 +202,8 @@ class HookSet:
             raise TypeError("Hook plugin must be callable")
         if matcher is not None and not isinstance(matcher, str):
             raise TypeError("persistent Hook matcher must be a glob string")
-        if failure_policy not in {"open", "block"}:
-            raise ValueError("failure_policy must be 'open' or 'block'")
+        if failure_policy not in {"open", "block", "closed"}:
+            raise ValueError("failure_policy must be 'open', 'block', or 'closed'")
         if failure_policy == "block" and event != PRE_TOOL_USE:
             raise ValueError("only PreToolUse Hooks may block on failure")
         normalized_id = str(hook_id or self._new_hook_id()).strip()
@@ -290,8 +291,18 @@ class HookSet:
     def unregister(self, hook_id: str) -> bool:
         normalized_id = str(hook_id)
         with self._lock:
+            hook = self._hooks.get(normalized_id)
             removed = self._persistence.delete_hook(normalized_id)
             self._hooks.pop(normalized_id, None)
+            release_plugin = bool(
+                hook is not None
+                and all(
+                    item.plugin_id != hook.plugin_id
+                    for item in self._hooks.values()
+                )
+            )
+        if release_plugin and hook is not None:
+            self._plugins.unregister(hook.plugin_id)
         log_operation(
             logger,
             "hook.set",
@@ -302,6 +313,23 @@ class HookSet:
             removed=removed,
         )
         return removed
+
+    def set_before_dispatch(self, callback: Callable[[], Any] | None) -> None:
+        """Install a session-owned freshness barrier before Hook snapshots."""
+
+        if callback is not None and not callable(callback):
+            raise TypeError("before-dispatch callback must be callable or None")
+        with self._lock:
+            self._before_dispatch = callback
+
+    async def _prepare_dispatch(self) -> None:
+        with self._lock:
+            callback = self._before_dispatch
+        if callback is None:
+            return
+        result = callback()
+        if inspect.isawaitable(result):
+            await result
 
     def list(self, event: str | None = None) -> tuple[Hook, ...]:
         with self._lock:
@@ -403,6 +431,21 @@ class HookSet:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
+                    if hook.failure_policy == "closed":
+                        log_operation(
+                            logger,
+                            "hook.set",
+                            "dispatch_hook",
+                            phase="failed_closed",
+                            level=logging.ERROR,
+                            exc_info=True,
+                            tree_id=self.tree_id,
+                            hook_id=hook.id,
+                            plugin_id=hook.plugin_id,
+                            event=event.name,
+                            error=exc,
+                        )
+                        raise HookError(f"{hook.id}: {exc}") from exc
                     failed.append(hook.id)
                     log_operation(
                         logger,
@@ -426,6 +469,7 @@ class HookSet:
         arguments: dict[str, Any],
         time: datetime,
     ) -> dict[str, Any]:
+        await self._prepare_dispatch()
         with operation(
             logger,
             "hook.set",
@@ -569,6 +613,7 @@ class HookSet:
             return results
 
     async def _drain_persisted(self) -> None:
+        await self._prepare_dispatch()
         processed = 0
         failed = 0
         blocked = 0
@@ -688,7 +733,7 @@ class HookSet:
                 elif isinstance(item, _DispatchRequest):
                     try:
                         result = loop.run_until_complete(
-                            self._dispatch_snapshot(self._snapshot(item.event), item.event)
+                            self._dispatch_current(item.event)
                         )
                     except BaseException as exc:
                         _settle_future(item.future, error=exc)
@@ -764,7 +809,7 @@ class HookSet:
                 f"Hook event tree mismatch: expected {self.tree_id}, got {event.tree_id}"
             )
         if self._in_worker_thread():
-            return await self._dispatch_snapshot(self._snapshot(event), event)
+            return await self._dispatch_current(event)
         future: Future[tuple[Any, ...]] = Future()
         with self._lock:
             self._ensure_open()
@@ -781,6 +826,10 @@ class HookSet:
             payload=event.payload,
         )
         return await asyncio.wrap_future(future)
+
+    async def _dispatch_current(self, event: HookEvent) -> tuple[Any, ...]:
+        await self._prepare_dispatch()
+        return await self._dispatch_snapshot(self._snapshot(event), event)
 
     def dispatch_nowait(self, event: HookEvent) -> Future[tuple[Any, ...]] | None:
         if event.tree_id != self.tree_id:

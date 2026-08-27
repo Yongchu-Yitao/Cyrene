@@ -184,7 +184,7 @@ async def handler(
             }
         )
     except Exception as exc:
-        return json_result(remote_tool_error(exc))
+        return json_result(remote_tool_error(exc, context))
 
 
 __all__ = ["TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler"]

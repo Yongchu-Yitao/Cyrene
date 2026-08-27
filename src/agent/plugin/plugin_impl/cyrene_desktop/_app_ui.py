@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+
 
 def action_tool_def(
     name: str, family: str, description: str, extra: dict[str, Any] | None = None,
@@ -28,9 +30,13 @@ def action_tool_def(
     }}
 
 
-async def run_action(family: str, args: dict[str, Any]) -> str:
+async def run_action(
+    family: str,
+    args: dict[str, Any],
+    context: PluginContext,
+) -> str:
     from ._app_semantic_backend import execute_action, format_result
-    return format_result(await execute_action(family, dict(args or {})))
+    return format_result(await execute_action(family, dict(args or {})), context)
 
 
 ACTION_METADATA = {"read_only": False, "resource_keys": ("desktop:app-semantic",), "requires_order": True}

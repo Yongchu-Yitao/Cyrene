@@ -5,17 +5,18 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
-
+from cyrene.localization import localized
 from cyrene.workbench.project_services import (
     ProjectApplicationService,
     ProjectNotFoundError,
 )
 from route import schemas as api_models
+from route.errors import error_response
 
 
-def _not_found(exc: ProjectNotFoundError) -> JSONResponse:
-    return JSONResponse({"error": str(exc)}, status_code=404)
+def _not_found(exc: ProjectNotFoundError):
+    message = str(exc).strip() or localized("Task not found.", "未找到任务。")
+    return error_response(message, 404, "project_or_task_not_found")
 
 
 def register_project_task_routes(

@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from cyrene.localization import localized
 from cyrene.runtime import settings_store, update_install, updater
 from cyrene.runtime.host_actions import finalize_origin, schedule_action
 from cyrene.runtime.host_bridge import HostBridgeError, call_host
@@ -69,7 +70,11 @@ class DownloadCoordinator:
     async def download(self) -> dict[str, Any]:
         info = self.cached_info()
         if not info or not info.download_url:
-            error = info.error if info and info.error else "No update available"
+            error = (
+                info.error
+                if info and info.error
+                else localized("No update is available.", "暂无可用更新。")
+            )
             return {"ok": False, "error": error}
         if not info.asset_sha256:
             error = self.progress.checksum_missing(info)
@@ -84,7 +89,9 @@ class DownloadCoordinator:
             return self._in_progress_response()
         except Exception as exc:
             logger.warning("Update download failed", exc_info=True)
-            self.progress.failure(f"下载更新失败：{exc}")
+            self.progress.failure(
+                localized("Update download failed.", "下载更新失败。")
+            )
             result = None
 
         verified, error = self._verify(info, result)
@@ -100,7 +107,7 @@ class DownloadCoordinator:
         snapshot = self.progress.current()
         return {
             "ok": False,
-            "error": error or "Download failed",
+            "error": error or localized("Download failed.", "下载失败。"),
             "verified": False,
             "actual_sha256": snapshot["actual_sha256"],
             "expected_sha256": snapshot["expected_sha256"],
@@ -112,11 +119,21 @@ class DownloadCoordinator:
         result: updater.DownloadResult | None,
     ) -> tuple[bool, str]:
         if result is None:
-            return False, self.progress.current()["verification_error"] or "Download failed"
+            return False, self.progress.current()["verification_error"] or localized(
+                "Download failed.", "下载失败。"
+            )
         if info.asset_size and result.size != info.asset_size:
-            return False, f"更新包大小不一致：实际 {result.size} 字节，期望 {info.asset_size} 字节。"
+            return False, localized(
+                "Update package size mismatch: received {actual} bytes; expected {expected} bytes.",
+                "更新包大小不一致：实际 {actual} 字节，预期 {expected} 字节。",
+                actual=result.size,
+                expected=info.asset_size,
+            )
         if result.sha256.lower() != info.asset_sha256.lower():
-            return False, "更新包 sha256 校验失败。"
+            return False, localized(
+                "Update package SHA-256 verification failed.",
+                "更新包 SHA-256 校验失败。",
+            )
         return True, ""
 
     @staticmethod
@@ -124,7 +141,10 @@ class DownloadCoordinator:
         return {
             "ok": False,
             "code": "update_download_in_progress",
-            "error": "更新包正在后台下载中。",
+            "error": localized(
+                "The update package is already downloading in the background.",
+                "更新包正在后台下载。",
+            ),
         }
 
 
@@ -156,11 +176,21 @@ class InstallScheduler:
             host_status = await self.host_status("host.status")
         except HostBridgeError as exc:
             raise UpdateApplicationError(
-                "Electron host is unavailable", 409, "unsupported_host"
+                localized(
+                    "The Electron host is unavailable.",
+                    "Electron 宿主不可用。",
+                ),
+                409,
+                "unsupported_host",
             ) from exc
         if host_status.get("hostKind") != "electron":
             raise UpdateApplicationError(
-                "Electron host is unavailable", 409, "unsupported_host"
+                localized(
+                    "The Electron host is unavailable.",
+                    "Electron 宿主不可用。",
+                ),
+                409,
+                "unsupported_host",
             )
         action = self.schedule_action(
             "update_install",

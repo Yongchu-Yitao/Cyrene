@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
-from cyrene.media.models import MediaArtifact, MediaProviderError
+from agent.plugin.plugin_impl.cyrene_media.models import MediaArtifact, MediaProviderError
 
 
 async def _progress(
@@ -19,7 +19,7 @@ async def _progress(
 
 
 def _install_openai_client(monkeypatch, payload: dict[str, Any]):
-    from cyrene.media.providers import openai_image
+    from agent.plugin.plugin_impl.cyrene_media.providers import openai_image
 
     calls: list[tuple[str, dict[str, Any]]] = []
 
@@ -42,7 +42,7 @@ def _install_openai_client(monkeypatch, payload: dict[str, Any]):
 
 
 def test_resolve_provider_explicit_auto_disabled_and_kind_contracts():
-    from cyrene.media.providers.registry import resolve_provider
+    from agent.plugin.plugin_impl.cyrene_media.providers.registry import resolve_provider
 
     settings = {
         "default_providers": {"image": "auto", "video": "auto", "music": "auto"},
@@ -87,7 +87,7 @@ def test_resolve_provider_explicit_auto_disabled_and_kind_contracts():
 async def test_openai_gpt_image_generation_decodes_b64_and_uses_generation_endpoint(
     monkeypatch,
 ):
-    from cyrene.media.providers.openai_image import OpenAIImageProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers.openai_image import OpenAIImageProvider
 
     image_bytes = b"generated-png"
     calls = _install_openai_client(
@@ -143,7 +143,7 @@ async def test_openai_gpt_image_edit_uses_multipart_reference_and_mask_fields(
     tmp_path,
     monkeypatch,
 ):
-    from cyrene.media.providers.openai_image import OpenAIImageProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers.openai_image import OpenAIImageProvider
 
     first_reference = tmp_path / "first.png"
     second_reference = tmp_path / "second.webp"
@@ -198,7 +198,7 @@ async def test_openai_gpt_image_2_rejects_explicit_input_fidelity(
     tmp_path,
     monkeypatch,
 ):
-    from cyrene.media.providers.openai_image import OpenAIImageProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers.openai_image import OpenAIImageProvider
 
     reference = tmp_path / "reference.png"
     reference.write_bytes(b"reference-image")
@@ -237,7 +237,7 @@ async def test_openai_rejects_invalid_mask_and_output_format_before_submission(
     expected_code,
     monkeypatch,
 ):
-    from cyrene.media.providers.openai_image import OpenAIImageProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers.openai_image import OpenAIImageProvider
 
     calls = _install_openai_client(monkeypatch, {"data": []})
 
@@ -258,8 +258,8 @@ async def test_openai_rejects_invalid_mask_and_output_format_before_submission(
 
 @pytest.mark.asyncio
 async def test_minimax_music_accepts_inline_hex_and_remote_url_outputs(monkeypatch):
-    from cyrene.media.providers import minimax
-    from cyrene.media.providers.minimax import MiniMaxProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers import minimax
+    from agent.plugin.plugin_impl.cyrene_media.providers.minimax import MiniMaxProvider
 
     responses = [
         {
@@ -322,7 +322,7 @@ async def test_minimax_music_accepts_inline_hex_and_remote_url_outputs(monkeypat
 
 @pytest.mark.asyncio
 async def test_google_image_provider_uses_sdk_and_normalizes_inline_bytes(monkeypatch):
-    from cyrene.media.providers.google_media import GoogleMediaProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers.google_media import GoogleMediaProvider
 
     captured: dict[str, Any] = {}
 
@@ -419,7 +419,7 @@ async def test_google_omni_submits_local_reference_image_offline(
     tmp_path,
     monkeypatch,
 ):
-    from cyrene.media.providers.google_media import GoogleMediaProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers.google_media import GoogleMediaProvider
 
     reference = tmp_path / "reference.png"
     reference.write_bytes(b"omni-reference-image")
@@ -495,7 +495,7 @@ async def test_google_omni_uploads_one_local_reference_video_offline(
     tmp_path,
     monkeypatch,
 ):
-    from cyrene.media.providers.google_media import GoogleMediaProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers.google_media import GoogleMediaProvider
 
     reference = tmp_path / "reference.mp4"
     reference.write_bytes(b"omni-reference-video")
@@ -579,7 +579,7 @@ async def test_google_omni_rejects_unsupported_reference_combinations_offline(
     tmp_path,
     monkeypatch,
 ):
-    from cyrene.media.providers.google_media import GoogleMediaProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers.google_media import GoogleMediaProvider
 
     image = tmp_path / "reference.png"
     first_video = tmp_path / "first.mp4"
@@ -654,7 +654,7 @@ async def test_google_omni_resume_does_not_reupload_original_reference_video(
     tmp_path,
     monkeypatch,
 ):
-    from cyrene.media.providers.google_media import GoogleMediaProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers.google_media import GoogleMediaProvider
 
     reference = tmp_path / "reference.mp4"
     reference.write_bytes(b"original-video")
@@ -714,7 +714,7 @@ async def test_google_omni_resume_does_not_reupload_original_reference_video(
 
 
 def test_comfyui_raw_mcp_structured_image_and_resource_blocks_are_normalized():
-    from cyrene.media.providers.comfyui import (
+    from agent.plugin.plugin_impl.cyrene_media.providers.comfyui import (
         _inline_artifacts,
         _job_id,
         _status,
@@ -779,7 +779,7 @@ def test_comfyui_raw_mcp_structured_image_and_resource_blocks_are_normalized():
 
 
 def test_comfyui_workflow_template_injects_typed_request_and_staged_inputs():
-    from cyrene.media.providers.comfyui import _render_workflow
+    from agent.plugin.plugin_impl.cyrene_media.providers.comfyui import _render_workflow
 
     rendered = _render_workflow(
         {
@@ -817,8 +817,8 @@ def test_comfyui_workflow_template_injects_typed_request_and_staged_inputs():
 async def test_seedance_resume_queries_existing_task_without_creating_another(
     monkeypatch,
 ):
-    from cyrene.media.providers import seedance
-    from cyrene.media.providers.seedance import SeedanceProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers import seedance
+    from agent.plugin.plugin_impl.cyrene_media.providers.seedance import SeedanceProvider
 
     calls: list[dict[str, Any]] = []
 
@@ -865,7 +865,7 @@ async def test_seedance_resume_queries_existing_task_without_creating_another(
 
 
 def test_seedance_output_urls_ignore_thumbnail_and_last_frame_side_outputs():
-    from cyrene.media.providers.seedance import _output_urls
+    from agent.plugin.plugin_impl.cyrene_media.providers.seedance import _output_urls
 
     assert _output_urls(
         {
@@ -882,8 +882,8 @@ def test_seedance_output_urls_ignore_thumbnail_and_last_frame_side_outputs():
 async def test_minimax_video_resume_queries_existing_task_without_new_submission(
     monkeypatch,
 ):
-    from cyrene.media.providers import minimax
-    from cyrene.media.providers.minimax import MiniMaxProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers import minimax
+    from agent.plugin.plugin_impl.cyrene_media.providers.minimax import MiniMaxProvider
 
     calls: list[dict[str, Any]] = []
 
@@ -927,8 +927,8 @@ async def test_minimax_video_resume_queries_existing_task_without_new_submission
 
 @pytest.mark.asyncio
 async def test_google_veo_resume_polls_operation_without_generate_videos(monkeypatch):
-    from cyrene.media.providers import google_media
-    from cyrene.media.providers.google_media import GoogleMediaProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers import google_media
+    from agent.plugin.plugin_impl.cyrene_media.providers.google_media import GoogleMediaProvider
 
     generated_calls: list[dict[str, Any]] = []
     operation_names: list[str] = []
@@ -1048,7 +1048,7 @@ async def test_google_veo_rejects_unsupported_duration_and_output_boundaries(
     expected_code,
     monkeypatch,
 ):
-    from cyrene.media.providers.google_media import GoogleMediaProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers.google_media import GoogleMediaProvider
 
     generated_calls: list[dict[str, Any]] = []
 
@@ -1107,7 +1107,7 @@ async def test_google_veo_accepts_documented_duration_and_output_boundaries(
     number_of_outputs,
     monkeypatch,
 ):
-    from cyrene.media.providers.google_media import GoogleMediaProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers.google_media import GoogleMediaProvider
 
     generated_calls: list[dict[str, Any]] = []
 
@@ -1175,8 +1175,8 @@ async def test_seedance_rejects_local_video_reference_before_submission(
     tmp_path,
     monkeypatch,
 ):
-    from cyrene.media.providers import seedance
-    from cyrene.media.providers.seedance import SeedanceProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers import seedance
+    from agent.plugin.plugin_impl.cyrene_media.providers.seedance import SeedanceProvider
 
     local_video = tmp_path / "reference.mp4"
     local_video.write_bytes(b"local-video")
@@ -1230,7 +1230,7 @@ async def test_google_veo_validates_reference_modes_and_roles_before_submission(
     expected_code,
     monkeypatch,
 ):
-    from cyrene.media.providers.google_media import GoogleMediaProvider
+    from agent.plugin.plugin_impl.cyrene_media.providers.google_media import GoogleMediaProvider
 
     generated_calls: list[dict[str, Any]] = []
 

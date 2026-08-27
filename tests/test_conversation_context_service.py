@@ -75,22 +75,33 @@ def test_agent_path_usage_normalizes_openai_cache_details():
     }
 
 
-def test_system_prompt_blocks_split_default_prompt_categories():
-    from agent.prompt import DEFAULT_SYSTEM_PROMPT
+def test_mounted_ephemeral_context_is_not_projected_as_a_second_layer(tmp_path):
+    service = _context_service(tmp_path, {"id": "chat_1", "model": "model"})
+    state = {
+        "messages": [
+            {
+                "role": "system",
+                "content": "system prompt\n\nmemory\n\nturn context",
+            },
+            {"role": "user", "content": "inspect"},
+        ],
+        "systemPrompt": "system prompt",
+        "ephemeralContext": "turn context",
+        "contextMounts": [{
+            "kind": "plugin_session",
+            "content": "memory\n\nturn context",
+            "source": "hook",
+        }],
+    }
 
-    blocks = _system_prompt_blocks(
-        DEFAULT_SYSTEM_PROMPT.replace("{workspace}", "/workspace"),
-        100,
-        len,
-    )
+    blocks = service._agent_blocks({"model": "model"}, state)
+    summary = service._agent_summary(state, model_name="model", ctx_limit=128_000)
 
-    assert [block["id"] for block in blocks] == [
-        "system.identity",
-        "system.behavior",
-        "system.tools",
-        "system.workspace",
+    assert [layer["id"] for layer in blocks["layers"]] == [
+        "system_prefix",
+        "messages",
     ]
-    assert sum(block["tokens_est"] for block in blocks) == 100
+    assert blocks["contextUsed"] == summary["ctxUsed"]
 
 
 @pytest.mark.asyncio
@@ -103,12 +114,19 @@ async def test_new_agent_context_tree_drives_summary_blocks_and_plugin_usage(tmp
         {
             "role": "system",
             "content": "system prompt",
-            "_cyrene_subagents": {
-                "reader": {
-                    "task": "inspect the files",
-                    "status": "done",
-                    "result": "all clear",
-                    "round_id": "run_1",
+            "_plugin_session_state": {
+                "cyrene_subagent": {
+                    "child_context_ids": [],
+                    "public_snapshot": {
+                        "subagents": {
+                            "reader": {
+                                "task": "inspect the files",
+                                "status": "done",
+                                "result": "all clear",
+                                "round_id": "run_1",
+                            },
+                        },
+                    },
                 },
             },
         },
@@ -298,8 +316,8 @@ async def test_new_agent_context_tree_drives_summary_blocks_and_plugin_usage(tmp
     assert summary["ctxUsed"] > 0
     assert summary["ratio"] == summary["ctxUsed"] / 128_000
     assert summary["messageCount"] == 6
-    assert summary["usedToolPackages"] == ["cyrene_subagent", "cyrene_code"]
-    assert summary["usedStandaloneTools"] == ["CustomLint"]
+    assert summary["usedPluginPacks"] == ["cyrene_subagent", "cyrene_code"]
+    assert "usedStandaloneTools" not in summary
     assert [item["key"] for item in summary["segments"]] == [
         "compacted", "system", "user", "assistant", "tool",
     ]
@@ -332,8 +350,8 @@ async def test_new_agent_context_tree_drives_summary_blocks_and_plugin_usage(tmp
     assert blocks["layers"][1]["totalTokens"] == 14
     assert blocks["layers"][2]["totalTokens"] == blocks["messageTokens"]
     assert blocks["contextLimit"] == 128_000
-    assert blocks["usedToolPackages"] == ["cyrene_subagent", "cyrene_code"]
-    assert blocks["usedStandaloneTools"] == ["CustomLint"]
+    assert blocks["usedPluginPacks"] == ["cyrene_subagent", "cyrene_code"]
+    assert "usedStandaloneTools" not in blocks
     assert blocks["messageCount"] == 6
     assert blocks["updatedAt"]
     assert subagents["activeRoundId"] == "run_1"

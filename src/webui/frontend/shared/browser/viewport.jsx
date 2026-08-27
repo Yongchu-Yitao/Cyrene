@@ -974,12 +974,12 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
         </div>
       )}
       <div className="browser-nav-bar">
-        <button type="button" className="browser-icon-btn" disabled={!active || !active.canGoBack || busy} onClick={function () { run(function () { return bridge.goBack(electronSessionId); }); }} title="Back"><BrowserIcon name="back" /></button>
-        <button type="button" className="browser-icon-btn" disabled={!active || !active.canGoForward || busy} onClick={function () { run(function () { return bridge.goForward(electronSessionId); }); }} title="Forward"><BrowserIcon name="forward" /></button>
-        {!hideReload && <button type="button" className="browser-icon-btn" disabled={!active || busy} onClick={function () { run(function () { return bridge.reload(electronSessionId); }); }} title="Reload"><BrowserIcon name="reload" /></button>}
+        <button type="button" className="browser-icon-btn" disabled={!active || !active.canGoBack || busy} onClick={function () { run(function () { return bridge.goBack(electronSessionId); }); }} title={browserLabel("browser.nav.back", "Back")}><BrowserIcon name="back" /></button>
+        <button type="button" className="browser-icon-btn" disabled={!active || !active.canGoForward || busy} onClick={function () { run(function () { return bridge.goForward(electronSessionId); }); }} title={browserLabel("browser.nav.forward", "Forward")}><BrowserIcon name="forward" /></button>
+        {!hideReload && <button type="button" className="browser-icon-btn" disabled={!active || busy} onClick={function () { run(function () { return bridge.reload(electronSessionId); }); }} title={browserLabel("browser.context.reload", "Reload")}><BrowserIcon name="reload" /></button>}
         <input ref={addressRef} className="browser-address" value={address} onChange={function (e) { setAddress(e.target.value); }} onKeyDown={onAddressKeyDown} placeholder="https://example.com" />
-        <button type="button" className="browser-icon-btn browser-go-btn" disabled={busy} onClick={navigate} title="Go"><BrowserIcon name="go" /></button>
-        {!hideMute && <button type="button" className={"browser-icon-btn" + (active && active.muted ? " muted" : "")} disabled={!active} onClick={function () { run(function () { return bridge.setMuted({ sessionId: electronSessionId, muted: !(active && active.muted) }); }); }} title={active && active.muted ? "Unmute" : "Mute"}>
+        <button type="button" className="browser-icon-btn browser-go-btn" disabled={busy} onClick={navigate} title={browserLabel("browser.nav.go", "Go")}><BrowserIcon name="go" /></button>
+        {!hideMute && <button type="button" className={"browser-icon-btn" + (active && active.muted ? " muted" : "")} disabled={!active} onClick={function () { run(function () { return bridge.setMuted({ sessionId: electronSessionId, muted: !(active && active.muted) }); }); }} title={active && active.muted ? browserLabel("browser.context.unmute", "Unmute") : browserLabel("browser.context.mute", "Mute")}>
           <BrowserIcon name={active && active.muted ? "muted" : "volume"} />
         </button>}
       </div>
@@ -1306,7 +1306,7 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
 
   // ---- agent-initiated login takeover (M3) ------------------------------
   const takeover = browser.takeover || {};
-  const completeLabel = "我已完成登录";
+  const completeLabel = browserLabel("browser.takeover.completeLogin", "I completed sign-in");
 
   function completeTakeover() {
     if (takeoverSubmitting) return;
@@ -1327,7 +1327,7 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
     }
 
     if (!takeover.questionId) {
-      setTakeoverError("缺少登录确认问题，请在聊天输入区确认。");
+      setTakeoverError(browserLabel("browser.takeover.missingQuestion", "The sign-in confirmation question is missing. Confirm from the chat composer."));
       setTakeoverSubmitting(false);
       return;
     }
@@ -1359,9 +1359,9 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
   const action = browser.action || "";
   const target = browser.target || "";
   const actionLabel = !action ? "" :
-    action === "navigate" ? ("导航到 " + (url || "")) :
-    action === "click" ? ("点击了 " + (target || "")) :
-    action === "type" ? ("输入到 " + (target || "")) : action;
+    action === "navigate" ? browserLabel("browser.activity.navigate", "Navigated to {target}").replace("{target}", url || "") :
+    action === "click" ? browserLabel("browser.activity.click", "Clicked {target}").replace("{target}", target || "") :
+    action === "type" ? browserLabel("browser.activity.type", "Typed into {target}").replace("{target}", target || "") : action;
 
   const showControls = !error && !takeover.pending && !nativeWindow;
   return (
@@ -1435,18 +1435,18 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
               disabled={takeoverSubmitting}
               style={{ minWidth: 132 }}
             >
-              {takeoverSubmitting ? "正在继续…" : completeLabel}
+              {takeoverSubmitting ? browserLabel("browser.takeover.continuing", "Continuing…") : completeLabel}
             </button>
             {takeoverError && <div className="browser-error-text">{takeoverError}</div>}
           </div>
         ) : (
-          <img ref={imgRef} alt="browser" draggable={false} className="browser-frame-img" />
+          <img ref={imgRef} alt={browserLabel("browser.frameAlt", "Browser view")} draggable={false} className="browser-frame-img" />
         )}
       </div>
 
       {controlling && !error && !takeover.pending && !nativeWindow ? (
         <div className="browser-view-action active">
-          ● 你正在直接控制浏览器（agent 浏览器操作已暂停）— 点击 / 滚动 / 输入（含中文）都会作用到页面
+          {browserLabel("browser.control.activeNotice", "● You are controlling the browser directly (Agent browser actions are paused) — clicks, scrolling, and typing affect the page")}
         </div>
       ) : actionLabel && !error && !takeover.pending && !nativeWindow && (
         <div className="browser-view-action">

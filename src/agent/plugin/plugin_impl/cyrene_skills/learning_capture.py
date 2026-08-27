@@ -45,16 +45,13 @@ class LearningCaptureHooks:
 
     @property
     def learning_data_directory(self) -> Path:
-        # ``setup.data_directory`` owns ContextTree state (normally
-        # ``<user-data>/agent-state``), not application-domain databases.
-        # Prefer the application Plugin host so learning routes, scheduler and
-        # Agent Hooks all address the same behavior-learning database.
-        from agent.plugin import active_plugin_application_host
-        from cyrene.config import DATA_DIR
+        from agent.plugin import active_plugin_service
 
-        host = active_plugin_application_host()
-        root = getattr(host, "data_directory", None) if host is not None else None
-        return Path(root or DATA_DIR).expanduser().resolve()
+        service = active_plugin_service("skills")
+        root = getattr(service, "data_directory", None)
+        if root is None:
+            raise RuntimeError("cyrene_skills application service is unavailable")
+        return Path(root).expanduser().resolve()
 
     def _history_before(self, node_id: str) -> list[dict[str, Any]]:
         if not node_id:
@@ -116,7 +113,7 @@ class LearningCaptureHooks:
         captured = self._turns.get(normalized)
         if captured is not None:
             return captured
-        import cyrene.learning.orchestrator as learning
+        from . import orchestrator as learning
 
         await learning.ensure_initialized(
             self.learning_data_directory,
@@ -131,7 +128,7 @@ class LearningCaptureHooks:
     async def on_session_start(self, event: HookEvent) -> dict[str, str]:
         details = _mapping(event.payload)
         run_id = str(details.get("run_id") or "").strip()
-        import cyrene.learning.orchestrator as learning
+        from . import orchestrator as learning
 
         # The learning database belongs to the Plugin pack's application data
         # directory.  Initializing is idempotent and also covers installations
@@ -186,7 +183,7 @@ class LearningCaptureHooks:
         if not name:
             return
         arguments = tool.get("arguments")
-        import cyrene.learning.orchestrator as learning
+        from . import orchestrator as learning
 
         await learning.record_action(
             name,
@@ -208,7 +205,7 @@ class LearningCaptureHooks:
         if captured is None:
             return
         self._turns.pop(run_id, None)
-        import cyrene.learning.orchestrator as learning
+        from . import orchestrator as learning
 
         if str(details.get("status") or "") != "completed":
             await learning.abort_turn(
@@ -235,7 +232,7 @@ class LearningCaptureHooks:
         if captured is None:
             return
         self._turns.pop(run_id, None)
-        import cyrene.learning.orchestrator as learning
+        from . import orchestrator as learning
 
         await learning.abort_turn(
             turn_id=captured["turn_id"],

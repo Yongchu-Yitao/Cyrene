@@ -14,8 +14,6 @@ async def shutdown_background_work() -> None:
     """
     from cyrene.agent_runtime import get_acp_runtime_service
     from cyrene.agent_runtime.model_gateway import revoke_all_model_gateway_scopes
-    from cyrene.model_runtime.codex_provider import get_codex_provider
 
     await get_acp_runtime_service().close_all()
     revoke_all_model_gateway_scopes()
-    await get_codex_provider().close()

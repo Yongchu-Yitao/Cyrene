@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.plugin import PluginContext
-from .common import selected_remote_devices
+from .common import remote_tool_error, selected_remote_devices
 from agent.plugin.native_runtime import json_result
 
 TOOL_NAME = "ListRemoteDevices"
@@ -53,7 +53,7 @@ async def handler(
             }
         )
     except Exception as exc:
-        return json_result({"ok": False, "error": str(exc)})
+        return json_result(remote_tool_error(exc, context))
 
 
 __all__ = ["TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler"]

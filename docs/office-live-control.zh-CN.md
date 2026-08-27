@@ -13,7 +13,7 @@ Cyrene 的 Office 工具包可以控制 PowerPoint 当前打开的演示文稿�
 
 如果安装后列表中暂时没有出现 Cyrene，先确认 PowerPoint 已用 `⌘Q` 完全退出而不是只关闭窗口，再重新打开。开发期间更新过 manifest 时，PowerPoint 仍可能保留旧的 Wef 缓存；此时按 Microsoft 的 Office 缓存清理流程清理后重新安装。
 
-面向开发者的命令行安装入口仍然保留：`uv run python -m cyrene.office.install --trust`。
+面向开发者的命令行安装入口仍然保留：`uv run python -m agent.plugin.plugin_impl.cyrene_office.install --trust`。
 
 手动 Web 模式默认不占用固定端口。需要使用 Office Gateway 时以 `CYRENE_OFFICE_FORCE_START=1` 启动 Cyrene。端口可通过 `CYRENE_OFFICE_PORT` 修改；修改后要重新生成并重新加载清单。
 

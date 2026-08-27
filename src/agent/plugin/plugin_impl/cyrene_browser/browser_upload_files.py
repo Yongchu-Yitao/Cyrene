@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import mimetypes
 import os
 import shutil
@@ -20,9 +21,13 @@ from cyrene.runtime.paths import TEMP_DIR
 from agent.plugin import PluginContext
 from agent.plugin.native_runtime import (
     json_result,
+    plugin_localized,
     publish_runtime_event,
     resolve_tool_path,
 )
+
+
+logger = logging.getLogger(__name__)
 
 TOOL_NAME = "browser_upload_files"
 _MAX_FILES = 10
@@ -182,8 +187,15 @@ async def _resolve_files(path_args: list[str]) -> tuple[list[dict[str, Any]] | N
     for raw in path_args:
         path_arg = str(raw or "").strip()
         if not path_arg:
-            return None, "File paths must not be empty."
-        resolved = resolve_tool_path(path_arg)
+            return None, "empty_path"
+        try:
+            resolved = resolve_tool_path(path_arg)
+        except FileNotFoundError:
+            logger.debug("Browser upload path was not found", exc_info=True)
+            return None, "file_not_found"
+        except (OSError, RuntimeError, ValueError):
+            logger.debug("Browser upload path could not be resolved", exc_info=True)
+            return None, "file_unavailable"
         key = str(resolved)
         if key in seen:
             continue
@@ -192,11 +204,42 @@ async def _resolve_files(path_args: list[str]) -> tuple[list[dict[str, Any]] | N
 
     try:
         metadata = await asyncio.gather(*[asyncio.to_thread(_file_metadata, path) for path in resolved_paths])
-    except FileNotFoundError as exc:
-        return None, f"Browser upload failed: file not found: {exc.filename or exc}"
-    except (OSError, ValueError) as exc:
-        return None, f"Browser upload failed: {exc}"
+    except FileNotFoundError:
+        logger.debug("Browser upload file was not found", exc_info=True)
+        return None, "file_not_found"
+    except OSError:
+        logger.debug("Browser upload file could not be read", exc_info=True)
+        return None, "file_unavailable"
+    except ValueError:
+        logger.debug("Browser upload file failed validation", exc_info=True)
+        return None, "file_invalid"
     return list(metadata), None
+
+
+def _resolve_error_message(context: PluginContext, code: str | None) -> str:
+    messages = {
+        "empty_path": (
+            "Browser upload failed: file paths must not be empty.",
+            "浏览器上传失败：文件路径不能为空。",
+        ),
+        "file_not_found": (
+            "Browser upload failed: a selected file was not found.",
+            "浏览器上传失败：未找到所选文件。",
+        ),
+        "file_unavailable": (
+            "Browser upload failed: a selected file could not be read.",
+            "浏览器上传失败：无法读取所选文件。",
+        ),
+        "file_invalid": (
+            "Browser upload failed: a selected file is invalid, changed, or exceeds the upload limit.",
+            "浏览器上传失败：所选文件无效、已发生变化或超过上传限制。",
+        ),
+    }
+    en, zh = messages.get(
+        str(code or ""),
+        ("Browser upload failed.", "浏览器上传失败。"),
+    )
+    return plugin_localized(context, en, zh)
 
 
 def _upload_fingerprint(target: dict[str, Any], files: list[dict[str, Any]]) -> str:
@@ -246,47 +289,94 @@ async def _tool_browser_upload_files(
     args: dict[str, Any],
     context: PluginContext,
 ) -> str:
-    from cyrene import browser
+    from . import runtime
+    from .browser_output import browser_error_text
 
     chooser_id = str(args.get("chooser_id") or "").strip()
     ref = str(args.get("ref") or "").strip()
     if bool(chooser_id) == bool(ref):
-        return "Browser upload failed: provide exactly one of chooser_id or ref."
+        return plugin_localized(
+            context,
+            "Browser upload failed: provide exactly one of chooser_id or ref.",
+            "浏览器上传失败：chooser_id 和 ref 必须且只能提供一个。",
+        )
     raw_paths = args.get("paths")
     if not isinstance(raw_paths, list) or not 1 <= len(raw_paths) <= _MAX_FILES:
-        return f"Browser upload failed: paths must contain between 1 and {_MAX_FILES} files."
+        return plugin_localized(
+            context,
+            "Browser upload failed: paths must contain between 1 and {maximum} files.",
+            "浏览器上传失败：paths 必须包含 1 到 {maximum} 个文件。",
+            maximum=_MAX_FILES,
+        )
 
-    prepared = await browser.prepare_file_upload(chooser_id=chooser_id, ref=ref)
+    prepared = await runtime.prepare_file_upload(chooser_id=chooser_id, ref=ref)
     if prepared.get("ok") is not True:
-        return f"Browser upload target unavailable: {prepared.get('error', 'unknown error')}"
+        return plugin_localized(
+            context,
+            "Browser upload target unavailable: {error}",
+            "浏览器上传目标不可用：{error}",
+            error=browser_error_text(
+                prepared,
+                context,
+                "The browser upload target could not be prepared.",
+                "无法准备浏览器上传目标。",
+            ),
+        )
     target = prepared.get("target") if isinstance(prepared.get("target"), dict) else {}
     if not target.get("id") or not target.get("origin"):
-        return "Browser upload target unavailable: the destination origin could not be verified."
+        return plugin_localized(
+            context,
+            "Browser upload target unavailable: the destination origin could not be verified.",
+            "浏览器上传目标不可用：无法验证目标来源。",
+        )
     destination = urlparse(str(target.get("origin") or ""))
     if destination.scheme not in {"http", "https"} or not destination.netloc:
-        return "Browser upload target unavailable: files may only be disclosed to a verified HTTP(S) origin."
+        return plugin_localized(
+            context,
+            "Browser upload target unavailable: files may only be disclosed to a verified HTTP(S) origin.",
+            "浏览器上传目标不可用：文件只能披露给已验证的 HTTP(S) 来源。",
+        )
 
     files, error = await _resolve_files([str(item or "") for item in raw_paths])
     if error is not None:
-        return error
+        return _resolve_error_message(context, error)
     assert files is not None
     if not target.get("multiple") and len(files) != 1:
-        return "Browser upload failed: this file input accepts only one file."
+        return plugin_localized(
+            context,
+            "Browser upload failed: this file input accepts only one file.",
+            "浏览器上传失败：此文件输入框只接受一个文件。",
+        )
 
     fingerprint = _upload_fingerprint(target, files)
     # Re-resolve the browser node and re-hash every file immediately before the
     # side effect. Any changed page, origin, path, size, or content cancels the
     # action rather than silently widening the centrally reviewed call.
-    prepared_now = await browser.prepare_file_upload(chooser_id=chooser_id, ref=ref)
+    prepared_now = await runtime.prepare_file_upload(chooser_id=chooser_id, ref=ref)
     files_now, validation_error = await _resolve_files([str(item or "") for item in raw_paths])
     if prepared_now.get("ok") is not True or validation_error is not None or files_now is None:
+        public_error = (
+            _resolve_error_message(context, validation_error)
+            if validation_error is not None
+            else browser_error_text(
+                prepared_now,
+                context,
+                "Revalidation failed.",
+                "重新验证失败。",
+            )
+        )
         await publish_runtime_event(context, {
             "type": "external_browser_upload",
             "status": "cancelled_before_execution",
             "fingerprint": fingerprint,
-            "error": validation_error or prepared_now.get("error") or "revalidation failed",
+            "error": public_error,
         })
-        return f"Browser upload cancelled during revalidation: {validation_error or prepared_now.get('error') or 'unknown error'}"
+        return plugin_localized(
+            context,
+            "Browser upload was cancelled during revalidation: {error}",
+            "浏览器上传在重新验证期间已取消：{error}",
+            error=public_error,
+        )
     target_now = prepared_now.get("target") if isinstance(prepared_now.get("target"), dict) else {}
     if _upload_fingerprint(target_now, files_now) != fingerprint:
         await publish_runtime_event(context, {
@@ -294,7 +384,11 @@ async def _tool_browser_upload_files(
             "status": "cancelled_binding_changed",
             "fingerprint": fingerprint,
         })
-        return "Browser upload cancelled: the destination or file content changed after approval."
+        return plugin_localized(
+            context,
+            "Browser upload was cancelled: the destination or file content changed after approval.",
+            "浏览器上传已取消：目标或文件内容在批准后发生变化。",
+        )
 
     await publish_runtime_event(context, {
         "type": "external_browser_upload",
@@ -310,7 +404,15 @@ async def _tool_browser_upload_files(
         "files": _public_files(files_now),
     })
     staging_root: Path | None = None
-    result: dict[str, Any] = {"ok": False, "error": "Approved file snapshot was not created."}
+    result: dict[str, Any] = {
+        "ok": False,
+        "error": plugin_localized(
+            context,
+            "The approved file snapshot was not created.",
+            "未创建已批准文件的快照。",
+        ),
+        "code": "UPLOAD_SNAPSHOT_NOT_CREATED",
+    }
     try:
         staging_root = _new_upload_snapshot()
         staged_files = await asyncio.to_thread(
@@ -318,14 +420,29 @@ async def _tool_browser_upload_files(
             files_now,
             staging_root,
         )
-        result = await browser.set_input_files(target_now, staged_files)
-    except Exception as exc:
-        result = {"ok": False, "error": f"Approved file snapshot failed: {exc}"}
+        result = await runtime.set_input_files(target_now, staged_files)
+    except Exception:
+        logger.warning("Approved browser upload snapshot failed", exc_info=True)
+        result = {
+            "ok": False,
+            "error": plugin_localized(
+                context,
+                "The approved file snapshot could not be prepared.",
+                "无法准备已批准文件的快照。",
+            ),
+            "code": "UPLOAD_SNAPSHOT_FAILED",
+        }
     if result.get("ok") is True and staging_root is not None:
         _retain_upload_snapshot(staging_root)
     elif staging_root is not None:
         _remove_upload_snapshot(staging_root)
     status = "completed" if result.get("ok") is True else "failed"
+    result_error = browser_error_text(
+        result,
+        context,
+        "The browser could not attach the approved files.",
+        "浏览器无法附加已批准的文件。",
+    )
     await publish_runtime_event(context, {
         "type": "external_browser_upload",
         "status": status,
@@ -337,16 +454,25 @@ async def _tool_browser_upload_files(
             "target_id": str(target_now.get("id") or ""),
         },
         "files": _public_files(files_now),
-        "error": "" if status == "completed" else str(result.get("error") or "unknown error"),
+        "error": "" if status == "completed" else result_error,
     })
     if result.get("ok") is not True:
-        return f"Browser upload failed after approval: {result.get('error', 'unknown error')}"
+        return plugin_localized(
+            context,
+            "Browser upload failed after approval: {error}",
+            "浏览器上传在批准后失败：{error}",
+            error=result_error,
+        )
     return json_result({
         "status": "files_attached",
         "origin": str(target_now.get("origin") or ""),
         "url": str(result.get("url") or target_now.get("topUrl") or ""),
         "files": _public_files(files_now),
-        "note": "Files were attached to the page. A separate submit button, if any, was not clicked.",
+        "note": plugin_localized(
+            context,
+            "Files were attached to the page. A separate submit button, if any, was not clicked.",
+            "文件已附加到页面。若页面存在单独的提交按钮，尚未点击该按钮。",
+        ),
     })
 
 

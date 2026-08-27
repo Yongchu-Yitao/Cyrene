@@ -76,6 +76,24 @@ class ExternalAgentTurnApplicationService:
             workspace_path=workspace_path,
             run_id=run.run_id,
         )
+        if projection.usage:
+            from cyrene.workbench.usage_events import publish_usage_event
+
+            await publish_usage_event(
+                {
+                    "type": "llm_call",
+                    "timestamp": self.dependencies.utc_now_iso(),
+                    "status": "completed",
+                    "caller": "external_agent",
+                    "phase": "agent",
+                    "model": "external_agent/" + str(result.get("agentId") or "unknown"),
+                    "session_id": chat_id,
+                    "round_id": run.run_id,
+                    "duration_ms": 0,
+                    "usage": dict(projection.usage),
+                },
+                session_id=chat_id,
+            )
         session_id = str(result.get("sessionId") or projector.session_id or "")
         if session_id:
             await asyncio.to_thread(self.dependencies.set_session_id, chat_id, session_id)

@@ -1,10 +1,18 @@
 """Editable Cyrene media Plugin pack."""
 
-from agent.plugin import Plugin, PluginPack
+from agent.plugin import Plugin, PluginApplicationContext, PluginPack
 
 from . import start_media_generation
 
 _FUNCTION = start_media_generation.TOOL_DEF["function"]
+
+
+def application_setup(context: PluginApplicationContext) -> None:
+    from .application import setup_application
+
+    setup_application(context)
+
+
 plugin_pack = PluginPack(
     id="cyrene_media",
     description="Start asynchronous media generation.",
@@ -25,6 +33,7 @@ plugin_pack = PluginPack(
             },
         ),
     ),
+    application_setup=application_setup,
 )
 
-__all__ = ["plugin_pack"]
+__all__ = ["application_setup", "plugin_pack"]

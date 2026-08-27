@@ -755,7 +755,6 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
 
     return (
       <div className="wb-init">
-        <button type="button" className="wb-task-back-board wb-init-back-board" onClick={props.onBackToBoard}>{T("taskBoard.back")}</button>
         <div className="wb-init-head">
           <div className="wb-init-head-main">
             <h1>{T("init.title")}</h1>
@@ -879,16 +878,47 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       done: completed,
       active: !completed && (planReady || firstIncomplete === -1),
     });
+    var completedCount = rows.filter(function (row) { return row.done; }).length;
+    var progressValue = rows.length ? Math.round((completedCount / rows.length) * 100) : 0;
     return (
       <div className="wb-init-progress">
-        {rows.map(function (row, i) {
-          return (
-            <div className={"wb-init-progress-row" + (row.active ? " active" : "") + (row.done ? " done" : "")} key={i}>
-              <span className="wb-init-progress-dot" />
-              <span>{row.label}</span>
-            </div>
-          );
-        })}
+        <div className="wb-init-progress-summary">
+          <div className="wb-init-progress-summary-copy">
+            <span>{completed ? T("status.done") : T("status.initializing")}</span>
+            <strong>{completedCount}<small> / {rows.length}</small></strong>
+          </div>
+          <div
+            className="wb-init-progress-meter"
+            role="progressbar"
+            aria-valuemin="0"
+            aria-valuemax={rows.length}
+            aria-valuenow={completedCount}
+          >
+            <span style={{ width: progressValue + "%" }} />
+          </div>
+        </div>
+        <ol className="wb-init-progress-list">
+          {rows.map(function (row, i) {
+            var stateLabel = row.done ? T("status.done") : row.active ? T("status.running") : T("status.pending");
+            return (
+              <li
+                className={"wb-init-progress-row" + (row.active ? " active" : "") + (row.done ? " done" : "")}
+                aria-current={row.active ? "step" : undefined}
+                key={i}
+              >
+                <span className="wb-init-progress-marker" aria-hidden="true">
+                  {row.done ? (
+                    <svg viewBox="0 0 16 16" fill="none"><path d="m3.5 8.1 2.7 2.7 6.3-6.2" /></svg>
+                  ) : i + 1}
+                </span>
+                <span className="wb-init-progress-copy">
+                  <span>{row.label}</span>
+                  <small>{stateLabel}</small>
+                </span>
+              </li>
+            );
+          })}
+        </ol>
       </div>
     );
   }

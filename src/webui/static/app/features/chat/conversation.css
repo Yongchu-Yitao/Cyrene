@@ -3636,6 +3636,12 @@ html[data-theme="dark"] :is(.wbc-composer-box, .wbc-side-card) {
   box-shadow: var(--wbc-composer-glass-shadow);
 }
 
+/* Match the message input's tint to the neutral dock component while keeping
+   the original translucent glass layer and its backdrop blur visible. */
+html[data-theme="dark"] .wbc-composer-box {
+  --wbc-composer-glass-background: var(--wb-composer-surface);
+}
+
 /* Conversation panels opened over a split transcript are cards, not glass.
    Keep their material opaque in both themes and anchor the visual boundary to
    the panel itself; otherwise transcript text remains visible through the

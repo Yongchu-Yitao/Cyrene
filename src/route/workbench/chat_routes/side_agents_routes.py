@@ -5,10 +5,11 @@ import re
 from typing import Any
 
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
 
+from cyrene.localization import app_language, localized
 from cyrene.workbench.chat_events import publish_chat_changed
 from route import schemas as api_models
+from route.errors import localized_error_response
 from route.workbench.chat_routes.context import ChatRouteContext
 
 
@@ -27,7 +28,9 @@ def register_side_agents_routes(router: APIRouter, context: ChatRouteContext) ->
         payload = await asyncio.to_thread(_read_chats_store)
         parent = _find_chat(payload, chat_id)
         if not parent:
-            return JSONResponse({"error": "chat not found"}, status_code=404)
+            return localized_error_response(
+                "Chat not found.", "未找到对话。", 404, "chat_not_found"
+            )
         agents = [_public_chat_full(item) for item in payload.get("chats", []) if str(item.get("kind") or "") == "side-agent" and str(item.get("parentChatId") or "") == chat_id]
         agents.sort(key=lambda item: str(item.get("createdAt") or ""))
         return {"agents": agents}
@@ -37,7 +40,13 @@ def register_side_agents_routes(router: APIRouter, context: ChatRouteContext) ->
         body = api_models.body_dict(body_model)
         quote = str(body.get("quote") or "").strip()
         if not quote:
-            return JSONResponse({"error": "quote is required"}, status_code=400)
+            return localized_error_response(
+                "A quoted passage is required.",
+                "请选择要引用的内容。",
+                400,
+                "quote_required",
+            )
+        language = app_language()
 
         def create_and_persist() -> dict[str, Any] | None:
             payload = _read_chats_store()
@@ -48,7 +57,9 @@ def register_side_agents_routes(router: APIRouter, context: ChatRouteContext) ->
             title = str(body.get("title") or "").strip() or compact_quote[:28]
             agent = _new_chat(
                 str(parent.get("projectId") or ""),
-                title or "侧边提问",
+                title or localized(
+                    "Side question", "侧边提问", language=language
+                ),
                 str(parent.get("model") or ""),
                 project_memory_snapshot=(dict(parent.get("projectMemorySnapshot") or {}) if isinstance(parent.get("projectMemorySnapshot"), dict) else None),
             )
@@ -59,6 +70,12 @@ def register_side_agents_routes(router: APIRouter, context: ChatRouteContext) ->
                 agent["workspaceOverride"] = str(parent["workspaceOverride"])
             agent["soulActive"] = _chat_soul_active(parent)
             agent["workspaceActive"] = _chat_workspace_active(parent)
+            agent["contextActivations"] = dict(
+                parent.get("contextActivations") or {}
+            )
+            agent["remoteDeviceIds"] = list(
+                parent.get("remoteDeviceIds") or ()
+            )
             if parent.get("reasoningEffort"):
                 agent["reasoningEffort"] = str(parent["reasoningEffort"])
             payload.setdefault("chats", []).insert(0, agent)
@@ -67,7 +84,9 @@ def register_side_agents_routes(router: APIRouter, context: ChatRouteContext) ->
 
         agent = await asyncio.to_thread(create_and_persist)
         if not agent:
-            return JSONResponse({"error": "chat not found"}, status_code=404)
+            return localized_error_response(
+                "Chat not found.", "未找到对话。", 404, "chat_not_found"
+            )
         await publish_chat_changed(
             chat_id,
             str(agent.get("projectId") or ""),

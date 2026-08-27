@@ -12,9 +12,30 @@ var WORKBENCH_TRANSLATIONS = {
 var workbenchI18nLang = "en";
 var workbenchI18nVersion = 0;
 var __workbenchI18nSubscribers = new Set();
+var __workbenchMissingTranslationKeys = new Set();
+var __workbenchExpectedDesktopLanguage = "";
+
+function workbenchUsableTranslation(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function reportWorkbenchMissingTranslation(key, lang, fallbackUsed) {
+  var marker = lang + ":" + key;
+  if (__workbenchMissingTranslationKeys.has(marker)) return;
+  __workbenchMissingTranslationKeys.add(marker);
+  try {
+    window.dispatchEvent(new CustomEvent("cyrene:i18n-missing", {
+      detail: { key: String(key), lang: lang, fallbackUsed: fallbackUsed === true },
+    }));
+  } catch (e) {}
+}
 
 function workbenchInterpolate(text, params) {
   if (!params) return text;
+  var pluralValue = params.count !== undefined ? Number(params.count) : Number(params.n);
+  text = text.replace(/\{\{([^{}|]*)\|([^{}]*)\}\}/g, function (_match, singular, plural) {
+    return pluralValue === 1 ? singular : plural;
+  });
   Object.keys(params).forEach(function (name) {
     text = text.split("{" + name + "}").join(String(params[name]));
   });
@@ -38,8 +59,12 @@ function workbenchTranslateForLang(key, lang, params, fallback) {
       text = dict[resolvedKey];
     }
   }
-  if (text === undefined) text = (WORKBENCH_TRANSLATIONS.en || {})[resolvedKey];
-  if (text === undefined) text = fallback !== undefined ? fallback : key;
+  var localeMissing = !workbenchUsableTranslation(text);
+  if (localeMissing) text = (WORKBENCH_TRANSLATIONS.en || {})[resolvedKey];
+  if (!workbenchUsableTranslation(text)) {
+    text = fallback !== undefined ? fallback : key;
+  }
+  if (localeMissing) reportWorkbenchMissingTranslation(key, lang, text !== key);
   return workbenchInterpolate(text, params);
 }
 
@@ -58,6 +83,28 @@ function workbenchT(key, params, fallback) {
     params,
     fallback
   );
+}
+
+function workbenchLocale(lang) {
+  return (lang || workbenchI18nLang) === "zh" ? "zh-CN" : "en-US";
+}
+
+function workbenchFormatDate(value, options) {
+  if (value === undefined || value === null || value === "") return "";
+  try {
+    var date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return new Intl.DateTimeFormat(workbenchLocale(), options || {}).format(date);
+  } catch (e) {
+    return String(value);
+  }
+}
+
+function workbenchFormatNumber(value, options) {
+  var number = Number(value);
+  if (!Number.isFinite(number)) return String(value == null ? "" : value);
+  try { return new Intl.NumberFormat(workbenchLocale(), options || {}).format(number); }
+  catch (e) { return String(number); }
 }
 
 function workbenchToolName(toolName, lang) {
@@ -127,22 +174,61 @@ function workbenchPermissionQuestionText(pending, lang) {
   return lines.join("\n");
 }
 
-function setWorkbenchLang(lang) {
-  if (lang !== "en" && lang !== "zh") return;
-  workbenchI18nLang = lang;
-  try { localStorage.setItem("cyrene-workbench-lang", lang); } catch (e) {}
+function persistWorkbenchRuntimeLanguage(lang) {
   try {
-    if (window.cyrene && typeof window.cyrene.updateDesktopSettings === "function") {
-      window.cyrene.updateDesktopSettings({ language: lang }).catch(function () {});
-    }
-  } catch (e) {}
-  workbenchI18nVersion += 1;
-  __workbenchI18nSubscribers.forEach(function (fn) { fn(workbenchI18nVersion); });
+    return fetch("/api/settings/namespaces/runtime", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ changes: { app_language: lang } }),
+    }).catch(function () {});
+  } catch (e) {
+    return Promise.resolve();
+  }
+}
+
+function syncWorkbenchDesktopLanguage(lang) {
+  try {
+    if (!window.cyrene || typeof window.cyrene.updateDesktopSettings !== "function") return Promise.resolve();
+    var read = typeof window.cyrene.getDesktopSettings === "function"
+      ? window.cyrene.getDesktopSettings()
+      : Promise.resolve(null);
+    return Promise.resolve(read).then(function (settings) {
+      if (settings && settings.language === lang) return;
+      __workbenchExpectedDesktopLanguage = lang;
+      return window.cyrene.updateDesktopSettings({ language: lang }).catch(function () {
+        if (__workbenchExpectedDesktopLanguage === lang) __workbenchExpectedDesktopLanguage = "";
+      });
+    }).catch(function () {});
+  } catch (e) {
+    return Promise.resolve();
+  }
+}
+
+function applyWorkbenchLang(lang, options) {
+  if (lang !== "en" && lang !== "zh") return;
+  options = options || {};
+  var changed = workbenchI18nLang !== lang;
+  workbenchI18nLang = lang;
+  if (options.persist !== false) {
+    try { localStorage.setItem("cyrene-workbench-lang", lang); } catch (e) {}
+    syncWorkbenchDesktopLanguage(lang);
+    persistWorkbenchRuntimeLanguage(lang);
+  }
+  if (changed || options.force === true) {
+    workbenchI18nVersion += 1;
+    __workbenchI18nSubscribers.forEach(function (fn) { fn(workbenchI18nVersion); });
+  }
   document.documentElement.dataset.workbenchLang = lang;
   document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
-  try {
-    window.dispatchEvent(new CustomEvent("cyrene:i18n-changed", { detail: { lang: lang } }));
-  } catch (e) {}
+  if (changed || options.force === true) {
+    try {
+      window.dispatchEvent(new CustomEvent("cyrene:i18n-changed", { detail: { lang: lang } }));
+    } catch (e) {}
+  }
+}
+
+function setWorkbenchLang(lang) {
+  applyWorkbenchLang(lang, { persist: true });
 }
 
 function useWorkbenchI18n() {
@@ -156,6 +242,8 @@ function useWorkbenchI18n() {
     t: workbenchT,
     lang: workbenchI18nLang || "en",
     setLang: setWorkbenchLang,
+    formatDate: workbenchFormatDate,
+    formatNumber: workbenchFormatNumber,
   };
 }
 
@@ -176,12 +264,71 @@ function useWorkbenchI18n() {
 })();
 
 function registerWorkbenchTranslations(translations) {
+  var changed = false;
   ["en", "zh"].forEach(function (lang) {
     if (translations && translations[lang]) {
       Object.assign(WORKBENCH_TRANSLATIONS[lang], translations[lang]);
+      changed = true;
     }
   });
+  if (changed) {
+    workbenchI18nVersion += 1;
+    __workbenchI18nSubscribers.forEach(function (fn) { fn(workbenchI18nVersion); });
+  }
 }
+
+try {
+  window.addEventListener("storage", function (event) {
+    if (!event || event.key !== "cyrene-workbench-lang") return;
+    if (event.newValue === "en" || event.newValue === "zh") {
+      applyWorkbenchLang(event.newValue, { persist: false });
+    }
+  });
+} catch (e) {}
+
+try {
+  if (window.cyrene && typeof window.cyrene.onDesktopLanguageChanged === "function") {
+    window.cyrene.onDesktopLanguageChanged(function (lang) {
+      if (lang !== "en" && lang !== "zh") return;
+      var expected = __workbenchExpectedDesktopLanguage === lang;
+      if (expected) __workbenchExpectedDesktopLanguage = "";
+      try { localStorage.setItem("cyrene-workbench-lang", lang); } catch (e) {}
+      applyWorkbenchLang(lang, { persist: false });
+      if (!expected) persistWorkbenchRuntimeLanguage(lang);
+    });
+  }
+} catch (e) {}
+
+try {
+  var workbenchEvents = window.CyreneUI && window.CyreneUI.has("events")
+    ? window.CyreneUI.require("events")
+    : null;
+  if (workbenchEvents && typeof workbenchEvents.subscribe === "function") {
+    workbenchEvents.subscribe(function (event) {
+      if (!event || event.type !== "settings_changed" || event.namespace !== "runtime") return;
+      if (Array.isArray(event.changed) && event.changed.indexOf("app_language") < 0) return;
+      syncWorkbenchLangFromRuntime();
+    });
+  }
+} catch (e) {}
+
+function syncWorkbenchLangFromRuntime() {
+  try {
+    return fetch("/api/settings/namespaces/runtime").then(function (response) {
+      return response.ok ? response.json() : null;
+    }).then(function (payload) {
+      var lang = payload && payload.values && payload.values.app_language;
+      if (lang !== "en" && lang !== "zh") return;
+      try { localStorage.setItem("cyrene-workbench-lang", lang); } catch (e) {}
+      applyWorkbenchLang(lang, { persist: false });
+      syncWorkbenchDesktopLanguage(lang);
+    }).catch(function () {});
+  } catch (e) {
+    return Promise.resolve();
+  }
+}
+
+syncWorkbenchLangFromRuntime();
 
 window.CyreneUI.i18n = window.CyreneUI.register("i18n", {
   translations: WORKBENCH_TRANSLATIONS,
@@ -192,6 +339,10 @@ window.CyreneUI.i18n = window.CyreneUI.register("i18n", {
   permissionQuestionText: workbenchPermissionQuestionText,
   setLang: setWorkbenchLang,
   getLang: function () { return workbenchI18nLang || "en"; },
+  getLocale: workbenchLocale,
+  formatDate: workbenchFormatDate,
+  formatNumber: workbenchFormatNumber,
+  getMissingKeys: function () { return Array.from(__workbenchMissingTranslationKeys); },
   use: useWorkbenchI18n,
   registerTranslations: registerWorkbenchTranslations,
 });

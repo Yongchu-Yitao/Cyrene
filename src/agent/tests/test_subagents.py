@@ -204,9 +204,9 @@ def test_subagent_pack_follows_toolbox_list_describe_invoke(tmp_path):
             context,
         )
 
-        assert spawned.value["result"].startswith("Sub-agent 'worker' spawned.")
-        assert sent.value["result"] == "Message sent to worker."
-        assert broadcast.value["result"] == "Broadcast sent to 2/2 peers."
+        assert spawned.value["result"].startswith("子 Agent 'worker' 已启动。")
+        assert sent.value["result"] == "消息已发送给 worker。"
+        assert broadcast.value["result"] == "广播已发送给 2/2 个同级 Agent。"
         assert manager.calls[0][:4] == (
             "spawn",
             "main",
@@ -216,6 +216,32 @@ def test_subagent_pack_follows_toolbox_list_describe_invoke(tmp_path):
         assert manager.calls[0][4]
 
     run(scenario())
+
+
+def test_disabled_subagent_pack_does_not_attach_session_driver(tmp_path):
+    plugin_directory = tmp_path / "plugin_impl"
+    copy_subagent_pack(plugin_directory)
+    registry = model_registry(lambda _arguments, _context: answer("unused"))
+    assert registry.load_directory(plugin_directory) == ()
+    registry.configure_activation(
+        plugins={},
+        packs={"cyrene_subagent": False},
+    )
+
+    session = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        tree_id="subagent-disabled",
+        registry=registry,
+        load_plugins=False,
+    )
+    try:
+        assert session.session_driver is None
+        assert "subagents" not in session.plugin_services
+        assert "session_driver" not in session.plugin_services
+    finally:
+        session.close()
 
 
 def test_agent_session_subagent_tree_inbox_and_workbench_output(tmp_path, monkeypatch):
@@ -396,7 +422,9 @@ def test_subagent_tree_recovers_without_repeating_instruction(tmp_path, monkeypa
         )
         first.submit("seed", run_id="recover-run")
         await first.drain()
-        await first.subagent_manager.spawn("main", "worker", "resume this")
+        await first.plugin_services["subagents"].spawn(
+            "main", "worker", "resume this"
+        )
         assert await asyncio.to_thread(child_started.wait, 2)
         child_tree_id = "recover-chat.subagent.worker"
         first.close()
@@ -470,7 +498,9 @@ def test_parent_cancel_cascades_while_main_is_idle(tmp_path, monkeypatch):
         try:
             session.submit("seed", run_id="cancel-run")
             await session.drain()
-            await session.subagent_manager.spawn("main", "worker", "wait")
+            await session.plugin_services["subagents"].spawn(
+                "main", "worker", "wait"
+            )
             assert await asyncio.to_thread(child_started.wait, 2)
             assert session.is_idle is True
 

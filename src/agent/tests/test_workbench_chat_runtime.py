@@ -13,7 +13,7 @@ def run(coroutine):
     return asyncio.run(coroutine)
 
 
-def test_model_router_invokes_selected_provider_plugin_and_normalizes_tools(monkeypatch):
+def test_model_router_forwards_session_messages_and_normalizes_tools(monkeypatch):
     captured = {}
 
     async def provider(arguments, context):
@@ -108,7 +108,7 @@ def test_model_router_invokes_selected_provider_plugin_and_normalizes_tools(monk
     assert call_result.success is True
     result = call_result.value
     assert captured["session_id"] == "chat-selected"
-    assert captured["arguments"]["messages"][0]["content"] == "base system\n\nturn-only context"
+    assert captured["arguments"]["messages"] == stored_messages
     assert stored_messages[0]["content"] == "base system"
     assert "api_key" not in captured["candidate_context"]
     assert result["tool_calls"] == [
@@ -273,19 +273,6 @@ def test_model_router_falls_back_through_provider_plugins(monkeypatch):
     assert fallbacks == [("primary", "fallback")]
 
 
-def test_workbench_system_extra_is_not_added_to_permission_prompt():
-    messages = [{"role": "system", "content": "permission system"}]
-
-    projected = model_router.project_model_messages(
-        messages,
-        phase="permission",
-        system_extra="turn-only project context",
-    )
-
-    assert projected == messages
-    assert projected is not messages
-
-
 def test_permission_model_usage_does_not_report_agent_context():
     from agent.plugin.plugin_impl.cyrene_model._shared import (
         ModelProvider,
@@ -420,10 +407,11 @@ def test_production_runtime_seeds_forwards_context_and_leaves_final_reply_to_lif
     assert opened["chat_id"] == "chat-production"
     assert opened["host_context"]["chat_id"] == "host-chat"
     assert opened["host_context"]["notify_state"] is None
-    assert opened["plugin_context_data"]["system_extra"] == "project context"
+    assert "system_extra" not in opened["plugin_context_data"]
     assert opened["plugin_context_data"]["project_id"] == "project-production"
     assert opened["text"] == "inspect it"
     assert "context_mounts" not in opened["metadata"]
+    assert opened["metadata"]["ephemeral_context"] == "project context"
     context = opened["plugin_context_data"]["run_context"]
     assert context["session_id"] == "chat-production"
     assert context["round_id"] == "run-production"
@@ -443,7 +431,6 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     monkeypatch,
 ):
     from cyrene.runtime import host_bridge
-    from cyrene.workbench import composer_context
     from route.workbench.chat_routes.run_send_routes import _SendOperation
 
     captured = {}
@@ -478,7 +465,6 @@ def test_builtin_workbench_route_always_uses_new_runtime(
         return "desktop_local"
 
     monkeypatch.setattr(host_bridge, "resolve_conversation_source", fake_source)
-    monkeypatch.setattr(composer_context, "build_context_activation_prompt", lambda _value: "context")
 
     operation = object.__new__(_SendOperation)
     operation.chat_id = "chat-route"
@@ -494,7 +480,8 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     operation.workspace_dir = str(tmp_path / "workspace")
     operation.ui_instance_id = "ui-route"
     operation.conversation_source = ""
-    operation.context_activations = {}
+    operation.context_activations = {"skills": ["writer"]}
+    operation.resolved_context_activations = {"skills": ["writer"]}
     operation.dynamic_command_prompt = ""
     operation.project_id = "project-route"
     operation.retry = False
@@ -534,7 +521,9 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     assert config.session_id == "chat-route"
     assert config.host_chat_id == "host-route"
     assert config.conversation_source == "desktop_local"
-    assert config.system_extra == "context"
+    assert config.system_extra == ""
+    assert config.context_activations == {"skills": ["writer"]}
+    assert config.resolved_context_activations == {"skills": ["writer"]}
     assert config.project_id == "project-route"
     assert config.project_memory_snapshot == {}
     assert config.session_title == "Route chat"

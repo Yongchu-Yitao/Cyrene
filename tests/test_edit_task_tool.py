@@ -5,7 +5,7 @@ import pytest
 from agent.plugin import PluginContext, PluginRegistry, PluginRuntime
 from agent.plugin.plugin_impl.cyrene_schedule import plugin_pack
 from cyrene.runtime.database import init_db
-from cyrene.runtime.schedule_runtime import ScheduleRuntimeService
+from agent.plugin.plugin_impl.cyrene_schedule.service import ScheduleRuntimeService
 
 
 @pytest.mark.asyncio

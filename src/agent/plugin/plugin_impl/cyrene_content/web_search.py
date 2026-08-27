@@ -6,8 +6,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from agent.plugin import PluginContext
+from agent.plugin.native_runtime import plugin_localized
 from .definitions import get_native_tool_def
-from .search_backend import deep_search
 
 TOOL_NAME = 'WebSearch'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -16,14 +16,22 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 async def _tool_websearch(args: dict[str, Any], context: PluginContext) -> str:
     query = str(args.get("query", ""))
     if not query:
-        return "No query provided."
+        return plugin_localized(context, "No query was provided.", "请提供搜索内容。")
     detail = str(args.get("detail") or "preview").strip().lower()
     if detail not in {"preview", "content"}:
-        return 'Invalid detail. Use "preview" or "content".'
+        return plugin_localized(
+            context,
+            'Invalid detail. Use "preview" or "content".',
+            'detail 无效，请使用 "preview" 或 "content"。',
+        )
     try:
         max_results = max(1, min(8, int(args.get("max_results") or 5)))
     except (TypeError, ValueError):
-        return "Invalid max_results. Use an integer from 1 to 8."
+        return plugin_localized(
+            context,
+            "Invalid max_results. Use an integer from 1 to 8.",
+            "max_results 无效，请使用 1 到 8 的整数。",
+        )
     raw_run_context = context.data.get("run_context")
     run_context = raw_run_context if isinstance(raw_run_context, Mapping) else {}
     options = {
@@ -42,9 +50,9 @@ async def _tool_websearch(args: dict[str, Any], context: PluginContext) -> str:
     }
     service = context.services.get("web_search")
     search = getattr(service, "search", None)
-    if callable(search):
-        return str(await search(query, **options))
-    return await deep_search(query, **options)
+    if not callable(search) or context.services.get("content") is None:
+        raise RuntimeError("cyrene_content application service is unavailable")
+    return str(await search(query, **options))
 
 
 handler = _tool_websearch

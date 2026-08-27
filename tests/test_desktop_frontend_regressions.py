@@ -71,7 +71,7 @@ def test_schedule_frontend_persists_local_iana_timezone():
 
 
 def test_scheduled_task_timezone_round_trips_through_plugin_repository(tmp_path):
-    from cyrene.runtime.schedule_runtime import ScheduleRuntimeService
+    from agent.plugin.plugin_impl.cyrene_schedule.service import ScheduleRuntimeService
 
     db_path = str(tmp_path / "cyrene.sqlite3")
 

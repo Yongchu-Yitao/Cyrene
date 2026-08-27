@@ -9,6 +9,7 @@ from agent.plugin import PluginContext
 from agent.plugin.native_runtime import (
     guard_shell_command_workspace_write,
     json_result,
+    plugin_localized,
 )
 
 from .definitions import get_native_tool_def
@@ -82,7 +83,15 @@ async def _tool_send_shell(
     command = str(args.get("text", args.get("command", "")) or "")
     sensitive = bool(args.get("sensitive"))
     if not sensitive:
-        guard_shell_command_workspace_write(command, context)
+        try:
+            guard_shell_command_workspace_write(command, context)
+        except ValueError:
+            raise ValueError(plugin_localized(
+                context,
+                "The command was blocked because its workspace write targets "
+                "could not be verified safely.",
+                "该命令已被阻止，因为无法安全确认其写入目标位于工作区内。",
+            )) from None
     terminals = terminal_service(context)
     terminal = await terminals.resolve(
         context,
@@ -93,13 +102,22 @@ async def _tool_send_shell(
         before = await terminals.screen(str(terminal.get("id") or ""))
         if not _screen_accepts_sensitive_input(str(before.get("screenText") or "")):
             raise ValueError(
-                "sensitive=true is allowed only while the terminal visibly requests "
-                "a password, passphrase, passcode, PIN, or verification code."
+                plugin_localized(
+                    context,
+                    "sensitive=true is allowed only while the terminal visibly requests "
+                    "a password, passphrase, passcode, PIN, or verification code.",
+                    "仅当终端明确要求输入密码、口令、PIN 或验证码时，"
+                    "才允许使用 sensitive=true。",
+                )
             )
     key = str(args.get("key") or "").strip().lower()
     data = command + _terminal_key_sequence(key)
     if not data:
-        raise ValueError("text or key is required")
+        raise ValueError(plugin_localized(
+            context,
+            "text or key is required.",
+            "必须提供 text 或 key。",
+        ))
     await terminals.animate(context, str(terminal.get("id") or ""), "input")
     snap = await terminals.input(str(terminal.get("id") or ""), data)
     await asyncio.sleep(0.12)

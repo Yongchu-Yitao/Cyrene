@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import logging
 import threading
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, WebSocketException
+from starlette.requests import HTTPConnection
 
 from .activation import PluginActivationState, set_active_plugin_activation_state
 from .customization import (
@@ -17,11 +19,22 @@ from .customization import (
 )
 from .model_gateway import PluginModelGateway, ensure_model_router
 from .native_tools import BuiltinPluginSeedResult, seed_builtin_plugin_directory
-from .plugin import PluginApplicationContext, PluginLifecycleHandler, PluginSearchHandler
-from .registry import PluginLoadFailure, PluginRegistry, default_plugin_impl_directory
+from .plugin import (
+    PluginApplicationContext,
+    PluginFrontendHandler,
+    PluginLifecycleHandler,
+    PluginSearchHandler,
+)
+from .registry import (
+    PluginLoadFailure,
+    PluginRegistry,
+    PluginRegistryError,
+    default_plugin_impl_directory,
+)
 from .runtime import PluginRuntime
 
 logger = logging.getLogger(__name__)
+_REQUIRED_PRODUCT_APPLICATION_PACK_IDS = frozenset({"cyrene_composer_context"})
 
 
 class PluginApplicationHost:
@@ -49,12 +62,21 @@ class PluginApplicationHost:
         self.runtime = PluginRuntime(self.registry)
         self.model_gateway = PluginModelGateway(self.registry, self.runtime)
         self.services: dict[str, Any] = {"model": self.model_gateway}
-        self.search_providers: dict[str, PluginSearchHandler] = {}
-        self.frontend_modules: list[str] = []
-        self._startup_handlers: list[PluginLifecycleHandler] = []
-        self._shutdown_handlers: list[PluginLifecycleHandler] = []
+        self._service_owners: dict[str, str] = {}
+        self._search_providers: dict[str, PluginSearchHandler] = {}
+        self._search_provider_owners: dict[str, str] = {}
+        self._frontend_modules: list[str] = []
+        self._frontend_module_owners: dict[str, str] = {}
+        self._frontend_methods: dict[str, dict[str, PluginFrontendHandler]] = {}
+        self._startup_handlers: dict[str, list[PluginLifecycleHandler]] = {}
+        self._shutdown_handlers: dict[str, list[PluginLifecycleHandler]] = {}
+        self._running_packs: set[str] = set()
         self._attached_packs: list[str] = []
+        self._attached_pack_sources: dict[str, str] = {}
+        self._attached_pack_generations: dict[str, tuple[Any, ...]] = {}
+        self._restart_required_packs: set[str] = set()
         self._setup_failures: dict[str, str] = {}
+        self._startup_failures: dict[str, str] = {}
         self._attached = False
         self._started = False
 
@@ -91,6 +113,23 @@ class PluginApplicationHost:
                 "Some Plugin application contributions failed to load: %s",
                 "; ".join(f"{item.path}: {item.error}" for item in failures),
             )
+        loaded_pack_ids = {pack.id for pack in registry.list_packs()}
+        missing_required = sorted(
+            _REQUIRED_PRODUCT_APPLICATION_PACK_IDS - loaded_pack_ids
+        )
+        if missing_required:
+            failure_by_name = {
+                item.path.name: str(item.error or "load failed")
+                for item in failures
+            }
+            details = ", ".join(
+                f"{pack_id} ({failure_by_name.get(pack_id, 'missing')})"
+                for pack_id in missing_required
+            )
+            raise RuntimeError(
+                "Required Plugin application contribution is unavailable: "
+                + details
+            )
         return cls(
             app=app,
             registry=registry,
@@ -101,14 +140,26 @@ class PluginApplicationHost:
             load_failures=failures,
         )
 
-    def reload_user_plugins(
+    async def reload_user_plugins(
         self,
     ) -> tuple[BuiltinPluginSeedResult, tuple[PluginLoadFailure, ...]]:
-        """Refresh canonical defaults and every user-owned contribution."""
+        """Refresh contributions and immediately reconcile process lifecycle."""
 
-        seeded = seed_builtin_plugin_directory(self.plugin_directory)
-        failures = self.registry.refresh_directory(self.plugin_directory)
-        self.load_failures = tuple(failures)
+        seed_error: Exception | None = None
+        seeded: BuiltinPluginSeedResult | None = None
+        try:
+            seeded = seed_builtin_plugin_directory(self.plugin_directory)
+        except Exception as exc:
+            seed_error = exc
+        try:
+            failures = self.registry.refresh_directory(self.plugin_directory)
+            self.load_failures = tuple(failures)
+            self._reconcile_attachment_generations()
+        finally:
+            await self.reconcile_activation()
+        if seed_error is not None:
+            raise seed_error
+        assert seeded is not None
         return seeded, self.load_failures
 
     @property
@@ -119,6 +170,250 @@ class PluginApplicationHost:
     def setup_failures(self) -> dict[str, str]:
         return dict(self._setup_failures)
 
+    @property
+    def startup_failures(self) -> dict[str, str]:
+        return dict(self._startup_failures)
+
+    @property
+    def restart_required_packs(self) -> tuple[str, ...]:
+        return tuple(sorted(self._restart_required_packs))
+
+    @property
+    def started(self) -> bool:
+        return self._started
+
+    @staticmethod
+    def _source_generation(source: str) -> tuple[Any, ...]:
+        """Return a stable content generation for one application source."""
+
+        if source == "core" or source.startswith("mcp:"):
+            return ("logical", source)
+        path = Path(source)
+        try:
+            files = (
+                tuple(sorted(path.rglob("*.py")))
+                if path.is_dir()
+                else (path,)
+                if path.is_file()
+                else ()
+            )
+            digest = hashlib.sha256()
+            for item in files:
+                relative = item.relative_to(path) if path.is_dir() else Path(item.name)
+                digest.update(str(relative).encode("utf-8"))
+                digest.update(b"\0")
+                digest.update(item.read_bytes())
+                digest.update(b"\0")
+            return ("files", len(files), digest.hexdigest())
+        except OSError as exc:
+            return ("unreadable", source, type(exc).__name__)
+
+    def _reconcile_attachment_generations(self) -> None:
+        """Quarantine application closures that no longer match registry code."""
+
+        packs = {pack.id: pack for pack in self.registry.list_packs()}
+        for pack_id in self._attached_packs:
+            pack = packs.get(pack_id)
+            if pack is None:
+                self._restart_required_packs.add(pack_id)
+                continue
+            try:
+                source = self.registry.pack_source(pack_id)
+            except PluginRegistryError:
+                self._restart_required_packs.add(pack_id)
+                continue
+            if (
+                source != self._attached_pack_sources.get(pack_id)
+                or self._source_generation(source)
+                != self._attached_pack_generations.get(pack_id)
+            ):
+                self._restart_required_packs.add(pack_id)
+        for pack in packs.values():
+            if (
+                pack.application_setup is not None
+                and pack.id not in self._attached_packs
+                and self._pack_enabled(pack.id)
+            ):
+                self._restart_required_packs.add(pack.id)
+
+    def _pack_enabled(self, pack_id: str) -> bool:
+        """Treat removed or failed-to-reload packs as unavailable."""
+
+        try:
+            return self.registry.pack_enabled(pack_id)
+        except (KeyError, PluginRegistryError):
+            return False
+
+    def _pack_available(self, pack_id: str) -> bool:
+        if not self._pack_enabled(pack_id) or self.pack_restart_required(pack_id):
+            return False
+        return not self._started or pack_id in self._running_packs
+
+    def pack_running(self, pack_id: str) -> bool:
+        return str(pack_id) in self._running_packs
+
+    def pack_restart_required(self, pack_id: str) -> bool:
+        return str(pack_id) in self._restart_required_packs
+
+    def pack_operational(self, pack_id: str) -> bool:
+        """Return whether a pack may currently serve process/background work."""
+
+        normalized = str(pack_id)
+        if not self._pack_enabled(normalized) or self.pack_restart_required(normalized):
+            return False
+        if not self._started:
+            return False
+        if normalized in self._attached_packs:
+            return normalized in self._running_packs
+        pack = next(
+            (item for item in self.registry.list_packs() if item.id == normalized),
+            None,
+        )
+        return pack is not None and pack.application_setup is None
+
+    @property
+    def frontend_modules(self) -> list[str]:
+        """Return only Workbench surfaces whose owning pack is enabled."""
+
+        return [
+            module
+            for module in self._frontend_modules
+            if self._pack_available(self._frontend_module_owners[module])
+        ]
+
+    def frontend_contributions(self) -> dict[str, list[dict[str, Any]]]:
+        """Return enabled sandboxed views and their Workbench entry points."""
+
+        views: list[dict[str, Any]] = []
+        project_tools: list[dict[str, Any]] = []
+        for pack in self.registry.list_packs():
+            if not self.pack_operational(pack.id):
+                continue
+            view_ids = {str(item.get("id") or "") for item in pack.frontend_views}
+            for raw in pack.frontend_views:
+                item = dict(raw)
+                item["pack_id"] = pack.id
+                views.append(item)
+            for raw in pack.project_tools:
+                item = dict(raw)
+                if str(item.get("view") or "") not in view_ids:
+                    continue
+                item["pack_id"] = pack.id
+                project_tools.append(item)
+        return {"views": views, "project_tools": project_tools}
+
+    def frontend_asset_path(self, pack_id: str, asset_path: str) -> Path:
+        """Resolve one enabled view asset without exposing the pack's Python source."""
+
+        normalized_pack = str(pack_id or "").strip()
+        if not self.pack_operational(normalized_pack):
+            raise PluginRegistryError(
+                f"Plugin pack is unavailable: {normalized_pack}"
+            )
+        pack = next(
+            (item for item in self.registry.list_packs() if item.id == normalized_pack),
+            None,
+        )
+        if pack is None:
+            raise PluginRegistryError(f"Plugin pack is not registered: {normalized_pack}")
+        source = Path(self.registry.pack_source(normalized_pack)).resolve()
+        if not source.is_dir():
+            raise PluginRegistryError("Plugin frontend views require a pack directory")
+        relative = Path(str(asset_path or "").replace("\\", "/"))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise PluginRegistryError("Plugin frontend asset path is invalid")
+        target = (source / relative).resolve()
+        allowed = False
+        for view in pack.frontend_views:
+            view_root = (source / Path(str(view.get("entry") or "")).parent).resolve()
+            if target == view_root or view_root in target.parents:
+                allowed = True
+                break
+        if not allowed or not target.is_file():
+            raise PluginRegistryError("Plugin frontend asset was not found")
+        return target
+
+    async def call_frontend_method(
+        self,
+        pack_id: str,
+        method: str,
+        arguments: Any,
+        *,
+        project_id: str = "",
+    ) -> Any:
+        """Invoke a JSON RPC method registered by one operational Plugin pack."""
+
+        normalized_pack = str(pack_id or "").strip()
+        normalized_method = str(method or "").strip()
+        if not self.pack_operational(normalized_pack):
+            raise PluginRegistryError(
+                f"Plugin pack is unavailable: {normalized_pack}"
+            )
+        handler = self._frontend_methods.get(normalized_pack, {}).get(normalized_method)
+        if handler is None:
+            raise PluginRegistryError(
+                f"Plugin frontend method is not registered: {normalized_method}"
+            )
+        result = handler(
+            arguments,
+            {"pack_id": normalized_pack, "project_id": str(project_id or "")},
+        )
+        return await result if inspect.isawaitable(result) else result
+
+    @property
+    def search_providers(self) -> dict[str, PluginSearchHandler]:
+        """Return only search providers whose owning pack is enabled."""
+
+        return {
+            name: provider
+            for name, provider in self._search_providers.items()
+            if self._pack_available(self._search_provider_owners[name])
+        }
+
+    @property
+    def active_services(self) -> dict[str, Any]:
+        """Return core services plus services whose owning pack is enabled."""
+
+        return {
+            name: service
+            for name, service in self.services.items()
+            if (
+                (owner := self._service_owners.get(name)) is None
+                or self._pack_available(owner)
+            )
+        }
+
+    def _pack_guard(self, pack_id: str):
+        async def unavailable(connection: HTTPConnection, status_code: int, detail: str) -> None:
+            if connection.scope.get("type") == "websocket":
+                raise WebSocketException(code=4404, reason=detail)
+            raise HTTPException(status_code=status_code, detail=detail)
+
+        async def require_enabled(connection: HTTPConnection) -> None:
+            if not self._pack_enabled(pack_id):
+                await unavailable(
+                    connection,
+                    404,
+                    f"Plugin pack is unavailable: {pack_id}",
+                )
+            if self.pack_restart_required(pack_id):
+                await unavailable(
+                    connection,
+                    503,
+                    f"Plugin pack changed and requires an application restart: {pack_id}",
+                )
+            if self._started and pack_id not in self._running_packs:
+                await unavailable(
+                    connection,
+                    503,
+                    (
+                        self._startup_failures.get(pack_id)
+                        or f"Plugin pack did not start: {pack_id}"
+                    ),
+                )
+
+        return require_enabled
+
     def attach(self, parent_router: APIRouter) -> None:
         """Run each pack setup against an isolated router and commit atomically."""
 
@@ -126,10 +421,15 @@ class PluginApplicationHost:
             raise RuntimeError("Plugin application host is already attached")
         self._attached = True
         for pack in self.registry.list_packs():
-            if (
-                pack.application_setup is None
-                or not self.registry.pack_enabled(pack.id)
-            ):
+            if pack.application_setup is None:
+                continue
+            # Optional packs that are disabled at process composition time must
+            # remain completely inert.  Running application_setup here would
+            # still construct stores, managers, route closures, and other
+            # process state even though guards later hide the contribution.
+            # Enabling one of these packs is therefore an explicit restart
+            # boundary; the next composition attaches its application surface.
+            if not self._pack_enabled(pack.id):
                 continue
             child_router = APIRouter()
             inherited_services = dict(self.services)
@@ -138,6 +438,7 @@ class PluginApplicationHost:
             search_providers: dict[str, PluginSearchHandler] = {}
             startup_handlers: list[PluginLifecycleHandler] = []
             shutdown_handlers: list[PluginLifecycleHandler] = []
+            frontend_methods: dict[str, PluginFrontendHandler] = {}
             context = PluginApplicationContext(
                 app=self.app,
                 router=child_router,
@@ -150,11 +451,13 @@ class PluginApplicationHost:
                 search_providers=search_providers,
                 startup_handlers=startup_handlers,
                 shutdown_handlers=shutdown_handlers,
+                frontend_methods=frontend_methods,
+                registry=self.registry,
             )
             try:
                 pack.application_setup(context)
                 service_collisions = {name for name, value in services.items() if name in inherited_services and value is not inherited_services[name]}
-                search_collisions = set(search_providers) & set(self.search_providers)
+                search_collisions = set(search_providers) & set(self._search_providers)
                 if service_collisions:
                     raise ValueError("application service collision: " + ", ".join(sorted(service_collisions)))
                 if search_collisions:
@@ -162,43 +465,141 @@ class PluginApplicationHost:
             except Exception as exc:
                 self._setup_failures[pack.id] = str(exc)
                 logger.exception("Failed to attach Plugin application pack %s", pack.id)
+                if bool(pack.metadata.get("required")):
+                    raise RuntimeError(
+                        f"Required Plugin application pack failed to attach: {pack.id}"
+                    ) from exc
                 continue
-            parent_router.include_router(child_router)
-            self.services.update({name: value for name, value in services.items() if name not in inherited_services})
-            self.search_providers.update(search_providers)
+            parent_router.include_router(
+                child_router,
+                dependencies=[Depends(self._pack_guard(pack.id))],
+            )
+            provided_services = {
+                name: value
+                for name, value in services.items()
+                if name not in inherited_services
+            }
+            self.services.update(provided_services)
+            self._service_owners.update(
+                {name: pack.id for name in provided_services}
+            )
+            self._search_providers.update(search_providers)
+            self._search_provider_owners.update(
+                {name: pack.id for name in search_providers}
+            )
             for module in frontend_modules:
-                if module not in self.frontend_modules:
-                    self.frontend_modules.append(module)
-            self._startup_handlers.extend(startup_handlers)
-            self._shutdown_handlers.extend(shutdown_handlers)
+                if module not in self._frontend_modules:
+                    self._frontend_modules.append(module)
+                    self._frontend_module_owners[module] = pack.id
+            self._startup_handlers[pack.id] = list(startup_handlers)
+            self._shutdown_handlers[pack.id] = list(shutdown_handlers)
+            self._frontend_methods[pack.id] = dict(frontend_methods)
             self._attached_packs.append(pack.id)
+            source = self.registry.pack_source(pack.id)
+            self._attached_pack_sources[pack.id] = source
+            self._attached_pack_generations[pack.id] = self._source_generation(source)
+
+    @staticmethod
+    async def _call_lifecycle(handler: PluginLifecycleHandler) -> None:
+        result = handler()
+        if inspect.isawaitable(result):
+            await result
+
+    async def _start_pack(self, pack_id: str) -> None:
+        if pack_id in self._running_packs:
+            return
+        self._startup_failures.pop(pack_id, None)
+        try:
+            for handler in self._startup_handlers.get(pack_id, ()):
+                await self._call_lifecycle(handler)
+        except Exception as exc:
+            self._startup_failures[pack_id] = str(exc)
+            logger.exception(
+                "Plugin application startup failed for pack %s",
+                pack_id,
+            )
+            for handler in reversed(self._shutdown_handlers.get(pack_id, ())):
+                try:
+                    await self._call_lifecycle(handler)
+                except Exception:
+                    logger.exception(
+                        "Plugin application rollback failed for pack %s",
+                        pack_id,
+                    )
+            return
+        self._running_packs.add(pack_id)
+
+    async def _stop_pack(self, pack_id: str) -> None:
+        if pack_id not in self._running_packs:
+            return
+        # Make the pack non-operational before touching its services so clocks
+        # cannot start or continue work while shutdown handlers are running.
+        self._running_packs.discard(pack_id)
+        from .background import reconcile_background_plugin_hosts
+
+        await reconcile_background_plugin_hosts(self)
+        try:
+            for handler in reversed(self._shutdown_handlers.get(pack_id, ())):
+                try:
+                    await self._call_lifecycle(handler)
+                except Exception:
+                    logger.exception(
+                        "Plugin application shutdown failed for pack %s",
+                        pack_id,
+                    )
+        finally:
+            self._running_packs.discard(pack_id)
+
+    async def reconcile_activation(self) -> None:
+        """Apply pack switches to process lifecycle contributions immediately."""
+
+        for pack in self.registry.list_packs():
+            if (
+                pack.application_setup is not None
+                and pack.id not in self._attached_packs
+                and self._pack_enabled(pack.id)
+            ):
+                self._restart_required_packs.add(pack.id)
+
+        if self._started:
+            for pack_id in reversed(self._attached_packs):
+                if (
+                    not self._pack_enabled(pack_id)
+                    or self.pack_restart_required(pack_id)
+                ):
+                    await self._stop_pack(pack_id)
+            for pack_id in self._attached_packs:
+                if (
+                    self._pack_enabled(pack_id)
+                    and not self.pack_restart_required(pack_id)
+                ):
+                    await self._start_pack(pack_id)
+        from .background import reconcile_background_plugin_hosts
+
+        await reconcile_background_plugin_hosts(self)
 
     async def startup(self) -> None:
         if self._started:
             return
         self._started = True
-        for handler in self._startup_handlers:
-            try:
-                result = handler()
-                if inspect.isawaitable(result):
-                    await result
-            except Exception:
-                logger.exception("Plugin application startup handler failed")
+        await self.reconcile_activation()
 
     async def shutdown(self) -> None:
         if not self._started:
             return
+        for pack_id in reversed(self._attached_packs):
+            await self._stop_pack(pack_id)
         self._started = False
-        for handler in reversed(self._shutdown_handlers):
-            try:
-                result = handler()
-                if inspect.isawaitable(result):
-                    await result
-            except Exception:
-                logger.exception("Plugin application shutdown handler failed")
+        from .background import reconcile_background_plugin_hosts
+
+        await reconcile_background_plugin_hosts(self)
 
     def service(self, name: str) -> Any | None:
-        return self.services.get(str(name or "").strip())
+        normalized = str(name or "").strip()
+        owner = self._service_owners.get(normalized)
+        if owner is not None and not self._pack_available(owner):
+            return None
+        return self.services.get(normalized)
 
 
 _ACTIVE_LOCK = threading.RLock()

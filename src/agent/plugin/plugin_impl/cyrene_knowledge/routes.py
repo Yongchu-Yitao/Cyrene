@@ -6,6 +6,7 @@ from typing import Any, Awaitable
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from cyrene.localization import localized
 
 from .service import (
     KnowledgeService,
@@ -23,19 +24,50 @@ def _bool(value: str | bool | None) -> bool | None:
     return str(value).casefold() in {"1", "true", "yes", "on"}
 
 
+def _json_error(code: str, english: str, chinese: str, status_code: int) -> JSONResponse:
+    return JSONResponse(
+        {"error": localized(english, chinese), "code": code},
+        status_code=status_code,
+    )
+
+
+def _not_found() -> JSONResponse:
+    return _json_error(
+        "knowledge_item_not_found",
+        "The knowledge item was not found.",
+        "未找到知识库条目。",
+        404,
+    )
+
+
 async def _call(awaitable: Awaitable[Any]) -> Any:
     try:
         return await awaitable
     except WorkspaceRequiredError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400,
+            detail=localized("A workspace is required.", "必须指定工作区。"),
+        ) from exc
     except WorkspaceNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=404,
+            detail=localized("The workspace was not found.", "未找到工作区。"),
+        ) from exc
     except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({
+            "error": localized("The knowledge request is invalid.", "知识库请求无效。"),
+            "code": "invalid_knowledge_request",
+        }, status_code=400)
     except LookupError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=404)
+        return JSONResponse({
+            "error": localized("The knowledge item was not found.", "未找到知识库条目。"),
+            "code": "knowledge_item_not_found",
+        }, status_code=404)
     except PermissionError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=403)
+        return JSONResponse({
+            "error": localized("Access to the knowledge item was denied.", "无权访问该知识库条目。"),
+            "code": "knowledge_access_denied",
+        }, status_code=403)
 
 
 def register_routes(parent: APIRouter, service: KnowledgeService) -> None:
@@ -43,9 +75,15 @@ def register_routes(parent: APIRouter, service: KnowledgeService) -> None:
         try:
             service.resolve_workspace(workspace)
         except WorkspaceRequiredError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=400,
+                detail=localized("A workspace is required.", "必须指定工作区。"),
+            ) from exc
         except WorkspaceNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=404,
+                detail=localized("The workspace was not found.", "未找到工作区。"),
+            ) from exc
 
     router = APIRouter(dependencies=[Depends(require_workspace)])
 
@@ -91,26 +129,41 @@ def register_routes(parent: APIRouter, service: KnowledgeService) -> None:
     async def delete_items(body: dict[str, Any], workspace: str = ""):
         raw_ids = body.get("item_ids")
         if not isinstance(raw_ids, list):
-            return JSONResponse({"error": "item_ids must be a list"}, status_code=400)
+            return _json_error(
+                "invalid_item_ids",
+                "Item IDs must be a list.",
+                "条目 ID 必须是列表。",
+                400,
+            )
         item_ids = [value for value in dict.fromkeys(str(value or "").strip() for value in raw_ids) if value]
         if not item_ids:
-            return JSONResponse({"error": "item_ids is required"}, status_code=400)
+            return _json_error(
+                "item_ids_required",
+                "At least one item ID is required.",
+                "至少需要一个条目 ID。",
+                400,
+            )
         if len(item_ids) > 500:
-            return JSONResponse({"error": "at most 500 items can be deleted at once"}, status_code=400)
+            return _json_error(
+                "too_many_item_ids",
+                "At most 500 items can be deleted at once.",
+                "一次最多可以删除 500 个条目。",
+                400,
+            )
         deleted = await service.delete_items(workspace, item_ids, permanent=bool(_bool(body.get("permanent"))))
         return {"ok": True, "deleted": deleted}
 
     @router.get("/api/workbench/library/items/{item_id}")
     async def get_item(item_id: str, workspace: str = ""):
         value = await service.get_item(workspace, item_id)
-        return value or JSONResponse({"error": "not found"}, status_code=404)
+        return value or _not_found()
 
     @router.patch("/api/workbench/library/items/{item_id}")
     async def update_item(item_id: str, body: dict[str, Any], workspace: str = ""):
         value = await _call(service.update_item(workspace, item_id, body))
         if isinstance(value, JSONResponse):
             return value
-        return value or JSONResponse({"error": "not found"}, status_code=404)
+        return value or _not_found()
 
     @router.delete("/api/workbench/library/items/{item_id}")
     async def delete_item(item_id: str, workspace: str = "", permanent: bool = False):
@@ -119,7 +172,7 @@ def register_routes(parent: APIRouter, service: KnowledgeService) -> None:
     @router.post("/api/workbench/library/items/{item_id}/restore")
     async def restore_item(item_id: str, workspace: str = ""):
         value = await service.restore_item(workspace, item_id)
-        return value or JSONResponse({"error": "not found"}, status_code=404)
+        return value or _not_found()
 
     @router.post("/api/workbench/library/read")
     async def mark_read(body: dict[str, Any], workspace: str = ""):
@@ -150,7 +203,7 @@ def register_routes(parent: APIRouter, service: KnowledgeService) -> None:
         value = await _call(service.update_collection(workspace, collection_id, body))
         if isinstance(value, JSONResponse):
             return value
-        return value or JSONResponse({"error": "not found"}, status_code=404)
+        return value or _not_found()
 
     @router.delete("/api/workbench/library/collections/{collection_id}")
     async def delete_collection(collection_id: str, workspace: str = ""):
@@ -159,12 +212,12 @@ def register_routes(parent: APIRouter, service: KnowledgeService) -> None:
     @router.post("/api/workbench/library/items/{item_id}/notes")
     async def create_note(item_id: str, body: dict[str, Any], workspace: str = ""):
         value = await service.create_note(workspace, item_id, body)
-        return value or JSONResponse({"error": "item not found"}, status_code=404)
+        return value or _not_found()
 
     @router.patch("/api/workbench/library/notes/{note_id}")
     async def update_note(note_id: str, body: dict[str, Any], workspace: str = ""):
         value = await service.update_note(workspace, note_id, body)
-        return value or JSONResponse({"error": "not found"}, status_code=404)
+        return value or _not_found()
 
     @router.delete("/api/workbench/library/notes/{note_id}")
     async def delete_note(note_id: str, workspace: str = ""):
@@ -189,7 +242,12 @@ def register_routes(parent: APIRouter, service: KnowledgeService) -> None:
         files: list[UploadFile] = File(...),
     ):
         if not files:
-            return JSONResponse({"error": "no files uploaded"}, status_code=400)
+            return _json_error(
+                "files_required",
+                "Upload at least one file.",
+                "请至少上传一个文件。",
+                400,
+            )
         value = await _call(service.upload(workspace, files, item_id))
         return value if isinstance(value, JSONResponse) else {"items": value}
 
@@ -200,7 +258,7 @@ def register_routes(parent: APIRouter, service: KnowledgeService) -> None:
     @router.get("/api/workbench/library/items/{item_id}/citation")
     async def citation(item_id: str, workspace: str = "", style: str = "ieee"):
         value = await service.citation(workspace, item_id, style)
-        return value or JSONResponse({"error": "not found"}, status_code=404)
+        return value or _not_found()
 
     @router.get("/api/workbench/library/items/{item_id}/raw")
     async def raw(item_id: str, workspace: str = ""):
@@ -208,7 +266,7 @@ def register_routes(parent: APIRouter, service: KnowledgeService) -> None:
         if isinstance(value, JSONResponse):
             return value
         if value is None:
-            return JSONResponse({"error": "not found"}, status_code=404)
+            return _not_found()
         return FileResponse(
             str(value["path"]),
             media_type=str(value["media_type"]),
@@ -226,7 +284,7 @@ def register_routes(parent: APIRouter, service: KnowledgeService) -> None:
         if isinstance(value, JSONResponse):
             return value
         if value is None:
-            return JSONResponse({"error": "not found"}, status_code=404)
+            return _not_found()
         return FileResponse(
             str(value["path"]),
             media_type=str(value["media_type"]),
@@ -250,6 +308,7 @@ def register_routes(parent: APIRouter, service: KnowledgeService) -> None:
             return {
                 "available": False,
                 "error": str(exc),
+                "code": "zotero_unavailable",
                 "sync_sources": [],
             }
 
@@ -259,14 +318,20 @@ def register_routes(parent: APIRouter, service: KnowledgeService) -> None:
         try:
             return await service.zotero_collections(library_id, library_type)
         except ZoteroError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=503)
+            return JSONResponse({
+                "error": str(exc),
+                "code": "zotero_unavailable",
+            }, status_code=503)
 
     @router.post("/api/workbench/library/zotero/sync")
     async def zotero_sync(body: dict[str, Any], workspace: str = ""):
         try:
             return await service.zotero_sync(workspace, body)
         except ZoteroError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=503)
+            return JSONResponse({
+                "error": str(exc),
+                "code": "zotero_unavailable",
+            }, status_code=503)
 
     parent.include_router(router)
 

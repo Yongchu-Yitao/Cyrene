@@ -16,6 +16,10 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     return workbenchServices.i18n().t(key, params || null, fallback);
   }
 
+  function formatNumber(value, options) {
+    return workbenchServices.i18n().formatNumber(value, options);
+  }
+
   var PAGE_SIZE = 120;
   // Auto-sync is an app-session convenience, not a polling loop. Remember the
   // projects already checked so navigation and hidden-surface remounts cannot
@@ -72,8 +76,12 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     if (!value) return "—";
     var d = new Date(value);
     if (isNaN(d.getTime())) return String(value).slice(0, withTime ? 16 : 10);
-    var date = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-    return withTime ? date + " " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") : date;
+    return workbenchServices.i18n().formatDate(
+      d,
+      withTime
+        ? { dateStyle: "medium", timeStyle: "short" }
+        : { dateStyle: "medium" }
+    );
   }
 
   function formatBytes(value) {
@@ -82,7 +90,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     var units = ["B", "KB", "MB", "GB"];
     var i = 0;
     while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
-    return (i ? n.toFixed(1) : n) + " " + units[i];
+    return formatNumber(n, i ? { maximumFractionDigits: 1 } : undefined) + " " + units[i];
   }
 
   function creatorName(creator) {
@@ -109,15 +117,15 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
   function itemTypeLabel(value) {
     var raw = String(value || "document");
     return L("library.itemType." + raw, {
-      document: "文档",
-      journalArticle: "期刊文章",
-      conferencePaper: "会议论文",
-      book: "图书",
-      bookSection: "图书章节",
-      thesis: "学位论文",
-      report: "报告",
-      webpage: "网页",
-    }[raw] || "文档");
+      document: "Document",
+      journalArticle: "Journal article",
+      conferencePaper: "Conference paper",
+      book: "Book",
+      bookSection: "Book section",
+      thesis: "Thesis",
+      report: "Report",
+      webpage: "Web page",
+    }[raw] || "Document");
   }
 
   function collectionName(collection) {
@@ -167,14 +175,14 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
   }
 
   var FILE_TYPE_LABELS = {
-    pdf: "PDF", document: "文档与文本", spreadsheet: "电子表格",
-    presentation: "演示文稿", image: "图片", audio: "音频",
-    video: "视频", link: "网页与链接", other: "其他文件",
+    pdf: "PDF", document: "Documents and text", spreadsheet: "Spreadsheets",
+    presentation: "Presentations", image: "Images", audio: "Audio",
+    video: "Video", link: "Web pages and links", other: "Other files",
   };
 
   function itemFileTypeLabel(item) {
     var raw = itemFileType(item);
-    return L("library.fileType." + raw, FILE_TYPE_LABELS[raw] || "文件");
+    return L("library.fileType." + raw, FILE_TYPE_LABELS[raw] || "File");
   }
 
   var LibraryFileVisual = {
@@ -363,7 +371,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       onClick: props.onClick,
       title: props.label,
     }, h("span", { className: "wb-lib-side-icon" }, props.icon), h("span", { className: "wb-lib-side-label" }, props.label),
-      props.count != null && h("span", { className: "wb-lib-side-count" }, Number(props.count || 0).toLocaleString()));
+      props.count != null && h("span", { className: "wb-lib-side-count" }, formatNumber(props.count || 0)));
   }
 
   function LibrarySidebar(props) {
@@ -602,7 +610,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
         props.tab === "info" ? h("div", { className: "wb-lib-work-cards", role: "region", tabIndex: 0, "aria-label": L("library.summaryNotesTags", "Summary, notes and tags") },
           h("section", { className: "wb-lib-work-card" }, h("h3", null, L("library.abstract", "Abstract")), h("p", null, item.abstract || L("library.noAbstract", "No abstract available"))),
           h("section", { className: "wb-lib-work-card" }, h("div", { className: "wb-lib-work-head" }, h("h3", null, L("library.notes", "Notes")), h("button", { type: "button", onClick: function () { props.onTab("notes"); } }, icon("plus", 14), " ", L("library.addNote", "Add note"))),
-            notes.length ? h(React.Fragment, null, h("p", null, notes[0].content || notes[0].text || ""), h("small", null, notes[0].author || L("common.me", "Me"), " · ", formatDate(notes[0].updated_at || notes[0].created_at))) : h("p", { className: "wb-lib-muted" }, L("library.noNotes", "No notes yet."))),
+            notes.length ? h(React.Fragment, null, h("p", null, notes[0].content || notes[0].text || ""), h("small", null, notes[0].author || L("library.me", "Me"), " · ", formatDate(notes[0].updated_at || notes[0].created_at))) : h("p", { className: "wb-lib-muted" }, L("library.noNotes", "No notes yet."))),
           h("section", { className: "wb-lib-work-card" }, h("h3", null, L("library.tags", "Tags")), h("div", { className: "wb-lib-tag-list" }, itemTags(item).map(function (tag) { return h("span", { key: tag }, tag); }), h("button", { type: "button", onClick: function () { props.onTab("tags"); } }, icon("plus", 14), " ", L("library.addTag", "Add tag"))))) :
           h("div", { className: "wb-lib-work-pane-body" }, props.activeContent)));
   }
@@ -615,10 +623,10 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       var content = value.trim();
       if (!content || busy) return;
       setBusy(true);
-      props.onAdd({ title: "研究笔记", content: content, author: (workbenchServices.data().state.user || {}).name || "我" }).then(function () { setValue(""); setBusy(false); }, function () { setBusy(false); });
+      props.onAdd({ title: L("library.researchNote", "Research note"), content: content, author: (workbenchServices.data().state.user || {}).name || L("library.me", "Me") }).then(function () { setValue(""); setBusy(false); }, function () { setBusy(false); });
     }
     return h("div", { className: "wb-lib-editor-layout" },
-      h("div", { className: "wb-lib-note-compose" }, h("textarea", { value: value, onChange: function (event) { setValue(event.target.value); }, placeholder: "记录这篇文献的发现、疑问或下一步…" }), h("button", { type: "button", className: "wb-lib-primary", disabled: busy || !value.trim(), onClick: submit }, busy ? h(Spinner) : icon("plus", 14), " 添加笔记")),
+      h("div", { className: "wb-lib-note-compose" }, h("textarea", { value: value, onChange: function (event) { setValue(event.target.value); }, placeholder: L("library.notePlaceholder", "Record findings, questions, or next steps for this item…") }), h("button", { type: "button", className: "wb-lib-primary", disabled: busy || !value.trim(), onClick: submit }, busy ? h(Spinner) : icon("plus", 14), " ", L("library.addNote", "Add note"))),
       h("div", { className: "wb-lib-note-list" }, notes.length ? notes.map(function (note) { return h("article", { key: note.id }, h("h4", null, note.title || L("library.note", "Note")), h("p", null, note.content || note.text || ""), h("small", null, note.author || L("library.me", "Me"), " · ", formatDate(note.updated_at || note.created_at, true))); }) : h("p", { className: "wb-lib-muted" }, L("library.noNotes", "No notes yet."))));
   }
 
@@ -633,10 +641,10 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       if (next.length !== tags.length) save(next);
       setValue("");
     }
-    return h("div", { className: "wb-lib-tags-workspace" }, h("h3", null, "文献标签"), h("p", null, "标签只保存在当前项目的文献库中。"),
-      h("div", { className: "wb-lib-tag-editor" }, tags.map(function (tag) { return h("span", { key: tag }, tag, h("button", { type: "button", onClick: function () { save(tags.filter(function (v) { return v !== tag; })); }, title: "移除 " + tag }, icon("close", 12))); }),
-        h("input", { value: value, onChange: function (event) { setValue(event.target.value); }, onKeyDown: function (event) { if (event.key === "Enter") { event.preventDefault(); add(); } }, placeholder: "输入标签后回车" })),
-      h("button", { type: "button", className: "wb-lib-secondary", disabled: !value.trim(), onClick: add }, icon("plus", 14), " 添加"));
+    return h("div", { className: "wb-lib-tags-workspace" }, h("h3", null, L("library.itemTags", "Item tags")), h("p", null, L("library.itemTagsHint", "Tags are stored only in this project's knowledge base.")),
+      h("div", { className: "wb-lib-tag-editor" }, tags.map(function (tag) { return h("span", { key: tag }, tag, h("button", { type: "button", onClick: function () { save(tags.filter(function (v) { return v !== tag; })); }, title: L("library.removeTag", "Remove {tag}", { tag: tag }) }, icon("close", 12))); }),
+        h("input", { value: value, onChange: function (event) { setValue(event.target.value); }, onKeyDown: function (event) { if (event.key === "Enter") { event.preventDefault(); add(); } }, placeholder: L("library.tagInputPlaceholder", "Enter a tag and press Enter") })),
+      h("button", { type: "button", className: "wb-lib-secondary", disabled: !value.trim(), onClick: add }, icon("plus", 14), " ", L("common.add", "Add")));
   }
 
   function RelationsWorkspace(props) {
@@ -649,8 +657,8 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
   function AttachmentsWorkspace(props) {
     var attachments = Array.isArray(props.item.attachments) ? props.item.attachments : [];
     return h("div", { className: "wb-lib-attachments" }, attachments.length ? attachments.map(function (attachment, index) {
-      return h("a", { key: attachment.id || index, href: attachment.raw_url || props.rawUrl, target: "_blank", rel: "noreferrer" }, h(PdfMark, { item: Object.assign({}, props.item, { attachments: [attachment] }) }), h("div", null, h("b", null, attachment.filename || attachment.name || "附件"), h("small", null, formatBytes(attachment.size), attachment.page_count ? " · " + attachment.page_count + " 页" : "")), icon("eye", 16));
-    }) : h(StatePanel, { title: "暂无附件", body: "可以从工具栏导入 PDF，或从 Zotero 同步附件。" }));
+      return h("a", { key: attachment.id || index, href: attachment.raw_url || props.rawUrl, target: "_blank", rel: "noreferrer" }, h(PdfMark, { item: Object.assign({}, props.item, { attachments: [attachment] }) }), h("div", null, h("b", null, attachment.filename || attachment.name || L("library.attachment", "Attachment")), h("small", null, formatBytes(attachment.size), attachment.page_count ? " · " + L("library.pageCount", "Pages: {count}", { count: attachment.page_count }) : "")), icon("eye", 16));
+    }) : h(StatePanel, { title: L("library.noAttachment", "No attachment"), body: L("library.noAttachmentHint", "Import a PDF from the toolbar or sync attachments from Zotero.") }));
   }
 
   function CitationCopyControl(props) {
@@ -666,8 +674,8 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
 
   function CitationWorkspace(props) {
     return h("div", { className: "wb-lib-citation-workspace" }, h("div", { className: "wb-lib-citation-toolbar" }, h("label", null, L("library.citationStyle", "Citation style"), h("select", { value: props.style, onChange: function (event) { props.onStyle(event.target.value); } }, ["ieee", "apa", "mla", "chicago-author-date", "gb-t-7714-2015-numeric"].map(function (style) { return h("option", { key: style, value: style }, style.toUpperCase()); }))), h(CitationCopyControl, { citation: props.citation, bibtex: props.bibtex, onCopy: props.onCopy })),
-      props.loading ? h(StatePanel, { loading: true, title: "正在生成引用…" }) : props.error ? h(StatePanel, { kind: "error", title: "引用生成失败", body: props.error, action: props.onRetry, actionLabel: "重试" }) : h("blockquote", null, props.citation || "暂无可用引用。"),
-      props.citekey && h("div", { className: "wb-lib-citekey" }, h("span", null, "Citation key"), h("code", null, props.citekey)));
+      props.loading ? h(StatePanel, { loading: true, title: L("library.citationGenerating", "Generating citation…") }) : props.error ? h(StatePanel, { kind: "error", title: L("library.citationFailed", "Citation generation failed"), body: props.error, action: props.onRetry, actionLabel: L("common.retry", "Retry") }) : h("blockquote", null, props.citation || L("library.citationUnavailable", "No citation is available.")),
+      props.citekey && h("div", { className: "wb-lib-citekey" }, h("span", null, L("library.citationKey", "Citation key")), h("code", null, props.citekey)));
   }
 
   function ItemWorkspace(props) {
@@ -680,11 +688,12 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       }
     });
     var panelHeight = heightState[0]; var setPanelHeight = heightState[1];
+    var detailHeightLabel = L("library.detailPanelHeight", "Knowledge detail panel height");
     var resizeRef = useRef(null);
     var resizeHandleRef = useRef(null);
     var tabs = [
-      { id: "info", label: L("library.info", "信息") }, { id: "notes", label: L("library.notes", "笔记") }, { id: "tags", label: L("library.tags", "标签") },
-      { id: "relations", label: L("library.relations", "关联") }, { id: "attachments", label: L("library.attachments", "附件") }, { id: "citation", label: L("library.citation", "引用") },
+      { id: "info", label: L("library.info", "Information") }, { id: "notes", label: L("library.notes", "Notes") }, { id: "tags", label: L("library.tags", "Tags") },
+      { id: "relations", label: L("library.relations", "Relations") }, { id: "attachments", label: L("library.attachments", "Attachments") }, { id: "citation", label: L("library.citation", "Citation") },
     ];
 
     function heightBounds(handle) {
@@ -761,7 +770,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
           var handle = resizeHandleRef.current;
           return handle && handle.isConnected ? {
             role: "separator",
-            name: "文献详情面板高度",
+            name: detailHeightLabel,
             value_summary: String(Math.round(handle.parentElement.getBoundingClientRect().height)),
             state: { orientation: "horizontal", automatic: panelHeight == null },
           } : null;
@@ -773,7 +782,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
         ],
         handlers: { adjust: setSemanticHeight, set_value: setSemanticHeight, reset_size: resetHeight },
       });
-    }, [panelHeight]);
+    }, [panelHeight, detailHeightLabel]);
 
     return h("section", {
       className: "wb-lib-item-workspace" + (panelHeight ? " is-resized" : ""),
@@ -784,8 +793,8 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
         className: "wb-lib-work-resizer",
         role: "separator",
         tabIndex: 0,
-        title: "拖动调整详情面板高度；双击恢复自动高度",
-        "aria-label": "调整详情面板高度",
+        title: L("library.detailPanelResizeHint", "Drag to resize the detail panel; double-click to restore automatic height"),
+        "aria-label": L("library.detailPanelResize", "Resize the detail panel"),
         "aria-orientation": "horizontal",
         "aria-valuemin": 170,
         "aria-valuenow": panelHeight || undefined,
@@ -796,13 +805,13 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
         onKeyDown: resizeWithKeyboard,
         onDoubleClick: resetHeight,
       }, icon("menu", 15)),
-      h("div", { className: "wb-lib-work-body info" }, props.loading ? h(StatePanel, { loading: true, title: "正在加载文献详情…" }) : h(InfoWorkspace, {
+      h("div", { className: "wb-lib-work-body info" }, props.loading ? h(StatePanel, { loading: true, title: L("library.loadingDetails", "Loading knowledge details…") }) : h(InfoWorkspace, {
         item: props.item,
         rawUrl: props.rawUrl,
         onUpdate: props.onUpdate,
         onTab: props.onTab,
         tab: props.tab,
-        navigation: h("nav", { className: "wb-lib-work-tabs", "aria-label": "文献详情标签" },
+        navigation: h("nav", { className: "wb-lib-work-tabs", "aria-label": L("library.detailTabs", "Knowledge detail tabs") },
         tabs.map(function (tab) {
           return h("button", {
             key: tab.id,
@@ -811,7 +820,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
             onClick: function () { props.onTab(tab.id); },
           }, tab.label);
         }),
-        h("button", { type: "button", className: "wb-lib-work-tabs-more", title: "更多", "aria-label": "更多" }, icon("menu", 17))),
+        h("button", { type: "button", className: "wb-lib-work-tabs-more", title: L("common.more", "More"), "aria-label": L("common.more", "More") }, icon("menu", 17))),
         activeContent: props.tab === "notes" ? h(NotesWorkspace, { item: props.item, onAdd: props.onAddNote }) :
           props.tab === "tags" ? h(TagsWorkspace, { item: props.item, onUpdate: props.onUpdate }) :
             props.tab === "relations" ? h(RelationsWorkspace, { item: props.item }) :
@@ -889,27 +898,27 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     var itemTypes = ["document", "journalArticle", "conferencePaper", "book", "bookSection", "thesis", "report", "webpage"];
     if (itemTypes.indexOf(form.item_type) < 0) itemTypes.unshift(form.item_type);
     return h("form", { className: "wb-lib-right-editor", onSubmit: submit },
-      h("header", null, h("div", null, h("h3", null, "编辑文献信息"), h("p", null, "文件大小和时间由系统维护，其余文献元数据均可修改。"))),
-      h("label", null, h("span", null, "条目类型"), h("select", { value: form.item_type, onChange: function (event) { field("item_type", event.target.value); } }, itemTypes.map(function (type) { return h("option", { key: type, value: type }, itemTypeLabel(type)); }))),
-      inputField("标题", "title"),
-      h("label", null, h("span", null, "作者"), h("textarea", { value: form.authors, onChange: function (event) { field("authors", event.target.value); }, placeholder: "多个作者用分号或换行分隔" })),
-      h("label", null, h("span", null, "摘要"), h("textarea", { value: form.abstract, onChange: function (event) { field("abstract", event.target.value); }, placeholder: "来源元数据中的摘要" })),
-      inputField("出版源", "venue"),
-      inputField("出版社", "publisher"),
-      h("div", { className: "wb-lib-right-editor-grid" }, inputField("卷", "volume"), inputField("期号", "issue"), inputField("页码", "pages"), inputField("年份", "year", "number")),
+      h("header", null, h("div", null, h("h3", null, L("library.editMetadata", "Edit item information")), h("p", null, L("library.editMetadataHint", "File size and timestamps are maintained by the system; all other metadata can be edited.")))),
+      h("label", null, h("span", null, L("library.itemType", "Item type")), h("select", { value: form.item_type, onChange: function (event) { field("item_type", event.target.value); } }, itemTypes.map(function (type) { return h("option", { key: type, value: type }, itemTypeLabel(type)); }))),
+      inputField(L("library.titleField", "Title"), "title"),
+      h("label", null, h("span", null, L("library.author", "Author")), h("textarea", { value: form.authors, onChange: function (event) { field("authors", event.target.value); }, placeholder: L("library.authorsPlaceholder", "Separate multiple authors with semicolons or line breaks") })),
+      h("label", null, h("span", null, L("library.abstract", "Abstract")), h("textarea", { value: form.abstract, onChange: function (event) { field("abstract", event.target.value); }, placeholder: L("library.abstractPlaceholder", "Abstract from the source metadata") })),
+      inputField(L("library.sourceField", "Publication"), "venue"),
+      inputField(L("library.publisher", "Publisher"), "publisher"),
+      h("div", { className: "wb-lib-right-editor-grid" }, inputField(L("library.volume", "Volume"), "volume"), inputField(L("library.issue", "Issue"), "issue"), inputField(L("library.pages", "Pages"), "pages"), inputField(L("library.year", "Year"), "year", "number")),
       inputField("DOI", "doi"),
       inputField("ISBN", "isbn"),
-      inputField("语言", "language"),
+      inputField(L("library.language", "Language"), "language"),
       inputField("URL", "url", "url"),
-      inputField("出版日期", "date_text"),
-      inputField("引用键", "citekey"),
-      h("label", null, h("span", null, "阅读状态"), h("select", { value: form.reading_status, onChange: function (event) { field("reading_status", event.target.value); } },
-        h("option", { value: "unread" }, "待读"), h("option", { value: "reading" }, "阅读中"), h("option", { value: "read" }, "已读"), h("option", { value: "archived" }, "已归档"))),
-      inputField("标签", "tags"),
-      h("label", { className: "wb-lib-right-editor-check" }, h("input", { type: "checkbox", checked: form.starred, onChange: function (event) { field("starred", event.target.checked); } }), h("span", null, "标记为星标")),
+      inputField(L("library.publicationDate", "Publication date"), "date_text"),
+      inputField(L("library.citationKey", "Citation key"), "citekey"),
+      h("label", null, h("span", null, L("library.readingStatus", "Reading status")), h("select", { value: form.reading_status, onChange: function (event) { field("reading_status", event.target.value); } },
+        h("option", { value: "unread" }, L("library.status.unread", "Unread")), h("option", { value: "reading" }, L("library.status.reading", "Reading")), h("option", { value: "read" }, L("library.status.read", "Read")), h("option", { value: "archived" }, L("library.status.archived", "Archived")))),
+      inputField(L("library.tags", "Tags"), "tags"),
+      h("label", { className: "wb-lib-right-editor-check" }, h("input", { type: "checkbox", checked: form.starred, onChange: function (event) { field("starred", event.target.checked); } }), h("span", null, L("library.markStarred", "Mark as starred"))),
       h("footer", null,
-        h("button", { type: "button", className: "wb-lib-secondary", disabled: saving, onClick: props.onCancel }, "取消"),
-        h("button", { type: "submit", className: "wb-lib-primary", disabled: saving || !form.title.trim() }, saving ? h(Spinner) : null, saving ? "保存中" : "保存全部信息")));
+        h("button", { type: "button", className: "wb-lib-secondary", disabled: saving, onClick: props.onCancel }, L("common.cancel", "Cancel")),
+        h("button", { type: "submit", className: "wb-lib-primary", disabled: saving || !form.title.trim() }, saving ? h(Spinner) : null, saving ? L("common.saving", "Saving…") : L("library.saveAllInformation", "Save all information"))));
   }
 
   function CollectionMembership(props) {
@@ -927,9 +936,9 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     }
     return h("section", { className: "wb-lib-right-collections" },
       h("div", { className: "wb-lib-right-section-head" },
-        h("h3", null, "收藏夹"),
-        collections.length > 0 && h("select", { defaultValue: "", onChange: add, "aria-label": "将文献加入收藏夹" },
-          h("option", { value: "", disabled: true }, "加入收藏夹"),
+        h("h3", null, L("library.collections", "Collections")),
+        collections.length > 0 && h("select", { defaultValue: "", onChange: add, "aria-label": L("library.addToCollection", "Add item to a collection") },
+          h("option", { value: "", disabled: true }, L("library.addToCollection", "Add to collection")),
           collections.filter(function (collection) { return selected.indexOf(String(collection.id)) < 0; }).map(function (collection) {
             return h("option", { key: collection.id, value: collection.id }, collectionName(collection));
           }))),
@@ -940,11 +949,11 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
           return h("span", { key: id }, collectionName(collection), h("button", {
             type: "button",
             onClick: function () { update(selected.filter(function (value) { return value !== id; })); },
-            title: "从收藏夹移出",
-            "aria-label": "从 " + collectionName(collection) + " 移出",
+            title: L("library.removeFromCollection", "Remove from collection"),
+            "aria-label": L("library.removeFromNamedCollection", "Remove from {collection}", { collection: collectionName(collection) }),
           }, icon("close", 12)));
         }),
-        !selected.length && h("p", { className: "wb-lib-muted" }, collections.length ? "尚未加入收藏夹" : "请先在左侧新建收藏夹")));
+        !selected.length && h("p", { className: "wb-lib-muted" }, collections.length ? L("library.notInCollection", "Not in a collection yet") : L("library.createCollectionFirst", "Create a collection in the sidebar first"))));
   }
 
   function RightPanel(props) {
@@ -980,17 +989,17 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
         if (tabId === "content" && props.onContentViewed) props.onContentViewed();
       },
     },
-      h("header", { className: "wb-lib-right-head" }, h(PdfMark, { item: item }), h("b", { title: itemTitle(item) }, itemTitle(item)), hasAttachment(item) && h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer", title: "查看附件" }, icon("eye", 17))),
+      h("header", { className: "wb-lib-right-head" }, h(PdfMark, { item: item }), h("b", { title: itemTitle(item) }, itemTitle(item)), hasAttachment(item) && h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer", title: L("library.viewAttachment", "View attachment") }, icon("eye", 17))),
       tabId === "detail" && editing && h(RightMetadataEditor, { item: item, onSave: props.onUpdate, onCancel: function () { setEditing(false); } }),
       tabId === "detail" && !editing && h(React.Fragment, null,
-        h("p", { className: "wb-lib-right-abstract" }, item.abstract || "无摘要信息"),
-        h("section", null, h("h3", null, "文件信息"), h("div", { className: "wb-lib-right-card" },
-          h(MetaLine, { label: "文件大小", value: formatBytes(attachment && attachment.size) }), h(MetaLine, { label: "页数", value: attachment && attachment.page_count }),
-          h(MetaLine, { label: "创建时间", value: formatDate(item.created_at, true) }), h(MetaLine, { label: "修改时间", value: formatDate(item.updated_at, true) }),
-          h(MetaLine, { label: "来源", value: item.provider === "zotero" ? "Zotero" : (item.provider || "Cyrene") }),
+        h("p", { className: "wb-lib-right-abstract" }, item.abstract || L("library.noAbstract", "No abstract available")),
+        h("section", null, h("h3", null, L("library.fileInformation", "File information")), h("div", { className: "wb-lib-right-card" },
+          h(MetaLine, { label: L("library.fileSize", "File size"), value: formatBytes(attachment && attachment.size) }), h(MetaLine, { label: L("library.pageTotal", "Pages"), value: attachment && attachment.page_count }),
+          h(MetaLine, { label: L("library.createdAt", "Created"), value: formatDate(item.created_at, true) }), h(MetaLine, { label: L("library.updated", "Updated"), value: formatDate(item.updated_at, true) }),
+          h(MetaLine, { label: L("library.sourceField", "Source"), value: item.provider === "zotero" ? "Zotero" : (item.provider || "Cyrene") }),
           embedding.state && h(MetaLine, { label: L("library.embeddingStatus", "Vector status"), value: embeddingValue }))),
         h(CollectionMembership, { item: item, collections: props.collections, onUpdate: props.onCollectionsUpdate }),
-        h("button", { type: "button", className: "wb-lib-right-edit-button", onClick: function () { setEditing(true); } }, icon("note", 15), "编辑信息")),
+        h("button", { type: "button", className: "wb-lib-right-edit-button", onClick: function () { setEditing(true); } }, icon("note", 15), L("library.editInformation", "Edit information"))),
       tabId === "content" && h(ContentPreview, { item: item, rawUrl: props.rawUrl, annotations: annotations, onViewed: props.onContentViewed }),
       tabId === "notes" && h(NotesWorkspace, { item: item, onAdd: props.onAddNote }),
       tabId === "tags" && h(TagsWorkspace, { item: item, onUpdate: props.onUpdate }),
@@ -1023,7 +1032,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
                 h("div", { className: "wb-detail-accordion-panel wb-lib-right-tab-panel" + (props.tab === tab.id ? " open" : ""), "aria-hidden": props.tab !== tab.id },
                   h("div", { className: "wb-detail-accordion-panel-inner" }, panelBody(tab.id))));
             }))),
-        h("button", { type: "button", className: "wb-lib-detail-fab", onClick: props.onClose, title: "关闭详情" }, icon("panel", 17))));
+        h("button", { type: "button", className: "wb-lib-detail-fab", onClick: props.onClose, title: L("library.closeDetails", "Close details") }, icon("panel", 17))));
   }
 
   function LibraryPdfPreview(props) {
@@ -1037,12 +1046,12 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     useEffect(function () {
       var container = containerRef.current;
       if (!container || !props.url) {
-        setError("没有可用的 PDF 地址");
+        setError(L("library.pdfUrlUnavailable", "No PDF URL is available."));
         setLoading(false);
         return;
       }
       if (!pdf.lib || !pdf.viewer || !pdf.setupViewer || !pdf.loadPdf) {
-        setError("PDF.js 尚未加载");
+        setError(L("library.pdfViewerUnavailable", "PDF.js is not loaded."));
         setLoading(false);
         return;
       }
@@ -1053,7 +1062,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       var timer = setTimeout(function () {
         loadTimedOut = true;
         abortLoader.abort(new DOMException("PDF loading timed out", "TimeoutError"));
-        setError("PDF 加载超时");
+        setError(L("library.pdfLoadTimedOut", "PDF loading timed out."));
         setLoading(false);
       }, 60000);
       var result = pdf.setupViewer(container);
@@ -1086,7 +1095,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       }).catch(function (error) {
         if (!cancelled) {
           clearTimeout(timer);
-          setError(loadTimedOut ? "PDF 加载超时" : String(error && error.message || "PDF 加载失败"));
+          setError(loadTimedOut ? L("library.pdfLoadTimedOut", "PDF loading timed out.") : String(error && error.message || L("library.pdfLoadFailed", "PDF loading failed.")));
           setLoading(false);
         }
       });
@@ -1119,9 +1128,9 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
           onScroll: props.onViewed,
           onWheelCapture: props.onViewed,
         }),
-        loading && h("div", { className: "wb-lib-pdf-preview-state" }, h(Spinner), "正在加载 PDF…"),
+        loading && h("div", { className: "wb-lib-pdf-preview-state" }, h(Spinner), L("library.pdfLoading", "Loading PDF…")),
         error && h("div", { className: "wb-lib-pdf-preview-state error" },
-          h("p", null, "PDF 内容加载失败"),
+          h("p", null, L("library.pdfContentFailed", "PDF content could not be loaded")),
           h("small", null, error))));
   }
 
@@ -1143,12 +1152,12 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     } else if (attachment && previewType === "video") {
       media = h("figure", { className: "wb-lib-media-preview video" },
         h("video", { src: props.rawUrl, controls: true, preload: "metadata", playsInline: true },
-          h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer" }, "打开视频")),
+          h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer" }, L("library.openVideo", "Open video"))),
         h("figcaption", null, filename));
     } else if (attachment && previewType === "audio") {
       media = h("figure", { className: "wb-lib-media-preview audio" },
         h("audio", { src: props.rawUrl, controls: true, preload: "metadata" },
-          h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer" }, "打开音频")),
+          h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer" }, L("library.openAudio", "Open audio"))),
         h("figcaption", null, filename));
     } else if (attachment && previewType === "pdf") {
       media = h(LibraryPdfPreview, {
@@ -1159,8 +1168,8 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     } else if (attachment && previewType === "file" && !content) {
       media = h("div", { className: "wb-lib-media-fallback" },
         icon("file", 26),
-        h("p", null, "此文件格式暂不支持内嵌预览。"),
-        h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer" }, "打开文件"));
+        h("p", null, L("library.previewUnsupported", "This file format cannot be previewed here.")),
+        h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer" }, L("library.openFile", "Open file")));
     }
     return h("div", { className: "wb-lib-content-panel" },
       media || (safeHtml
@@ -1168,21 +1177,21 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
           srcDoc: safeHtml,
           sandbox: "",
           referrerPolicy: "no-referrer",
-          title: itemTitle(item) + " HTML 内容预览",
+          title: L("library.htmlPreviewTitle", "HTML content preview for {title}", { title: itemTitle(item) }),
         }))
         : markdownHtml
         ? h("div", { className: "wb-lib-markdown", dangerouslySetInnerHTML: { __html: markdownHtml } })
-        : (content ? h("pre", null, content) : h("p", { className: "wb-lib-content-empty" }, "暂无可显示内容。"))),
+        : (content ? h("pre", null, content) : h("p", { className: "wb-lib-content-empty" }, L("library.noDisplayContent", "No content is available to display.")))),
       Array.isArray(props.annotations) && props.annotations.length > 0 && h("section", null,
-        h("h3", null, "PDF 批注"),
+        h("h3", null, L("library.pdfAnnotations", "PDF annotations")),
         props.annotations.map(function (annotation) {
-          return h("blockquote", { key: annotation.id }, h("p", null, annotation.quote || annotation.text || annotation.comment), h("small", null, annotation.page_label ? "第 " + annotation.page_label + " 页" : ""));
+          return h("blockquote", { key: annotation.id }, h("p", null, annotation.quote || annotation.text || annotation.comment), h("small", null, annotation.page_label ? L("library.pageNumber", "Page {page}", { page: annotation.page_label }) : ""));
         })));
   }
 
   function Dropdown(props) {
     if (!props.open) return null;
-    return h(React.Fragment, null, h("button", { type: "button", className: "wb-lib-scrim", onClick: props.onClose, tabIndex: -1, "aria-label": "关闭菜单" }), h("div", { className: "wb-lib-dropdown " + (props.className || "") }, props.children));
+    return h(React.Fragment, null, h("button", { type: "button", className: "wb-lib-scrim", onClick: props.onClose, tabIndex: -1, "aria-label": L("common.closeMenu", "Close menu") }), h("div", { className: "wb-lib-dropdown " + (props.className || "") }, props.children));
   }
 
   function ManualItemModal(props) {
@@ -1196,14 +1205,14 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       props.onSave(Object.assign({}, form, { year: form.year ? Number(form.year) : null, creators: creators })).then(function () { setBusy(false); props.onClose(); }, function () { setBusy(false); });
     }
     return h("div", { className: "wb-lib-modal-layer", role: "presentation", onMouseDown: function (event) { if (event.target === event.currentTarget) props.onClose(); } }, h("form", { className: "wb-lib-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "wb-lib-add-title", onSubmit: submit },
-      h("header", null, h("div", null, h("h2", { id: "wb-lib-add-title" }, "添加知识条目"), h("p", null, "条目只会添加到当前项目。")), h("button", { type: "button", onClick: props.onClose, "aria-label": "关闭" }, icon("close"))),
-      h("label", null, "标题", h("input", { required: true, autoFocus: true, value: form.title, onChange: function (event) { field("title", event.target.value); }, placeholder: "知识标题" })),
-      h("label", null, "作者或贡献者", h("textarea", { value: form.authors, onChange: function (event) { field("authors", event.target.value); }, placeholder: "多人可用分号分隔" })),
-      h("div", { className: "wb-lib-modal-grid" }, h("label", null, "年份", h("input", { type: "number", min: 0, max: 9999, value: form.year, onChange: function (event) { field("year", event.target.value); } })), h("label", null, "条目类型", h("select", { value: form.item_type, onChange: function (event) { field("item_type", event.target.value); } }, h("option", { value: "document" }, "普通知识条目"), h("option", { value: "webpage" }, "网页"), h("option", { value: "journalArticle" }, "期刊文章"), h("option", { value: "conferencePaper" }, "会议论文"), h("option", { value: "book" }, "图书"), h("option", { value: "thesis" }, "学位论文"), h("option", { value: "report" }, "报告")))),
-      h("label", null, "来源", h("input", { value: form.venue, onChange: function (event) { field("venue", event.target.value); }, placeholder: "网站、出版物或其他来源" })),
-      h("label", null, "来源链接", h("input", { type: "url", value: form.url, onChange: function (event) { field("url", event.target.value); }, placeholder: "https://…" })),
+      h("header", null, h("div", null, h("h2", { id: "wb-lib-add-title" }, L("library.createItem", "Create a knowledge item")), h("p", null, L("library.createItemHint", "The item will be added only to the current project."))), h("button", { type: "button", onClick: props.onClose, "aria-label": L("common.close", "Close") }, icon("close"))),
+      h("label", null, L("library.titleField", "Title"), h("input", { required: true, autoFocus: true, value: form.title, onChange: function (event) { field("title", event.target.value); }, placeholder: L("library.titlePlaceholder", "Knowledge title") })),
+      h("label", null, L("library.authorsOrContributors", "Authors or contributors"), h("textarea", { value: form.authors, onChange: function (event) { field("authors", event.target.value); }, placeholder: L("library.authorsSemicolonPlaceholder", "Separate multiple people with semicolons") })),
+      h("div", { className: "wb-lib-modal-grid" }, h("label", null, L("library.year", "Year"), h("input", { type: "number", min: 0, max: 9999, value: form.year, onChange: function (event) { field("year", event.target.value); } })), h("label", null, L("library.itemType", "Item type"), h("select", { value: form.item_type, onChange: function (event) { field("item_type", event.target.value); } }, ["document", "webpage", "journalArticle", "conferencePaper", "book", "thesis", "report"].map(function (type) { return h("option", { key: type, value: type }, itemTypeLabel(type)); })))),
+      h("label", null, L("library.sourceField", "Source"), h("input", { value: form.venue, onChange: function (event) { field("venue", event.target.value); }, placeholder: L("library.sourcePlaceholder", "Website, publication, or another source") })),
+      h("label", null, L("library.sourceLink", "Source link"), h("input", { type: "url", value: form.url, onChange: function (event) { field("url", event.target.value); }, placeholder: "https://…" })),
       h("label", null, "DOI", h("input", { value: form.doi, onChange: function (event) { field("doi", event.target.value); }, placeholder: "10.xxxx/xxxxx" })),
-      h("footer", null, h("button", { type: "button", className: "wb-lib-secondary", onClick: props.onClose }, "取消"), h("button", { type: "submit", className: "wb-lib-primary", disabled: busy || !form.title.trim() }, busy && h(Spinner), " 添加条目"))));
+      h("footer", null, h("button", { type: "button", className: "wb-lib-secondary", onClick: props.onClose }, L("common.cancel", "Cancel")), h("button", { type: "submit", className: "wb-lib-primary", disabled: busy || !form.title.trim() }, busy && h(Spinner), " ", L("library.addItem", "Add item")))));
   }
 
   function CollectionModal(props) {
@@ -1220,11 +1229,11 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     }
     return h("div", { className: "wb-lib-modal-layer", role: "presentation", onMouseDown: function (event) { if (event.target === event.currentTarget) props.onClose(); } },
       h("form", { className: "wb-lib-modal wb-lib-collection-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "wb-lib-collection-title", onSubmit: submit },
-        h("header", null, h("div", null, h("h2", { id: "wb-lib-collection-title" }, "新建收藏夹"), h("p", null, "收藏夹仅保存在当前项目的知识库中。")), h("button", { type: "button", onClick: props.onClose, "aria-label": "关闭" }, icon("close"))),
-        h("label", null, "名称", h("input", { required: true, autoFocus: true, value: name, onChange: function (event) { setName(event.target.value); }, placeholder: "例如：论文综述" })),
+        h("header", null, h("div", null, h("h2", { id: "wb-lib-collection-title" }, L("library.newCollection", "New collection")), h("p", null, L("library.collectionProjectHint", "Collections are stored only in the current project's knowledge base."))), h("button", { type: "button", onClick: props.onClose, "aria-label": L("common.close", "Close") }, icon("close"))),
+        h("label", null, L("common.name", "Name"), h("input", { required: true, autoFocus: true, value: name, onChange: function (event) { setName(event.target.value); }, placeholder: L("library.collectionNamePlaceholder", "For example: Literature review") })),
         h("footer", null,
-          h("button", { type: "button", className: "wb-lib-secondary", disabled: busy, onClick: props.onClose }, "取消"),
-          h("button", { type: "submit", className: "wb-lib-primary", disabled: busy || !name.trim() }, busy && h(Spinner), busy ? "创建中" : "创建"))));
+          h("button", { type: "button", className: "wb-lib-secondary", disabled: busy, onClick: props.onClose }, L("common.cancel", "Cancel")),
+          h("button", { type: "submit", className: "wb-lib-primary", disabled: busy || !name.trim() }, busy && h(Spinner), busy ? L("common.creating", "Creating…") : L("common.create", "Create")))));
   }
 
   function WorkbenchLibraryPage(props) {
@@ -1411,7 +1420,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
         }).then(function (result) {
           if (!alive) return;
           var changed = Number(result.created || 0) + Number(result.updated || 0) + Number(result.deleted || 0);
-          if (changed) Toast("Zotero 自动同步完成：" + changed + " 项变更");
+          if (changed) Toast(L("library.zoteroAutoSyncComplete", "Zotero auto-sync completed. Changes: {count}", { count: changed }));
           reload();
         });
       }).catch(function () { /* Status and sync errors are already surfaced by explicit actions. */ });
@@ -1435,15 +1444,15 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       if (String(item.id) === String(selectedId)) setDetail(function (old) { return Object.assign({}, old || {}, item); });
     }
     function updateSelected(value) {
-      if (!client || !selectedId) return Promise.reject(new Error("未选择文献"));
-      return client.update(selectedId, value).then(function (payload) { var item = payload.item || payload; replaceItem(item); Toast("文献已更新"); reload({ itemsOnly: true }); return item; });
+      if (!client || !selectedId) return Promise.reject(new Error(L("library.noItemSelected", "No knowledge item is selected.")));
+      return client.update(selectedId, value).then(function (payload) { var item = payload.item || payload; replaceItem(item); Toast(L("library.itemUpdated", "Knowledge item updated")); reload({ itemsOnly: true }); return item; });
     }
     function updateSelectedCollections(collectionIds) {
-      if (!client || !selectedId) return Promise.reject(new Error("未选择文献"));
+      if (!client || !selectedId) return Promise.reject(new Error(L("library.noItemSelected", "No knowledge item is selected.")));
       return client.update(selectedId, { collection_ids: collectionIds }).then(function (payload) {
         var item = payload.item || payload;
         replaceItem(item);
-        Toast("收藏夹已更新");
+        Toast(L("library.collectionsUpdated", "Collections updated"));
         reload();
         return item;
       });
@@ -1466,19 +1475,19 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       if (rightOpen && rightTab === "content" && selectedId) markSelectedRead(selectedId);
     }, [rightOpen, rightTab, selectedId]);
     function toggleStar(item) { client.update(item.id, { starred: !item.starred }).then(function (payload) { replaceItem(payload.item || payload); }, function (err) { Toast(String(err.message || err), "error"); }); }
-    function addNote(value) { return client.addNote(selectedId, value).then(function () { Toast("笔记已添加"); return client.detail(selectedId).then(function (payload) { setDetail(payload.item || payload); }); }); }
+    function addNote(value) { return client.addNote(selectedId, value).then(function () { Toast(L("library.noteAdded", "Note added")); return client.detail(selectedId).then(function (payload) { setDetail(payload.item || payload); }); }); }
     function removeItem(item) {
       if (!item || !item.id) return;
       var run = function () {
         client.remove(item.id).then(function () {
-          Toast("文献已移至回收站");
+          Toast(L("library.itemMovedToTrash", "Knowledge item moved to trash"));
           if (String(selectedId) === String(item.id)) { setSelectedId(""); setDetail(null); }
           reload();
         });
       };
       var confirmModal = workbenchServices.feedback().confirmModal;
       if (confirmModal) {
-        confirmModal({ title: "移至回收站？", body: "文献会保留在当前项目的回收站中。", confirmLabel: "移至回收站", danger: true })
+        confirmModal({ title: L("library.confirmMoveToTrashTitle", "Move to trash?"), body: L("library.confirmMoveToTrashBody", "The item will remain in this project's trash."), confirmLabel: L("library.moveToTrash", "Move to trash"), danger: true })
           .then(function (ok) { if (ok) run(); });
       } else {
         run();
@@ -1488,19 +1497,19 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       if (!selectedId) return;
       removeItem(selectedItem || { id: selectedId });
     }
-    function restore(item) { client.restore(item.id).then(function () { Toast("文献已恢复"); reload(); }); }
+    function restore(item) { client.restore(item.id).then(function () { Toast(L("library.itemRestored", "Knowledge item restored")); reload(); }); }
     function permanentlyDeleteItem(item) {
       if (!item || !item.id) return;
       var run = function () {
         client.removeMany([String(item.id)], true).then(function () {
-          Toast("已永久删除 1 项知识");
+          Toast(L("library.permanentlyDeletedCount", "Items permanently deleted: {count}", { count: 1 }));
           if (String(selectedId) === String(item.id)) { setSelectedId(""); setDetail(null); }
           reload();
         }).catch(function (err) { Toast(String(err.message || err), "error"); });
       };
       var confirmModal = workbenchServices.feedback().confirmModal;
       if (confirmModal) {
-        confirmModal({ title: "永久删除此知识？", body: "此操作不可撤销。", confirmLabel: "永久删除", danger: true })
+        confirmModal({ title: L("library.confirmPermanentDeleteTitle", "Delete this knowledge item permanently?"), body: L("library.confirmPermanentDeleteBody", "This action cannot be undone."), confirmLabel: L("library.permanentDelete", "Delete permanently"), danger: true })
           .then(function (ok) { if (ok) run(); });
       } else {
         run();
@@ -1553,18 +1562,20 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       if (!client || !checked.length || batchDeleting) return;
       var ids = checked.slice();
       var permanent = scope.type === "trash";
-      var title = permanent ? "永久删除所选知识？" : "将所选知识移至回收站？";
+      var title = permanent ? L("library.confirmPermanentDeleteSelectedTitle", "Delete the selected knowledge permanently?") : L("library.confirmMoveSelectedTitle", "Move the selected knowledge to trash?");
       var bodyText = permanent
-        ? "将永久删除所选的 " + ids.length + " 项知识，此操作不可撤销。"
-        : "所选的 " + ids.length + " 项知识会保留在当前项目的回收站中。";
-      var confirmLabel = permanent ? "永久删除" : "移至回收站";
+        ? L("library.confirmPermanentDeleteSelectedBody", "Selected items ({count}) will be permanently deleted. This action cannot be undone.", { count: ids.length })
+        : L("library.confirmMoveSelectedBody", "Selected items ({count}) will remain in this project's trash.", { count: ids.length });
+      var confirmLabel = permanent ? L("library.permanentDelete", "Delete permanently") : L("library.moveToTrash", "Move to trash");
       var run = function () {
         setBatchDeleting(true);
         client.removeMany(ids, permanent).then(function (payload) {
           var deleted = Number(payload.deleted || 0);
           if (ids.indexOf(String(selectedId)) >= 0) { setSelectedId(""); setDetail(null); }
           setChecked([]);
-          Toast(permanent ? "已永久删除 " + deleted + " 项知识" : "已将 " + deleted + " 项知识移至回收站");
+          Toast(permanent
+            ? L("library.permanentlyDeletedCount", "Items permanently deleted: {count}", { count: deleted })
+            : L("library.movedToTrashCount", "Items moved to trash: {count}", { count: deleted }));
           return reload();
         }).catch(function (err) {
           Toast(String(err.message || err), "error");
@@ -1582,12 +1593,12 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     function handleFiles(files) {
       if (!client || !files || !files.length) return;
       setUploading(true);
-      client.upload(files).then(function (payload) { setUploading(false); if (fileRef.current) fileRef.current.value = ""; Toast("已导入 " + ((payload.items && payload.items.length) || 0) + " 个条目"); reload(); }, function () { setUploading(false); if (fileRef.current) fileRef.current.value = ""; });
+      client.upload(files).then(function (payload) { setUploading(false); if (fileRef.current) fileRef.current.value = ""; Toast(L("library.importedCount", "Items imported: {count}", { count: (payload.items && payload.items.length) || 0 })); reload(); }, function () { setUploading(false); if (fileRef.current) fileRef.current.value = ""; });
     }
-    function createItem(value) { return client.create(value).then(function (payload) { var item = payload.item || payload; Toast("文献条目已添加"); reload(); if (item.id) select(item.id); return item; }); }
+    function createItem(value) { return client.create(value).then(function (payload) { var item = payload.item || payload; Toast(L("library.itemAdded", "Knowledge item added")); reload(); if (item.id) select(item.id); return item; }); }
     function createCollection(value) {
       return client.createCollection(value).then(function (collection) {
-        Toast("收藏夹已创建");
+        Toast(L("library.collectionCreated", "Collection created"));
         return reload().then(function () { return collection; });
       });
     }
@@ -1602,7 +1613,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
         return Promise.all(requests).then(function (pages) { pages.forEach(function (page) { items = items.concat(page.items || []); }); return items; });
       }).then(function (items) {
         var blob = new Blob([JSON.stringify(items, null, 2)], { type: "application/json" });
-        var href = URL.createObjectURL(blob); var link = document.createElement("a"); link.href = href; link.download = "cyrene-library-" + workspace + ".json"; link.click(); setTimeout(function () { URL.revokeObjectURL(href); }, 0); Toast("已导出 " + items.length + " 篇文献");
+        var href = URL.createObjectURL(blob); var link = document.createElement("a"); link.href = href; link.download = "cyrene-library-" + workspace + ".json"; link.click(); setTimeout(function () { URL.revokeObjectURL(href); }, 0); Toast(L("library.exportedCount", "Knowledge items exported: {count}", { count: items.length }));
       }).catch(function (err) { Toast(String(err.message || err), "error"); });
     }
     function toggleChecked(id) { setChecked(function (prev) { var key = String(id); return prev.indexOf(key) >= 0 ? prev.filter(function (v) { return v !== key; }) : prev.concat([key]); }); }
@@ -1630,7 +1641,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     function copyCitation(format) {
       var value = format === "bibtex" ? citation.bibtex : citation.text;
       if (!value) return;
-      navigator.clipboard.writeText(value).then(function () { Toast(format === "bibtex" ? "BibTeX 已复制" : "引用已复制"); });
+      navigator.clipboard.writeText(value).then(function () { Toast(format === "bibtex" ? L("library.bibtexCopied", "BibTeX copied") : L("library.citationCopied", "Citation copied")); });
     }
 
     var scopeTitle = scope.type === "all" ? L("library.title", "Knowledge base") : scope.type === "unclassified" ? L("library.unclassified", "Untagged") : scope.type === "recent_added" ? L("library.recentAdded", "Recently added") : scope.type === "recent_read" ? L("library.recentRead", "Recently read") : scope.type === "starred" ? L("library.starredKnowledge", "Starred knowledge") : scope.type === "trash" ? L("library.trash", "Trash") : (scope.label || L("library.title", "Knowledge base"));
@@ -1672,8 +1683,8 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
           h("div", { className: "wb-lib-heading" }, scope.type !== "all" && h("h2", null, scopeTitle),
             h("div", { className: "wb-lib-menu-wrap" }, h("button", { type: "button", "data-tour": "knowledge_add", className: "wb-lib-primary", title: L("library.addItem", "Add item"), "aria-label": L("library.addItem", "Add item"), onClick: function () { setMenu(menu === "add" ? "" : "add"); } }, icon("plus", 16), " ", L("library.addItem", "Add item")), h(Dropdown, { open: menu === "add", onClose: function () { setMenu(""); } }, h("button", { type: "button", onClick: function () { setMenu(""); setManualOpen(true); } }, icon("note", 16), h("span", null, h("b", null, L("library.manualAdd", "Add manually")), h("small", null, L("library.createItem", "Create a knowledge item")))), h("button", { type: "button", onClick: function () { setMenu(""); fileRef.current && fileRef.current.click(); } }, icon("upload", 16), h("span", null, h("b", null, L("library.uploadFile", "Upload file")), h("small", null, L("library.uploadTypes", "Documents, images, audio and video"))))))),
           h("div", { className: "wb-lib-head-actions" },
-            h("span", { className: "wb-lib-count" }, L("library.count", "{count} items", { count: Number(data.total || 0).toLocaleString() })),
-            h("button", { type: "button", className: "wb-lib-head-button", title: !embedding.configured ? L("library.vectorizeUnavailable", "Install and enable an embedding model first") : !Number(embedding.pending_vectors || 0) ? L("library.vectorizedAll", "All chunks are vectorized") : L("library.vectorizeAllHint", "Vectorize {count} missing chunks", { count: Number(embedding.pending_vectors || 0) }), "aria-label": L("library.vectorizeAll", "Vectorize all"), disabled: !embedding.configured || !Number(embedding.pending_vectors || 0) || (embedding.reembed && embedding.reembed.running), onClick: vectorizeAll }, embedding.reembed && embedding.reembed.running ? h(Spinner) : icon("vector", 16), embedding.reembed && embedding.reembed.running ? L("library.vectorizing", "Vectorizing…") : L("library.vectorizeAll", "Vectorize all")),
+            h("span", { className: "wb-lib-count" }, L("library.count", "Items: {count}", { count: formatNumber(data.total || 0) })),
+            h("button", { type: "button", className: "wb-lib-head-button", title: !embedding.configured ? L("library.vectorizeUnavailable", "Install and enable an embedding model first") : !Number(embedding.pending_vectors || 0) ? L("library.vectorizedAll", "All chunks are vectorized") : L("library.vectorizeAllHint", "Missing chunks to vectorize: {count}", { count: Number(embedding.pending_vectors || 0) }), "aria-label": L("library.vectorizeAll", "Vectorize all"), disabled: !embedding.configured || !Number(embedding.pending_vectors || 0) || (embedding.reembed && embedding.reembed.running), onClick: vectorizeAll }, embedding.reembed && embedding.reembed.running ? h(Spinner) : icon("vector", 16), embedding.reembed && embedding.reembed.running ? L("library.vectorizing", "Vectorizing…") : L("library.vectorizeAll", "Vectorize all")),
             h("button", { type: "button", "data-tour": "knowledge_upload", className: "wb-lib-head-button", title: uploading ? L("library.importing", "Importing") : L("library.import", "Import"), "aria-label": uploading ? L("library.importing", "Importing") : L("library.import", "Import"), disabled: uploading, onClick: function () { fileRef.current && fileRef.current.click(); } }, uploading ? h(Spinner) : icon("upload", 16), uploading ? L("library.importing", "Importing") : L("library.import", "Import")),
             h("button", { type: "button", className: "wb-lib-head-button", title: L("library.export", "Export"), "aria-label": L("library.export", "Export"), onClick: exportItems, disabled: !data.items.length }, icon("download", 16), L("library.export", "Export")))),
         h("div", { className: "wb-lib-toolbar" },

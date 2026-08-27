@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from agent.plugin import Plugin, PluginContext
+from agent.plugin.native_runtime import plugin_language, plugin_localized
 
 from .schedule_spec import next_run, occurrence_window, task_events
 
@@ -31,10 +32,12 @@ async def _ready(context: PluginContext) -> tuple[Any, Any]:
     return service, service.scope(context)
 
 
-def _task_id(arguments: dict[str, Any]) -> str:
+def _task_id(arguments: dict[str, Any], context: PluginContext) -> str:
     value = str(arguments.get("task_id") or "").strip()
     if not value:
-        raise ValueError("task_id is required")
+        raise ValueError(
+            plugin_localized(context, "task_id is required.", "必须提供 task_id。")
+        )
     return value
 
 
@@ -42,12 +45,20 @@ def _task_payload(task: Any) -> dict[str, Any]:
     return task.to_dict() if hasattr(task, "to_dict") else dict(task)
 
 
-def _permission(arguments: dict[str, Any], source: str) -> str:
+def _permission(
+    arguments: dict[str, Any], source: str, context: PluginContext
+) -> str:
     if source == "workbench":
         return "workspace_only"
     value = str(arguments.get("permission_mode") or "workspace_only").strip()
     if value not in {"workspace_only", "full_access"}:
-        raise ValueError("permission_mode must be workspace_only or full_access")
+        raise ValueError(
+            plugin_localized(
+                context,
+                "permission_mode must be workspace_only or full_access.",
+                "permission_mode 必须是 workspace_only 或 full_access。",
+            )
+        )
     return value
 
 
@@ -57,7 +68,7 @@ async def create_schedule(
     service, scope = await _ready(context)
     prompt = str(arguments.get("prompt") or "").strip()
     if not prompt:
-        raise ValueError("prompt is required")
+        raise ValueError(plugin_localized(context, "prompt is required.", "必须提供 prompt。"))
     kind = str(arguments.get("schedule_type") or "").strip().lower()
     value = str(arguments.get("schedule_value") or "").strip()
     timezone_name = str(arguments.get("schedule_timezone") or "UTC").strip() or "UTC"
@@ -66,14 +77,20 @@ async def create_schedule(
         value = fire_at
     action = str(arguments.get("action_type") or "agent_task").strip().lower()
     if action not in {"message", "agent_task"}:
-        raise ValueError("action_type must be message or agent_task")
+        raise ValueError(
+            plugin_localized(
+                context,
+                "action_type must be message or agent_task.",
+                "action_type 必须是 message 或 agent_task。",
+            )
+        )
     task_id = await service.repository.create(
         chat_id=scope.chat_id,
         prompt=prompt,
         schedule_type=kind,
         schedule_value=value,
         next_run=fire_at,
-        permission_mode=_permission(arguments, scope.source),
+        permission_mode=_permission(arguments, scope.source, context),
         project_id=scope.project_id,
         schedule_timezone=timezone_name,
         origin_session_id=scope.session_id,
@@ -84,7 +101,13 @@ async def create_schedule(
         "ok": True,
         "id": task_id,
         "task": _task_payload(task),
-        "message": f"Scheduled task {task_id}. Next run: {fire_at}",
+        "message": plugin_localized(
+            context,
+            "Scheduled task {task_id}. Next run: {fire_at}",
+            "已创建定时任务 {task_id}。下次运行：{fire_at}",
+            task_id=task_id,
+            fire_at=fire_at,
+        ),
     }
 
 
@@ -108,7 +131,14 @@ async def list_occurrences(
     )
     events: list[dict[str, Any]] = []
     for task in await service.repository.list(scope.project_id):
-        events.extend(task_events(_task_payload(task), start_at, end_at))
+        events.extend(
+            task_events(
+                _task_payload(task),
+                start_at,
+                end_at,
+                language=plugin_language(context),
+            )
+        )
     events.sort(key=lambda event: str(event.get("start") or ""))
     return {
         "ok": True,
@@ -122,26 +152,26 @@ async def edit_schedule(
     arguments: dict[str, Any], context: PluginContext
 ) -> dict[str, Any]:
     service, scope = await _ready(context)
-    task_id = _task_id(arguments)
+    task_id = _task_id(arguments, context)
     task = await service.repository.get(task_id, scope.project_id)
     if task is None:
-        raise LookupError(f"scheduled task not found: {task_id}")
+        raise LookupError(plugin_localized(context, "Scheduled task not found: {task_id}", "未找到定时任务：{task_id}", task_id=task_id))
 
     updates: dict[str, Any] = {}
     if "prompt" in arguments:
         prompt = str(arguments["prompt"] or "").strip()
         if not prompt:
-            raise ValueError("prompt cannot be empty")
+            raise ValueError(plugin_localized(context, "prompt cannot be empty.", "prompt 不能为空。"))
         updates["prompt"] = prompt
     if "action_type" in arguments:
         action = str(arguments["action_type"] or "").strip().lower()
         if action not in {"message", "agent_task"}:
-            raise ValueError("action_type must be message or agent_task")
+            raise ValueError(plugin_localized(context, "action_type must be message or agent_task.", "action_type 必须是 message 或 agent_task。"))
         updates["action_type"] = action
     if "status" in arguments:
         status = str(arguments["status"] or "").strip().lower()
         if status not in {"active", "paused"}:
-            raise ValueError("status must be active or paused")
+            raise ValueError(plugin_localized(context, "status must be active or paused.", "status 必须是 active 或 paused。"))
         updates["status"] = status
 
     schedule_changed = any(field in arguments for field in SCHEDULE_FIELDS)
@@ -171,7 +201,7 @@ async def edit_schedule(
 
     sensitive_edit = "prompt" in updates or "action_type" in updates
     if "permission_mode" in arguments:
-        updates["permission_mode"] = _permission(arguments, scope.source)
+        updates["permission_mode"] = _permission(arguments, scope.source, context)
     elif scope.source == "workbench" and (sensitive_edit or task.permission_mode == "full_access"):
         updates["permission_mode"] = "workspace_only"
     elif sensitive_edit and task.permission_mode == "full_access":
@@ -181,12 +211,12 @@ async def edit_schedule(
         updates["permission_mode"] = "workspace_only"
 
     if not updates:
-        raise ValueError("no editable fields were provided")
+        raise ValueError(plugin_localized(context, "No editable fields were provided.", "未提供可编辑字段。"))
     if updates.get("status") == "paused":
         await service.cancel_active(task_id, "schedule paused")
     changed = await service.repository.edit(task_id, updates, scope.project_id)
     if not changed:
-        raise LookupError(f"scheduled task not found: {task_id}")
+        raise LookupError(plugin_localized(context, "Scheduled task not found: {task_id}", "未找到定时任务：{task_id}", task_id=task_id))
     updated = await service.repository.get(task_id, scope.project_id)
     return {"ok": True, "task": _task_payload(updated), "changed": sorted(updates)}
 
@@ -195,12 +225,12 @@ async def pause_schedule(
     arguments: dict[str, Any], context: PluginContext
 ) -> dict[str, Any]:
     service, scope = await _ready(context)
-    task_id = _task_id(arguments)
+    task_id = _task_id(arguments, context)
     await service.cancel_active(task_id, "schedule paused")
     if not await service.repository.update_status(
         task_id, "paused", project_id=scope.project_id
     ):
-        raise LookupError(f"scheduled task not found: {task_id}")
+        raise LookupError(plugin_localized(context, "Scheduled task not found: {task_id}", "未找到定时任务：{task_id}", task_id=task_id))
     return {"ok": True, "id": task_id, "status": "paused"}
 
 
@@ -208,10 +238,10 @@ async def resume_schedule(
     arguments: dict[str, Any], context: PluginContext
 ) -> dict[str, Any]:
     service, scope = await _ready(context)
-    task_id = _task_id(arguments)
+    task_id = _task_id(arguments, context)
     task = await service.repository.get(task_id, scope.project_id)
     if task is None:
-        raise LookupError(f"scheduled task not found: {task_id}")
+        raise LookupError(plugin_localized(context, "Scheduled task not found: {task_id}", "未找到定时任务：{task_id}", task_id=task_id))
     fire_at = next_run(
         task.schedule_type,
         task.schedule_value,
@@ -223,7 +253,7 @@ async def resume_schedule(
         project_id=scope.project_id,
         next_run=fire_at,
     ):
-        raise LookupError(f"scheduled task not found: {task_id}")
+        raise LookupError(plugin_localized(context, "Scheduled task not found: {task_id}", "未找到定时任务：{task_id}", task_id=task_id))
     return {"ok": True, "id": task_id, "status": "active", "next_run": fire_at}
 
 
@@ -231,10 +261,10 @@ async def cancel_schedule(
     arguments: dict[str, Any], context: PluginContext
 ) -> dict[str, Any]:
     service, scope = await _ready(context)
-    task_id = _task_id(arguments)
+    task_id = _task_id(arguments, context)
     await service.cancel_active(task_id, "schedule cancelled")
     if not await service.repository.delete(task_id, scope.project_id):
-        raise LookupError(f"scheduled task not found: {task_id}")
+        raise LookupError(plugin_localized(context, "Scheduled task not found: {task_id}", "未找到定时任务：{task_id}", task_id=task_id))
     return {"ok": True, "id": task_id, "cancelled": True}
 
 
@@ -242,9 +272,9 @@ async def list_runs(
     arguments: dict[str, Any], context: PluginContext
 ) -> dict[str, Any]:
     service, scope = await _ready(context)
-    task_id = _task_id(arguments)
+    task_id = _task_id(arguments, context)
     if await service.repository.get(task_id, scope.project_id) is None:
-        raise LookupError(f"scheduled task not found: {task_id}")
+        raise LookupError(plugin_localized(context, "Scheduled task not found: {task_id}", "未找到定时任务：{task_id}", task_id=task_id))
     runs = await service.repository.list_runs(
         task_id,
         project_id=scope.project_id,
@@ -372,6 +402,55 @@ SCHEDULE_PROPERTIES = {
 }
 
 
+TOOL_I18N = {
+    "schedule.create": (
+        "Create schedule",
+        "创建定时任务",
+        "在当前项目中创建精确消息或 Agent 定时任务。",
+    ),
+    "schedule.list": (
+        "List schedules",
+        "列出定时任务",
+        "列出当前项目中的定时任务。",
+    ),
+    "schedule.occurrences": (
+        "Schedule occurrences",
+        "日程事件",
+        "将定时任务展开为指定时间范围内的日历事件。",
+    ),
+    "schedule.edit": (
+        "Edit schedule",
+        "编辑定时任务",
+        "局部编辑一个定时任务；变更后的授权会重新审核。",
+    ),
+    "schedule.pause": (
+        "Pause schedule",
+        "暂停定时任务",
+        "暂停定时任务并取消当前正在执行的实例。",
+    ),
+    "schedule.resume": (
+        "Resume schedule",
+        "恢复定时任务",
+        "恢复已暂停的定时任务并计算下一次执行时间。",
+    ),
+    "schedule.cancel": (
+        "Cancel schedule",
+        "取消定时任务",
+        "取消正在执行的实例并永久删除该定时任务。",
+    ),
+    "schedule.runs": (
+        "Schedule runs",
+        "定时任务记录",
+        "列出一个定时任务的持久化执行记录。",
+    ),
+    "schedule.tick": (
+        "Schedule worker",
+        "定时任务执行器",
+        "领取并执行到期的定时任务；该工具对模型隐藏。",
+    ),
+}
+
+
 def _plugin(
     name: str,
     description: str,
@@ -382,6 +461,12 @@ def _plugin(
     timeout: float = 30.0,
     metadata: dict[str, Any] | None = None,
 ) -> Plugin:
+    plugin_metadata = dict(metadata or {})
+    english_name, chinese_name, chinese_description = TOOL_I18N[name]
+    plugin_metadata["i18n"] = {
+        "en": {"name": english_name, "description": description},
+        "zh": {"name": chinese_name, "description": chinese_description},
+    }
     return Plugin(
         name=name,
         description=description,
@@ -389,7 +474,7 @@ def _plugin(
         handler=handler,
         allow_parallel=allow_parallel,
         timeout_seconds=timeout,
-        metadata=metadata or {},
+        metadata=plugin_metadata,
     )
 
 

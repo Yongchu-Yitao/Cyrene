@@ -6,19 +6,36 @@ import time
 from typing import Any
 
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
 
 from cyrene.workbench.chat_events import publish_chat_changed
 from route import schemas as api_models
+from route.errors import localized_error_response
 from route.workbench.chat_routes.context import ChatRouteContext
 
 logger = logging.getLogger(__name__)
 
 
+def _composer_context_service():
+    from agent.plugin import active_plugin_service
+
+    service = active_plugin_service("composer_context")
+    if service is None:
+        raise RuntimeError(
+            "Required Plugin application service is unavailable: composer_context"
+        )
+    return service
+
+
+def _extensions_service():
+    from agent.plugin import active_plugin_service
+
+    return active_plugin_service("extensions")
+
+
 def _register_list_route(router: APIRouter, context: ChatRouteContext):
     service = context.service
     _prune_orphaned_fork_metadata = service.prune_orphaned_fork_metadata
-    _public_chat_light = service.public_chat_light
+    _public_chats_light = service.public_chats_light
     _read_chats_store = service.repository.read
     _read_chat_summaries_store = service.repository.read_summaries
     _write_chats_store = service.repository.write
@@ -35,11 +52,12 @@ def _register_list_route(router: APIRouter, context: ChatRouteContext):
             if _prune_orphaned_fork_metadata(full_payload):
                 await asyncio.to_thread(_write_chats_store, full_payload)
                 payload = await asyncio.to_thread(_read_chat_summaries_store)
-        chats = [
-            _public_chat_light(chat)
+        source_chats = [
+            chat
             for chat in payload.get("chats", [])
             if str(chat.get("kind") or "chat") == "chat" and (not project or str(chat.get("projectId") or "") == project)
         ]
+        chats = _public_chats_light(source_chats)
         chats.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
         elapsed_ms = (time.monotonic() - started) * 1000
         if elapsed_ms >= 1000:
@@ -135,22 +153,22 @@ def _register_create_route(router: APIRouter, context: ChatRouteContext):
         body = api_models.body_dict(body_model)
         project_id = str(body.get("project") or body.get("projectId") or "").strip()
         if not project_id:
-            return JSONResponse({"error": "project is required"}, status_code=400)
+            return localized_error_response(
+                "A project is required.", "请选择项目。", 400, "project_required"
+            )
         R = _routes()
         project = await asyncio.to_thread(R.find_project_lightweight, project_id)
         if not project:
-            return JSONResponse({"error": "project not found"}, status_code=404)
+            return localized_error_response(
+                "Project not found.", "未找到项目。", 404, "project_not_found"
+            )
 
         memory_snapshot = await context.project_memory_snapshot(project_id)
 
-        from cyrene.workbench.composer_context import validate_context_activations
-
-        try:
-            context_activations = validate_context_activations(
-                body.get("contextActivations")
-            )
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+        composer_context = _composer_context_service()
+        context_activations = composer_context.normalize(
+            body.get("contextActivations")
+        )
 
         requested_agent = body.get("agent") if isinstance(body.get("agent"), dict) else None
         requested_installation_id = str((requested_agent or {}).get("installationId") or "").strip()
@@ -164,29 +182,28 @@ def _register_create_route(router: APIRouter, context: ChatRouteContext):
                 agent_snapshot = {"installationId": BUILTIN_INSTALLATION_ID}
                 model_access_snapshot = body.get("modelAccess") if isinstance(body.get("modelAccess"), dict) else None
             else:
-                from cyrene.extensions import agent_runtime as extension_agents
-
-                installation = await asyncio.to_thread(
-                    extension_agents.get_agent_installation,
-                    requested_installation_id,
+                extensions = _extensions_service()
+                resolver = getattr(extensions, "get_agent_installation", None)
+                installation = (
+                    await asyncio.to_thread(resolver, requested_installation_id)
+                    if callable(resolver)
+                    else None
                 )
                 if installation is None:
-                    return JSONResponse(
-                        {
-                            "error": "Agent installation not found",
-                            "code": "dependency_missing",
-                            "failureKind": "dependency_missing",
-                        },
-                        status_code=404,
+                    return localized_error_response(
+                        "Agent installation not found.",
+                        "未找到 Agent 安装。",
+                        404,
+                        "dependency_missing",
+                        failureKind="dependency_missing",
                     )
                 if not bool(installation.get("enabled", True)):
-                    return JSONResponse(
-                        {
-                            "error": "Agent installation is disabled",
-                            "code": "agent_disabled",
-                            "failureKind": "agent_disabled",
-                        },
-                        status_code=409,
+                    return localized_error_response(
+                        "The Agent installation is disabled.",
+                        "该 Agent 安装已停用。",
+                        409,
+                        "agent_disabled",
+                        failureKind="agent_disabled",
                     )
                 # Identity, driver and capabilities are server-owned. Never
                 # persist a client-authored snapshot for an external Agent.
@@ -206,26 +223,62 @@ def _register_create_route(router: APIRouter, context: ChatRouteContext):
             and requested_installation_id != BUILTIN_INSTALLATION_ID
             and any(context_activations.values())
         ):
-            return JSONResponse(
-                {"error": "Composer context capabilities require the built-in Cyrene Agent"},
-                status_code=400,
+            return localized_error_response(
+                "Composer context capabilities require the built-in Cyrene Agent.",
+                "编辑器上下文能力需要使用 Cyrene 内置 Agent。",
+                400,
+                "builtin_agent_required",
             )
+
+        chat = service.create_chat(
+            project_id,
+            str(body.get("title") or ""),
+            R.get_model(),
+            project_memory_snapshot=memory_snapshot,
+            agent=agent_snapshot,
+            model_access=model_access_snapshot,
+            capabilities=capabilities_snapshot,
+            soul_active=body.get("soulActive"),
+            workspace_active=body.get("workspaceActive"),
+            reasoning_effort=str(body.get("reasoningEffort") or ""),
+        )
+        chat["contextActivations"] = context_activations
+        chat["remoteDeviceIds"] = list(body.get("remoteDeviceIds") or ())
+        try:
+            workspace_dir = service.resolve_chat_workspace_dir(
+                chat,
+                project,
+                R.resolve_workspace_dir,
+            )
+            resolved_input = service.resolve_composer_input_context(
+                chat,
+                workspace_dir,
+                strict=True,
+            )
+        except (ValueError, RuntimeError) as exc:
+            logger.warning("Invalid composer input context: %s", exc)
+            invalid = isinstance(exc, ValueError)
+            return localized_error_response(
+                (
+                    "The context configuration is invalid."
+                    if invalid
+                    else "The selected input context is unavailable."
+                ),
+                "上下文配置无效。" if invalid else "所选输入框上下文当前不可用。",
+                400 if invalid else 503,
+                (
+                    "invalid_context_configuration"
+                    if invalid
+                    else "composer_context_unavailable"
+                ),
+            )
+        chat["soulActive"] = bool(resolved_input["soulActive"])
+        chat["workspaceActive"] = bool(resolved_input["workspaceActive"])
+        chat["remoteDeviceIds"] = list(resolved_input["remoteDeviceIds"])
+        chat["contextActivations"] = dict(resolved_input["contextActivations"])
 
         def create_and_persist() -> dict[str, Any]:
             payload = service.repository.read()
-            chat = service.create_chat(
-                project_id,
-                str(body.get("title") or ""),
-                R.get_model(),
-                project_memory_snapshot=memory_snapshot,
-                agent=agent_snapshot,
-                model_access=model_access_snapshot,
-                capabilities=capabilities_snapshot,
-                soul_active=body.get("soulActive"),
-                workspace_active=body.get("workspaceActive"),
-                reasoning_effort=str(body.get("reasoningEffort") or ""),
-            )
-            chat["contextActivations"] = context_activations
             payload.setdefault("chats", []).insert(0, chat)
             service.repository.write(payload)
             return chat

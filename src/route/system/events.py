@@ -3,9 +3,10 @@
 import json
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from cyrene.observability.debug_event_repository import DebugEventRepository
+from route.errors import localized_error_response
 
 
 def register_event_routes(
@@ -38,7 +39,12 @@ def register_event_routes(
     async def api_event_detail(event_id: str):
         event = repository.get(event_id)
         if event is None:
-            return JSONResponse({"error": "event not found"}, status_code=404)
+            return localized_error_response(
+                "Event not found.",
+                "未找到事件。",
+                404,
+                "event_not_found",
+            )
         return event
 
     @router.get("/api/context-debug/events")
@@ -54,7 +60,12 @@ def register_event_routes(
     async def api_context_debug_event_detail(event_id: str):
         event = repository.get_llm_call(event_id)
         if event is None:
-            return JSONResponse({"error": "event not found"}, status_code=404)
+            return localized_error_response(
+                "Event not found.",
+                "未找到事件。",
+                404,
+                "event_not_found",
+            )
         return event
 
 

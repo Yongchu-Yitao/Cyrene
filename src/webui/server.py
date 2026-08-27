@@ -1,7 +1,6 @@
 """FastAPI app factory and WebBot adapter for the scheduler."""
 
 import logging
-import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -42,35 +41,6 @@ logger = logging.getLogger(__name__)
 _STATIC_DIR = Path(__file__).parent / "static"
 
 
-def _office_gateway_enabled(instance_id: str) -> bool:
-    forced = os.environ.get("CYRENE_OFFICE_FORCE_START", "").lower()
-    return bool(instance_id) or forced in {"1", "true", "yes"}
-
-
-async def _start_office_gateway(instance_id: str) -> None:
-    # Desktop hosts have an instance id. Manual web launches can opt in without
-    # making every lightweight app factory bind the fixed Office HTTPS port.
-    if not _office_gateway_enabled(instance_id):
-        return
-    try:
-        from cyrene.office.gateway import get_office_gateway_runtime
-
-        await get_office_gateway_runtime().start()
-    except Exception:
-        logger.warning("Office gateway startup failed", exc_info=True)
-
-
-async def _stop_office_gateway(instance_id: str) -> None:
-    if not _office_gateway_enabled(instance_id):
-        return
-    try:
-        from cyrene.office.gateway import get_office_gateway_runtime
-
-        await get_office_gateway_runtime().stop()
-    except Exception:
-        logger.warning("Office gateway shutdown failed", exc_info=True)
-
-
 def _configure_app(app: FastAPI, middleware: Any, register_routes: Any, bot: Any, db_path: str, instance_id: str) -> None:
     app.add_middleware(middleware)
     app.state.instance_id = instance_id
@@ -103,8 +73,14 @@ class WebBot:
         return matched
 
 
-def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "workbench") -> FastAPI:
-    from cyrene.channels.wechat import setup_wechat as _setup_wechat
+def create_app(
+    bot: Any,
+    db_path: str,
+    instance_id: str = "",
+    ui_mode: str = "workbench",
+    *,
+    enable_background_plugins: bool = False,
+) -> FastAPI:
     from route.registry import register_routes
 
     from webui.auth import LocalAuthMiddleware
@@ -112,31 +88,18 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):
         await plugin_application_host.startup()
-        await _start_workbench_chat_runs()
-        terminal_wake_bridge = getattr(_app.state, "terminal_wake_bridge", None)
-        if terminal_wake_bridge is not None:
-            await terminal_wake_bridge.start_daemon_bridge()
-        media_daemon = getattr(_app.state, "media_daemon", None)
-        media_wake_bridge = getattr(_app.state, "media_wake_bridge", None)
-        if media_daemon is not None:
-            await media_daemon.start()
-        if media_wake_bridge is not None:
-            await media_wake_bridge.start()
-        await _start_remote_control()
-        await _start_office_gateway(instance_id)
-        await _start_wechat()
+        scheduler = getattr(_app.state, "plugin_background_scheduler", None)
         try:
+            if scheduler is not None:
+                scheduler.start()
+            await _start_workbench_chat_runs()
             yield
         finally:
-            if media_wake_bridge is not None:
-                await media_wake_bridge.stop()
-            if media_daemon is not None:
-                await media_daemon.stop()
-            if terminal_wake_bridge is not None:
-                await terminal_wake_bridge.stop_daemon_bridge()
             # Drain native Agent/Chat work while Plugin services and their
             # model/provider ports are still available.
-            await _close_browser_session()
+            await _shutdown_native_runs()
+            if scheduler is not None and scheduler.running:
+                scheduler.shutdown(wait=False)
             await plugin_application_host.shutdown()
             from agent.plugin import (
                 active_plugin_application_host,
@@ -145,7 +108,6 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
 
             if active_plugin_application_host() is plugin_application_host:
                 set_active_plugin_application_host(None)
-            await _stop_office_gateway(instance_id)
 
     app = FastAPI(title="Cyrene", lifespan=_lifespan)
     from agent.plugin import (
@@ -164,6 +126,14 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
     # ``ui_mode`` remains in the Python call signature for historical callers,
     # but Workbench is now the only served UI.
     _configure_app(app, LocalAuthMiddleware, register_routes, bot, db_path, instance_id)
+    if enable_background_plugins:
+        from agent.plugin.background import setup_background_plugin_scheduler
+
+        # Build the clock only after register_routes attached the authoritative
+        # Plugin host, then start it inside the lifespan after pack startup.
+        app.state.plugin_background_scheduler = setup_background_plugin_scheduler(
+            str(db_path)
+        )
 
     async def _start_workbench_chat_runs() -> None:
         from cyrene.workbench.chat_runs import startup_chat_runs
@@ -180,32 +150,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         if manager is not None:
             await manager.startup()
 
-    async def _start_wechat() -> None:
-        try:
-            await _setup_wechat(app, db_path)
-        except Exception:
-            logger.warning("WeChat bot setup failed — check your config / proxy setup")
-
-    async def _start_remote_control() -> None:
-        runtime = getattr(app.state, "remote_control_runtime", None)
-        if runtime is None:
-            return
-        try:
-            await runtime.start()
-        except Exception:
-            logger.warning("Remote-control gateway startup failed", exc_info=True)
-
-    async def _close_browser_session() -> None:
-        remote_runtime = getattr(app.state, "remote_control_runtime", None)
-        if remote_runtime is not None:
-            try:
-                await remote_runtime.stop()
-            except Exception:
-                logger.warning(
-                    "Remote-control gateway shutdown failed",
-                    exc_info=True,
-                )
-
+    async def _shutdown_native_runs() -> None:
         manager = getattr(app.state, "goal_loop_manager", None)
         if manager is not None:
             try:
@@ -231,26 +176,6 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         except Exception:
             logger.warning("Workbench chat run shutdown failed", exc_info=True)
 
-        try:
-            from cyrene.browser import close_session
-            await close_session()
-        except Exception:
-            logger.warning("Browser session shutdown failed")
-
-        try:
-            updater = getattr(app.state, "wechat_updater", None)
-            if updater is not None:
-                await updater.stop()
-                app.state.wechat_updater = None
-            from cyrene.channels.wechat import get_current_client, set_current_client
-
-            client = get_current_client()
-            set_current_client(None)
-            if client is not None:
-                await client.close()
-        except Exception:
-            logger.warning("WeChat shutdown failed", exc_info=True)
-
         # Cancel and await all agent/telemetry/indexing work while the event loop
         # and SQLite worker threads are still alive.
         try:
@@ -264,7 +189,13 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
 
 
 async def run_web(bot: Any, db_path: str, port: int = WEB_PORT, instance_id: str = "", ui_mode: str = "workbench") -> None:
-    app = create_app(bot, db_path, instance_id=instance_id, ui_mode=ui_mode)
+    app = create_app(
+        bot,
+        db_path,
+        instance_id=instance_id,
+        ui_mode=ui_mode,
+        enable_background_plugins=True,
+    )
     app.state.web_port = int(port)
     from cyrene.agent_runtime.model_gateway import configure_model_gateway
     configure_model_gateway(port)

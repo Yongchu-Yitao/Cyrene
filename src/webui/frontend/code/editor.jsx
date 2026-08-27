@@ -34,6 +34,7 @@ import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
+import { workbenchServices } from "../shared/runtime/services.jsx";
 
 (function (root) {
   "use strict";
@@ -111,6 +112,11 @@ import { gfm } from "turndown-plugin-gfm";
   }
 
   function Editor(props) {
+    var dataStore = workbenchServices.data();
+    dataStore.useVersion();
+    var pluginModules = Array.isArray(dataStore.state.pluginModules)
+      ? dataStore.state.pluginModules : [];
+    var codeAvailable = pluginModules.indexOf("code") >= 0;
     var hostRef = useRef(null);
     var viewRef = useRef(null);
     var valueRef = useRef(String(props.value == null ? "" : props.value));
@@ -124,7 +130,7 @@ import { gfm } from "turndown-plugin-gfm";
     onSaveRef.current = props.onSave;
 
     useEffect(function () {
-      if (!hostRef.current) return undefined;
+      if (!codeAvailable || !hostRef.current) return undefined;
       var themeCompartment = new Compartment();
       var languageCompartment = new Compartment();
       themeCompartmentRef.current = themeCompartment;
@@ -190,7 +196,7 @@ import { gfm } from "turndown-plugin-gfm";
         view.destroy();
         if (viewRef.current === view) viewRef.current = null;
       };
-    }, []);
+    }, [codeAvailable]);
 
     useEffect(function () {
       var view = viewRef.current;
@@ -211,7 +217,8 @@ import { gfm } from "turndown-plugin-gfm";
       view.dispatch({ effects: compartment.reconfigure(languageExtension(languageName(props.file))) });
     }, [props.file && (props.file.path || props.file.name)]);
 
-    return <div ref={hostRef} className="wbc-codemirror-host" aria-label={props.ariaLabel || "Text editor"} />;
+    if (!codeAvailable) return null;
+    return <div ref={hostRef} className="wbc-codemirror-host" aria-label={props.ariaLabel || workbenchServices.i18n().t("code.editor.textEditor", null, "Text editor")} />;
   }
 
   var turndown = new TurndownService({

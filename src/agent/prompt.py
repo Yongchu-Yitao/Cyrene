@@ -12,7 +12,6 @@ names and standalone Plugin names; describe the relevant pack or standalone Plug
 before invoking a Plugin. Return the result without asking the user to choose a
 tool. After receiving tool results, explain the result to the user instead of
 repeating the same call.
-The workspace is {workspace}.
 """
 
 

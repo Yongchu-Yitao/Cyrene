@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from agent.plugin import PluginContext
-from agent.plugin.native_runtime import workspace_root
+from agent.plugin.native_runtime import plugin_localized, workspace_root
 
 logger = logging.getLogger(__name__)
 
@@ -350,9 +350,9 @@ def build_index(
 
     pr_resolved = project_root.resolve()
     if pr_resolved not in resolved.parents and resolved != pr_resolved:
-        return {"error": f"Path outside project root: {path}"}
+        return {"error_code": "path_outside_project", "path": path}
     if not resolved.exists():
-        return {"error": f"Path not found: {path}"}
+        return {"error_code": "path_not_found", "path": path}
 
     conn = _connect(index_db)
     try:
@@ -367,7 +367,7 @@ def build_index(
         elif resolved.is_dir():
             py_files = _collect_py_files(resolved)
         else:
-            return {"error": f"Not a file or directory: {path}"}
+            return {"error_code": "unsupported_path", "path": path}
 
         # Collect current file paths for stale-entry cleanup
         current_paths = set()
@@ -496,8 +496,66 @@ def get_file_symbols(index_db: Path, path: str) -> dict:
 def _context_index_db(context: PluginContext) -> Path:
     value = context.services.get("code_index_db")
     if value is None:
-        raise RuntimeError("The code Plugin pack requires the code_index_db service")
+        raise RuntimeError(plugin_localized(
+            context,
+            "The code index service is unavailable.",
+            "代码索引服务不可用。",
+        ))
     return Path(value).expanduser().resolve()
+
+
+def _localized_index_result(
+    result: dict,
+    context: PluginContext,
+) -> dict:
+    error_code = str(result.get("error_code") or "")
+    if not error_code:
+        return result
+    path = str(result.get("path") or "")
+    messages = {
+        "path_outside_project": (
+            "The requested path is outside the active project: {path}",
+            "请求的路径不在当前项目内：{path}",
+        ),
+        "path_not_found": (
+            "Path not found: {path}",
+            "未找到路径：{path}",
+        ),
+        "unsupported_path": (
+            "The path is not a file or directory: {path}",
+            "该路径不是文件或目录：{path}",
+        ),
+    }
+    templates = messages.get(error_code)
+    if templates is None:
+        return {
+            "error_code": "index_failed",
+            "error": plugin_localized(
+                context,
+                "The code index could not be updated.",
+                "无法更新代码索引。",
+            ),
+        }
+    return {
+        **result,
+        "error": plugin_localized(
+            context,
+            templates[0],
+            templates[1],
+            path=path,
+        ),
+    }
+
+
+def _unexpected_index_error(context: PluginContext) -> str:
+    return json.dumps({
+        "error_code": "index_failed",
+        "error": plugin_localized(
+            context,
+            "The code index operation could not be completed.",
+            "无法完成代码索引操作。",
+        ),
+    }, ensure_ascii=False)
 
 
 async def _tool_index_codebase(
@@ -506,14 +564,18 @@ async def _tool_index_codebase(
 ) -> str:
     path = str(args.get("path", "."))
     force = bool(args.get("force", False))
-    result = await asyncio.to_thread(
-        build_index,
-        workspace_root(context),
-        _context_index_db(context),
-        path,
-        force,
-    )
-    return json.dumps(result, ensure_ascii=False)
+    try:
+        result = await asyncio.to_thread(
+            build_index,
+            workspace_root(context),
+            _context_index_db(context),
+            path,
+            force,
+        )
+    except Exception:
+        logger.warning("Code indexing failed", exc_info=True)
+        return _unexpected_index_error(context)
+    return json.dumps(_localized_index_result(result, context), ensure_ascii=False)
 
 
 async def _tool_search_symbol(
@@ -523,8 +585,21 @@ async def _tool_search_symbol(
     name = str(args.get("name", ""))
     kind = str(args.get("kind", ""))
     if not name:
-        return json.dumps({"error": "name is required"}, ensure_ascii=False)
-    result = await asyncio.to_thread(search_symbol, _context_index_db(context), name, kind)
+        return json.dumps({"error": plugin_localized(
+            context,
+            "name is required.",
+            "必须提供 name。",
+        )}, ensure_ascii=False)
+    try:
+        result = await asyncio.to_thread(
+            search_symbol,
+            _context_index_db(context),
+            name,
+            kind,
+        )
+    except Exception:
+        logger.warning("Code symbol search failed", exc_info=True)
+        return _unexpected_index_error(context)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -534,8 +609,20 @@ async def _tool_find_references(
 ) -> str:
     name = str(args.get("name", ""))
     if not name:
-        return json.dumps({"error": "name is required"}, ensure_ascii=False)
-    result = await asyncio.to_thread(find_references, _context_index_db(context), name)
+        return json.dumps({"error": plugin_localized(
+            context,
+            "name is required.",
+            "必须提供 name。",
+        )}, ensure_ascii=False)
+    try:
+        result = await asyncio.to_thread(
+            find_references,
+            _context_index_db(context),
+            name,
+        )
+    except Exception:
+        logger.warning("Code reference search failed", exc_info=True)
+        return _unexpected_index_error(context)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -545,8 +632,20 @@ async def _tool_get_file_symbols(
 ) -> str:
     path = str(args.get("path", ""))
     if not path:
-        return json.dumps({"error": "path is required"}, ensure_ascii=False)
-    result = await asyncio.to_thread(get_file_symbols, _context_index_db(context), path)
+        return json.dumps({"error": plugin_localized(
+            context,
+            "path is required.",
+            "必须提供 path。",
+        )}, ensure_ascii=False)
+    try:
+        result = await asyncio.to_thread(
+            get_file_symbols,
+            _context_index_db(context),
+            path,
+        )
+    except Exception:
+        logger.warning("Code file-symbol lookup failed", exc_info=True)
+        return _unexpected_index_error(context)
     return json.dumps(result, ensure_ascii=False)
 
 

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Callable, Protocol
 
+from cyrene.localization import localized
 from cyrene.workbench.goal_loop_repository import (
     GoalLoopRepositoryPort,
     GoalLoopTransactionPort,
@@ -24,6 +25,10 @@ TERMINAL_STATUSES = {"review", "completed", "cancelled"}
 RESUMABLE_STATUSES = {"paused", "blocked"}
 REFLECTION_MODES = {"standard", "proactive", "frequent"}
 PERMISSION_MODES = {"auto", "full_access"}
+
+
+def _l(en: str, zh: str, **values: Any) -> str:
+    return localized(en, zh, **values)
 
 
 class GoalLoopApplicationError(Exception):
@@ -92,7 +97,10 @@ class GoalLoopApplicationService:
         base_revision = _base_revision(command.payload, session)
         current = await self._prepare_preview_storage(command.session_id)
         if _is_active(current):
-            raise GoalLoopApplicationError("该任务已有持续执行实例。", 409, code="goal_loop_exists")
+            raise GoalLoopApplicationError(_l(
+                "This task already has a continuous-execution run.",
+                "该任务已有持续执行实例。",
+            ), 409, code="goal_loop_exists")
         goal = str(limits["goal"])
         goal_changed = goal.strip() != str(session.get("goal") or "").strip()
         plan, acceptance, generated = await self._preview_plan(project, session, goal, goal_changed)
@@ -119,10 +127,16 @@ class GoalLoopApplicationService:
         _payload, project, session = self._read_session(command.session_id)
         base_revision = int(draft.get("base_plan_revision") or 0)
         if base_revision != int(session.get("planDefinitionRevision") or 0):
-            raise GoalLoopApplicationError("计划已发生变化，请重新生成目标配置。", 409, code="stale_plan_revision")
+            raise GoalLoopApplicationError(_l(
+                "The plan changed. Generate the goal configuration again.",
+                "计划已发生变化，请重新生成目标配置。",
+            ), 409, code="stale_plan_revision")
         existing = await self.repository.get_run_by_session(command.session_id)
         if _is_active(existing):
-            raise GoalLoopApplicationError("该任务已有持续执行实例。", 409, code="goal_loop_exists")
+            raise GoalLoopApplicationError(_l(
+                "This task already has a continuous-execution run.",
+                "该任务已有持续执行实例。",
+            ), 409, code="goal_loop_exists")
         if existing:
             await self.repository.delete_run(str(existing["id"]))
         run_seed = _run_reservation(command.session_id, project, draft, base_revision)
@@ -140,7 +154,14 @@ class GoalLoopApplicationService:
         await self.repository.add_event(str(run_seed["id"]), "started", payload={"limits": json_loads(draft.get("limits_json"), {})})
         if run:
             await self.sessions.publish(run)
-        await self._wake_or_conflict(run, command.session_id, "持续执行未启动并已安全暂停。")
+        await self._wake_or_conflict(
+            run,
+            command.session_id,
+            _l(
+                "Continuous execution did not start and was safely paused.",
+                "持续执行未启动并已安全暂停。",
+            ),
+        )
         return response
 
     async def get(self, session_id: str) -> dict[str, Any]:
@@ -157,31 +178,50 @@ class GoalLoopApplicationService:
     async def pause(self, session_id: str) -> dict[str, Any]:
         run = await self.repository.get_run_by_session(session_id)
         if not run or str(run.get("status") or "") != "running":
-            raise GoalLoopApplicationError("没有正在运行的持续任务。", 409)
+            raise GoalLoopApplicationError(_l(
+                "No continuous task is currently running.",
+                "没有正在运行的持续任务。",
+            ), 409)
         self.manager.interrupt(session_id, reason="user_paused")
         paused = await self.repository.set_inactive(run, "paused", phase="paused", stop_reason="user_paused")
         if paused:
             await self.repository.add_event(str(run["id"]), "paused")
-            await self.sessions.sync_projection(paused, message="持续执行已暂停，当前进度已保留。")
+            await self.sessions.sync_projection(paused, message=_l(
+                "Continuous execution was paused and current progress was preserved.",
+                "持续执行已暂停，当前进度已保留。",
+            ))
         return self._session_response(session_id, paused)
 
     async def resume(self, session_id: str) -> dict[str, Any]:
         run = await self.repository.get_run_by_session(session_id)
         if not run or str(run.get("status") or "") not in RESUMABLE_STATUSES:
-            raise GoalLoopApplicationError("当前持续任务不能恢复。", 409)
+            raise GoalLoopApplicationError(_l(
+                "The current continuous task cannot be resumed.",
+                "当前持续任务不能恢复。",
+            ), 409)
         resumed = await self.repository.update_run(str(run["id"]), status="running", phase="executing",
             active_started_at=utc_iso(), stop_reason=None, last_error=None, lease_owner=None, lease_until=None)
         response = self._project_resumed_run(session_id, resumed)
         if resumed:
             await self.repository.add_event(str(run["id"]), "resumed")
             await self.sessions.publish(resumed)
-            await self._wake_or_conflict(resumed, session_id, "持续执行未恢复并已安全暂停。")
+            await self._wake_or_conflict(
+                resumed,
+                session_id,
+                _l(
+                    "Continuous execution did not resume and was safely paused.",
+                    "持续执行未恢复并已安全暂停。",
+                ),
+            )
         return response
 
     async def cancel(self, session_id: str) -> dict[str, Any]:
         run = await self.repository.get_run_by_session(session_id)
         if not run or str(run.get("status") or "") in TERMINAL_STATUSES | {"cancelled"}:
-            raise GoalLoopApplicationError("没有可取消的持续任务。", 409)
+            raise GoalLoopApplicationError(_l(
+                "There is no continuous task to cancel.",
+                "没有可取消的持续任务。",
+            ), 409)
         self.manager.interrupt(session_id, reason="user_cancelled")
         await self.manager.cancel_agent_context(
             session_id,
@@ -191,18 +231,27 @@ class GoalLoopApplicationService:
         cancelled = await self.repository.set_inactive(run, "cancelled", phase="cancelled", stop_reason="user_cancelled")
         if cancelled:
             await self.repository.add_event(str(run["id"]), "cancelled")
-            await self.sessions.sync_projection(cancelled, message="持续执行已取消，当前进度和文件改动已保留。")
+            await self.sessions.sync_projection(cancelled, message=_l(
+                "Continuous execution was cancelled. Current progress and file changes were preserved.",
+                "持续执行已取消，当前进度和文件改动已保留。",
+            ))
         return self._session_response(session_id, cancelled)
 
     async def update_limits(self, command: GoalLoopLimitsCommand) -> dict[str, Any]:
         run = await self.repository.get_run_by_session(command.session_id)
         if not run:
-            raise GoalLoopApplicationError("持续任务不存在。", 404)
+            raise GoalLoopApplicationError(_l(
+                "The continuous task does not exist.",
+                "持续任务不存在。",
+            ), 404)
         max_hours, max_repairs, reflection_mode = _updated_limits(command.payload, run)
         updated = await self.repository.update_run(str(run["id"]), max_active_seconds=int(max_hours * 3600),
             max_repair_rounds=max_repairs, reflection_mode=reflection_mode)
         if updated:
-            await self.sessions.sync_projection(updated, message="持续执行限制已更新。")
+            await self.sessions.sync_projection(updated, message=_l(
+                "Continuous-execution limits were updated.",
+                "持续执行限制已更新。",
+            ))
         return self._session_response(command.session_id, updated)
 
     async def _prepare_preview_storage(self, session_id: str) -> dict[str, Any] | None:
@@ -231,21 +280,35 @@ class GoalLoopApplicationService:
             else:
                 acceptance, generated = await self.sessions.generate_acceptance(draft_session, project)
         if not plan:
-            raise GoalLoopApplicationError("无法生成可执行计划。", 503)
+            raise GoalLoopApplicationError(_l(
+                "Could not generate an executable plan.",
+                "无法生成可执行计划。",
+            ), 503)
         if not acceptance:
-            raise GoalLoopApplicationError("无法生成验收条件。", 503)
+            raise GoalLoopApplicationError(_l(
+                "Could not generate acceptance criteria.",
+                "无法生成验收条件。",
+            ), 503)
         return plan, acceptance, generated
 
     async def _raise_missing_draft(self, session_id: str) -> None:
         if _is_active(await self.repository.get_run_by_session(session_id)):
-            raise GoalLoopApplicationError("该任务已有持续执行实例。", 409, code="goal_loop_exists")
-        raise GoalLoopApplicationError("目标配置草稿不存在或已过期。", 404, code="draft_not_found")
+            raise GoalLoopApplicationError(_l(
+                "This task already has a continuous-execution run.",
+                "该任务已有持续执行实例。",
+            ), 409, code="goal_loop_exists")
+        raise GoalLoopApplicationError(_l(
+            "The goal-configuration draft does not exist or has expired.",
+            "目标配置草稿不存在或已过期。",
+        ), 404, code="draft_not_found")
 
     def _read_session(self, session_id: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         try:
             return self.sessions.read_session(session_id)
         except KeyError as exc:
-            raise GoalLoopApplicationError("session not found", 404) from exc
+            raise GoalLoopApplicationError(_l(
+                "Session not found.", "未找到会话。"
+            ), 404) from exc
 
     def _project_started_run(self, session_id: str, draft: dict[str, Any], run: dict[str, Any] | None) -> dict[str, Any]:
         plan = json_loads(draft.get("plan_json"), [])
@@ -266,9 +329,15 @@ class GoalLoopApplicationService:
                 status="running", planRevision=int(session.get("planRevision") or 0) + 1,
                 planDefinitionRevision=revision, approvedPlanDefinitionRevision=revision,
                 goalLoop=self.sessions.serialize_run(run),
-                agentReply="持续执行已启动，Agent 将执行计划并循环返工直到验收通过或达到退出条件。")
+                agentReply=_l(
+                    "Continuous execution started. The Agent will execute the plan and iterate on repairs until acceptance passes or an exit condition is reached.",
+                    "持续执行已启动，Agent 将执行计划并循环返工直到验收通过或达到退出条件。",
+                ))
             session.setdefault("events", []).append({"id": self.sessions.event_id(), "type": "GoalLoopStarted",
-                "createdAt": now, "body": "用户确认启动持续执行到验收通过。"})
+                "createdAt": now, "body": _l(
+                    "The user confirmed continuous execution until acceptance passes.",
+                    "用户确认启动持续执行到验收通过。",
+                )})
         payload, project, session = self.sessions.write_session(session_id, apply)
         return {"ok": True, "project": project, "session": session, "goalLoop": self.sessions.serialize_run(run), **payload}
 
@@ -286,7 +355,14 @@ class GoalLoopApplicationService:
                     step["status"], step["startedAt"] = "pending", None
                 if str(step.get("status") or "") not in {"completed", "done", "skipped"}:
                     step["goalLoopAttempts"] = 0
-            session.update(status="running", goalLoop=self.sessions.serialize_run(run), agentReply="持续执行已恢复。")
+            session.update(
+                status="running",
+                goalLoop=self.sessions.serialize_run(run),
+                agentReply=_l(
+                    "Continuous execution resumed.",
+                    "持续执行已恢复。",
+                ),
+            )
         payload, project, session = self.sessions.write_session(session_id, apply)
         return {"ok": True, "project": project, "session": session, "goalLoop": self.sessions.serialize_run(run), **payload}
 
@@ -299,9 +375,16 @@ class GoalLoopApplicationService:
             return
         paused = await self.repository.set_inactive(run, "paused", phase="paused", stop_reason="run_conflict")
         if paused:
-            await self.sessions.sync_projection(paused, message=f"任务已有其他运行，{message}")
+            await self.sessions.sync_projection(paused, message=_l(
+                "Another run is already active for this task. {message}",
+                "任务已有其他运行，{message}",
+                message=message,
+            ))
         self._read_session(session_id)
-        raise GoalLoopApplicationError("该任务已有正在执行的请求，请等待完成或先停止它。", 409, code="task_run_in_progress")
+        raise GoalLoopApplicationError(_l(
+            "This task already has an active request. Wait for it to finish or stop it first.",
+            "该任务已有正在执行的请求，请等待完成或先停止它。",
+        ), 409, code="task_run_in_progress")
 
     def _session_response(self, session_id: str, run: dict[str, Any] | None) -> dict[str, Any]:
         payload, project, session = self._read_session(session_id)
@@ -311,27 +394,49 @@ class GoalLoopApplicationService:
 def _validate_limits(payload: dict[str, Any]) -> dict[str, Any]:
     goal = str(payload.get("goal") or "").strip()
     if len(goal) < 3:
-        raise GoalLoopApplicationError("目标至少需要 3 个字符。", 400)
+        raise GoalLoopApplicationError(_l(
+            "The goal must contain at least 3 characters.",
+            "目标至少需要 3 个字符。",
+        ), 400)
     try:
         max_hours = float(payload.get("maxRuntimeHours"))
     except (TypeError, ValueError) as exc:
-        raise GoalLoopApplicationError("最大运行时间必须是数字。", 400) from exc
+        raise GoalLoopApplicationError(_l(
+            "Maximum runtime must be a number.",
+            "最大运行时间必须是数字。",
+        ), 400) from exc
     if max_hours < 0.5 or max_hours > 24:
-        raise GoalLoopApplicationError("最大运行时间必须在 0.5 到 24 小时之间。", 400)
+        raise GoalLoopApplicationError(_l(
+            "Maximum runtime must be between 0.5 and 24 hours.",
+            "最大运行时间必须在 0.5 到 24 小时之间。",
+        ), 400)
     try:
         max_repairs = int(payload.get("maxRepairRounds"))
     except (TypeError, ValueError) as exc:
-        raise GoalLoopApplicationError("最大返工轮数必须是整数。", 400) from exc
+        raise GoalLoopApplicationError(_l(
+            "Maximum repair rounds must be an integer.",
+            "最大返工轮数必须是整数。",
+        ), 400) from exc
     if max_repairs < 0 or max_repairs > 10:
-        raise GoalLoopApplicationError("最大返工轮数必须在 0 到 10 之间。", 400)
+        raise GoalLoopApplicationError(_l(
+            "Maximum repair rounds must be between 0 and 10.",
+            "最大返工轮数必须在 0 到 10 之间。",
+        ), 400)
     permission = str(payload.get("permissionMode") or "auto").strip()
     if permission not in PERMISSION_MODES:
-        raise GoalLoopApplicationError("权限模式无效。", 400)
+        raise GoalLoopApplicationError(_l(
+            "Invalid permission mode.", "权限模式无效。"
+        ), 400)
     if permission == "full_access" and not bool(payload.get("fullAccessConfirmed")):
-        raise GoalLoopApplicationError("使用完全访问前必须确认风险。", 400)
+        raise GoalLoopApplicationError(_l(
+            "You must acknowledge the risk before using full access.",
+            "使用完全访问前必须确认风险。",
+        ), 400)
     reflection = str(payload.get("reflectionMode") or "proactive").strip()
     if reflection not in REFLECTION_MODES:
-        raise GoalLoopApplicationError("深度思考强度无效。", 400)
+        raise GoalLoopApplicationError(_l(
+            "Invalid reflection intensity.", "深度思考强度无效。"
+        ), 400)
     return {"goal": goal, "maxRuntimeHours": max_hours, "maxActiveSeconds": int(max_hours * 3600),
         "maxRepairRounds": max_repairs, "permissionMode": permission, "reflectionMode": reflection}
 
@@ -342,21 +447,33 @@ def _base_revision(payload: dict[str, Any], session: dict[str, Any]) -> int:
     except (TypeError, ValueError) as exc:
         raise GoalLoopApplicationError("invalid basePlanDefinitionRevision", 400) from exc
     if revision != int(session.get("planDefinitionRevision") or 0):
-        raise GoalLoopApplicationError("计划已发生变化，请重新打开配置。", 409, code="stale_plan_revision")
+        raise GoalLoopApplicationError(_l(
+            "The plan changed. Reopen the configuration.",
+            "计划已发生变化，请重新打开配置。",
+        ), 409, code="stale_plan_revision")
     return revision
 
 
 def _require_planning_session(session: dict[str, Any]) -> None:
     if str(session.get("status") or "") != "planning":
-        raise GoalLoopApplicationError("只有计划确认阶段可以启动持续执行。", 409, code="invalid_status")
+        raise GoalLoopApplicationError(_l(
+            "Continuous execution can start only during plan confirmation.",
+            "只有计划确认阶段可以启动持续执行。",
+        ), 409, code="invalid_status")
 
 
 def _require_valid_draft(draft: dict[str, Any]) -> None:
     try:
         if datetime.fromisoformat(str(draft["expires_at"])) <= utc_now():
-            raise GoalLoopApplicationError("目标配置草稿已过期，请重新生成。", 409, code="draft_expired")
+            raise GoalLoopApplicationError(_l(
+                "The goal-configuration draft expired. Generate it again.",
+                "目标配置草稿已过期，请重新生成。",
+            ), 409, code="draft_expired")
     except ValueError as exc:
-        raise GoalLoopApplicationError("目标配置草稿无效。", 409) from exc
+        raise GoalLoopApplicationError(_l(
+            "The goal-configuration draft is invalid.",
+            "目标配置草稿无效。",
+        ), 409) from exc
 
 
 def _is_active(run: dict[str, Any] | None) -> bool:
@@ -403,17 +520,27 @@ def _updated_limits(payload: dict[str, Any], run: dict[str, Any]) -> tuple[float
         hours = float(payload.get("maxRuntimeHours", int(run["max_active_seconds"]) / 3600))
         repairs = int(payload.get("maxRepairRounds", run["max_repair_rounds"]))
     except (TypeError, ValueError) as exc:
-        raise GoalLoopApplicationError("退出条件格式无效。", 400) from exc
+        raise GoalLoopApplicationError(_l(
+            "Invalid exit-condition format.", "退出条件格式无效。"
+        ), 400) from exc
     if hours < 0.5 or hours > 24 or repairs < 0 or repairs > 10:
-        raise GoalLoopApplicationError("退出条件超出允许范围。", 400)
+        raise GoalLoopApplicationError(_l(
+            "Exit conditions are outside the allowed range.",
+            "退出条件超出允许范围。",
+        ), 400)
     reflection = str(payload.get("reflectionMode") or run.get("reflection_mode") or "proactive")
     if reflection not in REFLECTION_MODES:
-        raise GoalLoopApplicationError("深度思考强度无效。", 400)
+        raise GoalLoopApplicationError(_l(
+            "Invalid reflection intensity.", "深度思考强度无效。"
+        ), 400)
     return hours, repairs, reflection
 
 
 def _storage_busy_error() -> GoalLoopApplicationError:
-    return GoalLoopApplicationError("任务存储正被其他操作占用，请等待相关测试或任务结束后重试。", 503,
+    return GoalLoopApplicationError(_l(
+        "Task storage is busy with another operation. Wait for the related test or task to finish, then try again.",
+        "任务存储正被其他操作占用，请等待相关测试或任务结束后重试。",
+    ), 503,
         code="goal_loop_storage_busy")
 
 

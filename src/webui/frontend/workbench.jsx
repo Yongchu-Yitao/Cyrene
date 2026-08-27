@@ -167,7 +167,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         && enabledModules.indexOf(fullPage) < 0) {
       setFullPage(null);
     }
-  }, [fullPage, enabledModules.join("|")]);
+    if (enabledModules.indexOf("memory") < 0 && editMemoryProject) setEditMemoryProject(null);
+  }, [fullPage, editMemoryProject, enabledModules.join("|")]);
 
   useWorkbenchEffect(function () {
     function openSettings(event) {
@@ -617,6 +618,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         onCloseEditProject={function () { setEditProject(null); }}
         onUpdateProject={handleUpdateProject}
         editMemoryProject={editMemoryProject}
+        memoryAvailable={enabledModules.indexOf("memory") >= 0}
         onCloseEditMemory={function () { setEditMemoryProject(null); }}
         newTaskOpen={newTaskOpen}
         onCloseNewTask={function () { setNewTaskOpen(false); }}

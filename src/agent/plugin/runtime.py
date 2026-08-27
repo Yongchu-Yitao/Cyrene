@@ -12,9 +12,14 @@ from typing import Any
 
 from ..observability import log_operation, operation
 from .execution import bind_plugin_execution
+from .native_runtime import plugin_localized
 from .plugin import Plugin, PluginCall, PluginCallResult, PluginContext
-from .registry import PluginRegistry
-from .validation import validate_plugin_arguments
+from .registry import PluginNotFoundError, PluginRegistry, PluginUnavailableError
+from .validation import (
+    PluginInputValidationError,
+    PluginSchemaError,
+    validate_plugin_arguments,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +55,21 @@ def _context_agent_id(context: PluginContext) -> str:
         if nested:
             return nested
     return "main"
+
+
+def _validation_error_text(context: PluginContext, exc: Exception) -> str:
+    english = str(exc) or "Plugin call validation failed."
+    if isinstance(exc, PluginInputValidationError):
+        chinese = "插件参数无效。"
+    elif isinstance(exc, PluginSchemaError):
+        chinese = "插件输入规则无效。"
+    elif isinstance(exc, PluginNotFoundError):
+        chinese = "未找到请求的插件。"
+    elif isinstance(exc, PluginUnavailableError):
+        chinese = "请求的插件当前不可用。"
+    else:
+        chinese = "无法验证插件调用。"
+    return plugin_localized(context, english, chinese)
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,7 +167,7 @@ class PluginRuntime:
                             call.name,
                             False,
                             None,
-                            str(exc),
+                            _validation_error_text(context, exc),
                             _utc_now(),
                         )
                     )
@@ -218,7 +238,7 @@ class PluginRuntime:
                                 item.call.name,
                                 False,
                                 None,
-                                str(exc),
+                                _validation_error_text(context, exc),
                                 _utc_now(),
                             )
                         else:
@@ -286,7 +306,7 @@ class PluginRuntime:
                     call.name,
                     False,
                     None,
-                    str(exc),
+                    _validation_error_text(context, exc),
                     _utc_now(),
                 )
             try:
@@ -311,7 +331,12 @@ class PluginRuntime:
                     if inspect.isawaitable(value):
                         value = await value
             except asyncio.TimeoutError:
-                error = f"Plugin timed out after {plugin.timeout_seconds:g} seconds"
+                error = plugin_localized(
+                    context,
+                    "Plugin timed out after {seconds:g} seconds.",
+                    "插件在 {seconds:g} 秒后超时。",
+                    seconds=plugin.timeout_seconds,
+                )
                 if _dispatches_own_tool_hooks(plugin):
                     await self._post(context, call.name, arguments, None, False, error)
                 op.finish(success=False, timed_out=True, error=error)
@@ -338,15 +363,20 @@ class PluginRuntime:
                     error=exc,
                     **_context_fields(context),
                 )
+                error = plugin_localized(
+                    context,
+                    "Plugin execution failed.",
+                    "插件执行失败。",
+                )
                 if _dispatches_own_tool_hooks(plugin):
-                    await self._post(context, call.name, arguments, None, False, str(exc))
+                    await self._post(context, call.name, arguments, None, False, error)
                 op.finish(success=False, error=exc)
                 return PluginCallResult(
                     call.id,
                     call.name,
                     False,
                     None,
-                    str(exc),
+                    error,
                     _utc_now(),
                 )
 
@@ -369,6 +399,34 @@ class PluginRuntime:
             else PluginCall(name=name, arguments=arguments, id=call_id)
         )
         return await self.run(call, context)
+
+    async def call_canonical(
+        self,
+        canonical_name: str,
+        arguments: dict[str, Any],
+        context: PluginContext | None = None,
+        *,
+        call_id: str | None = None,
+    ) -> PluginCallResult:
+        """Invoke an application-owned tool by its stable canonical identity."""
+
+        try:
+            registered = self.registry.registered_by_canonical(canonical_name)
+        except Exception as exc:
+            return PluginCallResult(
+                call_id or f"call_{canonical_name}",
+                str(canonical_name),
+                False,
+                None,
+                _validation_error_text(context or PluginContext(), exc),
+                _utc_now(),
+            )
+        return await self.call(
+            registered.plugin.name,
+            arguments,
+            context,
+            call_id=call_id,
+        )
 
     @staticmethod
     async def _post(

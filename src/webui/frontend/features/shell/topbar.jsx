@@ -172,10 +172,15 @@ function WorkbenchSessionActivityPreview({ preview, t }) {
 function WorkbenchTopbar({ projects, activeProject, activePage, taskView, activeTaskId, activeChatId, recentSessions, overflowSessions, browserOwners, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onOpenBrowserPage, onPauseSession, onStopSession, onTogglePinnedSession, onRemoveSessionTab, onLoadSessionResources, onLoadSessionBrowserPreview, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onSelectProject, onEditProject, onEditMemory, onDeleteProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
   var { t } = workbenchServices.i18n().use();
   var dataState = workbenchServices.data().state;
+  var pluginModules = Array.isArray(dataState.pluginModules) ? dataState.pluginModules : [];
+  var browserAvailable = pluginModules.indexOf("browser") >= 0;
+  var memoryAvailable = pluginModules.indexOf("memory") >= 0;
   var tabs = Array.isArray(recentSessions) ? recentSessions : [];
   var overflowTabs = Array.isArray(overflowSessions) ? overflowSessions : [];
   var overflowGroups = wbSplitOverflowSessions(overflowTabs);
-  var resources = Array.isArray(pinnedResources) ? pinnedResources : [];
+  var resources = (Array.isArray(pinnedResources) ? pinnedResources : []).filter(function (resource) {
+    return browserAvailable || !resource || resource.kind !== "browser";
+  });
   var [sessionMenu, setSessionMenu] = useWorkbenchState(null);
   var [resourceMenu, setResourceMenu] = useWorkbenchState(null);
   var [overflowMenu, setOverflowMenu] = useWorkbenchState(null);
@@ -202,6 +207,11 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
   }, []);
 
   useWorkbenchEffect(function () {
+    if (!browserAvailable) {
+      setBrowserManagerState({ ok: true, pageCount: 0, downloadCount: 0, pages: [], downloads: [] });
+      setBrowserManagerMenu(null);
+      return undefined;
+    }
     var bridge = window.cyrene && window.cyrene.browser;
     if (!bridge || typeof bridge.getManagerState !== "function") return undefined;
     var mounted = true;
@@ -217,7 +227,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
       mounted = false;
       unsubscribe();
     };
-  }, []);
+  }, [browserAvailable]);
 
   useWorkbenchEffect(function () {
     if (!browserManagerMenu) return undefined;
@@ -595,6 +605,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
   }, []);
 
   useWorkbenchEffect(function () {
+    if (!browserAvailable) return undefined;
     function handleBrowserCopy(event) {
       var detail = event && event.detail || {};
       if (!detail.targetChatId || !detail.resource) return;
@@ -604,7 +615,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
     return function () {
       window.removeEventListener("cyrene:copy-browser-to-chat", handleBrowserCopy);
     };
-  }, []);
+  }, [browserAvailable]);
 
   useWorkbenchEffect(function () {
     function handleSessionShortcut(event) {
@@ -700,7 +711,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
   }, [!!sessionMenu, !!resourceMenu, !!overflowMenu, !!hoverPreview]);
 
   useWorkbenchEffect(function () {
-    if (!sessionMenu || !onLoadSessionBrowserPreview) return undefined;
+    if (!browserAvailable || !sessionMenu || !onLoadSessionBrowserPreview) return undefined;
     var item = sessionMenu.item;
     var cancelled = false;
     var inFlight = false;
@@ -731,7 +742,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
       cancelled = true;
       clearInterval(timer);
     };
-  }, [sessionMenu ? sessionMenu.item.kind + ":" + sessionMenu.item.id : "", !!onLoadSessionBrowserPreview]);
+  }, [browserAvailable, sessionMenu ? sessionMenu.item.kind + ":" + sessionMenu.item.id : "", !!onLoadSessionBrowserPreview]);
 
   useWorkbenchEffect(function () {
     return function () {
@@ -763,7 +774,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
           return Object.assign({}, current, {
             loading: false,
             resources: {
-              browser: resources && resources.browser ? resources.browser : null,
+              browser: browserAvailable && resources && resources.browser ? resources.browser : null,
               files: resources && Array.isArray(resources.files) ? resources.files : [],
             },
           });
@@ -1128,7 +1139,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
     browserManagerPreviewPages.push(page);
   });
 
-  var browserManagerMenuPortal = browserManagerMenu && typeof ReactDOM !== "undefined"
+  var browserManagerMenuPortal = browserAvailable && browserManagerMenu && typeof ReactDOM !== "undefined"
     ? ReactDOM.createPortal((
       <div className="workbench-browser-manager-layer" style={browserManagerMenu.portalTheme || {}}>
         <div className="workbench-browser-manager-scrim" onMouseDown={function () { setBrowserManagerMenu(null); }} />
@@ -1316,10 +1327,10 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
                           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                           <span>{t("rail.editProject")}</span>
                         </button>
-                        <button type="button" role="menuitem" onClick={function () { setProjectActionId(""); setProjectMenuOpen(false); if (onEditMemory) onEditMemory(project); }}>
+                        {memoryAvailable ? <button type="button" role="menuitem" onClick={function () { setProjectActionId(""); setProjectMenuOpen(false); if (onEditMemory) onEditMemory(project); }}>
                           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3 13.7 9.3 20 11l-6.3 1.7L12 19l-1.7-6.3L4 11l6.3-1.7Z"/><path d="M18.5 16.5 19 19l2.5.5L19 20l-.5 2.5L18 20l-2.5-.5L18 19Z"/></svg>
                           <span>{t("rail.editMemory")}</span>
-                        </button>
+                        </button> : null}
                         {!isCyrene ? <button type="button" role="menuitem" className="danger" onClick={function () { setProjectActionId(""); setProjectMenuOpen(false); if (onDeleteProject) onDeleteProject(project); }}>
                           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
                           <span>{t("rail.deleteProject")}</span>

@@ -7,13 +7,13 @@ from typing import Any
 
 _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
   'function': {'name': 'ListEnvironment',
-               'description': 'List enabled, installed or system-detected MCP servers, CLI tools, '
-                              'and runtimes available to Cyrene. Disabled extensions are hidden. '
+               'description': 'List enabled, installed or system-detected MCP servers and '
+                              'runtimes available to Cyrene. Disabled extensions are hidden. '
                               'Returns compact metadata only and does not change the system. Use '
                               'the cyrene_skills Plugin pack for Skills.',
                'parameters': {'type': 'object',
                               'properties': {'kind': {'type': 'string',
-                                                      'enum': ['all', 'mcp', 'cli', 'toolchain'],
+                                                      'enum': ['all', 'mcp', 'toolchain'],
                                                       'description': 'Optional environment '
                                                                      'category; defaults to all.'},
                                              'query': {'type': 'string',
@@ -39,7 +39,7 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                                                                  'disable',
                                                                  'set_default']},
                                              'kind': {'type': 'string',
-                                                      'enum': ['skill', 'mcp', 'cli', 'toolchain']},
+                                                      'enum': ['skill', 'mcp', 'toolchain']},
                                              'extension_id': {'type': 'string'},
                                              'query': {'type': 'string'},
                                              'version': {'type': 'string'},
@@ -90,7 +90,7 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                               'required': ['action']}}},
  {'type': 'function',
   'function': {'name': 'SearchEnvironment',
-               'description': 'Search available MCP servers, CLI tools, and runtimes without '
+               'description': 'Search available MCP servers and runtimes without '
                               'installing them. Disabled extensions are hidden. Results include '
                               'installed state and a deterministic install_request that can be '
                               'passed to the reviewed environment manager. Use the cyrene_skills Plugin pack for '
@@ -101,7 +101,7 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                                                                       'command, runtime, or plugin '
                                                                       'to find.'},
                                              'kind': {'type': 'string',
-                                                      'enum': ['all', 'mcp', 'cli', 'toolchain'],
+                                                      'enum': ['all', 'mcp', 'toolchain'],
                                                       'description': 'Optional category; defaults '
                                                                      'to all.'},
                                              'advanced': {'type': 'boolean',

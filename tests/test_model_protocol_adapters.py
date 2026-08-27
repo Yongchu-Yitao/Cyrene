@@ -235,6 +235,7 @@ def test_prepare_anthropic_request_converts_system_images_tools_and_auth() -> No
     assert request.payload["system"] == "Be concise."
     assert request.payload["max_tokens"] == 512
     assert request.payload["stream"] is True
+    assert request.payload["cache_control"] == {"type": "ephemeral"}
     assert request.payload["messages"][0] == {
         "role": "user",
         "content": [
@@ -540,7 +541,7 @@ def test_gemini_thought_parts_are_reasoning_not_visible_answer_text() -> None:
     assert parsed["reasoning_content"] == "internal analysis"
 
 
-def test_parse_response_preserves_provider_cache_usage() -> None:
+def test_parse_response_normalizes_provider_cache_usage() -> None:
     anthropic = parse_response(
         "anthropic",
         {
@@ -566,8 +567,13 @@ def test_parse_response_preserves_provider_cache_usage() -> None:
         },
     )
 
-    assert anthropic["usage"]["prompt_cache_hit_tokens"] == 90
-    assert anthropic["usage"]["prompt_cache_miss_tokens"] == 30
+    assert anthropic["usage"] == {
+        "prompt_tokens": 240,
+        "completion_tokens": 12,
+        "total_tokens": 252,
+        "prompt_cache_hit_tokens": 90,
+        "prompt_cache_miss_tokens": 150,
+    }
     assert gemini["usage"]["prompt_cache_hit_tokens"] == 20
     assert gemini["usage"]["prompt_cache_miss_tokens"] == 30
 
@@ -580,7 +586,17 @@ def _sse_response(events: list[dict[str, object]]) -> httpx.Response:
 @pytest.mark.asyncio
 async def test_anthropic_sse_accumulates_text_tool_arguments_usage_and_finish() -> None:
     events = [
-        {"type": "message_start", "message": {"usage": {"input_tokens": 10, "output_tokens": 0}}},
+        {
+            "type": "message_start",
+            "message": {
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 0,
+                    "cache_read_input_tokens": 40,
+                    "cache_creation_input_tokens": 5,
+                }
+            },
+        },
         {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
         {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
         {"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "weather", "input": {}}},
@@ -614,7 +630,13 @@ async def test_anthropic_sse_accumulates_text_tool_arguments_usage_and_finish() 
     assert parsed == {
         "role": "assistant",
         "content": "Hello",
-        "usage": {"prompt_tokens": 10, "completion_tokens": 7, "total_tokens": 17},
+        "usage": {
+            "prompt_tokens": 55,
+            "completion_tokens": 7,
+            "total_tokens": 62,
+            "prompt_cache_hit_tokens": 40,
+            "prompt_cache_miss_tokens": 15,
+        },
         "tool_calls": [
             {
                 "id": "toolu_1",

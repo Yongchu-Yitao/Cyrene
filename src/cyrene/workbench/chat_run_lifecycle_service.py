@@ -7,8 +7,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-import httpx
-
+from cyrene.localization import localized
 from cyrene.workbench.chat_runs import ChatRun
 
 logger = logging.getLogger(__name__)
@@ -89,7 +88,7 @@ class ChatRunLifecycleApplicationService:
             stream=False,
         )
         if not is_new:
-            return self._already_running()
+            return self._already_running(request.lang)
         await self.dependencies.publish_chat_changed(
             request.chat_id,
             request.project_id,
@@ -146,9 +145,14 @@ class ChatRunLifecycleApplicationService:
             if not isinstance(exc, Exception):
                 exc = RuntimeError("agent run failed")
             message = self.dependencies.error_message(exc, request.lang)
-            error = message if isinstance(exc, httpx.TransportError) else "agent run failed"
+            metadata = self.dependencies.error_metadata(exc)
             return ChatRunDispatchResult(
-                payload={"error": error, "detail": str(exc), **self.dependencies.error_metadata(exc)},
+                payload={
+                    "error": message,
+                    "detail": message,
+                    "code": "model_call_failed",
+                    **metadata,
+                },
                 status_code=502,
             )
         if kind == "awaiting":
@@ -209,7 +213,7 @@ class ChatRunLifecycleApplicationService:
             )
         if request.detached:
             if not is_new:
-                return self._already_running()
+                return self._already_running(request.lang)
             return ChatRunDispatchResult(
                 payload={
                     "run_id": run.run_id,
@@ -457,9 +461,16 @@ class ChatRunLifecycleApplicationService:
         )
 
     @staticmethod
-    def _already_running() -> ChatRunDispatchResult:
+    def _already_running(language: str = "") -> ChatRunDispatchResult:
         return ChatRunDispatchResult(
-            payload={"error": "chat already has a running reply", "code": "chat_run_in_progress"},
+            payload={
+                "error": localized(
+                    "This chat already has a reply in progress.",
+                    "此对话已有正在生成的回复。",
+                    language=language,
+                ),
+                "code": "chat_run_in_progress",
+            },
             status_code=409,
         )
 

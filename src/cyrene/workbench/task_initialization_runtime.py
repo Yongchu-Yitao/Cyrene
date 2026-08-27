@@ -15,21 +15,28 @@ import re
 from pathlib import Path
 from typing import Any
 
+from cyrene.localization import app_language, localized
 from cyrene.workbench import planning_contracts, project_runtime
+
+
+def _l(en: str, zh: str, **values: Any) -> str:
+    return localized(en, zh, **values)
 
 
 class _WorkbenchGenerationError(RuntimeError):
     def __init__(self, category: str, message: str):
         super().__init__(message)
         self.category = str(category or "unknown")
-        self.message = str(message or "未知错误")
+        self.message = str(message or _l("Unknown error", "未知错误"))
 
 
 class _WorkbenchAgentRunError(RuntimeError):
     def __init__(self, code: str, message: str, *, status_code: int = 502):
         super().__init__(message)
         self.code = str(code or "workbench_agent_run_failed")
-        self.message = str(message or "Agent 执行失败。")
+        self.message = str(message or _l(
+            "Agent execution failed.", "Agent 执行失败。"
+        ))
         self.status_code = int(status_code)
 
 
@@ -59,25 +66,53 @@ def _workbench_generation_error(exc: Exception) -> _WorkbenchGenerationError:
     if isinstance(exc, _WorkbenchGenerationError):
         return exc
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
-        return _WorkbenchGenerationError("timeout", "模型请求超时。")
+        return _WorkbenchGenerationError("timeout", _l(
+            "The model request timed out.", "模型请求超时。"
+        ))
     response = getattr(exc, "response", None)
     status_value = getattr(response, "status_code", None)
     if isinstance(status_value, int):
         status = status_value
         if status in {401, 403}:
-            category, summary = "authentication", f"模型服务鉴权失败（HTTP {status}）。"
+            category, summary = "authentication", _l(
+                "Model-service authentication failed (HTTP {status}).",
+                "模型服务鉴权失败（HTTP {status}）。",
+                status=status,
+            )
         elif status == 429:
-            category, summary = "rate_limit", "模型服务触发限流（HTTP 429）。"
+            category, summary = "rate_limit", _l(
+                "The model service rate limit was reached (HTTP 429).",
+                "模型服务触发限流（HTTP 429）。",
+            )
         elif status >= 500:
-            category, summary = "upstream", f"模型服务暂时异常（HTTP {status}）。"
+            category, summary = "upstream", _l(
+                "The model service is temporarily unavailable (HTTP {status}).",
+                "模型服务暂时异常（HTTP {status}）。",
+                status=status,
+            )
         else:
-            category, summary = "http", f"模型服务返回 HTTP {status}。"
+            category, summary = "http", _l(
+                "The model service returned HTTP {status}.",
+                "模型服务返回 HTTP {status}。",
+                status=status,
+            )
         return _WorkbenchGenerationError(category, summary)
     category = str(getattr(exc, "code", "internal") or "internal")
+    if category not in {
+        "authentication",
+        "configuration",
+        "http",
+        "internal",
+        "rate_limit",
+        "timeout",
+        "upstream",
+    }:
+        category = "internal"
     return _WorkbenchGenerationError(
         category,
-        _workbench_redact_error_text(
-            f"{type(exc).__name__}: {str(exc or '未知错误').strip()}"
+        _l(
+            "The model request failed unexpectedly.",
+            "模型请求意外失败。",
         ),
     )
 
@@ -346,10 +381,18 @@ async def _workbench_run_json_generation(
 def _workbench_explore_parse_failure(response: Any, content: Any) -> _WorkbenchGenerationError:
     finish_reason = str(response.get("finish_reason") or "") if isinstance(response, dict) else ""
     if finish_reason == "length":
-        return _WorkbenchGenerationError("truncated", "模型响应在 JSON 完成前被截断。")
+        return _WorkbenchGenerationError("truncated", _l(
+            "The model response was truncated before the JSON completed.",
+            "模型响应在 JSON 完成前被截断。",
+        ))
     if not str(content or "").strip():
-        return _WorkbenchGenerationError("empty_response", "模型返回了空响应。")
-    return _WorkbenchGenerationError("response_format", "模型响应不是有效的 JSON 对象。")
+        return _WorkbenchGenerationError("empty_response", _l(
+            "The model returned an empty response.", "模型返回了空响应。"
+        ))
+    return _WorkbenchGenerationError("response_format", _l(
+        "The model response is not a valid JSON object.",
+        "模型响应不是有效的 JSON 对象。",
+    ))
 
 
 async def _workbench_exec_explore_tool(*_args: Any, **_kwargs: Any) -> str:
@@ -389,10 +432,19 @@ async def _workbench_run_explore_agent(
 def _workbench_init_workspace_relationship_guidance(project: dict[str, Any]) -> str:
     source = str(project.get("workspacePathSource") or "user").lower()
     if str(project.get("template") or "") == "import":
-        return "已有文件是导入线索，仍需确认导入范围、保留边界和后续目标。"
+        return _l(
+            "Existing files are import clues; confirm the import scope, preservation boundaries, and follow-up goal.",
+            "已有文件是导入线索，仍需确认导入范围、保留边界和后续目标。",
+        )
     if source != "generated":
-        return "已有文件只是待确认线索；先确认它们与新项目的关系，不要当作用户已确认的定位。"
-    return "已有文件可作为现状线索，但探索结论仍需用户确认。"
+        return _l(
+            "Existing files are only unconfirmed clues. First confirm how they relate to the new project; do not treat them as a user-confirmed direction.",
+            "已有文件只是待确认线索；先确认它们与新项目的关系，不要当作用户已确认的定位。",
+        )
+    return _l(
+        "Existing files may be used as clues about the current state, but exploration conclusions still require user confirmation.",
+        "已有文件可作为现状线索，但探索结论仍需用户确认。",
+    )
 
 
 def _workbench_coerce_init_form(
@@ -478,7 +530,16 @@ async def _workbench_generate_init_form(
 
 def _workbench_init_brief(project: dict[str, Any], form: dict[str, Any]) -> str:
     answers = form.get("answers") if isinstance(form.get("answers"), dict) else {}
-    lines = [f"# {project.get('name') or '项目'} · 初始化总结", ""]
+    language = app_language()
+    project_name = project.get('name') or localized(
+        "Project", "项目", language=language
+    )
+    lines = [localized(
+        "# {project} · Initialization summary",
+        "# {project} · 初始化总结",
+        language=language,
+        project=project_name,
+    ), ""]
     for section in form.get("sections") or []:
         if not isinstance(section, dict):
             continue
@@ -488,7 +549,9 @@ def _workbench_init_brief(project: dict[str, Any], form: dict[str, Any]) -> str:
                 continue
             value = answers.get(question.get("id"))
             if isinstance(value, list):
-                value = "、".join(str(item) for item in value if str(item).strip())
+                value = (
+                    "、" if language == "zh" else ", "
+                ).join(str(item) for item in value if str(item).strip())
             if str(value or "").strip():
                 values.append(f"- **{question.get('label')}** {str(value).strip()}")
         if values:
@@ -500,7 +563,9 @@ def _workbench_answer_text(form: dict[str, Any], key: str) -> str:
     answers = form.get("answers") if isinstance(form.get("answers"), dict) else {}
     value = answers.get(key)
     if isinstance(value, list):
-        return "、".join(str(item).strip() for item in value if str(item).strip())
+        return (
+            "、" if app_language() == "zh" else ", "
+        ).join(str(item).strip() for item in value if str(item).strip())
     return str(value or "").strip()
 
 
@@ -514,33 +579,75 @@ def _workbench_fallback_init_task_plan(
     deadline = _workbench_answer_text(form, "deadline")
     constraints = [
         text for text in (
-            f"范围限制：{out_of_scope}" if out_of_scope else "",
-            f"时间约束：{deadline}" if deadline else "",
-            f"偏好工具或平台：{tech}" if tech else "",
+            _l(
+                "Scope limitation: {value}", "范围限制：{value}", value=out_of_scope
+            ) if out_of_scope else "",
+            _l(
+                "Time constraint: {value}", "时间约束：{value}", value=deadline
+            ) if deadline else "",
+            _l(
+                "Preferred tools or platforms: {value}",
+                "偏好工具或平台：{value}",
+                value=tech,
+            ) if tech else "",
         ) if text
     ]
-    target = goal or f"推进 {project.get('name') or '项目'}。"
+    target = goal or _l(
+        "Advance {project}.",
+        "推进 {project}。",
+        project=project.get('name') or _l("the project", "项目"),
+    )
     return [
         {
-            "title": "明确目标与范围",
-            "goal": "整理目标、背景和边界。" + (f" 重点覆盖：{requirements}" if requirements else ""),
+            "title": _l("Clarify the goal and scope", "明确目标与范围"),
+            "goal": _l(
+                "Organize the goal, context, and boundaries.{requirements}",
+                "整理目标、背景和边界。{requirements}",
+                requirements=(
+                    _l(
+                        " Focus on: {value}",
+                        " 重点覆盖：{value}",
+                        value=requirements,
+                    ) if requirements else ""
+                ),
+            ),
             "priority": "high",
             "constraints": constraints,
-            "acceptanceCriteria": ["目标清晰", "范围已定义", "优先级已确认"],
+            "acceptanceCriteria": [
+                _l("The goal is clear", "目标清晰"),
+                _l("The scope is defined", "范围已定义"),
+                _l("Priorities are confirmed", "优先级已确认"),
+            ],
         },
         {
-            "title": "制定执行方案",
-            "goal": f"基于项目信息设计具体方案。项目总目标：{target}",
+            "title": _l("Create the execution plan", "制定执行方案"),
+            "goal": _l(
+                "Design a concrete approach from the project information. Overall project goal: {target}",
+                "基于项目信息设计具体方案。项目总目标：{target}",
+                target=target,
+            ),
             "priority": "high",
             "constraints": constraints,
-            "acceptanceCriteria": ["执行方案已形成", "步骤可追踪", "依赖已记录"],
+            "acceptanceCriteria": [
+                _l("An execution plan exists", "执行方案已形成"),
+                _l("Steps are traceable", "步骤可追踪"),
+                _l("Dependencies are recorded", "依赖已记录"),
+            ],
         },
         {
-            "title": "推进执行与交付",
-            "goal": f"按计划完成并验证项目目标：{target}",
+            "title": _l("Execute and deliver", "推进执行与交付"),
+            "goal": _l(
+                "Complete and verify the project goal according to the plan: {target}",
+                "按计划完成并验证项目目标：{target}",
+                target=target,
+            ),
             "priority": "medium",
             "constraints": constraints,
-            "acceptanceCriteria": ["项目目标已完成", "结果可验证", "符合预期要求"],
+            "acceptanceCriteria": [
+                _l("The project goal is complete", "项目目标已完成"),
+                _l("The result can be verified", "结果可验证"),
+                _l("The result meets the stated requirements", "符合预期要求"),
+            ],
         },
     ]
 
@@ -592,7 +699,11 @@ async def _workbench_generate_init_task_plan(
 ) -> tuple[list[dict[str, Any]] | None, bool, dict[str, Any] | None]:
     if agent_runtime is None:
         error = _WorkbenchGenerationError(
-            "configuration", "TaskAgentRuntime is required for initialization planning."
+            "configuration",
+            _l(
+                "Task planning is not configured.",
+                "尚未配置任务规划功能。",
+            ),
         )
         return None, False, {
             "code": "init_plan_generation_failed",
@@ -649,7 +760,10 @@ def _workbench_create_sessions_from_init_plan(
             "id": project_runtime._short_id("event"),
             "type": "CreatedFromInitPlan",
             "createdAt": now,
-            "body": "由初始化计划确认后创建。",
+            "body": _l(
+                "Created after the initialization plan was confirmed.",
+                "由初始化计划确认后创建。",
+            ),
         }]
         created.append(session)
     for session in reversed(created):

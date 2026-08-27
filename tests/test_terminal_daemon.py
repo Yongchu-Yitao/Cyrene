@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from cyrene.terminal.client import (
+from agent.plugin.plugin_impl.cyrene_code.terminal.client import (
     LIFECYCLE_VERSION,
     TerminalDaemonClient,
     TerminalRequestError,
 )
-from cyrene.terminal.daemon import TerminalDaemon
+from agent.plugin.plugin_impl.cyrene_code.terminal.daemon import TerminalDaemon
 
 
 @pytest.mark.asyncio
@@ -88,7 +88,7 @@ async def test_legacy_retirement_never_uses_signal_zero(
     monkeypatch.setattr(client, "_recorded_request", recorded_request)
     monkeypatch.setattr(client, "_wait_for_legacy_retirement", retired)
     monkeypatch.setattr(
-        "cyrene.terminal.client.os.kill",
+        "agent.plugin.plugin_impl.cyrene_code.terminal.client.os.kill",
         lambda pid, signum: signals.append((pid, signum)),
     )
 
@@ -105,7 +105,7 @@ async def test_terminal_daemon_survives_view_disconnect_until_explicit_delete(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    import cyrene.terminal.manager as manager_module
+    import agent.plugin.plugin_impl.cyrene_code.terminal.manager as manager_module
 
     state_dir = tmp_path / "daemon-state"
     monkeypatch.setattr(
@@ -114,7 +114,7 @@ async def test_terminal_daemon_survives_view_disconnect_until_explicit_delete(
         classmethod(lambda cls, project_id, cwd="": tmp_path),
     )
     monkeypatch.setattr(
-        "cyrene.terminal.shell_runtime.interactive_argv",
+        "agent.plugin.plugin_impl.cyrene_code.terminal.shell_runtime.interactive_argv",
         lambda: ("sh", ["/bin/sh"]),
     )
     client = TerminalDaemonClient(state_dir=state_dir)
@@ -231,7 +231,7 @@ async def test_exited_terminal_input_does_not_drop_daemon_subscription(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    import cyrene.terminal.manager as manager_module
+    import agent.plugin.plugin_impl.cyrene_code.terminal.manager as manager_module
 
     state_dir = tmp_path / "daemon-state"
     monkeypatch.setattr(
@@ -240,7 +240,7 @@ async def test_exited_terminal_input_does_not_drop_daemon_subscription(
         classmethod(lambda cls, project_id, cwd="": tmp_path),
     )
     monkeypatch.setattr(
-        "cyrene.terminal.shell_runtime.interactive_argv",
+        "agent.plugin.plugin_impl.cyrene_code.terminal.shell_runtime.interactive_argv",
         lambda: ("sh", ["/bin/sh", "-c", "exit 0"]),
     )
     client = TerminalDaemonClient(state_dir=state_dir)
@@ -283,7 +283,7 @@ async def test_terminal_daemon_shutdown_closes_views_and_recovers_shell(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    import cyrene.terminal.manager as manager_module
+    import agent.plugin.plugin_impl.cyrene_code.terminal.manager as manager_module
 
     state_dir = tmp_path / "daemon-state"
     monkeypatch.setattr(
@@ -292,7 +292,7 @@ async def test_terminal_daemon_shutdown_closes_views_and_recovers_shell(
         classmethod(lambda cls, project_id, cwd="": tmp_path),
     )
     monkeypatch.setattr(
-        "cyrene.terminal.shell_runtime.interactive_argv",
+        "agent.plugin.plugin_impl.cyrene_code.terminal.shell_runtime.interactive_argv",
         lambda: ("sh", ["/bin/sh"]),
     )
     client = TerminalDaemonClient(state_dir=state_dir)

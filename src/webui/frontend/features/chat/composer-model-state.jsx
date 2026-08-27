@@ -11,7 +11,12 @@ function useWbcComposerAgentCatalog(enabled) {
   var [loaded, setLoaded] = useWbcState(false)
 
   useWbcEffect(function () {
-    if (!enabled || loaded || !WorkbenchChatModel.listAgents) return
+    if (!enabled) {
+      setOptions([])
+      setLoaded(false)
+      return
+    }
+    if (loaded || !WorkbenchChatModel.listAgents) return
     var cancelled = false
     WorkbenchChatModel.listAgents().then(function (list) {
       if (cancelled) return

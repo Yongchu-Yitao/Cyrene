@@ -19,6 +19,17 @@ _PREFIX_BY_ACTIVATION = {
 }
 
 
+def _composer_context_service():
+    from agent.plugin import active_plugin_service
+
+    service = active_plugin_service("composer_context")
+    if service is None:
+        raise RuntimeError(
+            "Required Plugin application service is unavailable: composer_context"
+        )
+    return service
+
+
 def _encoded(value: Any) -> str:
     return quote(str(value or "").strip(), safe="._-")
 
@@ -39,10 +50,8 @@ def _builtin_catalog() -> list[dict[str, Any]]:
 
 
 def _activation_catalog() -> list[dict[str, Any]]:
-    from cyrene.workbench.composer_context import context_activation_catalog
-
     result: list[dict[str, Any]] = []
-    catalog = context_activation_catalog()
+    catalog = _composer_context_service().catalog()
     for kind, group in _GROUP_BY_ACTIVATION.items():
         prefix = _PREFIX_BY_ACTIVATION[kind]
         for item in catalog[kind]:
@@ -59,6 +68,7 @@ def _activation_catalog() -> list[dict[str, Any]]:
                 "group": group,
                 "source": "context",
                 "activation": {"kind": kind, "id": identity},
+                "i18n": dict(item.get("i18n") or {}),
             })
     return result
 

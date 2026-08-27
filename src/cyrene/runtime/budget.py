@@ -19,6 +19,7 @@ from cyrene.runtime.adaptive_budget import (
     AdaptiveBudgetController,
 )
 from cyrene.model_runtime.pricing import CNY_PER_USD
+from cyrene.localization import localized
 from cyrene.runtime.settings_store import get_all as _get_all_settings
 
 _CONTROLLER = AdaptiveBudgetController()
@@ -476,18 +477,39 @@ async def check_budget_and_block(db_path: str, monthly: float, enabled: bool) ->
     except BudgetUsageQueryError:
         result = {
             "code": "budget_usage_unavailable",
-            "message": "Budget usage could not be verified. Please retry shortly.",
+            "message": localized(
+                "Budget usage could not be verified. Please retry shortly.",
+                "暂时无法核验预算用量，请稍后重试。",
+            ),
         }
     else:
         weekly_remaining = max(state.get("weekly_remaining", 0), 0)
         five_hour_remaining = max(state.get("five_hour_remaining", 0), 0)
         monthly_remaining = max(state.get("monthly_remaining", 0), 0)
         if monthly_remaining <= 0:
-            result = {"code": "budget_monthly_exhausted", "message": "Monthly budget exhausted — reduce spending or increase your monthly limit."}
+            result = {
+                "code": "budget_monthly_exhausted",
+                "message": localized(
+                    "Monthly budget exhausted — reduce spending or increase your monthly limit.",
+                    "月度预算已用尽，请减少支出或提高月度限额。",
+                ),
+            }
         elif weekly_remaining <= 0:
-            result = {"code": "budget_weekly_exhausted", "message": "Weekly budget exhausted — reduce spending or increase your monthly limit."}
+            result = {
+                "code": "budget_weekly_exhausted",
+                "message": localized(
+                    "Weekly budget exhausted — reduce spending or increase your monthly limit.",
+                    "每周预算已用尽，请减少支出或提高月度限额。",
+                ),
+            }
         elif five_hour_remaining <= 0:
-            result = {"code": "budget_5h_exhausted", "message": "5-hour budget exhausted — usage is too concentrated, please wait before sending more requests."}
+            result = {
+                "code": "budget_5h_exhausted",
+                "message": localized(
+                    "5-hour budget exhausted — usage is too concentrated. Please wait before sending more requests.",
+                    "5 小时预算已用尽，当前用量过于集中，请稍后再发送请求。",
+                ),
+            }
         else:
             return None
     if action == "warn":

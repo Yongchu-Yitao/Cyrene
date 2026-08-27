@@ -13,7 +13,7 @@ from agent.plugin import PluginContext
 from ._native import create_tool
 from .definitions import get_native_tool_def
 from .short_term import entry_id, load_entries
-from agent.plugin.native_runtime import json_result
+from agent.plugin.native_runtime import json_result, plugin_localized
 
 TOOL_NAME = 'RecallMemory'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -35,7 +35,7 @@ def _split_memory_query(query: str) -> tuple[str, list[str]]:
     return needle, [term for term in re.split(r"\s+", needle) if term]
 
 
-async def _tool_recall_memory(args: dict[str, Any], _context: PluginContext) -> str:
+async def _tool_recall_memory(args: dict[str, Any], context: PluginContext) -> str:
     """Return recent short-term memories, optionally filtered by keyword/type."""
     query = str(args.get("query", "") or "").strip()
     needle, terms = _split_memory_query(query)
@@ -95,7 +95,11 @@ async def _tool_recall_memory(args: dict[str, Any], _context: PluginContext) -> 
         "truncated": content_truncated or len(memories) < len(candidates),
     }
     if not payload["memories"]:
-        payload["note"] = "No recent memory matches found for the given filters."
+        payload["note"] = plugin_localized(
+            context,
+            "No recent memories match the requested filters.",
+            "没有匹配当前筛选条件的近期记忆。",
+        )
     return json_result(payload)
 
 

@@ -1,4 +1,5 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
+import { pluginLocalizedField } from "../../platform/plugins.jsx"
 import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_ICONS, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcBuildRailCardDragPreview, wbcErrorText, wbcFileViewKind, wbcFormatTime, wbcHasChatDrag, wbcHasChatRailDrag, wbcHasTaskDrag, wbcHideNativeDragImage, wbcNotifyAgentChatFlow, wbcSetChatDrag, wbcSetChatGroupDrag, wbcSetResourceDrag, wbcSetTaskDrag, wbcT } from "../../workbench-chat.jsx"
 import { wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue } from "./conversation.jsx"
 import { wbcStartFileDrag } from "./file-resources.jsx"
@@ -45,13 +46,13 @@ function wbcWriteProjectToolView(projectId, value) {
   } catch (error) {}
 }
 
-function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoading, activeTerminalId, railMode, workRailMode, pinnedChatIds, pinnedTaskIds, activeChatId, activeTaskId, loading, runningChatIds, runtimeEngine, onSelect, onSelectTask, onAnswer, onCreate, onCreateTask, onRename, onRenameTask, onDelete, onDeleteTask, onToTask, toTaskBusy, onTogglePinned, onTogglePinnedTask, onOpenFile, onOpenTerminal, onCreateTerminal, onRenameTerminal, onDeleteTerminal, onUpdateTerminalLayout, onOpenPluginView, onRailModeChange, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
+function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminals, terminalsLoading, activeTerminalId, railMode, workRailMode, pinnedChatIds, pinnedTaskIds, activeChatId, activeTaskId, loading, runningChatIds, runtimeEngine, onSelect, onSelectTask, onAnswer, onCreate, onCreateTask, onRename, onRenameTask, onDelete, onDeleteTask, onToTask, toTaskBusy, onTogglePinned, onTogglePinnedTask, onOpenFile, onOpenTerminal, onCreateTerminal, onRenameTerminal, onDeleteTerminal, onUpdateTerminalLayout, onOpenPluginView, onRailModeChange, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
   var [query, setQuery] = useWbcState("");
   var [projectToolView, setProjectToolViewState] = useWbcState(function () {
     return wbcReadProjectToolView(projectId);
   });
-  var fileToolsExpanded = projectToolView === "file";
-  var terminalToolsExpanded = projectToolView === "terminal";
+  var fileToolsExpanded = codeAvailable && projectToolView === "file";
+  var terminalToolsExpanded = codeAvailable && projectToolView === "terminal";
   function setProjectToolView(next) {
     setProjectToolViewState(function (current) {
       var resolved = wbcNormalizeProjectToolView(
@@ -82,14 +83,10 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
   }, [projectId, activeTerminalId, terminals]);
   var [pluginTools, setPluginTools] = useWbcState([]);
   useWbcEffect(function () {
-    if (!projectId) { setPluginTools([]); return undefined; }
-    return workbenchServices.plugins().subscribe(String(projectId), function (snapshot) {
-      var contributions = Array.isArray(snapshot && snapshot.contributions) ? snapshot.contributions : [];
-      setPluginTools(contributions.filter(function (item) {
-        return String(item && item.point || "") === "cyrene.projectTool";
-      }));
+    return workbenchServices.plugins().subscribe(function (snapshot) {
+      setPluginTools(Array.isArray(snapshot && snapshot.projectTools) ? snapshot.projectTools : []);
     });
-  }, [projectId]);
+  }, []);
   var [fileLocation, setFileLocation] = useWbcState(function () {
     return { projectId: String(projectId || ""), path: "." };
   });
@@ -118,7 +115,7 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
   var [renameTask, setRenameTask] = useWbcState(null);
   var [renameGroup, setRenameGroup] = useWbcState(null);
   var [renameTerminalItem, setRenameTerminalItem] = useWbcState(null);
-  var terminalDefaultOrder = (Array.isArray(terminals) ? terminals : []).slice().sort(function (left, right) {
+  var terminalDefaultOrder = (codeAvailable && Array.isArray(terminals) ? terminals : []).slice().sort(function (left, right) {
     return Number(left && left.orderIndex || 0) - Number(right && right.orderIndex || 0);
   }).map(function (terminal) { return String(terminal.id); });
   var [terminalOrder, setTerminalOrder] = useWbcState([]);
@@ -187,7 +184,7 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
     }).map(function (terminal) { return String(terminal.id); }));
   }, [projectId, terminalDefaultOrder.join("|")]);
   useWbcEffect(function () {
-    if (!fileToolsExpanded || !projectId) return undefined;
+    if (!codeAvailable || !fileToolsExpanded || !projectId) return undefined;
     var cancelled = false;
     setFilesLoading(true);
     setFilesError("");
@@ -197,11 +194,11 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
       .catch(function () { if (!cancelled) { setFileEntries([]); setFilesError(wbcT("rail.filesUnavailable", "Unable to load project files.")); } })
       .finally(function () { if (!cancelled) setFilesLoading(false); });
     return function () { cancelled = true; };
-  }, [fileToolsExpanded, filePath, projectId]);
+  }, [codeAvailable, fileToolsExpanded, filePath, projectId]);
 
   useWbcEffect(function () {
     var search = query.trim();
-    if (!search || !projectId) {
+    if (!codeAvailable || !search || !projectId) {
       setGlobalFileEntries([]);
       setGlobalFilesLoading(false);
       setGlobalFilesError("");
@@ -238,7 +235,7 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
       window.clearTimeout(timer);
       if (controller) controller.abort();
     };
-  }, [query, projectId]);
+  }, [codeAvailable, query, projectId]);
 
   useWbcEffect(function () {
     if (!query.trim()) return;
@@ -1991,7 +1988,8 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
   }
 
   var unifiedSearchActive = normalizedQuery.length > 0;
-  var unifiedSearchResultCount = filtered.length + taskRail.ordered.length + globalFileEntries.length + orderedTerminals.length;
+  var unifiedSearchResultCount = filtered.length + taskRail.ordered.length
+    + (codeAvailable ? globalFileEntries.length + orderedTerminals.length : 0);
 
   return (
     <aside ref={railRef} className={"wbc-rail workbench-integrated-rail"
@@ -2015,7 +2013,11 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
                   ref={chatSearchRef}
                   data-cyrene-node-id="chat_search_input"
                   value={query}
-                  onChange={function (e) { setQuery(e.target.value); }}
+                  onChange={function (e) {
+                    var nextQuery = e.target.value;
+                    setGlobalFilesLoading(codeAvailable && Boolean(nextQuery.trim()));
+                    setQuery(nextQuery);
+                  }}
                   placeholder={wbcT("rail.searchEverythingShort", "Search all")}
                   aria-label={wbcT("rail.searchEverything", "Search chats, tasks, files, and terminals")}
                 />
@@ -2062,37 +2064,40 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
           className={"wbc-chat-list workbench-integrated-rail-body wbc-unified-search-results" + (globalFilesLoading ? " is-loading" : "") + (!globalFilesLoading && unifiedSearchResultCount === 0 ? " is-empty" : "") + (menuId ? " menu-active" : "")}
         >
           <div className="wbc-chat-list-primary">
-            {filtered.length ? <section className="wbc-rail-section wbc-unified-search-section is-chat">
-              <header className="wbc-rail-section-label"><b>{wbcT("workbench.page.chat", "Chats")}</b><span>{filtered.length}</span></header>
-              <div className="wbc-rail-section-items">{filtered.map(function (chat) { return renderChatCard(chat); })}</div>
-            </section> : null}
-            {taskRail.ordered.length ? <section className="wbc-rail-section wbc-unified-search-section is-task">
-              <header className="wbc-rail-section-label"><b>{wbcT("workbench.page.task", "Tasks")}</b><span>{taskRail.ordered.length}</span></header>
-              <div className="wbc-rail-section-items"><WbcTaskRailCards
-                activeTaskId={activeTaskId}
-                menuId={menuId}
-                onDeleteTask={onDeleteTask}
-                onRenameTask={setRenameTask}
-                onSelectTask={onSelectTask}
-                onTogglePinnedTask={onTogglePinnedTask}
-                prepareDragImage={prepareRailDragImage}
-                projectId={projectId}
-                setMenuId={setMenuId}
-                state={taskRail}
-                tasks={taskRail.ordered}
-              /></div>
-            </section> : null}
-            {globalFileEntries.length ? <section className="wbc-rail-section wbc-unified-search-section is-file">
-              <header className="wbc-rail-section-label"><b>{wbcT("rail.files", "Files")}</b><span>{globalFileEntries.length}</span></header>
-              <div className="wbc-rail-section-items wbc-unified-search-file-items">{globalFileEntries.map(renderUnifiedFileResult)}</div>
-            </section> : null}
-            {orderedTerminals.length ? <section className="wbc-rail-section wbc-unified-search-section is-terminal">
-              <header className="wbc-rail-section-label"><b>{wbcT("terminal.title", "Terminal")}</b><span>{orderedTerminals.length}</span></header>
-              <div className="wbc-rail-section-items">{orderedTerminals.map(renderTerminalCard)}</div>
-            </section> : null}
-            {globalFilesLoading ? <div className="workbench-muted wbc-rail-loading" role="status">{wbcT("rail.searchingEverything", "Searching project...")}</div> : null}
-            {!globalFilesLoading && globalFilesError ? <div className="workbench-error wbc-unified-search-warning">{globalFilesError}</div> : null}
-            {!globalFilesLoading && unifiedSearchResultCount === 0 ? <div className="workbench-muted wbc-rail-empty">{wbcT("rail.noUnifiedMatches", "No matching chats, tasks, files, or terminals.")}</div> : null}
+            {globalFilesLoading ? (
+              <div className="workbench-muted wbc-rail-loading" role="status">{wbcT("rail.searchingEverything", "Searching project...")}</div>
+            ) : <>
+              {filtered.length ? <section className="wbc-rail-section wbc-unified-search-section is-chat">
+                <header className="wbc-rail-section-label"><b>{wbcT("workbench.page.chat", "Chats")}</b><span>{filtered.length}</span></header>
+                <div className="wbc-rail-section-items">{filtered.map(function (chat) { return renderChatCard(chat); })}</div>
+              </section> : null}
+              {taskRail.ordered.length ? <section className="wbc-rail-section wbc-unified-search-section is-task">
+                <header className="wbc-rail-section-label"><b>{wbcT("workbench.page.task", "Tasks")}</b><span>{taskRail.ordered.length}</span></header>
+                <div className="wbc-rail-section-items"><WbcTaskRailCards
+                  activeTaskId={activeTaskId}
+                  menuId={menuId}
+                  onDeleteTask={onDeleteTask}
+                  onRenameTask={setRenameTask}
+                  onSelectTask={onSelectTask}
+                  onTogglePinnedTask={onTogglePinnedTask}
+                  prepareDragImage={prepareRailDragImage}
+                  projectId={projectId}
+                  setMenuId={setMenuId}
+                  state={taskRail}
+                  tasks={taskRail.ordered}
+                /></div>
+              </section> : null}
+              {codeAvailable && globalFileEntries.length ? <section className="wbc-rail-section wbc-unified-search-section is-file">
+                <header className="wbc-rail-section-label"><b>{wbcT("rail.files", "Files")}</b><span>{globalFileEntries.length}</span></header>
+                <div className="wbc-rail-section-items wbc-unified-search-file-items">{globalFileEntries.map(renderUnifiedFileResult)}</div>
+              </section> : null}
+              {codeAvailable && orderedTerminals.length ? <section className="wbc-rail-section wbc-unified-search-section is-terminal">
+                <header className="wbc-rail-section-label"><b>{wbcT("terminal.title", "Terminal")}</b><span>{orderedTerminals.length}</span></header>
+                <div className="wbc-rail-section-items">{orderedTerminals.map(renderTerminalCard)}</div>
+              </section> : null}
+              {globalFilesError ? <div className="workbench-error wbc-unified-search-warning">{globalFilesError}</div> : null}
+              {unifiedSearchResultCount === 0 ? <div className="workbench-muted wbc-rail-empty">{wbcT("rail.noUnifiedMatches", "No matching chats, tasks, files, or terminals.")}</div> : null}
+            </>}
           </div>
         </div>
       ) : railMode === "task" ? (
@@ -2260,7 +2265,7 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
           );
         })}
       </div>}
-      {(railMode === "chat" || railMode === "task") && !collapsed ? (
+      {codeAvailable && (railMode === "chat" || railMode === "task") && !collapsed ? (
         <section
           ref={projectToolsRef}
           className={"wbc-project-tools"
@@ -2404,24 +2409,30 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
               </div>
             </div>
           </div>
+        </section>
+      ) : null}
+      {pluginTools.length && (railMode === "chat" || railMode === "task") && !collapsed ? (
+        <section className="wbc-project-tools wbc-plugin-project-tools" aria-label={wbcT("rail.pluginTools", "Plugin tools")}>
+          <header><span>{wbcT("rail.pluginTools", "Plugin tools")}</span></header>
           {pluginTools.map(function (tool) {
-            var viewId = String(tool.viewId || tool.view || "");
-            var title = String(tool.title || tool.name || tool.id || "Plugin");
-            var subtitle = String(tool.subtitle || tool.description || tool.pluginName || "Plugin");
-            var glyph = String(tool.iconText || tool.icon || "").trim().slice(0, 2) || "◇";
+            var packId = String(tool && tool.pack_id || "");
+            var viewId = String(tool && tool.view || "");
+            var title = pluginLocalizedField(tool, "title") || tool.id || packId;
+            var subtitle = pluginLocalizedField(tool, "subtitle") || packId;
+            var glyph = String(tool && (tool.icon_text || tool.iconText || tool.icon) || "").trim().slice(0, 2) || "◇";
             return <button
               type="button"
-              key={String(tool.pluginId || "") + ":" + String(tool.id || "")}
+              key={packId + ":" + String(tool && tool.id || viewId)}
               className="wbc-project-plugin-tool"
-              disabled={!viewId || !onOpenPluginView}
+              disabled={!packId || !viewId || !onOpenPluginView}
               onClick={function () {
-                if (!viewId || !onOpenPluginView) return;
+                if (!packId || !viewId || !onOpenPluginView) return;
                 onOpenPluginView({
-                  pluginId: String(tool.pluginId || ""),
+                  packId: packId,
                   viewId: viewId,
-                  instanceId: String(tool.instanceId || "default"),
+                  instanceId: String(tool && (tool.instance_id || tool.instanceId) || "default"),
                   title: title,
-                  state: tool.state == null ? null : tool.state,
+                  state: !tool || tool.state == null ? null : tool.state,
                 });
               }}
             >
@@ -2468,6 +2479,11 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
 function WbcProjectRail(props) {
   props = props || {};
   var projectId = String(props.projectId || "");
+  var dataStore = workbenchServices.data();
+  dataStore.useVersion();
+  var pluginModules = Array.isArray(dataStore.state.pluginModules)
+    ? dataStore.state.pluginModules : [];
+  var codeAvailable = pluginModules.indexOf("code") >= 0;
   var terminalModule = workbenchServices.terminal();
   var terminalClient = terminalModule.Client;
   var [terminals, setTerminals] = useWbcState([]);
@@ -2488,7 +2504,7 @@ function WbcProjectRail(props) {
   }
 
   function refreshTerminals(options) {
-    if (!projectId) {
+    if (!codeAvailable || !projectId) {
       setTerminals([]);
       setActiveTerminalId("");
       return Promise.resolve([]);
@@ -2512,15 +2528,15 @@ function WbcProjectRail(props) {
   useWbcEffect(function () {
     setActiveTerminalId("");
     refreshTerminals();
-  }, [projectId]);
+  }, [projectId, codeAvailable]);
 
   useWbcEffect(function () {
-    if (!projectId || props.active === false) return undefined;
+    if (!codeAvailable || !projectId || props.active === false) return undefined;
     var timer = window.setInterval(function () {
       refreshTerminals({ background: true });
     }, 1500);
     return function () { window.clearInterval(timer); };
-  }, [projectId, props.active]);
+  }, [projectId, props.active, codeAvailable]);
 
   function openTerminal(terminalId, side) {
     var id = String(terminalId || "");
@@ -2578,6 +2594,7 @@ function WbcProjectRail(props) {
 
   return <WbcRail
     {...props}
+    codeAvailable={codeAvailable}
     terminals={terminals}
     terminalsLoading={terminalsLoading}
     activeTerminalId={activeTerminalId}

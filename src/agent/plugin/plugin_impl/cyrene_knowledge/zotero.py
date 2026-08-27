@@ -11,6 +11,8 @@ from urllib.parse import unquote, urlsplit
 
 import httpx
 
+from cyrene.localization import localized
+
 
 class ZoteroError(RuntimeError):
     pass
@@ -28,7 +30,10 @@ class ZoteroClient:
             except ValueError:
                 loopback = False
         if parsed.scheme not in {"http", "https"} or not loopback:
-            raise ZoteroError("Zotero Local API must use a loopback URL")
+            raise ZoteroError(localized(
+                "Zotero Local API must use a loopback URL.",
+                "Zotero Local API 必须使用本机回环地址。",
+            ))
         self.base_url = normalized
         self.timeout = timeout
 
@@ -37,9 +42,15 @@ class ZoteroClient:
         normalized_type = str(library_type or "user").casefold()
         normalized_id = str(library_id or "0").strip()
         if normalized_type not in {"user", "group"}:
-            raise ZoteroError("library_type must be user or group")
+            raise ZoteroError(localized(
+                "The Zotero library type must be user or group.",
+                "Zotero 文献库类型必须是 user 或 group。",
+            ))
         if not normalized_id.isdigit():
-            raise ZoteroError("library_id must be numeric")
+            raise ZoteroError(localized(
+                "The Zotero library ID must be numeric.",
+                "Zotero 文献库 ID 必须是数字。",
+            ))
         return f"groups/{normalized_id}" if normalized_type == "group" else f"users/{normalized_id}"
 
     async def request(self, path: str, params: Mapping[str, Any] | None = None) -> httpx.Response:
@@ -53,13 +64,26 @@ class ZoteroClient:
                 response.raise_for_status()
                 return response
         except httpx.ConnectError as exc:
-            raise ZoteroError("无法连接 Zotero。请启动 Zotero，并在高级设置中启用本地 API。") from exc
+            raise ZoteroError(localized(
+                "Could not connect to Zotero. Start Zotero and enable its Local API in advanced settings.",
+                "无法连接 Zotero。请启动 Zotero，并在高级设置中启用本地 API。",
+            )) from exc
         except httpx.TimeoutException as exc:
-            raise ZoteroError("连接 Zotero Local API 超时。") from exc
+            raise ZoteroError(localized(
+                "The Zotero Local API request timed out.",
+                "连接 Zotero Local API 超时。",
+            )) from exc
         except httpx.HTTPStatusError as exc:
-            raise ZoteroError(f"Zotero Local API 返回 HTTP {exc.response.status_code}。") from exc
+            raise ZoteroError(localized(
+                "Zotero Local API returned HTTP {status}.",
+                "Zotero Local API 返回 HTTP {status}。",
+                status=exc.response.status_code,
+            )) from exc
         except httpx.RequestError as exc:
-            raise ZoteroError(f"Zotero Local API 请求失败：{exc}。") from exc
+            raise ZoteroError(localized(
+                "The Zotero Local API request failed.",
+                "Zotero Local API 请求失败。",
+            )) from exc
 
     async def status(self) -> dict[str, Any]:
         response = await self.request("users/0/items", {"limit": 1, "format": "json"})
@@ -82,9 +106,15 @@ class ZoteroClient:
             try:
                 payload = response.json()
             except ValueError as exc:
-                raise ZoteroError("Zotero Local API 返回了无效 JSON。") from exc
+                raise ZoteroError(localized(
+                    "Zotero Local API returned invalid JSON.",
+                    "Zotero Local API 返回了无效 JSON。",
+                )) from exc
             if not isinstance(payload, list):
-                raise ZoteroError("Zotero Local API 返回了无法识别的数据。")
+                raise ZoteroError(localized(
+                    "Zotero Local API returned unrecognized data.",
+                    "Zotero Local API 返回了无法识别的数据。",
+                ))
             page = [value for value in payload if isinstance(value, dict)]
             result.extend(page)
             version = max(version, int(response.headers.get("Last-Modified-Version") or 0))
@@ -105,7 +135,10 @@ class ZoteroClient:
     ) -> tuple[list[dict[str, Any]], int]:
         prefix = self.prefix(library_id, library_type)
         if collection_key and not re.fullmatch(r"[A-Za-z0-9]+", collection_key):
-            raise ZoteroError("collection_key contains invalid characters")
+            raise ZoteroError(localized(
+                "The Zotero collection key contains invalid characters.",
+                "Zotero 集合键包含无效字符。",
+            ))
         path = f"{prefix}/collections/{collection_key}/items" if collection_key else f"{prefix}/items"
         return await self.fetch_all(path, {"include": "data", "includeTrashed": 1})
 

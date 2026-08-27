@@ -1,15 +1,26 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light" data-lang="zh">
+<html lang="en" data-theme="light" data-lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cyrene — AI Agent That Evolves</title>
+  <script>
+    (function () {
+      var saved = localStorage.getItem('cyrene-docs-lang');
+      var lang = saved === 'zh' || saved === 'en'
+        ? saved
+        : String(navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+      document.documentElement.dataset.lang = lang;
+      document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+      document.title = lang === 'zh' ? 'Cyrene — 持续进化的 AI Agent' : 'Cyrene — AI Agent That Evolves';
+    })();
+  </script>
   <link rel="stylesheet" href="style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
-  <a href="#main-content" class="skip-link">跳到内容</a>
+  <a href="#main-content" class="skip-link" data-i18n="skip.content">跳到内容</a>
 
   <!-- Top Bar -->
   <header class="topbar" id="topbar">
@@ -31,7 +42,7 @@
         </div>
       </div>
       <div class="topbar-right">
-        <button id="langToggle" class="topbar-btn topbar-btn-lang" onclick="toggleLang()" aria-label="Switch language">
+        <button id="langToggle" class="topbar-btn topbar-btn-lang" onclick="toggleLang()" aria-label="切换语言">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10"/>
             <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
@@ -83,7 +94,7 @@
         <li class="nav-item" data-page="scheduler"><a href="#" onclick="navigateTo('scheduler')" data-i18n="nav.scheduler">任务调度</a></li>
         <li class="nav-item" data-page="search"><a href="#" onclick="navigateTo('search')" data-i18n="nav.search">搜索</a></li>
 
-        <li class="nav-section-label" data-i18n="nav.development">开发</li>
+        <li class="nav-section-label" data-i18n="nav.development-section">开发</li>
         <li class="nav-item" data-page="development"><a href="#" onclick="navigateTo('development')" data-i18n="nav.development">开发指南</a></li>
         <li class="nav-item" data-page="cli-reference"><a href="#" onclick="navigateTo('cli-reference')" data-i18n="nav.cli-reference">命令参考</a></li>
       </ul>
@@ -91,6 +102,7 @@
 
     <div class="sidebar-footer">
       <div class="sidebar-version">v0.8.0-beta3</div>
+    </div>
     </div>
   </aside>
 
@@ -304,7 +316,7 @@
         <p class="page-subtitle">在 Linux、macOS 或 Windows 上安装 Cyrene，约 5 分钟即可完成。</p>
       </div>
 
-      <section>
+      <section data-topic="prerequisites">
         <h2>前置要求</h2>
         <ul>
           <li><strong>Python 3.12+</strong>——使用 <code>python --version</code> 检查</li>
@@ -317,7 +329,7 @@
         </div>
       </section>
 
-      <section>
+      <section data-topic="prebuilt-package">
         <h2>选项 A：预构建包（推荐，开箱即用）</h2>
         <p>从 <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">GitHub Releases</a> 下载适用于你平台的安装包，下载后直接打开即可使用。无需安装 Python、Node.js 或任何依赖。</p>
         <ul>
@@ -328,7 +340,7 @@
         <p>首次启动会运行引导向导，配置 API 密钥和人格。之后就可以开始使用了。</p>
       </section>
 
-      <section>
+      <section data-topic="source-installation">
         <h2>选项 B：从源码安装</h2>
         <p>如果希望自行构建或修改源码，按以下步骤操作。</p>
 
@@ -406,7 +418,7 @@ def getpwuid(uid):
         <div class="code-block"><pre><code>python -m cyrene --workbench</code></pre></div>
       </section>
 
-      <section>
+      <section data-topic="verification">
         <h2>验证安装</h2>
         <div class="code-block"><pre><code>conda activate cyrene
 cd /path/to/Cyrene
@@ -421,7 +433,7 @@ python -m cyrene --workbench</code></pre></div>
         <div class="code-block"><pre><code>python -m cyrene.local_cli</code></pre></div>
       </section>
 
-      <section>
+      <section data-topic="optional-extensions">
         <h2>可选扩展</h2>
         <div class="table-wrapper">
           <table>
@@ -434,14 +446,14 @@ python -m cyrene --workbench</code></pre></div>
         </div>
       </section>
 
-      <section>
+      <section data-topic="troubleshooting">
         <h2>故障排除</h2>
         <div class="note">
           <strong>启动问题？</strong>试试 <code>python -m cyrene.local_cli --verbose</code> 查看详细日志。详细模式下，调试日志写入 <code>data/debug_*.jsonl</code>。
         </div>
       </section>
 
-      <section>
+      <section data-topic="related-docs">
         <h2>相关文档</h2>
         <ul>
           <li><a href="#" onclick="navigateTo('usage-workbench')">Workbench UI 使用指南</a></li>
@@ -454,7 +466,7 @@ python -m cyrene --workbench</code></pre></div>
         <h1>Installation</h1>
         <p class="page-subtitle">Install Cyrene on Linux, macOS or Windows — about 5 minutes.</p>
       </div>
-      <section>
+      <section data-topic="prerequisites">
         <h2>Prerequisites</h2>
         <ul>
           <li><strong>Python 3.12+</strong> — check with <code>python --version</code></li>
@@ -462,9 +474,9 @@ python -m cyrene --workbench</code></pre></div>
           <li><strong>Git</strong> — for source installation</li>
           <li><strong>Node.js 22.12+</strong> (optional) — for JSX precompilation from source</li>
         </ul>
-        <div class="note"><strong>Tip:</strong> Pre-built releases include precompiled WebUI. No Node.js needed.</div>
+        <div class="note"><strong>Tip:</strong> If you do not want to install Node.js, download a pre-built package from <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">Releases</a>. Its WebUI is already compiled.</div>
       </section>
-      <section>
+      <section data-topic="prebuilt-package">
         <h2>Option A: Pre-built Package (Recommended)</h2>
         <p>Download from <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">GitHub Releases</a> — open and use immediately. No Python, Node.js, or any dependencies required.</p>
         <ul>
@@ -474,21 +486,114 @@ python -m cyrene --workbench</code></pre></div>
         </ul>
         <p>First launch runs the onboarding wizard for API key and personality setup.</p>
       </section>
-      <section>
+      <section data-topic="source-installation">
         <h2>Option B: From Source</h2>
+        <p>Follow these steps if you want to build Cyrene yourself or modify its source.</p>
         <h3>Linux / macOS</h3>
-        <div class="code-block"><pre><code>conda create -n cyrene python=3.12 -y
+        <div class="code-block"><pre><code># 1. Create a virtual environment
+conda create -n cyrene python=3.12 -y
 conda activate cyrene
-pip install -e .
-cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
-        <div class="note"><strong>Note:</strong> You do <strong>not</strong> need a <code>.env</code> file. Configuration is stored in an encrypted store.</div>
-      </section>
-      <section>
-        <h2>Verify Installation</h2>
+
+# 2. Install Cyrene (uv is recommended)
+uv sync
+# Or use pip:
+# pip install -e .
+
+# 3. Precompile WebUI JSX (source runs only)
+cd src/webui && npm install && node build-jsx.mjs && cd ../..
+
+# 4. Launch
+python -m cyrene --workbench</code></pre></div>
+
+        <div class="note"><strong>No .env file required:</strong> Cyrene uses an encrypted configuration store (<code>data/config.enc</code>). The first-run wizard creates model connections, profiles, and routes.</div>
+
+        <h3>Windows (from source)</h3>
+        <p>Windows needs additional setup because <code>uvloop</code>, used by the bundled SimpleXNG, is Unix-only.</p>
+
+        <h4>Step 1: Create the environment</h4>
+        <div class="code-block"><pre><code>conda create -n cyrene python=3.12 -y
+conda activate cyrene</code></pre></div>
+
+        <h4>Step 2: Install dependencies</h4>
+        <div class="code-block"><pre><code>pip install aiosqlite apscheduler croniter fastapi httpx jinja2 python-dotenv python-telegram-bot requests sniffio uvicorn "mcp&gt;=1.27.0"
+pip install winloop  # Windows replacement for uvloop
+pip install simplexng --no-deps
+pip install babel brotli clideps flask flask-babel httpx-socks isodate lxml markdown-it-py msgspec platformdirs pyyaml rich setproctitle typer-slim valkey whitenoise
+pip install -e . --no-build-isolation</code></pre></div>
+        <p class="step-hint">For users in China: <code>pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple</code></p>
+
+        <h4>Step 3: Apply Windows compatibility patches</h4>
+        <p>The vendored SimpleXNG code needs the following manual patches.</p>
+
+        <p><strong>Patch 1: uvloop → winloop</strong><br>Edit <code>Lib/site-packages/simplexng/_vendor/searx/network/client.py</code>:</p>
+        <div class="code-block"><pre><code># Replace:
+import uvloop
+uvloop.install()
+# With:
+import sys
+if sys.platform == 'win32':
+    import winloop as uvloop
+else:
+    import uvloop
+uvloop.install()</code></pre></div>
+
+        <p><strong>Patch 2: fork → spawn</strong><br>Edit <code>Lib/site-packages/simplexng/_vendor/searx/plugins/calculator.py</code>:</p>
+        <div class="code-block"><pre><code># Replace:
+mp_fork = multiprocessing.get_context("fork")
+# With:
+import sys
+mp_fork = multiprocessing.get_context("fork" if sys.platform != "win32" else "spawn")</code></pre></div>
+
+        <p><strong>Patch 3: Create a pwd stub</strong><br>Create <code>Lib/site-packages/pwd.py</code>:</p>
+        <div class="code-block"><pre><code>"""pwd stub for Windows — SearXNG compatibility."""
+import os
+def getpwuid(uid):
+    name = os.environ.get("USERNAME", "unknown")
+    return type("pw", (), {"pw_name": name, "pw_uid": uid})()</code></pre></div>
+
+        <p><strong>Patch 4: Enable the JSON API</strong><br>Edit <code>Lib/site-packages/simplexng/settings/settings_template.yml</code> and add <code>json</code> to <code>search.formats</code>.</p>
+
+        <div class="note"><strong>Alternative:</strong> Point <code>SEARXNG_URL</code> at an external SearXNG instance and set <code>SEARXNG_AUTO_START=0</code> to disable the bundled search startup.</div>
+
+        <h4>Step 4: Launch</h4>
         <div class="code-block"><pre><code>python -m cyrene --workbench</code></pre></div>
-        <p>Open <a href="http://localhost:4242">http://localhost:4242</a>. The first launch will run the onboarding wizard.</p>
+      </section>
+      <section data-topic="verification">
+        <h2>Verify Installation</h2>
+        <div class="code-block"><pre><code>conda activate cyrene
+cd /path/to/Cyrene
+python -m cyrene --workbench</code></pre></div>
+        <p>Open <a href="http://localhost:4242">http://localhost:4242</a>. The first launch opens the onboarding wizard, which guides you through:</p>
+        <ol>
+          <li>Configuring an API key (DeepSeek, Claude, GPT, and others)</li>
+          <li>Setting the agent name and personality</li>
+          <li>Selecting a default model</li>
+        </ol>
         <p>To test without the web server:</p>
         <div class="code-block"><pre><code>python -m cyrene.local_cli</code></pre></div>
+      </section>
+      <section data-topic="optional-extensions">
+        <h2>Optional Extensions</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>Extension</th><th>Install command</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td>Browser live view (outside Electron)</td><td><code>pip install -e ".[browser]"<br>playwright install chromium</code></td><td>Optional Playwright automation for the source Web UI or CLI; desktop builds do not need it</td></tr>
+              <tr><td>Development tools</td><td><code>pip install -e ".[dev]"</code></td><td>pytest and other development dependencies</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section data-topic="troubleshooting">
+        <h2>Troubleshooting</h2>
+        <div class="note"><strong>Startup trouble?</strong> Run <code>python -m cyrene.local_cli --verbose</code> for detailed output. In verbose mode, debug logs are written to <code>data/debug_*.jsonl</code>.</div>
+      </section>
+      <section data-topic="related-docs">
+        <h2>Related Documentation</h2>
+        <ul>
+          <li><a href="#" onclick="navigateTo('usage-workbench')">Workbench UI guide</a></li>
+          <li><a href="#" onclick="navigateTo('configuration')">Configuration reference: environment variables and settings</a></li>
+        </ul>
       </section>
 </div>
 </article>
@@ -501,7 +606,7 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
         <p class="page-subtitle">加密配置仓库、环境变量、运行时设置。无需 .env 文件。</p>
       </div>
 
-      <section>
+      <section data-topic="configuration-architecture">
         <h2>配置架构</h2>
         <p>Cyrene 使用 Fernet 加密的 JSON 配置存储（<code>data/config.enc</code>）。这意味着：</p>
         <ul>
@@ -513,7 +618,7 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
         <p>模型连接、档案与 primary / secondary / vision / embedding 路由以一份规范化配置图保存，并由 Provider Plugin 执行。</p>
       </section>
 
-      <section>
+      <section data-topic="environment-variables">
         <h2>环境变量</h2>
         <p>以下变量在启动时读取。多数字段可通过 Web UI 在运行时编辑，无需重启。</p>
 
@@ -599,7 +704,7 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
         </div>
       </section>
 
-      <section>
+      <section data-topic="runtime-settings">
         <h2>运行时设置</h2>
         <p>通过 Web UI <strong>设置</strong>页面可以在不重启的情况下修改大部分设置：</p>
 
@@ -618,7 +723,7 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
         </div>
       </section>
 
-      <section>
+      <section data-topic="model-pricing">
         <h2>模型定价参考</h2>
         <p>Cyrene 跟踪 token 用量并为已知模型估算成本。如果供应商价格变动，请在设置 UI 中更新。</p>
         <div class="table-wrapper">
@@ -639,15 +744,22 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
         <h1>Configuration</h1>
         <p class="page-subtitle">Encrypted config store, environment variables, runtime settings. No .env file required.</p>
       </div>
-      <section>
+      <section data-topic="configuration-architecture">
         <h2>Config Architecture</h2>
-        <p>Cyrene uses a Fernet-encrypted JSON config store (<code>data/config.enc</code>). API keys are encrypted on disk. The first-run wizard writes required values, and the Web UI Settings page can update them at runtime.</p>
+        <p>Cyrene uses a Fernet-encrypted JSON config store (<code>data/config.enc</code>). This means:</p>
+        <ul>
+          <li>Sensitive values such as API keys are encrypted on disk</li>
+          <li>You do <strong>not</strong> need to create or maintain a <code>.env</code> file</li>
+          <li>The first-run wizard writes every required value</li>
+          <li>The Web UI Settings page can update configuration at runtime</li>
+        </ul>
+        <p>Model connections, profiles, and primary / secondary / vision / embedding routes are stored as one normalized configuration graph and executed by Provider Plugins.</p>
       </section>
-      <section>
+      <section data-topic="environment-variables">
         <h2>Environment Variables</h2>
         <p>The following variables are read at startup. Most can be edited at runtime through the Web UI.</p>
         <h3>Model Provider Plugins</h3>
-        <p>Models no longer read OpenAI or embedding environment variables. Configure connections, profiles, and primary / secondary / vision / embedding routes in Settings.</p>
+        <p>Models no longer read OpenAI or embedding environment variables. Configure connections, profiles, and routes in Settings; chat and vectorization are both performed by the selected Provider Plugin.</p>
         <h3>Agent Settings</h3>
         <div class="table-wrapper"><table>
           <thead><tr><th>Variable</th><th>Description</th><th>Default</th></tr></thead>
@@ -657,16 +769,90 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
             <tr><td><code>MAX_TOOL_OUTPUT_CHARS</code></td><td>Optional tool output char limit (0 disables the global cap)</td><td><code>0</code></td></tr>
           </tbody>
         </table></div>
+
+        <h3>Scheduling & Steward</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Variable</th><th>Description</th><th>Default</th></tr></thead>
+          <tbody>
+            <tr><td><code>SCHEDULER_INTERVAL</code></td><td>Legacy heartbeat interval in seconds</td><td><code>60</code></td></tr>
+            <tr><td><code>HEARTBEAT_INTERVAL</code></td><td>Heartbeat check interval in seconds</td><td><code>300</code></td></tr>
+            <tr><td><code>HEARTBEAT_LOTTERY_INTERVAL</code></td><td>Proactive-message lottery interval in seconds</td><td><code>1800</code></td></tr>
+            <tr><td><code>LOTTERY_DELTA</code></td><td>Probability increment after each loss</td><td><code>0.15</code></td></tr>
+            <tr><td><code>LOTTERY_MAX</code></td><td>Maximum lottery probability</td><td><code>0.85</code></td></tr>
+            <tr><td><code>DAYTIME_START</code></td><td>Start of daytime hours</td><td><code>6</code></td></tr>
+            <tr><td><code>DAYTIME_END</code></td><td>End of daytime hours</td><td><code>22</code></td></tr>
+            <tr><td><code>STEWARD_INTERVAL</code></td><td>SOUL.md steward interval in seconds</td><td><code>1800</code></td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Search</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Variable</th><th>Description</th><th>Default</th></tr></thead>
+          <tbody>
+            <tr><td><code>SEARXNG_AUTO_START</code></td><td>Start SimpleXNG automatically</td><td><code>1</code> (enabled)</td></tr>
+            <tr><td><code>SEARXNG_PORT</code></td><td>SimpleXNG listening port</td><td><code>8888</code></td></tr>
+            <tr><td><code>SEARXNG_HOST</code></td><td>SimpleXNG bind address</td><td><code>127.0.0.1</code></td></tr>
+            <tr><td><code>SEARXNG_URL</code></td><td>External SearXNG URL, overriding auto-start</td><td>—</td></tr>
+            <tr><td><code>SEARCH_PROXY</code></td><td>HTTP proxy for search</td><td>—</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Knowledge Base / Embeddings (optional)</h3>
+        <p>Select a profile for the <code>embedding</code> route in the model configuration graph. Without one, the knowledge base remains available through full-text search.</p>
+        <div class="note"><strong>Tip:</strong> If no embedding endpoint is configured, the knowledge base automatically falls back to FTS. It still works, but semantic search is less precise.</div>
+
+        <h3>Browser</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Variable</th><th>Description</th><th>Default</th></tr></thead>
+          <tbody>
+            <tr><td><code>CYRENE_BROWSER_HEADLESS</code></td><td>Headless mode (0 keeps the browser headed)</td><td><code>1</code></td></tr>
+            <tr><td><code>CYRENE_BROWSER_SCREENCAST_QUALITY</code></td><td>JPEG screencast quality (1–100)</td><td><code>60</code></td></tr>
+            <tr><td><code>CYRENE_BROWSER_WIDTH</code></td><td>Viewport / frame width in pixels</td><td><code>1280</code></td></tr>
+            <tr><td><code>CYRENE_BROWSER_HEIGHT</code></td><td>Viewport / frame height in pixels</td><td><code>800</code></td></tr>
+            <tr><td><code>CYRENE_BROWSER_LOCALE</code></td><td>Browser locale</td><td><code>zh-CN</code></td></tr>
+            <tr><td><code>CYRENE_BROWSER_ACCEPT_LANGUAGE</code></td><td>Accept-Language header</td><td><code>zh-CN,zh;q=0.9,en;q=0.8</code></td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Channels (optional)</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Variable</th><th>Description</th><th>Default</th></tr></thead>
+          <tbody>
+            <tr><td><code>TELEGRAM_BOT_TOKEN</code></td><td>Telegram Bot token</td><td>—</td></tr>
+            <tr><td><code>OWNER_ID</code></td><td>Your Telegram user ID</td><td>—</td></tr>
+            <tr><td><code>WECHAT_BOT_TOKEN</code></td><td>WeChat Bot token</td><td>—</td></tr>
+            <tr><td><code>WECHAT_OWNER_ID</code></td><td>WeChat owner ID</td><td>—</td></tr>
+            <tr><td><code>AMAP_API_KEY</code></td><td>AMap API key</td><td>—</td></tr>
+          </tbody>
+        </table></div>
       </section>
-      <section>
+      <section data-topic="runtime-settings">
         <h2>Runtime Settings</h2>
         <p>Most settings can be modified at runtime through the Web UI Settings page without restarting:</p>
-        <ul>
-          <li><strong>Models</strong> — manage Provider Plugin connections, profiles, and routes</li>
-          <li><strong>Plugins</strong> — enable or disable packs and standalone tools</li>
-          <li><strong>MCP Servers</strong> — add, remove, and restart MCP connections</li>
-          <li><strong>SOUL.md</strong> — edit the personality document directly</li>
-        </ul>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Category</th><th>What you can change</th></tr></thead>
+          <tbody>
+            <tr><td>Models</td><td>Manage Provider Plugin connections, profiles, and primary / secondary / vision / embedding routes</td></tr>
+            <tr><td>Plugins</td><td>Enable or disable tool packs and standalone tools</td></tr>
+            <tr><td>MCP Servers</td><td>Add, remove, and restart MCP connections <strong>without restarting the process</strong></td></tr>
+            <tr><td>SOUL.md</td><td>Edit the personality document directly</td></tr>
+            <tr><td>Search</td><td>Prefer official DeepSeek native search with bundled SimpleXNG as fallback</td></tr>
+            <tr><td>Appearance</td><td>Theme, text size, and density</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+      <section data-topic="model-pricing">
+        <h2>Model Pricing Reference</h2>
+        <p>Cyrene tracks token use and estimates cost for known models. Update prices in Settings if a provider changes them.</p>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Model</th><th>Input (per million tokens)</th><th>Output (per million tokens)</th></tr></thead>
+          <tbody>
+            <tr><td>DeepSeek Chat</td><td>$0.14</td><td>$0.28</td></tr>
+            <tr><td>Claude Haiku 4.5</td><td>$0.25</td><td>$1.25</td></tr>
+            <tr><td>Claude Sonnet 4.6</td><td>$3.00</td><td>$15.00</td></tr>
+            <tr><td>Claude Opus 4.7</td><td>$15.00</td><td>$75.00</td></tr>
+          </tbody>
+        </table></div>
       </section>
 </div>
 </article>
@@ -679,7 +865,7 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
         <p class="page-subtitle">默认 UI。以项目为中心的桌面风格工作台，提供项目隔离、意图分流和诚实逐步执行。</p>
       </div>
 
-      <section>
+      <section data-topic="launching">
         <h2>启动</h2>
 
         <h3>Release 桌面应用</h3>
@@ -694,7 +880,7 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
         <p><code>--workbench</code> 标志可以省略——<code>python -m cyrene</code> 等价于 <code>python -m cyrene --workbench</code>。</p>
       </section>
 
-      <section>
+      <section data-topic="pages">
         <h2>页面一览</h2>
         <div class="table-wrapper">
           <table>
@@ -713,7 +899,7 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
         </div>
       </section>
 
-      <section>
+      <section data-topic="intent-dispatch">
         <h2>意图分流（Intent Dispatch）</h2>
         <p>聊天输入不是简单地全部交给 LLM。系统会自动分类意图：</p>
         <ul>
@@ -725,7 +911,7 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
         <p>你始终可以自由对话，不会无条件生成计划。</p>
       </section>
 
-      <section>
+      <section data-topic="step-by-step-execution">
         <h2>逐步执行</h2>
         <p>当代理进入任务模式时：</p>
         <ol>
@@ -737,7 +923,7 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
         </ol>
       </section>
 
-      <section>
+      <section data-topic="project-isolation">
         <h2>项目隔离</h2>
         <p>Workbench 的核心设计理念是项目隔离。每个项目拥有：</p>
         <ul>
@@ -749,7 +935,7 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
         <p>这意味着你可以在"工作"项目中讨论代码，在"个人"项目中讨论生活，两者互不干扰。</p>
       </section>
 
-      <section>
+      <section data-topic="related-docs">
         <h2>相关文档</h2>
         <ul>
           <li><a href="#" onclick="navigateTo('usage-cli')">CLI 使用——命令行和交互式终端</a></li>
@@ -761,28 +947,68 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
         <h1>Workbench UI</h1>
         <p class="page-subtitle">The default UI. A project-centric desktop workbench with project isolation, intent dispatch, and step-by-step execution.</p>
       </div>
-      <section>
+      <section data-topic="launching">
         <h2>Launching</h2>
         <h3>Release Desktop App</h3>
-        <p>Download from <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">GitHub Releases</a> and open the app directly. First launch runs the onboarding wizard. Workbench UI is the default interface.</p>
+        <p>Download an installer from <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">GitHub Releases</a> and open the app. First launch runs the onboarding wizard for the API key and personality. Workbench loads automatically as the default interface.</p>
         <div class="note"><strong>macOS:</strong> If Gatekeeper blocks it, go to <strong>System Settings → Privacy & Security</strong> and click "Open Anyway".</div>
         <h3>From Source</h3>
         <div class="code-block"><pre><code>python -m cyrene --workbench</code></pre></div>
-        <p>Open <a href="http://localhost:4242">http://localhost:4242</a>. The <code>--workbench</code> flag can be omitted.</p>
+        <p>Open <a href="http://localhost:4242">http://localhost:4242</a>. The first source run also opens the onboarding wizard.</p>
+        <p>The <code>--workbench</code> flag is optional: <code>python -m cyrene</code> is equivalent to <code>python -m cyrene --workbench</code>.</p>
       </section>
-      <section>
+      <section data-topic="pages">
+        <h2>Pages at a Glance</h2>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Page</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Welcome / Projects</strong></td><td>Create and switch projects. Each project has its own workspace, knowledge base, memory, and chat history.</td></tr>
+            <tr><td><strong>Dashboard</strong></td><td>System overview: active tasks, recent sessions, knowledge statistics, and LLM status.</td></tr>
+            <tr><td><strong>Chat</strong></td><td>Project-scoped live chat. See Intent Dispatch below.</td></tr>
+            <tr><td><strong>Schedule</strong></td><td>View and manage scheduled tasks, cron jobs, and deadlines.</td></tr>
+            <tr><td><strong>Knowledge</strong></td><td>Upload documents, browse the knowledge base, and run semantic search.</td></tr>
+            <tr><td><strong>Memory</strong></td><td>View and manage project and agent memories, isolated by workspace.</td></tr>
+            <tr><td><strong>Models</strong></td><td>Select LLM models and manage API endpoints.</td></tr>
+            <tr><td><strong>Help</strong></td><td>Getting-started tips, keyboard shortcuts, and documentation links.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+      <section data-topic="intent-dispatch">
         <h2>Intent Dispatch</h2>
         <p>Chat input is automatically classified into intents:</p>
         <ul>
-          <li><strong>Answer mode</strong> — direct LLM reply, no tool calls</li>
-          <li><strong>Command mode</strong> — tool execution (search, file operations)</li>
-          <li><strong>Task mode</strong> — multi-step plan with step-by-step execution</li>
-          <li><strong>Finalize</strong> — when you say "done", agent summarizes results</li>
+          <li><strong>Answer mode</strong> — direct LLM reply without tool calls or unnecessary planning</li>
+          <li><strong>Command mode</strong> — tool execution such as search or file operations</li>
+          <li><strong>Task mode</strong> — a complex request becomes a multi-step plan</li>
+          <li><strong>Finalize</strong> — when you say the task is done or ready for review, the agent summarizes results and marks it <code>review</code></li>
         </ul>
+        <p>You can always have a normal conversation; a plan is not generated unconditionally.</p>
       </section>
-      <section>
+      <section data-topic="step-by-step-execution">
+        <h2>Step-by-Step Execution</h2>
+        <p>When the agent enters task mode:</p>
+        <ol>
+          <li>The agent plans the required steps</li>
+          <li><strong>You</strong> choose the execution order; it does not have to match the plan order</li>
+          <li>Progress appears live in chat while each step runs</li>
+          <li>You can guide, adjust, or stop the active step at any time</li>
+          <li>At completion, the agent summarizes the outcome and makes artifacts such as files or reports available to view or download</li>
+        </ol>
+      </section>
+      <section data-topic="project-isolation">
         <h2>Project Isolation</h2>
-        <p>Each project has its own workspace path, knowledge base, memory space, and chat history — completely isolated.</p>
+        <p>Project isolation is a core Workbench design principle. Each project has:</p>
+        <ul>
+          <li>Its own workspace bounded by <code>workspacePath</code></li>
+          <li>Its own knowledge base, including documents and embeddings</li>
+          <li>Its own memory space</li>
+          <li>Its own chat history and sessions</li>
+        </ul>
+        <p>You can discuss code in a Work project and personal topics in another without mixing their context.</p>
+      </section>
+      <section data-topic="related-docs">
+        <h2>Related Documentation</h2>
+        <ul><li><a href="#" onclick="navigateTo('usage-cli')">CLI usage: commands and the interactive terminal</a></li></ul>
       </section>
 </div>
 </article>
@@ -795,7 +1021,7 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
         <p class="page-subtitle">cyrene 命令行客户端和交互式本地 CLI。</p>
       </div>
 
-      <section>
+      <section data-topic="http-client">
         <h2>cyrene 命令（HTTP 客户端）</h2>
         <p><code>cyrene</code> 命令是一个瘦 HTTP 客户端，与运行在 <code>http://localhost:4242</code> 的守护进程通信。使用 <code>--json</code> 获取机器可读输出。</p>
 
@@ -835,7 +1061,7 @@ cyrene stop</code></pre></div>
         </div>
       </section>
 
-      <section>
+      <section data-topic="interactive-cli">
         <h2>交互式本地 CLI</h2>
         <p>不需要启动 Web 服务器，直接运行代理的交互模式。适合快速测试和无头环境：</p>
         <div class="code-block"><pre><code>python -m cyrene.local_cli</code></pre></div>
@@ -856,7 +1082,7 @@ cyrene stop</code></pre></div>
         </div>
       </section>
 
-      <section>
+      <section data-topic="chat-slash-commands">
         <h2>聊天的斜杠命令</h2>
         <p>Workbench UI 和交互式 CLI 支持的斜杠命令：</p>
         <div class="table-wrapper">
@@ -870,7 +1096,7 @@ cyrene stop</code></pre></div>
         </div>
       </section>
 
-      <section>
+      <section data-topic="workflow-example">
         <h2>完成的工作流示例</h2>
         <div class="code-block"><pre><code># 1. 启动守护进程
 cyrene start
@@ -896,27 +1122,88 @@ cyrene stop</code></pre></div>
         <h1>CLI Usage</h1>
         <p class="page-subtitle">Command-line client and interactive local CLI.</p>
       </div>
-      <section>
+      <section data-topic="http-client">
         <h2>cyrene Command (HTTP Client)</h2>
-        <p>The <code>cyrene</code> command communicates with the daemon at <code>http://localhost:4242</code>.</p>
-        <div class="code-block"><pre><code>cyrene start
+        <p>The <code>cyrene</code> command is a thin HTTP client for the daemon at <code>http://localhost:4242</code>. Add <code>--json</code> for machine-readable output.</p>
+        <div class="code-block"><pre><code># Start the daemon in the background
+cyrene start
+
+# Inspect status
 cyrene status
+
+# Send a message
 cyrene do "search today news" --session daily
+
+# Stop the daemon
 cyrene stop</code></pre></div>
         <div class="table-wrapper"><table>
           <thead><tr><th>Command</th><th>Description</th></tr></thead>
           <tbody>
             <tr><td><code>cyrene start</code></td><td>Start daemon in background</td></tr>
             <tr><td><code>cyrene stop</code></td><td>Stop daemon</td></tr>
-            <tr><td><code>cyrene do &lt;text&gt; --session &lt;id&gt;</code></td><td>Send message to agent</td></tr>
+            <tr><td><code>cyrene do &lt;text&gt; --session &lt;id&gt;</code></td><td>Send a message to an agent session</td></tr>
+            <tr><td><code>cyrene session list</code></td><td>List active and archived sessions</td></tr>
+            <tr><td><code>cyrene session status --session &lt;id&gt;</code></td><td>Show session details</td></tr>
+            <tr><td><code>cyrene session delete --session &lt;id&gt;</code></td><td>Delete a session</td></tr>
+            <tr><td><code>cyrene flow --session &lt;id&gt;</code></td><td>List agent rounds</td></tr>
+            <tr><td><code>cyrene flow --session &lt;id&gt; --round &lt;r&gt;</code></td><td>Show an execution trace for one round</td></tr>
+            <tr><td><code>cyrene flow --session &lt;id&gt; --round &lt;r&gt; --id &lt;e&gt;</code></td><td>Inspect a specific LLM or tool-call event</td></tr>
             <tr><td><code>cyrene status</code></td><td>System status and metrics</td></tr>
+            <tr><td><code>cyrene mcp list</code></td><td>List MCP servers and their tools</td></tr>
+            <tr><td><code>cyrene mcp add &lt;name&gt; stdio &lt;cmd&gt; [args...]</code></td><td>Add a stdio MCP server</td></tr>
+            <tr><td><code>cyrene mcp add &lt;name&gt; sse &lt;url&gt;</code></td><td>Add an SSE MCP server</td></tr>
+            <tr><td><code>cyrene mcp remove &lt;name&gt;</code></td><td>Remove an MCP server</td></tr>
+            <tr><td><code>cyrene mcp toggle &lt;name&gt;</code></td><td>Enable or disable an MCP server</td></tr>
           </tbody>
         </table></div>
       </section>
-      <section>
+      <section data-topic="interactive-cli">
         <h2>Interactive Local CLI</h2>
+        <p>Run the agent interactively without starting the web server. This is useful for quick tests and headless environments:</p>
         <div class="code-block"><pre><code>python -m cyrene.local_cli</code></pre></div>
-        <p>Slash commands: <code>/h</code>, <code>/mcp</code>, <code>/clear</code>, <code>/deep-reflect [focus]</code>, <code>quit</code>.</p>
+        <p>Available commands:</p>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Command</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><code>/h</code></td><td>Help menu: clear context, reset personality, and show system status</td></tr>
+            <tr><td><code>/mcp</code></td><td>MCP server management (list/add/remove/toggle/test)</td></tr>
+            <tr><td><code>/mcp list</code></td><td>List configured MCP servers</td></tr>
+            <tr><td><code>/clear</code></td><td>Reset the current session context</td></tr>
+            <tr><td><code>/deep-reflect [focus]</code></td><td>Run deep reflection on a subject</td></tr>
+            <tr><td><code>quit</code></td><td>Exit the interactive CLI</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+      <section data-topic="chat-slash-commands">
+        <h2>Chat Slash Commands</h2>
+        <p>The Workbench UI and interactive CLI support these slash commands:</p>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Command</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>/deep-reflect [focus]</code></td><td>Run multi-round internal reframing for an ambiguous or complex request, trading a little latency for a more precise answer.</td></tr>
+            <tr><td><code>/clear</code></td><td>Reset the current session's context window. This clears all conversation history in that context.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+      <section data-topic="workflow-example">
+        <h2>Complete Workflow Example</h2>
+        <div class="code-block"><pre><code># 1. Start the daemon
+cyrene start
+
+# 2. Create a session and send a message
+cyrene do "analyze the project architecture in the current directory" --session analysis
+
+# 3. Inspect the agent's reasoning rounds
+cyrene flow --session analysis
+
+# 4. Inspect a particular round
+cyrene flow --session analysis --round round_1
+
+# 5. Read system status
+cyrene status
+
+# 6. Stop the daemon when finished
+cyrene stop</code></pre></div>
       </section>
 </div>
 </article>
@@ -929,7 +1216,7 @@ cyrene stop</code></pre></div>
         <p class="page-subtitle">双阶段代理循环、项目结构、安全模型。理解 Cyrene 的核心设计。</p>
       </div>
 
-      <section>
+      <section data-topic="two-phase-loop">
         <h2>双阶段决策循环</h2>
         <p>这是 Cyrene 最核心的设计决策。普通 Agent 如果把每个具体工具 schema 都直接传给模型，工具数量和动态连接变化会放大 token 成本并破坏提示缓存。</p>
         <p>Cyrene 将交互分为两个阶段，同时让两阶段共享同一固定 wire schema：</p>
@@ -983,13 +1270,13 @@ cyrene stop</code></pre></div>
         <p>代理在多轮之间保持状态，直到调用 <code>quit</code> 结束交互。</p>
       </section>
 
-      <section>
+      <section data-topic="self-control">
         <h2>Cyrene 自控制</h2>
         <p><code>cyrene_tools</code> 是渐进披露的桌面自管理工具包。Agent 先用 <code>cyrene.ui.snapshot</code> 读取当前已渲染、当前视口中的稳定语义组件，再用 <code>cyrene.ui.inspect</code> 查看某个组件此刻可执行的动作，最后通过 <code>click</code>、<code>type</code>、<code>scroll</code> 或 <code>drag</code> 操作。导航、滚动、展开或打开右键菜单后必须重新读取 Snapshot；Inspect 不预测未渲染的下一页。</p>
         <p>当前输入框的发送是显式 R2 动作，停止运行是 R1。项目、对话和数据后台 Service 保持 Internal，不直接暴露给 Agent。非模型设置通过 Typed Describe/Read/Write/Control 接口管理，写入使用版本比较并只更新指定字段，以免覆盖用户并发修改。</p>
       </section>
 
-      <section>
+      <section data-topic="project-structure">
         <h2>项目结构</h2>
         <div class="code-block"><pre><code>src/
 ├── cyrene/                           # 核心领域与 Runtime
@@ -1014,7 +1301,7 @@ cyrene stop</code></pre></div>
 └── store/</code></pre></div>
       </section>
 
-      <section>
+      <section data-topic="security-model">
         <h2>安全模型</h2>
         <ul>
           <li><strong>网络层</strong>——Web UI 只绑定 <code>127.0.0.1</code>，不暴露到网络。Electron 桌面构建在 OS 钥匙串中存储随机令牌，每次请求验证。</li>
@@ -1028,25 +1315,88 @@ cyrene stop</code></pre></div>
         <h1>Architecture</h1>
         <p class="page-subtitle">Two-phase agent loop, project structure, security model.</p>
       </div>
-      <section>
+      <section data-topic="two-phase-loop">
         <h2>Two-Phase Decision Loop</h2>
-        <p>Both ordinary phases receive the same deterministic wire bundle for the current package settings. Runtime policy restricts Phase 1 to <code>use_tools</code>, <code>ask_user</code>, and <code>quit</code>; Phase 2 keeps the same schemas and progressively discovers concrete capabilities through enabled gateways. Disabling a package omits its schema and package-specific prompt instructions, intentionally starting a new cache prefix. Deep Research keeps its specialized flow.</p>
+        <p>This is Cyrene's central design decision. Passing every concrete tool schema directly to the model would increase token cost and disrupt prompt caching as tools and dynamic connections change.</p>
+        <p>Cyrene divides an interaction into two phases while giving both phases the same fixed wire schema:</p>
+        <div class="flow-diagram">
+          <div class="flow-node flow-start">User message</div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-node flow-phase">Phase 1 (direct tools + enabled packages; policy allows only use_tools / ask_user / quit)</div>
+          <div class="flow-branch">
+            <div class="flow-branch-item"><div class="flow-node flow-end">Chat → direct response</div><div class="flow-label">One LLM call (quit / ask_user)</div></div>
+            <div class="flow-branch-item"><div class="flow-node flow-phase">Tools needed → Phase 2</div></div>
+          </div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-node flow-phase">Phase 2 (same fixed definitions + progressive packages + multiple rounds)</div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-node flow-end">Reply to user</div>
+        </div>
+
+        <h3>Phase 1 (fast path)</h3>
+        <p>Every interaction starts in Phase 1. The LLM chooses among <code>use_tools</code>, <code>ask_user</code>, and <code>quit</code>:</p>
+        <ul>
+          <li>For chat or a simple question, it calls <code>quit</code> and replies with <strong>one LLM call</strong></li>
+          <li>For a request that needs tools, it calls <code>use_tools</code> and enters Phase 2</li>
+          <li>When clarification is needed, it calls <code>ask_user</code>, another chat-only interaction</li>
+        </ul>
+        <p>Ordinary Phase 1 and Phase 2 calls receive the same deterministically ordered wire definitions for the active package settings. Phase 1 runtime policy permits only the three control tools above. Changing package settings creates a new prompt/cache prefix; unchanged settings keep reusing the same prefix.</p>
+
+        <h3>Phase 2 (progressive packages)</h3>
+        <p>Phase 2 keeps the same wire tools. Core file, shell, web, and AnalyzeAttachment tools are direct; other concrete capabilities use enabled, stable gateways in a discover → describe → invoke flow:</p>
+        <div class="flow-tools" style="justify-content:flex-start; max-width:100%;">
+          <span class="tool-tag">File operations</span>
+          <span class="tool-tag">Bash shell</span>
+          <span class="tool-tag">Web search</span>
+          <span class="tool-tag">Knowledge search</span>
+          <span class="tool-tag">Entity management</span>
+          <span class="tool-tag">Browser actions</span>
+          <span class="tool-tag">Code analysis</span>
+          <span class="tool-tag">Git operations</span>
+          <span class="tool-tag">Sub-agent spawning</span>
+          <span class="tool-tag">MCP tools</span>
+          <span class="tool-tag">Task scheduling</span>
+          <span class="tool-tag">Skill management</span>
+          <span class="tool-tag">Shared terminals</span>
+        </div>
+        <p>Settings toggle complete capability packages rather than individual tools. Disabling a package removes its gateway schema, package description, and prompt material; runtime policy also rejects stale calls from earlier messages. Direct tools such as AnalyzeAttachment are unaffected.</p>
+        <p>The agent maintains state across rounds until it calls <code>quit</code>.</p>
       </section>
-      <section>
+      <section data-topic="self-control">
         <h2>Cyrene Self-Control</h2>
         <p><code>cyrene_tools</code> is the progressively disclosed desktop self-management package. The agent reads stable semantic components in the current rendered viewport with <code>cyrene.ui.snapshot</code>, inspects a component's currently available actions with <code>cyrene.ui.inspect</code>, then uses <code>click</code>, <code>type</code>, <code>scroll</code>, or <code>drag</code>. Navigation, scrolling, expansion, and context menus require a fresh snapshot; inspect does not predict an unrendered next screen.</p>
         <p>Submitting the current composer is an explicit R2 action; stopping a run is R1. Project, chat, and data business services remain internal. Non-model settings use typed describe/read/write/control operations with compare-and-set writes that update only named fields, preserving concurrent user edits.</p>
       </section>
-      <section>
+      <section data-topic="project-structure">
         <h2>Project Structure</h2>
-        <p>Domain code lives under <code>src/cyrene</code>; every FastAPI HTTP/WebSocket adapter is composed from <code>src/route/registry.py</code>. Cyrene ships one Workbench front-end: <code>src/webui/frontend</code> is the sole React/JSX source root and <code>src/webui/static/app</code> is the sole generated and packaged web output root. Shared theme, feedback, Markdown, browser, diff, search, PDF, data, SSE, and readiness capabilities are owned by the explicit <code>platform/</code> and <code>shared/</code> layers.</p>
+        <div class="code-block"><pre><code>src/
+├── cyrene/                           # Core domain and runtime
+│   ├── agent/ workbench/ model_runtime/ learning/
+│   ├── runtime/ observability/ knowledge/ channels/
+│   ├── tooling/                      # Tool control plane, wire, and policy
+│   └── tool_impl/                    # Native tool implementations by domain
+├── route/                            # FastAPI HTTP/WebSocket adapters
+│   ├── registry.py                   # Sole route composition root
+│   ├── agent/ workbench/ system/
+│   ├── settings/ code/ maps/
+│   └── channels/
+├── webui/                            # App lifecycle, auth, and Workbench SPA
+│   ├── server.py                     # FastAPI app factory; installs route.registry
+│   ├── frontend/                     # Sole React/JSX source root
+│   │   ├── platform/                 # Bootstrap, API, SSE, data, readiness
+│   │   └── shared/                   # Theme, feedback, Markdown, browser, PDF
+│   └── static/app/                   # Sole generated and packaged web output
+├── tests/
+├── data/
+├── workspace/
+└── store/</code></pre></div>
       </section>
-      <section>
+      <section data-topic="security-model">
         <h2>Security</h2>
         <ul>
-          <li><strong>Network</strong> — Web UI binds to 127.0.0.1 only. Electron adds keyring-based auth.</li>
-          <li><strong>Workspace guard</strong> — file/shell operations are scoped to the workspace.</li>
-          <li><strong>Permission elevation</strong> — cross-workspace ops require user approval.</li>
+          <li><strong>Network</strong> — the Web UI binds only to <code>127.0.0.1</code>. Electron desktop builds store a random token in the OS keyring and validate every request.</li>
+          <li><strong>Workspace guard</strong> — file and shell operations are bounded to the workspace; in Workbench, that is the project's <code>workspacePath</code>.</li>
+          <li><strong>Permission elevation</strong> — reads or writes outside the workspace require an elevation request.</li>
         </ul>
       </section>
 </div>
@@ -1060,7 +1410,7 @@ cyrene stop</code></pre></div>
         <p class="page-subtitle">三层记忆架构：上下文窗口 → 短期摘要 → 长期人格文档，自动压缩和持久化。</p>
       </div>
 
-      <section>
+      <section data-topic="three-layer-architecture">
         <h2>三层架构</h2>
         <p>Cyrene 的记忆分为三个层级，随着时间从短期向长期流动：</p>
 
@@ -1076,7 +1426,7 @@ cyrene stop</code></pre></div>
         </div>
       </section>
 
-      <section>
+      <section data-topic="memory-flow">
         <h2>记忆流动过程</h2>
         <ol>
           <li><strong>每轮对话</strong>保存在上下文窗口中。超过 <code>MAX_HISTORY_MESSAGES</code> 条时，最早的条目被裁剪——但不会丢失，因为后台压缩器会处理。</li>
@@ -1091,7 +1441,7 @@ cyrene stop</code></pre></div>
         </ol>
       </section>
 
-      <section>
+      <section data-topic="memory-retirement">
         <h2>记忆退休（Memory Retirement）</h2>
         <p>过时或被取代的短期记忆可以<strong>退休</strong>（retire）。退休意味着：</p>
         <ul>
@@ -1102,7 +1452,7 @@ cyrene stop</code></pre></div>
         <p>这比直接删除更安全——如果后续发现需要这个信息，仍然可以恢复。退休机制也避免了"已删除的记忆被重新学习"的问题。</p>
       </section>
 
-      <section>
+      <section data-topic="soul-personality">
         <h2>SOUL.md 人格系统</h2>
         <p><code>workspace/SOUL.md</code> 是 Cyrene 的长期记忆载体，也是一个可自进化的人格文档。其结构如下：</p>
 
@@ -1136,7 +1486,7 @@ cyrene stop</code></pre></div>
         <p>SOUL.md 在每次交互时注入到系统提示中。由于启用了提示缓存，未变化的内容不会重新注入，缓存命中率高。</p>
       </section>
 
-      <section>
+      <section data-topic="workbench-memory">
         <h2>Workbench 记忆集成</h2>
         <p>Workbench UI 中的记忆页面按 <strong>workspace 隔离</strong>：</p>
         <ul>
@@ -1152,26 +1502,71 @@ cyrene stop</code></pre></div>
         <h1>Memory System</h1>
         <p class="page-subtitle">Three-layer memory: context window, short-term summaries, long-term SOUL.md.</p>
       </div>
-      <section>
+      <section data-topic="three-layer-architecture">
         <h2>Three-Layer Architecture</h2>
+        <p>Cyrene divides memory into three layers that move from short-term to long-term over time:</p>
         <div class="table-wrapper"><table>
           <thead><tr><th>Layer</th><th>Storage</th><th>Capacity</th><th>Maintained by</th></tr></thead>
           <tbody>
-            <tr><td><strong>Context Window</strong></td><td><code>data/state.json</code></td><td><code>MAX_HISTORY_MESSAGES</code> (40)</td><td>Auto-trimmed</td></tr>
-            <tr><td><strong>Short-Term</strong></td><td><code>data/short_term.json</code></td><td>Compressed summaries</td><td>Background compressor</td></tr>
-            <tr><td><strong>Long-Term</strong></td><td><code>workspace/SOUL.md</code></td><td>Structured document</td><td>Steward agent (every 30 min)</td></tr>
+            <tr><td><strong>Context Window</strong></td><td><code>data/state.json</code></td><td><code>MAX_HISTORY_MESSAGES</code> (40 by default)</td><td>FIFO auto-trimming</td></tr>
+            <tr><td><strong>Short-Term Memory</strong></td><td><code>data/short_term.json</code></td><td>Compressed summaries with valence and type labels</td><td>Background compressor</td></tr>
+            <tr><td><strong>Long-Term Memory</strong></td><td><code>workspace/SOUL.md</code></td><td>Structured, free-form document</td><td>Steward agent on an interval</td></tr>
           </tbody>
         </table></div>
       </section>
-      <section>
+      <section data-topic="memory-flow">
         <h2>Memory Flow</h2>
         <ol>
-          <li>Conversations stay in context window, auto-trimmed at the limit</li>
-          <li>Background compressor creates summaries with valence, mention count, type</li>
-          <li>High-frequency (>=3 mentions) and extreme-valence entries auto-preserve</li>
-          <li>Steward agent reviews and updates SOUL.md via APPEND/ERASE/MERGE</li>
+          <li><strong>Each conversation turn</strong> remains in the context window. When it exceeds <code>MAX_HISTORY_MESSAGES</code>, the oldest entries are trimmed after the background compressor has processed them.</li>
+          <li><strong>The background compressor</strong> stores summaries in short-term memory with valence (positive / neutral / negative), mention count, and a fact / pattern / preference / emotion type.</li>
+          <li><strong>Automatic preservation</strong> keeps frequently mentioned entries (at least three mentions) and entries with extreme valence.</li>
+          <li><strong>The steward agent</strong> runs at <code>STEWARD_INTERVAL</code> (30 minutes by default), reviews short-term memory and recent conversations, and updates SOUL.md with <code>APPEND</code>, <code>ERASE</code>, and <code>MERGE</code>.</li>
         </ol>
-        <p>Outdated memories can be <strong>retired</strong> — stopped from injection without destructive deletion.</p>
+      </section>
+      <section data-topic="memory-retirement">
+        <h2>Memory Retirement</h2>
+        <p>Outdated or superseded short-term memories can be <strong>retired</strong>. A retired memory:</p>
+        <ul>
+          <li>Stops being injected into the context window</li>
+          <li>Is no longer recalled or cited</li>
+          <li>Remains on disk instead of being destructively deleted</li>
+        </ul>
+        <p>This makes recovery possible and prevents a deleted memory from simply being learned again.</p>
+      </section>
+      <section data-topic="soul-personality">
+        <h2>SOUL.md Personality</h2>
+        <p><code>workspace/SOUL.md</code> is Cyrene's long-term memory carrier and a self-evolving personality document:</p>
+        <div class="code-block"><pre><code>## SELF:IDENTITY
+- I am Cyrene, a personal AI companion.
+- My purpose is to be a friend and companion.
+
+## SELF:BELIEFS
+<!-- Core beliefs and values -->
+
+## RELATIONSHIP:USER
+- Trust level: neutral
+- Communication style: casual, direct
+
+## MEMORY:HIGH_IMPACT
+<!-- Important long-term memories -->
+
+## PATTERN:USER
+<!-- User behavior patterns -->
+
+## TEMPORARY
+<!-- Entries expire after 24 hours --></code></pre></div>
+        <p>The steward agent reviews recent conversation history, decides what belongs in SOUL.md, applies structured <code>APPEND</code>/<code>ERASE</code>/<code>MERGE</code> commands, and expires <code>TEMPORARY</code> entries after 24 hours.</p>
+        <p>SOUL.md is injected into the system prompt for each interaction. Prompt caching avoids resending unchanged content.</p>
+      </section>
+      <section data-topic="workbench-memory">
+        <h2>Workbench Memory Integration</h2>
+        <p>The Workbench memory page is isolated by <strong>workspace</strong>:</p>
+        <ul>
+          <li>Files are named <code>wb_memory_&lt;workspace&gt;.json</code>, so project memories do not mix</li>
+          <li>Conversations are automatically distilled into memory</li>
+          <li>The agent can write memory explicitly with <code>save_project_memory</code></li>
+          <li>Reflection results are also persisted to the memory store</li>
+        </ul>
       </section>
 </div>
 </article>
@@ -1255,7 +1650,7 @@ cyrene stop</code></pre></div>
         <p class="page-subtitle">并行执行、文件基中枢通信、独立生命周期。将复杂任务分解为并行子任务。</p>
       </div>
 
-      <section>
+      <section data-topic="overview">
         <h2>概述</h2>
         <p>子代理是主代理动态生成的独立代理实例。每个子代理：</p>
         <ul>
@@ -1267,7 +1662,7 @@ cyrene stop</code></pre></div>
         <p>子代理特别适合：同时搜索多个来源、并行分析多个文件、执行可分解的子任务。</p>
       </section>
 
-      <section>
+      <section data-topic="lifecycle">
         <h2>生命周期</h2>
         <div class="flow-diagram flow-diagram-horizontal">
           <div class="flow-node flow-start" style="font-size:0.85rem;">running</div>
@@ -1287,7 +1682,7 @@ cyrene stop</code></pre></div>
         <p>主代理收集所有子代理的结果，综合为最终回复。</p>
       </section>
 
-      <section>
+      <section data-topic="communication">
         <h2>通信机制</h2>
         <p>子代理之间的通信使用<strong>文件基收件箱（inbox）系统</strong>：</p>
         <ul>
@@ -1297,7 +1692,7 @@ cyrene stop</code></pre></div>
         </ul>
       </section>
 
-      <section>
+      <section data-topic="use-cases">
         <h2>典型使用场景</h2>
         <ul>
           <li><strong>并行研究</strong>——同时搜索多个来源，合并结果</li>
@@ -1307,7 +1702,7 @@ cyrene stop</code></pre></div>
         </ul>
       </section>
 
-      <section>
+      <section data-topic="considerations">
         <h2>注意事项</h2>
         <div class="note">
           <strong>提示：</strong>子代理的 token 消耗是独立的。大量使用子代理会增加整体 LLM 调用成本。建议只在确实需要并行处理时使用。
@@ -1319,16 +1714,57 @@ cyrene stop</code></pre></div>
         <h1>Sub-agent System</h1>
         <p class="page-subtitle">Parallel execution, file-based inbox coordination, independent lifecycle.</p>
       </div>
-      <section>
-        <p>Sub-agents receive a stable, actor-scoped wire bundle. Capability discovery omits main-only actions and runtime policy rejects forbidden invocations. Communication uses a <strong>file-based inbox system</strong>.</p>
+      <section data-topic="overview">
+        <h2>Overview</h2>
+        <p>Sub-agents are independent agent instances spawned dynamically by the main agent. Each one:</p>
+        <ul>
+          <li>Receives a stable, actor-scoped wire bundle; discovery omits main-only actions and runtime policy rejects forbidden calls</li>
+          <li>Communicates with sibling agents through a <strong>file-based inbox</strong></li>
+          <li>Has an independent reasoning process and tool-call chain</li>
+          <li>Stops automatically on timeout</li>
+        </ul>
+        <p>They are especially useful for searching several sources, analyzing several files, or executing separable tasks in parallel.</p>
+      </section>
+      <section data-topic="lifecycle">
         <h2>Lifecycle</h2>
-        <p>running → waiting → resumed → done / timeout</p>
+        <div class="flow-diagram flow-diagram-horizontal">
+          <div class="flow-node flow-start" style="font-size:0.85rem;">running</div>
+          <div class="flow-arrow" style="min-width:20px;">→</div>
+          <div class="flow-node flow-phase" style="font-size:0.85rem;">waiting</div>
+          <div class="flow-arrow" style="min-width:20px;">→</div>
+          <div class="flow-node flow-phase" style="font-size:0.85rem;">resumed</div>
+          <div class="flow-arrow" style="min-width:20px;">→</div>
+          <div class="flow-node flow-end" style="font-size:0.85rem;">done / timeout</div>
+        </div>
         <ol>
           <li><strong>running</strong> — sub-agent starts executing</li>
           <li><strong>waiting</strong> — waiting for sibling results or inbox messages</li>
           <li><strong>resumed</strong> — continues after receiving a message</li>
           <li><strong>done / timeout</strong> — completed or timed out</li>
         </ol>
+        <p>The main agent collects all sub-agent results and synthesizes the final response.</p>
+      </section>
+      <section data-topic="communication">
+        <h2>Communication</h2>
+        <p>Sub-agents coordinate through a <strong>file-based inbox system</strong>:</p>
+        <ul>
+          <li>Each sub-agent owns an inbox directory</li>
+          <li>An agent writes a message to a sibling's inbox with <code>send_agent_message</code></li>
+          <li>Inbox messages are read and handled in the next reasoning loop</li>
+        </ul>
+      </section>
+      <section data-topic="use-cases">
+        <h2>Typical Use Cases</h2>
+        <ul>
+          <li><strong>Parallel research</strong> — search several sources at once and combine the findings</li>
+          <li><strong>Multi-file analysis</strong> — read and analyze several code files concurrently</li>
+          <li><strong>Task decomposition</strong> — run research and data analysis as separate parallel tasks</li>
+          <li><strong>Competing experiments</strong> — try multiple approaches and let the main agent select the strongest result</li>
+        </ul>
+      </section>
+      <section data-topic="considerations">
+        <h2>Considerations</h2>
+        <div class="note"><strong>Tip:</strong> Each sub-agent consumes tokens independently. Use parallel agents when concurrent work provides a real benefit.</div>
       </section>
 </div>
 </article>
@@ -1341,7 +1777,7 @@ cyrene stop</code></pre></div>
         <p class="page-subtitle">桌面版复用 Electron 内嵌 Chromium；非桌面环境可选 Playwright 实时画面与登录接管。</p>
       </div>
 
-      <section>
+      <section data-topic="features">
         <h2>特性</h2>
         <p>当代理使用浏览器工具时，聊天 UI 实时显示页面的画面——你能看到代理看到了什么和正在做什么。遇到登录墙时，代理可以把浏览器的<strong>控制权交给你</strong>。</p>
         <ul>
@@ -1351,7 +1787,7 @@ cyrene stop</code></pre></div>
         </ul>
       </section>
 
-      <section>
+      <section data-topic="setup">
         <h2>设置</h2>
         <p><strong>Electron 桌面版无需额外安装。</strong>浏览器工具通过本机令牌认证的 RPC 调用内嵌 Chromium；RPC 故障会明确返回，不会静默启动另一套浏览器。</p>
 
@@ -1366,7 +1802,7 @@ playwright install chromium</code></pre></div>
         </div>
       </section>
 
-      <section>
+      <section data-topic="workflow">
         <h2>工作流程</h2>
         <div class="steps">
           <div class="step"><div class="step-number">1</div><div><strong>代理浏览</strong>——调用 <code>browser_navigate</code> 打开 URL。每次操作后后端发布 SSE 事件（URL、标题、操作类型）。实时画面持续推送。</div></div>
@@ -1377,7 +1813,7 @@ playwright install chromium</code></pre></div>
         <p>因为配置文件是持久化的，对于大多数网站，接管只需要在首次登录时出现一次。</p>
       </section>
 
-      <section>
+      <section data-topic="configuration">
         <h2>配置</h2>
         <p>浏览器配置通过加密配置仓库设置（环境变量键名在括号中）：</p>
         <div class="table-wrapper">
@@ -1396,7 +1832,7 @@ playwright install chromium</code></pre></div>
         </div>
       </section>
 
-      <section>
+      <section data-topic="tools">
         <h2>工具列表</h2>
         <div class="table-wrapper">
           <table>
@@ -1422,18 +1858,67 @@ playwright install chromium</code></pre></div>
         <h1>Browser Live View & Login Takeover</h1>
         <p class="page-subtitle">Electron desktop reuses embedded Chromium; non-desktop runs can opt into Playwright live view and login takeover.</p>
       </div>
-      <section>
+      <section data-topic="features">
+        <h2>Features</h2>
+        <p>When the agent uses browser tools, the chat UI shows a live view of the page so you can see what it sees and does. At a login wall, the agent can hand <strong>control of the browser</strong> to you.</p>
         <ul>
-          <li><strong>Electron desktop</strong> — native <code>WebContentsView</code> tabs share one persistent partition with agent tools; no Playwright install</li>
-          <li><strong>Non-desktop Playwright mode</strong> — persistent profile and CDP JPEG live screencast via WebSocket</li>
-          <li><strong>Login takeover</strong> — use the embedded desktop tab, or a headed Chromium window in Playwright mode</li>
+          <li><strong>Electron desktop</strong> — native <code>WebContentsView</code> tabs are embedded in Workbench. You and the agent use the same persistent browser partition, with no Playwright install.</li>
+          <li><strong>Non-desktop Playwright mode</strong> — the profile persists at <code>&lt;DATA_DIR&gt;/browser_profile</code>, and a CDP screencast streams frames through <code>/ws/browser</code>.</li>
+          <li><strong>Login takeover</strong> — sign in directly in the embedded desktop tab, or switch non-desktop mode to a real headed Chromium window and continue the same session afterward.</li>
         </ul>
       </section>
-      <section>
+      <section data-topic="setup">
         <h2>Setup</h2>
-        <p>Packaged desktop releases need no extra setup. For source Web UI or CLI:</p>
+        <p><strong>Electron desktop needs no additional installation.</strong> Browser tools call embedded Chromium through locally token-authenticated RPC. An RPC failure is reported explicitly and does not silently launch another browser.</p>
+        <p>Outside Electron, basic <code>browser_navigate</code> use needs no extra dependency and falls back to a text-only HTTP fetch when Playwright is unavailable.</p>
+        <p>For full automation, live view, and login takeover in the source Web UI or CLI:</p>
         <div class="code-block"><pre><code>pip install -e ".[browser]"
 playwright install chromium</code></pre></div>
+        <div class="note"><strong>Note:</strong> This install is only for the source Web UI or CLI. If Playwright or its Chromium runtime is missing, interactive browser tools report that the runtime is unavailable.</div>
+      </section>
+      <section data-topic="workflow">
+        <h2>Workflow</h2>
+        <div class="steps">
+          <div class="step"><div class="step-number">1</div><div><strong>The agent browses</strong> — <code>browser_navigate</code> opens a URL. After every action, the backend publishes an SSE event with the URL, title, and action type while the live view continues streaming.</div></div>
+          <div class="step"><div class="step-number">2</div><div><strong>A login wall appears</strong> — the agent detects a login page, CAPTCHA, or 2FA and calls <code>browser_request_takeover</code>. The stream pauses and the panel shows a takeover card. Your credentials are <strong>not streamed</strong>.</div></div>
+          <div class="step"><div class="step-number">3</div><div><strong>You sign in</strong> — in Playwright mode, the browser restarts as a <strong>headed window</strong> with the same profile. Complete the login and close the window.</div></div>
+          <div class="step"><div class="step-number">4</div><div><strong>The agent resumes</strong> — the browser restarts headlessly with the same authenticated profile and the agent resumes its round automatically.</div></div>
+        </div>
+        <p>Because the profile persists, most sites need takeover only for the first login.</p>
+      </section>
+      <section data-topic="configuration">
+        <h2>Configuration</h2>
+        <p>Browser settings live in the encrypted configuration store; environment-variable keys are shown below.</p>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Setting</th><th>Default</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>CYRENE_BROWSER_HEADLESS</code></td><td><code>1</code></td><td>Set to 0 for persistent headed mode. Takeover forces headed mode regardless.</td></tr>
+            <tr><td><code>CYRENE_BROWSER_SCREENCAST_QUALITY</code></td><td><code>60</code></td><td>JPEG quality from 1 to 100.</td></tr>
+            <tr><td><code>CYRENE_BROWSER_WIDTH</code></td><td><code>1280</code></td><td>Viewport and frame width in pixels.</td></tr>
+            <tr><td><code>CYRENE_BROWSER_HEIGHT</code></td><td><code>800</code></td><td>Viewport and frame height in pixels.</td></tr>
+            <tr><td><code>CYRENE_BROWSER_USER_AGENT</code></td><td>Automatic</td><td>Removes the HeadlessChrome marker by default and presents desktop Chrome.</td></tr>
+            <tr><td><code>CYRENE_BROWSER_LOCALE</code></td><td><code>zh-CN</code></td><td>Locale passed to Playwright.</td></tr>
+            <tr><td><code>CYRENE_BROWSER_ACCEPT_LANGUAGE</code></td><td><code>zh-CN,zh;q=0.9,en;q=0.8</code></td><td>Accept-Language header sent by the browser.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+      <section data-topic="tools">
+        <h2>Tools</h2>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Tool</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><code>browser_navigate</code></td><td>Open a URL and return readable text</td></tr>
+            <tr><td><code>browser_screenshot</code></td><td>Capture the current page as a temporary PNG</td></tr>
+            <tr><td><code>browser_click</code></td><td>Click an element by CSS selector</td></tr>
+            <tr><td><code>browser_type</code></td><td>Enter text in a field, optionally submitting with Enter</td></tr>
+            <tr><td><code>browser_scroll</code></td><td>Scroll the page</td></tr>
+            <tr><td><code>browser_tab_list</code></td><td>List open tabs</td></tr>
+            <tr><td><code>browser_tab_new</code></td><td>Open a new tab</td></tr>
+            <tr><td><code>browser_tab_select</code></td><td>Switch to a specified tab</td></tr>
+            <tr><td><code>browser_tab_close</code></td><td>Close a specified tab</td></tr>
+            <tr><td><code>browser_request_takeover</code></td><td>Open a real window for manual login</td></tr>
+          </tbody>
+        </table></div>
       </section>
 </div>
 </article>
@@ -1446,7 +1931,7 @@ playwright install chromium</code></pre></div>
         <p class="page-subtitle">连接 Model Context Protocol 服务器，扩展 Cyrene 的工具集。</p>
       </div>
 
-      <section>
+      <section data-topic="overview">
         <h2>概述</h2>
         <p>MCP（Model Context Protocol）是一个开放协议，允许 AI 应用通过标准化接口连接外部工具和服务。Cyrene 支持两种 MCP 传输方式：</p>
         <ul>
@@ -1455,7 +1940,7 @@ playwright install chromium</code></pre></div>
         </ul>
       </section>
 
-      <section>
+      <section data-topic="adding-servers">
         <h2>添加 MCP 服务器</h2>
 
         <h3>Stdio 服务器</h3>
@@ -1469,7 +1954,7 @@ cyrene mcp add marp-deck stdio python /path/to/mcp_server.py</code></pre></div>
         <div class="code-block"><pre><code>cyrene mcp add my-api sse http://localhost:3000/mcp</code></pre></div>
       </section>
 
-      <section>
+      <section data-topic="management-commands">
         <h2>管理命令</h2>
         <div class="table-wrapper">
           <table>
@@ -1485,7 +1970,7 @@ cyrene mcp add marp-deck stdio python /path/to/mcp_server.py</code></pre></div>
         </div>
       </section>
 
-      <section>
+      <section data-topic="example-output">
         <h2>示例输出</h2>
         <div class="code-block"><pre><code>$ cyrene mcp list
 Name              Transport    Status         Tools    Endpoint
@@ -1493,7 +1978,7 @@ filesystem        stdio        connected      3        npx -y @modelcontextproto
 marp-deck         stdio        connected      4        python mcp_server.py</code></pre></div>
       </section>
 
-      <section>
+      <section data-topic="runtime-management">
         <h2>运行时管理</h2>
         <p>MCP 服务器也可以通过 Web UI（设置 → MCP 服务器）管理。添加、删除、启用/禁用 MCP 服务器<strong>无需重启 Cyrene 进程</strong>——MCP 工具会自动出现在内置工具旁边。</p>
       </section>
@@ -1503,10 +1988,49 @@ marp-deck         stdio        connected      4        python mcp_server.py</cod
         <h1>MCP Protocol</h1>
         <p class="page-subtitle">Connect external tools via Model Context Protocol.</p>
       </div>
-      <section>
-        <p>Supports stdio (subprocess) and SSE (HTTP) transports. Connected MCP capabilities are discovered on demand through <code>integration_tools</code> instead of being appended to the fixed tool bundle.</p>
-        <div class="code-block"><pre><code>cyrene mcp add filesystem stdio npx -y @modelcontextprotocol/server-filesystem /path
-cyrene mcp add my-api sse http://localhost:3000/mcp</code></pre></div>
+      <section data-topic="overview">
+        <h2>Overview</h2>
+        <p>MCP (Model Context Protocol) is an open protocol through which AI applications connect to external tools and services using a standard interface. Cyrene supports two transports:</p>
+        <ul>
+          <li><strong>stdio</strong> — start a subprocess and communicate through standard input and output; suitable for local tools and scripts</li>
+          <li><strong>SSE (Server-Sent Events)</strong> — connect to a remote MCP server over HTTP; suitable for remote tools and APIs</li>
+        </ul>
+        <p>Connected capabilities are discovered on demand through <code>integration_tools</code> instead of being appended to the fixed tool bundle.</p>
+      </section>
+      <section data-topic="adding-servers">
+        <h2>Add an MCP Server</h2>
+        <h3>Stdio server</h3>
+        <div class="code-block"><pre><code># Filesystem tools through npm
+cyrene mcp add filesystem stdio npx -y @modelcontextprotocol/server-filesystem /path/to/workspace
+
+# A custom Python MCP server
+cyrene mcp add marp-deck stdio python /path/to/mcp_server.py</code></pre></div>
+        <h3>SSE server</h3>
+        <div class="code-block"><pre><code>cyrene mcp add my-api sse http://localhost:3000/mcp</code></pre></div>
+      </section>
+      <section data-topic="management-commands">
+        <h2>Management Commands</h2>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Command</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>cyrene mcp list</code></td><td>List every MCP server and its tools</td></tr>
+            <tr><td><code>cyrene mcp add &lt;name&gt; stdio &lt;cmd&gt; [args...]</code></td><td>Add a stdio MCP server</td></tr>
+            <tr><td><code>cyrene mcp add &lt;name&gt; sse &lt;url&gt;</code></td><td>Add an SSE MCP server</td></tr>
+            <tr><td><code>cyrene mcp remove &lt;name&gt;</code></td><td>Remove an MCP server</td></tr>
+            <tr><td><code>cyrene mcp toggle &lt;name&gt;</code></td><td>Enable or disable an MCP server</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+      <section data-topic="example-output">
+        <h2>Example Output</h2>
+        <div class="code-block"><pre><code>$ cyrene mcp list
+Name              Transport    Status         Tools    Endpoint
+filesystem        stdio        connected      3        npx -y @modelcontextprotocol/server-filesystem .
+marp-deck         stdio        connected      4        python mcp_server.py</code></pre></div>
+      </section>
+      <section data-topic="runtime-management">
+        <h2>Runtime Management</h2>
+        <p>You can also manage MCP servers in Web UI under Settings → MCP Servers. Adding, removing, enabling, or disabling a server <strong>does not require restarting Cyrene</strong>; its tools appear automatically alongside built-in capabilities.</p>
       </section>
 </div>
 </article>
@@ -1519,7 +2043,7 @@ cyrene mcp add my-api sse http://localhost:3000/mcp</code></pre></div>
         <p class="page-subtitle">Cron、间隔、一次性任务，以及让代理主动发起行动的"抽奖"系统。</p>
       </div>
 
-      <section>
+      <section data-topic="task-types">
         <h2>任务类型</h2>
         <p>通过 <code>toolbox.list → describe → invoke schedule.create</code> 创建三种类型的任务：</p>
         <div class="table-wrapper">
@@ -1534,7 +2058,7 @@ cyrene mcp add my-api sse http://localhost:3000/mcp</code></pre></div>
         </div>
       </section>
 
-      <section>
+      <section data-topic="scheduling-mechanism">
         <h2>调度机制</h2>
         <p>调度器的工作方式：</p>
         <ul>
@@ -1545,7 +2069,7 @@ cyrene mcp add my-api sse http://localhost:3000/mcp</code></pre></div>
         </ul>
       </section>
 
-      <section>
+      <section data-topic="proactive-lottery">
         <h2>抽奖系统（Proactive Lottery）</h2>
         <p>抽奖系统是 Cyrene 的一个独特功能——它让代理可以在<strong>没有用户输入时主动发起行动</strong>：</p>
         <ul>
@@ -1558,7 +2082,7 @@ cyrene mcp add my-api sse http://localhost:3000/mcp</code></pre></div>
         <p>这个机制让 Cyrene 能够"主动"关心你，而不是只能被动响应你的提问。</p>
       </section>
 
-      <section>
+      <section data-topic="steward-agent">
         <h2>管家代理（Steward）</h2>
         <p>管家代理不是用户可调度的任务，而是一个特殊的内置代理，按 <code>STEWARD_INTERVAL</code>（默认 30 分钟）运行：</p>
         <ul>
@@ -1574,19 +2098,48 @@ cyrene mcp add my-api sse http://localhost:3000/mcp</code></pre></div>
         <h1>Task Scheduler</h1>
         <p class="page-subtitle">Cron, interval, one-shot tasks, and the proactive lottery system.</p>
       </div>
-      <section>
-        <p>The editable <code>cyrene_schedule</code> Plugin provides
-        <code>schedule.create/list/edit/pause/resume/cancel/runs</code> through
-        <code>toolbox.list → describe → invoke</code>. Its hidden
-        <code>schedule.tick</code> background job executes due tasks through the
-        same Plugin Runtime used by Workbench.</p>
+      <section data-topic="task-types">
+        <h2>Task Types</h2>
+        <p>Create three kinds of tasks through <code>toolbox.list → describe → invoke schedule.create</code>:</p>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Type</th><th>Description</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Cron</strong></td><td>Run on a cron expression</td><td>Check the weather every day at 8:00</td></tr>
+            <tr><td><strong>Interval</strong></td><td>Repeat at a fixed interval</td><td>Check email every 30 minutes</td></tr>
+            <tr><td><strong>One-shot</strong></td><td>Run once at a specified time</td><td>Remind me in two hours</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+      <section data-topic="scheduling-mechanism">
+        <h2>Scheduling Mechanism</h2>
         <ul>
-          <li><strong>Cron</strong> — schedule by cron expression</li>
-          <li><strong>Interval</strong> — repeat at fixed intervals</li>
-          <li><strong>One-shot</strong> — execute once at a specified time</li>
+          <li>The editable <code>cyrene_schedule</code> plugin provides create, query, edit, pause, resume, cancel, and execution history</li>
+          <li>Its hidden <code>schedule.tick</code> job is registered with the generic background Plugin Host through plugin metadata</li>
+          <li>Tasks and run history persist in SQLite, with leases preventing duplicate execution</li>
+          <li>The Workbench Schedule page uses the same Plugin Runtime rather than a second legacy backend</li>
         </ul>
+      </section>
+      <section data-topic="proactive-lottery">
         <h2>Lottery System</h2>
-        <p>Each heartbeat cycle, the agent has a chance to "win" and send proactive messages. Probability accumulates until it hits the cap or wins, then resets.</p>
+        <p>The proactive lottery lets Cyrene initiate an action <strong>without waiting for user input</strong>:</p>
+        <ul>
+          <li>On every heartbeat cycle, the agent has a chance to win</li>
+          <li>After a loss, <code>LOTTERY_DELTA</code> (0.15 by default) is added to the accumulated probability</li>
+          <li>The probability is capped at <code>LOTTERY_MAX</code> (0.85 by default)</li>
+          <li>A win resets the probability</li>
+          <li>It triggers only between <code>DAYTIME_START</code> and <code>DAYTIME_END</code> to avoid nighttime interruptions</li>
+        </ul>
+        <p>This lets Cyrene check in proactively instead of responding only after a question.</p>
+      </section>
+      <section data-topic="steward-agent">
+        <h2>Steward Agent</h2>
+        <p>The steward is not a user-scheduled task. It is a special built-in agent that runs at <code>STEWARD_INTERVAL</code> (30 minutes by default) to:</p>
+        <ul>
+          <li>Review recent conversation history</li>
+          <li>Decide what should change in SOUL.md</li>
+          <li>Apply <code>APPEND</code>, <code>ERASE</code>, and <code>MERGE</code> commands</li>
+          <li>Remove expired <code>TEMPORARY</code> entries after 24 hours</li>
+        </ul>
       </section>
 </div>
 </article>
@@ -1599,7 +2152,7 @@ cyrene mcp add my-api sse http://localhost:3000/mcp</code></pre></div>
         <p class="page-subtitle">配置官方 DeepSeek 时使用原生联网搜索，并以内置 SimpleXNG 自动回退。</p>
       </div>
 
-      <section>
+      <section data-topic="search-providers">
         <h2>DeepSeek 优先，SimpleXNG 回退</h2>
         <p>配置带 API Key 的官方 DeepSeek V4 Endpoint（<code>https://api.deepseek.com</code>）后，Cyrene 会优先调用 DeepSeek Responses API 的服务端联网搜索，并使用 <code>deepseek-v4-flash</code> 作为搜索工作模型。第三方兼容 Endpoint 不会启用原生搜索。</p>
         <p>没有官方 DeepSeek 配置或原生搜索调用失败时，Cyrene 自动使用 <strong>SimpleXNG</strong>——一个基于 SearXNG 的零配置封装。它不需要 Docker，不需要外部搜索 API 密钥，开箱即用。</p>
@@ -1617,7 +2170,7 @@ SEARXNG_URL=https://your-searxng-instance.com
 SEARXNG_AUTO_START=0</code></pre></div>
       </section>
 
-      <section>
+      <section data-topic="deep-research">
         <h2>深度研究（Deep Research）</h2>
         <p>深度研究是一个多轮管道，适合需要深入调研的复杂问题：</p>
         <ol>
@@ -1636,9 +2189,33 @@ SEARXNG_AUTO_START=0</code></pre></div>
         <h1>Search</h1>
         <p class="page-subtitle">DeepSeek-native web search when configured, with a built-in SimpleXNG fallback.</p>
       </div>
-      <section>
+      <section data-topic="search-providers">
+        <h2>DeepSeek First, SimpleXNG Fallback</h2>
         <p>When an official DeepSeek V4 endpoint (<code>https://api.deepseek.com</code>) and API key are configured, Cyrene first uses server-side Web Search through the DeepSeek Responses API, with <code>deepseek-v4-flash</code> as the documented search worker. Compatible third-party endpoints do not activate native search.</p>
         <p>Without that configuration, or whenever the native request fails, Cyrene automatically falls back to <strong>SimpleXNG</strong> (based on SearXNG). It is zero-config, auto-starts on port 8888, and requires no Docker or external search key.</p>
+        <ul>
+          <li><strong>Automatic configuration</strong> — the manager generates <code>data/simplexng_settings.yml</code></li>
+          <li><strong>Automatic startup</strong> — a search instance starts on port 8888 with Cyrene</li>
+          <li><strong>Proxy discovery</strong> — proxy configuration is handled automatically</li>
+        </ul>
+        <div class="note"><strong>Note:</strong> Native DeepSeek search consumes model usage on that account. Timeouts, authentication, rate limiting, protocol errors, and empty results fall back transparently to SimpleXNG. The old DuckDuckGo, Bing, and Baidu scrapers have been removed.</div>
+        <p>To use an external SearXNG instance:</p>
+        <div class="code-block"><pre><code># In Settings or .env
+SEARXNG_URL=https://your-searxng-instance.com
+SEARXNG_AUTO_START=0</code></pre></div>
+      </section>
+      <section data-topic="deep-research">
+        <h2>Deep Research</h2>
+        <p>Deep Research is a multi-round pipeline for questions that need detailed investigation:</p>
+        <ol>
+          <li><strong>Plan</strong> — split the main question into sub-questions</li>
+          <li><strong>Search</strong> — search several sources in parallel</li>
+          <li><strong>Read</strong> — fetch and analyze source content</li>
+          <li><strong>Iterate</strong> — run multiple rounds to dig deeper</li>
+          <li><strong>Synthesize</strong> — combine findings into a whiteboard</li>
+          <li><strong>Export</strong> — produce a structured PDF report</li>
+        </ol>
+        <p>Status: <strong>stable</strong>. It is suitable for market research, technical research, and paper review.</p>
       </section>
 </div>
 

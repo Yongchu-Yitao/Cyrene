@@ -413,20 +413,20 @@ function wbcMapItemLabel(item) {
   return String(item.name || wbcT("workbenchChat.mapPin", "Location"));
 }
 
-function useWbcMapData(chatId) {
+function useWbcMapData(chatId, available) {
   var [data, setData] = useWbcState({ chatId: "", loading: true, pins: [], routes: [] });
   useWbcEffect(function () {
-    if (!chatId) { setData({ chatId: "", loading: false, pins: [], routes: [] }); return undefined; }
-    var cancelled = false;
+    if (available === false || !chatId) { setData({ chatId: "", loading: false, pins: [], routes: [] }); return undefined; }
+    var controller = new AbortController();
     setData({ chatId: chatId, loading: true, pins: [], routes: [] });
-    fetch("/api/map/pins?session_id=" + encodeURIComponent(chatId))
+    fetch("/api/map/pins?session_id=" + encodeURIComponent(chatId), { signal: controller.signal })
       .then(function (r) { return r.json(); })
       .then(function (payload) {
-        if (!cancelled) setData({ chatId: chatId, loading: false, pins: Array.isArray(payload.pins) ? payload.pins : [], routes: Array.isArray(payload.routes) ? payload.routes : [] });
+        if (!controller.signal.aborted) setData({ chatId: chatId, loading: false, pins: Array.isArray(payload.pins) ? payload.pins : [], routes: Array.isArray(payload.routes) ? payload.routes : [] });
       })
-      .catch(function () { if (!cancelled) setData({ chatId: chatId, loading: false, pins: [], routes: [] }); });
-    return function () { cancelled = true; };
-  }, [chatId]);
+      .catch(function () { if (!controller.signal.aborted) setData({ chatId: chatId, loading: false, pins: [], routes: [] }); });
+    return function () { controller.abort(); };
+  }, [chatId, available]);
   return data.chatId === chatId ? data : { chatId: chatId, loading: true, pins: [], routes: [] };
 }
 
@@ -435,8 +435,8 @@ function wbcMapItems(data) {
     .concat((data.routes || []).map(function (item) { return Object.assign({ kind: "route" }, item); }));
 }
 
-function WbcMapList({ chatId, onSelect }) {
-  var data = useWbcMapData(chatId);
+function WbcMapList({ chatId, onSelect, available }) {
+  var data = useWbcMapData(chatId, available);
   var items = wbcMapItems(data);
   if (data.loading) return <p className="workbench-muted wbc-resource-empty">{wbcT("workbenchChat.mapLoading", "Loading maps...")}</p>;
   if (!items.length) return <p className="workbench-muted wbc-resource-empty">{wbcT("workbenchChat.mapEmpty", "No map pins in this chat yet.")}</p>;
@@ -568,8 +568,8 @@ function WbcResourceSplitHost({ openKey, children, closingChildren, width, onRes
   </div>;
 }
 
-function WbcMapSplitHost({ chatId, item, width, onSelect, onResize, onClose, splitSide, onToggleSide, onSplitDragStart, onSplitDragEnd }) {
-  var data = useWbcMapData(chatId);
+function WbcMapSplitHost({ chatId, item, width, onSelect, onResize, onClose, splitSide, onToggleSide, onSplitDragStart, onSplitDragEnd, available }) {
+  var data = useWbcMapData(chatId, available);
   var items = wbcMapItems(data);
   var key = wbcMapItemKey(item);
   return (
@@ -597,8 +597,8 @@ function WbcMapSplit({ chatId, item, items, onSelect, onClose }) {
   );
 }
 
-function WbcMapPaneContent({ chatId, item, onSelect, onClose }) {
-  var data = useWbcMapData(chatId);
+function WbcMapPaneContent({ chatId, item, onSelect, onClose, available }) {
+  var data = useWbcMapData(chatId, available);
   return <WbcMapSplit chatId={chatId} item={item} items={wbcMapItems(data)} onSelect={onSelect} onClose={onClose} />;
 }
 

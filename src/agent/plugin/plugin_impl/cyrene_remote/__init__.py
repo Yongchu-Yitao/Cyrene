@@ -3,7 +3,7 @@
 from types import ModuleType
 from typing import Any
 
-from agent.plugin import Plugin, PluginPack
+from agent.plugin import Plugin, PluginApplicationContext, PluginPack
 
 from . import action, files, harness, jobs, list_devices, run, status
 
@@ -14,6 +14,12 @@ _MAIN_ONLY = frozenset({
     "RemoteHarness",
     "RunRemoteCyrene",
 })
+
+
+def application_setup(context: PluginApplicationContext) -> None:
+    from .application import setup_application
+
+    setup_application(context)
 
 
 def _plugin(module: ModuleType) -> Plugin:
@@ -56,6 +62,7 @@ plugin_pack = PluginPack(
             run,
         )
     ),
+    application_setup=application_setup,
 )
 
-__all__ = ["plugin_pack"]
+__all__ = ["application_setup", "plugin_pack"]

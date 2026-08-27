@@ -8,6 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
+from cyrene.localization import app_language, localized, localized_plural
 
 MAX_OCCURRENCES_PER_TASK = 200
 DEFAULT_EVENT_MINUTES = 30
@@ -93,23 +94,50 @@ def recurrence_label(
     schedule_type: str,
     schedule_value: str,
     schedule_timezone: str = "UTC",
+    *,
+    language: str | None = None,
 ) -> str:
+    resolved_language = app_language(language)
     kind = str(schedule_type or "").strip()
     value = str(schedule_value or "").strip()
     if kind == "once":
-        return "单次"
+        return localized("Once", "单次", language=resolved_language)
     if kind == "interval":
         try:
             seconds = int(value)
         except (TypeError, ValueError):
-            return "固定间隔"
+            return localized("Fixed interval", "固定间隔", language=resolved_language)
         if seconds % 86400 == 0:
-            return f"每 {seconds // 86400} 天"
+            return localized_plural(
+                "Every {count} day",
+                "Every {count} days",
+                "每 {count} 天",
+                count=seconds // 86400,
+                language=resolved_language,
+            )
         if seconds % 3600 == 0:
-            return f"每 {seconds // 3600} 小时"
+            return localized_plural(
+                "Every {count} hour",
+                "Every {count} hours",
+                "每 {count} 小时",
+                count=seconds // 3600,
+                language=resolved_language,
+            )
         if seconds % 60 == 0:
-            return f"每 {seconds // 60} 分钟"
-        return f"每 {seconds} 秒"
+            return localized_plural(
+                "Every {count} minute",
+                "Every {count} minutes",
+                "每 {count} 分钟",
+                count=seconds // 60,
+                language=resolved_language,
+            )
+        return localized_plural(
+            "Every {count} second",
+            "Every {count} seconds",
+            "每 {count} 秒",
+            count=seconds,
+            language=resolved_language,
+        )
     if kind != "cron":
         return kind or "—"
     parts = value.split()
@@ -122,17 +150,37 @@ def recurrence_label(
         else ""
     )
     if day_of_month == "*" and month == "*" and day_of_week == "*":
-        return f"每天{clock}"
+        return localized(
+            "Daily{clock}",
+            "每天{clock}",
+            language=resolved_language,
+            clock=clock,
+        )
     if day_of_month == "*" and month == "*" and day_of_week != "*":
         try:
-            weekday = ["日", "一", "二", "三", "四", "五", "六"][
-                int(day_of_week) % 7
-            ]
-            return f"每周{weekday}{clock}"
+            index = int(day_of_week) % 7
+            weekday = (
+                ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][index]
+                if resolved_language == "en"
+                else ["日", "一", "二", "三", "四", "五", "六"][index]
+            )
+            return localized(
+                "Every {weekday}{clock}",
+                "每周{weekday}{clock}",
+                language=resolved_language,
+                weekday=weekday,
+                clock=clock,
+            )
         except (ValueError, IndexError):
             pass
     if day_of_month != "*" and month == "*" and day_of_week == "*":
-        return f"每月 {day_of_month} 号{clock}"
+        return localized(
+            "Monthly on day {day}{clock}",
+            "每月 {day} 号{clock}",
+            language=resolved_language,
+            day=day_of_month,
+            clock=clock,
+        )
     return f"Cron: {value}"
 
 
@@ -186,7 +234,10 @@ def task_events(
     task: dict[str, Any],
     start: datetime,
     end: datetime,
+    *,
+    language: str | None = None,
 ) -> list[dict[str, Any]]:
+    resolved_language = app_language(language)
     kind = str(task.get("schedule_type") or "").strip()
     value = str(task.get("schedule_value") or "")
     zone = str(task.get("schedule_timezone") or "UTC")
@@ -197,7 +248,9 @@ def task_events(
                 "id": f"{task['id']}@{fire_at.isoformat()}",
                 "task_id": task["id"],
                 "source": "task",
-                "title": task.get("prompt") or "定时任务",
+                "title": task.get("prompt") or localized(
+                    "Scheduled task", "定时任务", language=resolved_language
+                ),
                 "start": fire_at.isoformat(),
                 "end": (
                     fire_at + timedelta(minutes=DEFAULT_EVENT_MINUTES)
@@ -207,7 +260,9 @@ def task_events(
                 "schedule_type": kind,
                 "schedule_value": value,
                 "schedule_timezone": zone,
-                "recurrence": recurrence_label(kind, value, zone),
+                "recurrence": recurrence_label(
+                    kind, value, zone, language=resolved_language
+                ),
                 "status": task.get("status") or "active",
                 "next_run": task.get("next_run"),
                 "last_run": task.get("last_run"),

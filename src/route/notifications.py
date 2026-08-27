@@ -4,6 +4,8 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
+from route.errors import localized_error_payload
+
 
 def register_notification_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     # ---- Notification API ----
@@ -16,6 +18,13 @@ def register_notification_routes(router: APIRouter, bot: Any, db_path: str) -> N
         text = str(body.get("text") or "").strip()
         channel = str(body.get("channel") or "auto").strip()
         if not text:
-            return {"ok": False, "error": "text is required"}
+            return {
+                "ok": False,
+                **localized_error_payload(
+                    "Notification text is required.",
+                    "请填写通知内容。",
+                    "notification_text_required",
+                ),
+            }
         result = await notify(title, text, channel=channel)
         return result

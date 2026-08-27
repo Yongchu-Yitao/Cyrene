@@ -1,8 +1,36 @@
 from __future__ import annotations
 
+import sqlite3
+from types import SimpleNamespace
+
 import pytest
 
-from cyrene.media.manager import MediaJobManager
+from agent.plugin.plugin_impl.cyrene_media.manager import MediaJobManager
+
+
+def test_media_plugin_migrates_legacy_queue_database(tmp_path):
+    from agent.plugin.plugin_impl.cyrene_media.application import (
+        _migrate_legacy_database,
+    )
+
+    legacy = tmp_path / "media_jobs.sqlite3"
+    with sqlite3.connect(legacy) as connection:
+        connection.execute("CREATE TABLE migration_marker (value TEXT NOT NULL)")
+        connection.execute("INSERT INTO migration_marker VALUES ('legacy')")
+        connection.commit()
+
+    destination = _migrate_legacy_database(
+        SimpleNamespace(data_directory=tmp_path),  # type: ignore[arg-type]
+    )
+
+    assert destination == (
+        tmp_path / "plugin_data" / "cyrene_media" / "media_jobs.sqlite3"
+    )
+    assert legacy.exists() is False
+    with sqlite3.connect(destination) as connection:
+        assert connection.execute("SELECT value FROM migration_marker").fetchone() == (
+            "legacy",
+        )
 
 
 def _batch(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.plugin import Plugin, PluginContext
+from agent.plugin.native_runtime import plugin_localized, plugin_localized_plural
 
 from ._service import knowledge_service
 from .definitions import get_native_tool_def, get_plugin_spec
@@ -25,13 +26,31 @@ async def handler(arguments: dict[str, Any], context: PluginContext) -> str:
         limit=int(arguments.get("k") or 6),
     )
     if not results:
-        return "No matching documents found in the knowledge base."
-    lines = [f"Found {len(results)} matching passage(s) from the knowledge base:"]
+        return plugin_localized(
+            context,
+            "No matching documents were found in the knowledge base.",
+            "知识库中没有找到匹配文档。",
+        )
+    lines = [plugin_localized_plural(
+        context,
+        "Found {count} matching passage in the knowledge base:",
+        "Found {count} matching passages in the knowledge base:",
+        "在知识库中找到 {count} 段匹配内容：",
+        count=len(results),
+    )]
     for index, result in enumerate(results, start=1):
         similarity = result.get("cosine_similarity")
         similarity_text = f"; cosine_similarity={float(similarity):.6f}" if similarity is not None else ""
         content = str(result.get("content") or "").strip()[:500]
-        lines.append(f"[{index}] {result.get('document_name') or 'Unknown'}{similarity_text}\n{content}")
+        lines.append(plugin_localized(
+            context,
+            "[{index}] {document}{similarity}\n{content}",
+            "[{index}] {document}{similarity}\n{content}",
+            index=index,
+            document=result.get("document_name") or plugin_localized(context, "Unknown", "未知"),
+            similarity=similarity_text,
+            content=content,
+        ))
     return "\n\n".join(lines)
 
 

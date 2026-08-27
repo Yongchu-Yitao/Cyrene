@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.plugin import PluginContext
+from agent.plugin.native_runtime import plugin_language, plugin_localized
 
 from ._plugin import create_tool_plugin
 from ._service import current_project_id, entity_service, resolve_entity
@@ -20,7 +21,11 @@ async def update_entity(
         return {
             "ok": False,
             "error": "invalid_locator",
-            "message": "请提供完整 UUID、唯一 UUID 前缀或精确标题。",
+            "message": plugin_localized(
+                context,
+                "Provide a full UUID, a unique UUID prefix, or an exact title.",
+                "请提供完整 UUID、唯一 UUID 前缀或精确标题。",
+            ),
         }
     service = entity_service(context)
     resolution = await resolve_entity(
@@ -36,24 +41,35 @@ async def update_entity(
             "error": "ambiguous",
             "matched_by": resolution["matched_by"],
             "matches": resolution["matches"],
-            "message": "匹配到多条事务，为避免误改未执行。",
+            "message": plugin_localized(
+                context,
+                "Multiple items matched; nothing was changed to avoid a mistake.",
+                "匹配到多条事务，为避免误改未执行。",
+            ),
         }
     entity = resolution["entity"]
     if entity is None:
-        return {"ok": False, "error": "not_found", "message": "未找到事务。"}
+        return {"ok": False, "error": "not_found", "message": plugin_localized(context, "Item not found.", "未找到事务。")}
 
     field = str(arguments["field"])
     updated = await service.update(
         entity["id"],
+        language=plugin_language(context),
         **{field: arguments.get("value")},
     )
     if updated is None:
-        return {"ok": False, "error": "not_found", "message": "未找到事务。"}
+        return {"ok": False, "error": "not_found", "message": plugin_localized(context, "Item not found.", "未找到事务。")}
     return {
         "ok": True,
         "entity": updated,
         "updated_field": field,
-        "message": f"已更新事务 {updated['title']} 的 {field}。",
+        "message": plugin_localized(
+            context,
+            "Updated {field} for item {title}.",
+            "已更新事务 {title} 的 {field}。",
+            title=updated["title"],
+            field=field,
+        ),
     }
 
 

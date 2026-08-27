@@ -13,7 +13,7 @@ from typing import Any, Mapping, Sequence
 
 import aiosqlite
 
-from cyrene.runtime.persistence.telemetry import TelemetryRepository
+from cyrene.runtime.persistence.telemetry import TelemetryRepository, TokenUsageEvent
 
 _TOPIC_RE = re.compile(r"[\u4e00-\u9fff]{2,}|[a-z][a-z0-9_-]{2,}")
 _TOPIC_STOPWORDS = {
@@ -233,13 +233,20 @@ async def record_usage_stats_batch(
     model_events: list[tuple] | tuple = (),
     tool_events: list[tuple] | tuple = (),
     permission_events: list[dict] | tuple = (),
+    token_events: list[dict] | tuple = (),
 ) -> None:
     """Persist per-day usage counters and permission decisions with one commit.
 
     Events are aggregated in memory per day / (day, model) / (day, tool) and
     written with a single connection and transaction.
     """
-    if not (runtime_events or model_events or tool_events or permission_events):
+    if not (
+        runtime_events
+        or model_events
+        or tool_events
+        or permission_events
+        or token_events
+    ):
         return
     batch = _aggregate_usage_events(runtime_events, model_events, tool_events)
 
@@ -286,6 +293,19 @@ async def record_usage_stats_batch(
                 ON CONFLICT(day, tool) DO UPDATE SET count = count + ?
                 """,
                 (day, tool, count, count),
+            )
+        if token_events:
+            now = datetime.now(timezone.utc).isoformat()
+            await db.executemany(
+                """INSERT INTO token_usage
+                   (created_at, model, round_id, session_id, caller,
+                    prompt_tokens, completion_tokens, total_tokens,
+                    cache_hit_tokens, cache_miss_tokens, duration_ms, estimated_cost)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    TokenUsageEvent.from_mapping(event, now).as_row()
+                    for event in token_events
+                ],
             )
         if permission_events:
             # The schema init creates the table for the main DB; this guard

@@ -11,7 +11,7 @@ from agent.plugin.plugin_impl.cyrene_map import plugin_pack as map_plugin_pack
 from cyrene.runtime.backup import BackupDownloadError, BackupRepository
 from route.backup import register_backup_routes
 from agent.plugin.plugin_impl.cyrene_memory.routes_overview import register_memory_routes
-from route.search import register_search_routes
+from agent.plugin.plugin_impl.cyrene_content.routes import register_search_routes
 from route.system.shell import register_shell_routes
 
 

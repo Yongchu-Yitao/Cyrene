@@ -122,6 +122,25 @@ def _load_upstream_hashes(manifest: Path) -> dict[str, str]:
     }
 
 
+def _load_deleted_contributions(manifest: Path) -> set[str]:
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return set()
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        return set()
+    raw_deleted = payload.get("deleted", ())
+    if not isinstance(raw_deleted, list):
+        return set()
+    return {
+        item
+        for raw_item in raw_deleted
+        if (item := str(raw_item or "").strip())
+        and len(Path(item).parts) == 1
+        and item not in {".", ".."}
+    }
+
+
 def _atomic_write(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, raw_temporary = tempfile.mkstemp(
@@ -143,11 +162,18 @@ def _atomic_write(path: Path, content: bytes) -> None:
             pass
 
 
-def _write_upstream_hashes(manifest: Path, hashes: Mapping[str, str]) -> None:
+def _write_upstream_hashes(
+    manifest: Path,
+    hashes: Mapping[str, str],
+    *,
+    deleted: set[str] | frozenset[str] = frozenset(),
+) -> None:
     payload = {
         "version": _UPSTREAM_MANIFEST_VERSION,
         "files": {key: hashes[key] for key in sorted(hashes)},
     }
+    if deleted:
+        payload["deleted"] = sorted(deleted)
     encoded = (
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=False) + "\n"
     ).encode("utf-8")
@@ -191,6 +217,7 @@ def _seed_canonical_directory(root: Path) -> BuiltinPluginSeedResult:
     canonical_files = _collect_canonical_files()
     manifest = root / _UPSTREAM_MANIFEST_RELATIVE
     previous_hashes = _load_upstream_hashes(manifest)
+    deleted_contributions = _load_deleted_contributions(manifest)
     modified_owned_packs: set[str] = set()
     for relative, baseline_hash in previous_hashes.items():
         parts = Path(relative).parts
@@ -225,6 +252,9 @@ def _seed_canonical_directory(root: Path) -> BuiltinPluginSeedResult:
     skipped_packs: set[str] = set()
     new_packs: set[str] = set()
     for pack_name in sorted(canonical_packs):
+        if pack_name in deleted_contributions:
+            skipped_packs.add(pack_name)
+            continue
         if pack_name in skipped_packs:
             continue
         target_pack = root / pack_name
@@ -274,6 +304,8 @@ def _seed_canonical_directory(root: Path) -> BuiltinPluginSeedResult:
 
     for relative, upstream_content in canonical_files.items():
         parts = Path(relative).parts
+        if parts[0] in deleted_contributions:
+            continue
         if len(parts) > 1 and (
             parts[0] in skipped_packs or parts[0] in published_packs
         ):
@@ -294,13 +326,13 @@ def _seed_canonical_directory(root: Path) -> BuiltinPluginSeedResult:
                 next_hashes[relative] = upstream_hash
                 continue
 
-        # Top-level files are standalone Plugins.  Without a prior baseline,
-        # an existing same-name file belongs to the user even when its bytes
-        # happen to equal the current default.
+        # Top-level files include standalone Plugins and editable support data
+        # such as i18n.json. Without a prior baseline, an existing same-name
+        # file belongs to the user even when it matches the current default.
         if len(parts) == 1 and previous_hash is None:
             existing.append(target)
             diagnostics.append(
-                f"preserved unmanaged standalone Plugin collision: {target}"
+                f"preserved unmanaged top-level Plugin file collision: {target}"
             )
             continue
 
@@ -348,6 +380,8 @@ def _seed_canonical_directory(root: Path) -> BuiltinPluginSeedResult:
             continue
         previous_hash = previous_hashes[relative]
         parts = Path(relative).parts
+        if parts[0] in deleted_contributions:
+            continue
         if len(parts) > 1 and parts[0] in modified_owned_packs:
             existing.append(target)
             next_hashes[relative] = previous_hash
@@ -383,7 +417,11 @@ def _seed_canonical_directory(root: Path) -> BuiltinPluginSeedResult:
 
     for diagnostic in diagnostics:
         logger.warning("Plugin seed synchronization: %s", diagnostic)
-    _write_upstream_hashes(manifest, next_hashes)
+    _write_upstream_hashes(
+        manifest,
+        next_hashes,
+        deleted=deleted_contributions,
+    )
     return BuiltinPluginSeedResult(
         directory=root,
         created=tuple(created),
@@ -417,9 +455,47 @@ def seed_builtin_plugin_directory(
         return _seed_canonical_directory(root)
 
 
+def mark_builtin_plugin_deleted(
+    directory: str | Path,
+    contribution_name: str,
+) -> bool:
+    """Persist an explicit top-level tombstone for one canonical contribution.
+
+    The marker is intentionally separate from absence on disk: missing files
+    are normally repaired by seeding, while only a user-authorized deletion is
+    allowed to suppress a built-in contribution on later startups/upgrades.
+    """
+
+    root = Path(directory).expanduser().resolve()
+    normalized = str(contribution_name or "").strip()
+    if (
+        not normalized
+        or len(Path(normalized).parts) != 1
+        or normalized in {".", ".."}
+    ):
+        raise ValueError("Plugin contribution name must be one top-level entry")
+    with _SEED_LOCK:
+        canonical_files = _collect_canonical_files()
+        canonical_entries = {Path(relative).parts[0] for relative in canonical_files}
+        if normalized not in canonical_entries:
+            return False
+        root.mkdir(parents=True, exist_ok=True)
+        manifest = root / _UPSTREAM_MANIFEST_RELATIVE
+        hashes = {
+            relative: digest
+            for relative, digest in _load_upstream_hashes(manifest).items()
+            if Path(relative).parts[0] != normalized
+        }
+        deleted = _load_deleted_contributions(manifest)
+        deleted.add(normalized)
+        _write_upstream_hashes(manifest, hashes, deleted=deleted)
+        return True
+
+
 __all__ = [
     "BuiltinPluginSeedResult",
     "CORE_PLUGIN_NAMES",
     "USER_STANDALONE_PLUGIN_NAMES",
+    "mark_builtin_plugin_deleted",
     "seed_builtin_plugin_directory",
 ]

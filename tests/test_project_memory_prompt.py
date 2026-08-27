@@ -313,14 +313,20 @@ def test_new_chat_freezes_memory_while_pre_feature_chat_has_no_suffix():
     assert new_chat["projectMemorySnapshot"] == frozen
     assert "projectMemorySnapshot" not in old_chat
     assert memory_prompt.build_main_agent_suffix(None) == ""
-    suffix = memory_prompt.build_main_agent_suffix(new_chat["projectMemorySnapshot"])
+    suffix = memory_prompt.build_main_agent_suffix(
+        new_chat["projectMemorySnapshot"], language="en"
+    )
     assert suffix.endswith("Project memory:\nUse verified fixtures.")
     assert "trigger_project_memory_learning" in suffix
     side_suffix = memory_prompt.build_main_agent_suffix(
-        new_chat["projectMemorySnapshot"], include_trigger=False
+        new_chat["projectMemorySnapshot"], include_trigger=False, language="en"
     )
     assert side_suffix == "Project memory:\nUse verified fixtures."
     assert "trigger_project_memory_learning" not in side_suffix
+    chinese_suffix = memory_prompt.build_main_agent_suffix(
+        new_chat["projectMemorySnapshot"], include_trigger=False, language="zh"
+    )
+    assert chinese_suffix == "项目记忆：\nUse verified fixtures."
 
 
 def test_context_overflow_has_a_distinct_job_error_type():

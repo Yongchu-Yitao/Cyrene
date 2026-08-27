@@ -7,7 +7,7 @@ from typing import Any
 from agent.plugin import PluginContext
 from ._native import create_tool, service as memory_service
 from .definitions import get_native_tool_def
-from agent.plugin.native_runtime import json_result
+from agent.plugin.native_runtime import json_result, plugin_localized
 
 TOOL_NAME = "ReadChatGroupSessions"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -24,7 +24,11 @@ async def _tool_read_chat_group_sessions(
         return json_result({
             "status": "error",
             "type": "permission_denied",
-            "message": "Chat-group session reads are available only to the main agent.",
+            "message": plugin_localized(
+                context,
+                "Chat-group session reads are available only to the main Agent.",
+                "仅主 Agent 可以读取对话组会话。",
+            ),
         })
     current_session_id = memory.session_id
     requested = args.get("session_ids")
@@ -32,7 +36,11 @@ async def _tool_read_chat_group_sessions(
         return json_result({
             "status": "error",
             "type": "invalid_arguments",
-            "message": "session_ids must be an array of strings.",
+            "message": plugin_localized(
+                context,
+                "session_ids must be an array of strings.",
+                "session_ids 必须是字符串数组。",
+            ),
         })
     chat_groups.configure_store(memory.db_path)
     try:
@@ -46,7 +54,11 @@ async def _tool_read_chat_group_sessions(
         return json_result({
             "status": "error",
             "type": "permission_denied",
-            "message": str(exc),
+            "message": plugin_localized(
+                context,
+                "The requested chat-group sessions are not accessible.",
+                "无权访问请求的对话组会话。",
+            ),
         })
     return json_result(payload)
 

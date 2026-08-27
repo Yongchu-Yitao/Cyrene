@@ -13,7 +13,7 @@ from route.registry import register_routes
 
 
 def _patch_paths(monkeypatch, tmp_path, soul_content, default_content):
-    from cyrene.runtime import onboarding, setup
+    from cyrene.runtime import onboarding
     from agent.plugin.plugin_impl.cyrene_memory import archive as conversations
 
     soul_path = tmp_path / "workspace" / "SOUL.md"
@@ -26,21 +26,28 @@ def _patch_paths(monkeypatch, tmp_path, soul_content, default_content):
         "DB_PATH",
         tmp_path / "store" / "cyrene.runtime.database",
     )
-    monkeypatch.setattr(onboarding, "get_soul_path", lambda: soul_path)
-    monkeypatch.setattr(onboarding, "read_soul", lambda: soul_path.read_text(encoding="utf-8"))
-    monkeypatch.setattr(onboarding, "get_default_soul_content", lambda name=None: default_content)
+    def personality_status():
+        current = soul_path.read_text(encoding="utf-8")
+        configured = current.strip() != default_content.strip()
+        return {
+            "available": True,
+            "configured": configured,
+            "completedAt": "",
+            "mode": "custom" if configured else "",
+            "label": "",
+            "isDefaultSoul": not configured,
+            "path": str(soul_path),
+            "currentContent": current,
+            "source": "soul" if configured else "",
+            "pristine": not configured,
+        }
+
+    monkeypatch.setattr(onboarding, "_personality_status", personality_status)
     monkeypatch.setattr(
         onboarding,
         "_memory_service",
-        lambda: types.SimpleNamespace(
-            has_existing_data=lambda: False,
-            write_soul=lambda content: soul_path.write_text(
-                str(content or ""), encoding="utf-8"
-            )
-        ),
+        lambda: types.SimpleNamespace(has_existing_data=lambda: False),
     )
-    monkeypatch.setattr(setup, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(setup, "_SETUP_FLAG", None)
     monkeypatch.setattr(conversations, "CONVERSATIONS_DIR", tmp_path / "conversations")
     return soul_path
 
@@ -81,6 +88,58 @@ def test_get_onboarding_status_infers_existing_setup(monkeypatch, tmp_path):
     assert (tmp_path / "onboarding_state.json").exists()
 
 
+def test_get_onboarding_status_skips_personality_when_soul_is_unavailable(
+    monkeypatch,
+    tmp_path,
+):
+    from cyrene.runtime import onboarding
+
+    monkeypatch.setattr(onboarding, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(onboarding, "_has_existing_data", lambda: False)
+    monkeypatch.setattr(
+        onboarding,
+        "_primary_model",
+        lambda: {"model": "ready", "adapter": "test"},
+    )
+    monkeypatch.setattr(
+        onboarding,
+        "_personality_status",
+        lambda: {
+            "available": False,
+            "configured": False,
+            "completedAt": "",
+            "mode": "",
+            "label": "",
+            "isDefaultSoul": False,
+            "path": "",
+            "currentContent": "",
+            "source": "",
+            "pristine": True,
+        },
+    )
+
+    status = onboarding.get_onboarding_status()
+
+    assert status["needsOnboarding"] is False
+    assert status["activeStep"] == "done"
+    assert status["personality"]["available"] is False
+
+
+def test_core_onboarding_router_does_not_own_personality_endpoint():
+    from fastapi import APIRouter
+
+    from route.settings.onboarding_context import register_onboarding_routes
+
+    router = APIRouter()
+    register_onboarding_routes(router)
+
+    paths = {route.path for route in router.routes}
+    assert "/api/onboarding" in paths
+    assert "/api/onboarding/llm" in paths
+    assert "/api/onboarding/openai-oauth" in paths
+    assert "/api/onboarding/personality" not in paths
+
+
 async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path):
     from cyrene.runtime import onboarding
 
@@ -94,16 +153,27 @@ async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path
     }))
 
     saved = {}
-    monkeypatch.setattr(onboarding, "get_model_configuration", lambda: {
+    graph = {
         "version": 10,
         "connections": [],
         "profiles": [],
         "routes": {name: [] for name in ("primary", "secondary", "vision", "embedding")},
-    })
+    }
+    model_service = type("ModelService", (), {
+        "get_model_configuration": lambda self: graph,
+        "save_model_configuration": lambda self, value: saved.setdefault("graph", value),
+    })()
+    memory_service = type("MemoryService", (), {"has_existing_data": lambda self: False})()
+    import agent.plugin as plugin_api
+    monkeypatch.setattr(
+        plugin_api,
+        "active_plugin_service",
+        lambda name: model_service if name == "model_configuration" else memory_service if name == "memory" else None,
+    )
     monkeypatch.setattr(
         onboarding,
-        "save_model_configuration",
-        lambda graph: saved.setdefault("graph", graph),
+        "active_plugin_service",
+        lambda name: model_service if name in {"model_configuration", "model_probe"} else memory_service if name == "memory" else None,
     )
     monkeypatch.setattr(onboarding, "_primary_model", lambda: {
         "api_key": "sk-test",
@@ -156,17 +226,29 @@ async def test_save_codex_oauth_setup_persists_model_and_effort(monkeypatch, tmp
             return None
 
     saved = {}
-    monkeypatch.setattr(codex_provider, "get_codex_provider", lambda: FakeProvider())
-    monkeypatch.setattr(onboarding, "get_model_configuration", lambda: {
+    graph = {
         "version": 10,
         "connections": [],
         "profiles": [],
         "routes": {name: [] for name in ("primary", "secondary", "vision", "embedding")},
-    })
+    }
+    model_service = type("ModelService", (), {
+        "get_model_configuration": lambda self: graph,
+        "save_model_configuration": lambda self, value: saved.setdefault("graph", value),
+        "oauth_provider": lambda self: FakeProvider(),
+        "oauth_base_url": lambda self: "codex://oauth",
+    })()
+    memory_service = type("MemoryService", (), {"has_existing_data": lambda self: False})()
+    import agent.plugin as plugin_api
+    monkeypatch.setattr(
+        plugin_api,
+        "active_plugin_service",
+        lambda name: model_service if name == "model_configuration" else memory_service if name == "memory" else None,
+    )
     monkeypatch.setattr(
         onboarding,
-        "save_model_configuration",
-        lambda graph: saved.setdefault("graph", graph),
+        "active_plugin_service",
+        lambda name: model_service if name == "model_configuration" else memory_service if name == "memory" else None,
     )
     monkeypatch.setattr(onboarding, "_primary_model", lambda: {
         "model": "gpt-5.6-terra",
@@ -196,34 +278,26 @@ async def test_save_codex_oauth_setup_persists_model_and_effort(monkeypatch, tmp
 
 async def test_vision_capability_probe_sends_an_image(monkeypatch):
     from cyrene.runtime import onboarding
-    from cyrene.runtime import model_probe_service
+    from agent.plugin.plugin_impl.cyrene_model import probe as model_probe_service
 
     calls = []
 
-    class FakeResponse:
-        def raise_for_status(self):
-            return None
+    async def fake_complete(*args, **kwargs):
+        calls.append({"args": args, "kwargs": kwargs})
+        return {"content": "Image received"}
 
-        def json(self):
-            return {"choices": [{"message": {"content": "Image received"}}]}
-
-    class FakeClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def post(self, endpoint, headers=None, json=None):
-            calls.append({"endpoint": endpoint, "headers": headers, "json": json})
-            return FakeResponse()
-
-    monkeypatch.setattr(model_probe_service.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+    monkeypatch.setattr(model_probe_service, "_complete", fake_complete)
+    probe_service = model_probe_service.ModelProbeService()
+    monkeypatch.setattr(
+        onboarding,
+        "active_plugin_service",
+        lambda name: probe_service if name == "model_probe" else None,
+    )
 
     result = await onboarding.test_llm_vision_capability("sk-test", "https://example.test/v1", "vision-model")
 
     assert result["vision_capable"] is True
-    content = calls[0]["json"]["messages"][0]["content"]
+    content = calls[0]["kwargs"]["messages"][0]["content"]
     assert content[1]["type"] == "image_url"
     assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
 
@@ -241,32 +315,24 @@ async def test_text_connection_probe_normalizes_official_provider_endpoint(
     expected,
 ):
     from cyrene.runtime import onboarding
-    from cyrene.runtime import model_probe_service
+    from agent.plugin.plugin_impl.cyrene_model import probe as model_probe_service
 
     calls = []
 
-    class FakeResponse:
-        def raise_for_status(self):
-            return None
+    async def fake_complete(*args, **kwargs):
+        calls.append({"args": args, "kwargs": kwargs})
+        return {"content": "OK"}
 
-        def json(self):
-            return {"choices": [{"message": {"content": "OK"}}]}
-
-    class FakeClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def post(self, endpoint, headers=None, json=None):
-            calls.append(endpoint)
-            return FakeResponse()
-
-    monkeypatch.setattr(model_probe_service.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+    monkeypatch.setattr(model_probe_service, "_complete", fake_complete)
+    probe_service = model_probe_service.ModelProbeService()
+    monkeypatch.setattr(
+        onboarding,
+        "active_plugin_service",
+        lambda name: probe_service if name == "model_probe" else None,
+    )
 
     assert await onboarding.test_llm_connection("sk-test", base_url, "model") == "OK"
-    assert calls == [expected]
+    assert calls[0]["args"][1] == base_url.rstrip("/")
 
 
 

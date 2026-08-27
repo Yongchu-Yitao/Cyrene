@@ -523,7 +523,7 @@ def test_materialize_acp_inline_image_for_cyrene_viewer(
     assert len(materialized) == 1
     assert materialized[0]["name"] == "comparison.png"
     assert materialized[0]["kind"] == "image"
-    assert materialized[0]["url"].startswith("/api/chat/export/")
+    assert materialized[0]["url"].startswith("/api/workbench/exports/")
     assert (tmp_path / materialized[0]["id"]).read_bytes() == base64.b64decode(encoded)
 
     # OpenCode persists the same result as a file attachment with a data URL.
@@ -561,7 +561,7 @@ def test_materialize_acp_inline_image_for_cyrene_viewer(
     })
     resource_materialized = _materialize_acp_artifacts(resource_frame)
     assert resource_materialized[0]["name"] == "agent-resource.png"
-    assert resource_materialized[0]["url"].startswith("/api/chat/export/")
+    assert resource_materialized[0]["url"].startswith("/api/workbench/exports/")
     assert (tmp_path / resource_materialized[0]["id"]).read_bytes() == base64.b64decode(encoded)
 
     remote_frame = _frame("artifact/updated", {
@@ -1054,7 +1054,7 @@ def test_validate_before_connect_model_gateway_boundary():
 async def test_run_external_agent_turn_end_to_end(fake_acp_bin, monkeypatch):
     install = _installation()
     monkeypatch.setattr(
-        "cyrene.extensions.agent_runtime.get_agent_installation",
+        "cyrene.agent_runtime.runtime_service._external_agent_installation",
         lambda installation_id: install if installation_id == install["installation_id"] else None,
     )
     service = AcpRuntimeService(process_manager=AcpProcessManager())
@@ -1091,7 +1091,7 @@ async def test_external_agent_receives_scoped_cyrene_model_gateway(fake_acp_bin,
 
     install = _installation(model_access={"mode": "cyrene_managed", "profileId": "primary"})
     monkeypatch.setattr(
-        "cyrene.extensions.agent_runtime.get_agent_installation",
+        "cyrene.agent_runtime.runtime_service._external_agent_installation",
         lambda installation_id: install if installation_id == install["installation_id"] else None,
     )
     monkeypatch.setattr(
@@ -1143,7 +1143,7 @@ async def test_external_agent_receives_scoped_cyrene_model_gateway(fake_acp_bin,
 async def test_run_external_agent_turn_official_v1_prompt_response_is_terminal(fake_acp_bin, monkeypatch):
     install = _installation()
     monkeypatch.setattr(
-        "cyrene.extensions.agent_runtime.get_agent_installation",
+        "cyrene.agent_runtime.runtime_service._external_agent_installation",
         lambda installation_id: install if installation_id == install["installation_id"] else None,
     )
     def official_transport(command, args=(), **kwargs):
@@ -1175,7 +1175,7 @@ async def test_run_external_agent_turn_official_v1_prompt_response_is_terminal(f
 async def test_loaded_session_history_is_not_republished_and_new_turn_streams(fake_acp_bin, monkeypatch):
     install = _installation()
     monkeypatch.setattr(
-        "cyrene.extensions.agent_runtime.get_agent_installation",
+        "cyrene.agent_runtime.runtime_service._external_agent_installation",
         lambda installation_id: install if installation_id == install["installation_id"] else None,
     )
 
@@ -1215,7 +1215,7 @@ async def test_loaded_session_history_is_not_republished_and_new_turn_streams(fa
 async def test_loaded_session_service_failure_falls_back_to_new_session(fake_acp_bin, monkeypatch):
     install = _installation()
     monkeypatch.setattr(
-        "cyrene.extensions.agent_runtime.get_agent_installation",
+        "cyrene.agent_runtime.runtime_service._external_agent_installation",
         lambda installation_id: install if installation_id == install["installation_id"] else None,
     )
 
@@ -1249,7 +1249,7 @@ async def test_loaded_session_service_failure_falls_back_to_new_session(fake_acp
 async def test_loaded_session_process_crash_reconnects_before_new_session(fake_acp_bin, monkeypatch):
     install = _installation()
     monkeypatch.setattr(
-        "cyrene.extensions.agent_runtime.get_agent_installation",
+        "cyrene.agent_runtime.runtime_service._external_agent_installation",
         lambda installation_id: install if installation_id == install["installation_id"] else None,
     )
     spawned = 0

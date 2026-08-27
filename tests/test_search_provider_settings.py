@@ -4,14 +4,19 @@ import pytest
 
 
 def test_search_settings_persist_order_switches_and_encrypted_keys(monkeypatch):
-    from cyrene.runtime import search_settings
+    from agent.plugin import PluginRegistry
+    from agent.plugin.plugin_impl.cyrene_content import plugin_pack
+    from agent.plugin.plugin_impl.cyrene_content import search_settings
+
+    registry = PluginRegistry()
+    registry.register_pack(plugin_pack, source="test-content")
 
     state = {
         "search": {
             "provider_order": [],
             "provider_enabled": dict(search_settings.DEFAULT_PROVIDER_ENABLED),
         },
-        "enabled_tools": {"WebSearch": True},
+        "enabled_plugins": {"WebSearch": True},
     }
     env = {}
     revision = 4
@@ -23,13 +28,8 @@ def test_search_settings_persist_order_switches_and_encrypted_keys(monkeypatch):
     )
     monkeypatch.setattr(
         search_settings.config_store,
-        "get_enabled_tools",
-        lambda: dict(state["enabled_tools"]),
-    )
-    monkeypatch.setattr(
-        search_settings.config_store,
-        "is_tool_enabled",
-        lambda name: state["enabled_tools"].get(name, True),
+        "get_enabled_plugins",
+        lambda: dict(state["enabled_plugins"]),
     )
     monkeypatch.setattr(
         search_settings.config_store,
@@ -56,16 +56,20 @@ def test_search_settings_persist_order_switches_and_encrypted_keys(monkeypatch):
         update,
     )
 
-    payload = search_settings.update_settings({
-        "enabled": False,
-        "expected_revision": 4,
-        "providers": [
-            {"id": "tavily", "enabled": True, "api_key": "tvly-secret"},
-            {"id": "brave", "enabled": True, "api_key": "brave-secret"},
-            {"id": "deepseek", "enabled": False},
-            {"id": "simplexng", "enabled": True},
-        ],
-    })
+    payload = search_settings.update_settings(
+        {
+            "enabled": False,
+            "expected_revision": 4,
+            "providers": [
+                {"id": "tavily", "enabled": True, "api_key": "tvly-secret"},
+                {"id": "brave", "enabled": True, "api_key": "brave-secret"},
+                {"id": "deepseek", "enabled": False},
+                {"id": "simplexng", "enabled": True},
+            ],
+        },
+        canonical_name="WebSearch",
+        registry=registry,
+    )
 
     assert state["search"]["provider_order"] == [
         "tavily",
@@ -73,7 +77,7 @@ def test_search_settings_persist_order_switches_and_encrypted_keys(monkeypatch):
         "deepseek",
         "simplexng",
     ]
-    assert state["enabled_tools"]["WebSearch"] is False
+    assert state["enabled_plugins"]["WebSearch"] is False
     assert env == {
         "TAVILY_API_KEY": "tvly-secret",
         "BRAVE_SEARCH_API_KEY": "brave-secret",
@@ -85,35 +89,51 @@ def test_search_settings_persist_order_switches_and_encrypted_keys(monkeypatch):
 
 
 def test_search_settings_require_one_provider_when_search_is_enabled(monkeypatch):
-    from cyrene.runtime import search_settings
+    from agent.plugin import PluginRegistry
+    from agent.plugin.plugin_impl.cyrene_content import plugin_pack
+    from agent.plugin.plugin_impl.cyrene_content import search_settings
 
-    monkeypatch.setattr(
-        search_settings.config_store,
-        "get_enabled_tools",
-        lambda: {"WebSearch": True},
-    )
+    registry = PluginRegistry()
+    registry.register_pack(plugin_pack, source="test-content")
     rows = [{"id": provider, "enabled": False} for provider in search_settings.PROVIDER_IDS]
 
     with pytest.raises(search_settings.SearchSettingsError, match="at least one"):
-        search_settings.update_settings({"enabled": True, "providers": rows})
+        search_settings.update_settings(
+            {"enabled": True, "providers": rows},
+            canonical_name="WebSearch",
+            registry=registry,
+        )
 
 
 async def test_search_settings_publish_realtime_change_after_save(monkeypatch):
-    from cyrene.runtime import search_settings_service
+    from agent.plugin import PluginRegistry
+    from agent.plugin.plugin_impl.cyrene_content import plugin_pack
+    from agent.plugin.plugin_impl.cyrene_content import search_settings
+
+    registry = PluginRegistry()
+    registry.register_pack(plugin_pack, source="test-content")
 
     monkeypatch.setattr(
-        search_settings_service.search_settings,
+        search_settings,
         "update_settings",
-        lambda body: {"ok": True, "revision": 9, "enabled": body["enabled"]},
+        lambda body, **_kwargs: {
+            "ok": True,
+            "revision": 9,
+            "enabled": body["enabled"],
+        },
     )
     events = []
 
     async def publish(namespace, revision, changed):
         events.append((namespace, revision, changed))
 
-    service = search_settings_service.SearchSettingsApplicationService(publish)
+    service = search_settings.SearchSettingsApplicationService(
+        registry,
+        "WebSearch",
+        publish,
+    )
 
     result = await service.update_settings({"enabled": False})
 
     assert result["revision"] == 9
-    assert events == [("search", 9, ["search", "enabled_tools"])]
+    assert events == [("search", 9, ["search", "enabled_plugins"])]

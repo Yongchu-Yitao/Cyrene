@@ -813,7 +813,7 @@ Slash Command 也必须由 Agent Capability/Command 列表提供。Cyrene 专属
 - `src/route/workbench/chat.py` 不再直接假定唯一 `run_agent`，改由 Agent Runtime 分发。
 - `src/route/schemas.py` 增加 Agent Binding、ModelAccess、Agent Request Response 和能力 Schema。
 - `src/cyrene/workbench/chat_runs.py` 继续负责持久运行、重连和事件缓存，但缓存统一 Agent Event。
-- `src/cyrene/extensions/catalog.py` 和 Extension Service 增加 `agent` 类型。
+- `src/agent/plugin/plugin_impl/cyrene_extensions/extension_catalog.py` 和 Extension Service 增加 `agent` 类型。
 - `src/route/extensions.py` 继续管理安装生命周期，增加外部 Agent 安装提案、Inspect 和确认接口；新增 Agent Runtime Routes 管理配置、认证、Probe 和诊断。
 - `src/cyrene/runtime/config_store.py` 保存 Agent 默认设置和 Credential Reference，不能在普通 Settings Payload 中返回密钥。
 - `src/cyrene/model_runtime/` 增加本地 Model Gateway 和短期 Token 验证；现有 Provider Client 不能直接作为可公开给 Agent 的 Gateway。

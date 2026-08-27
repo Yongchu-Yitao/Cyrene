@@ -61,6 +61,56 @@ def run_context_value(
     return run_context_data(context).get(key, default)
 
 
+def plugin_language(context: PluginContext | None = None) -> str:
+    """Resolve the language frozen into a Plugin invocation, then app fallback."""
+
+    from cyrene.localization import app_language
+
+    active = context or current_plugin_context()
+    explicit = (
+        active.data.get("language")
+        or run_context_value(active, "language", "")
+        or run_context_value(active, "app_language", "")
+    )
+    return app_language(explicit)
+
+
+def plugin_localized(
+    context: PluginContext | None,
+    en: str,
+    zh: str,
+    **values: Any,
+) -> str:
+    """Render one compact user-visible Plugin result in the invocation locale."""
+
+    from cyrene.localization import localized
+
+    return localized(en, zh, language=plugin_language(context), **values)
+
+
+def plugin_localized_plural(
+    context: PluginContext | None,
+    en_one: str,
+    en_other: str,
+    zh: str,
+    *,
+    count: int | float,
+    **values: Any,
+) -> str:
+    """Render a count-aware user-visible Plugin result."""
+
+    from cyrene.localization import localized_plural
+
+    return localized_plural(
+        en_one,
+        en_other,
+        zh,
+        count=count,
+        language=plugin_language(context),
+        **values,
+    )
+
+
 async def publish_runtime_event(
     context: PluginContext,
     event: Mapping[str, Any],

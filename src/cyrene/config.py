@@ -38,60 +38,66 @@ for _k, _v in _env.items():
     if _v:
         os.environ.setdefault(_k, _v)
 
-# === Bot 配置 ===
-TELEGRAM_BOT_TOKEN = _store.get_env("TELEGRAM_BOT_TOKEN") or None
+# === Shared external identity ===
 OWNER_ID = int(os.environ["OWNER_ID"]) if os.environ.get("OWNER_ID") else None
-
-# === WeChat 配置 ===
-WECHAT_BOT_TOKEN = _store.get_env("WECHAT_BOT_TOKEN", "")
-WECHAT_OWNER_ID = _store.get_env("WECHAT_OWNER_ID", "")
-
-# === 高德地图 ===
-AMAP_API_KEY = _store.get_env("AMAP_API_KEY", "")
 
 # === Agent 配置 ===
 ASSISTANT_NAME = _store.get_env("ASSISTANT_NAME", "Cyrene")
 MAX_TOOL_OUTPUT_CHARS = int(_store.get_env("MAX_TOOL_OUTPUT_CHARS", "0"))
 
-# === Scheduler 配置 ===
-SCHEDULER_INTERVAL = int(_store.get_env("SCHEDULER_INTERVAL", "60"))
-
-# === 搜索配置 ===
-SEARCH_PROXY = _store.get_env("SEARCH_PROXY", "")
-SEARXNG_URL = _store.get_env("SEARXNG_URL", "")
-SEARXNG_AUTO_START = (os.environ.get("SEARXNG_AUTO_START") or _store.get_env("SEARXNG_AUTO_START", "1")) not in ("0", "false", "no")
-SEARXNG_PORT = int(_store.get_env("SEARXNG_PORT", "8888"))
-SEARXNG_HOST = _store.get_env("SEARXNG_HOST", "127.0.0.1")
-
-# === Steward 配置 ===
-# Steward runs are model-backed maintenance. Keep a one-hour floor.
-STEWARD_INTERVAL = max(3600, int(_store.get_env("STEWARD_INTERVAL", "3600")))
-
-PATTERN_DETECTION_INTERVAL = int(_store.get_env("PATTERN_DETECTION_INTERVAL", "600"))
-
 # Web UI
 WEB_PORT = int(os.environ.get("WEB_PORT") or _store.get_env("WEB_PORT", "4242"))
 
 
-# 可在 Web UI 中编辑的 key 白名单
-_EDITABLE_KEYS = {
-    "TELEGRAM_BOT_TOKEN": {"label": "Telegram Token","masked": True},
-    "WECHAT_BOT_TOKEN":  {"label": "WeChat Token",  "masked": True},
-    "AMAP_API_KEY":      {"label": "高德地图 Key",  "masked": True},
-}
+# Core does not own provider credentials. Active Plugins contribute the
+# editable key policy below.
+_EDITABLE_KEYS: dict[str, dict[str, object]] = {}
+
+
+def _plugin_editable_env_keys() -> dict[str, dict[str, object]]:
+    """Collect credential policies from active application Plugins."""
+
+    try:
+        from agent.plugin import active_plugin_application_host
+
+        host = active_plugin_application_host()
+        services = host.active_services.values() if host is not None else ()
+    except Exception:
+        return {}
+    result: dict[str, dict[str, object]] = {}
+    seen: set[int] = set()
+    for service in services:
+        if id(service) in seen:
+            continue
+        seen.add(id(service))
+        provider = getattr(service, "editable_env_keys", None)
+        if not callable(provider):
+            continue
+        contributed = provider()
+        if not isinstance(contributed, dict):
+            raise TypeError("Plugin editable_env_keys contribution must be a mapping")
+        for key, meta in contributed.items():
+            normalized = str(key or "").strip()
+            if not normalized or not isinstance(meta, dict):
+                raise TypeError("Plugin editable environment-key policy is invalid")
+            if normalized in result or normalized in _EDITABLE_KEYS:
+                raise ValueError(f"Duplicate editable environment key: {normalized}")
+            result[normalized] = dict(meta)
+    return result
 
 
 def read_env_file() -> dict[str, str]:
     """Read all editable .env keys from the encrypted store."""
     all_env = _store.get_all_env()
-    return {k: v for k, v in all_env.items() if k in _EDITABLE_KEYS}
+    allowed = editable_env_keys()
+    return {k: v for k, v in all_env.items() if k in allowed}
 
 
 def write_env_keys(updates: dict[str, str]) -> bool:
     """Write one or more env keys to the encrypted store.  Also update os.environ + module globals."""
     filtered = {}
     for key, value in updates.items():
-        if key not in _EDITABLE_KEYS and key != "WECHAT_OWNER_ID":
+        if key not in editable_env_keys():
             continue
         filtered[key] = _strip_wrapping_quotes(value)
 
@@ -99,33 +105,27 @@ def write_env_keys(updates: dict[str, str]) -> bool:
         return True
 
     _store.set_env_many(filtered)
-    _apply_env_updates(filtered)
     return True
-
-
-def _apply_env_updates(updates: dict[str, str]) -> None:
-    """Reflect env changes in this module's globals."""
-    import sys as _sys
-    _mod = _sys.modules[__name__]
-    for key, value in updates.items():
-        if key == "TELEGRAM_BOT_TOKEN":
-            _mod.TELEGRAM_BOT_TOKEN = value
-        elif key == "WECHAT_BOT_TOKEN":
-            _mod.WECHAT_BOT_TOKEN = value
-        elif key == "WECHAT_OWNER_ID":
-            _mod.WECHAT_OWNER_ID = value
-        elif key == "AMAP_API_KEY":
-            _mod.AMAP_API_KEY = value
 
 
 def get_env_keys_meta() -> list[dict]:
     """Return editable .env keys with metadata for the Web UI."""
-    return _store.get_editable_env_meta()
+    result = []
+    for key, meta in editable_env_keys().items():
+        value = _store.get_env(key, "")
+        if bool(meta.get("masked")) and value:
+            value = mask_value(value)
+        result.append({"key": key, **meta, "value": value})
+    return result
 
 
 def editable_env_keys() -> dict[str, dict[str, object]]:
     """Return a defensive copy of the editable environment-key policy."""
-    return {key: dict(meta) for key, meta in _EDITABLE_KEYS.items()}
+    core = {
+        key: {**dict(meta), "label": str(meta.get("label") or key)}
+        for key, meta in _EDITABLE_KEYS.items()
+    }
+    return {**core, **_plugin_editable_env_keys()}
 
 
 def mask_value(value: str, show: int = 4) -> str:

@@ -90,12 +90,15 @@ def _workspace_map(project_state: Mapping[str, Any]) -> tuple[dict[str, str], st
     active = _text(project_state.get("activeProjectId"))
     if active not in mapping.values():
         active = first
-    return mapping, active
+    return mapping, active or first or "default"
 
 
 def _source_workspace(path: Path, mapping: Mapping[str, str], fallback: str) -> str:
     key = path.stem[3:] if path.stem.startswith("kb_") else path.stem
-    return _text(mapping.get(key)) or fallback
+    # Preserve every legacy database even when its former Workbench project
+    # record is unavailable.  The filename's data key is a safer isolated
+    # workspace than merging unrelated content into the active project.
+    return _text(mapping.get(key)) or _text(key) or fallback
 
 
 def _managed_legacy_path(
@@ -243,7 +246,7 @@ def migrate_legacy_knowledge(
     source_root = Path(legacy_store_directory).expanduser().resolve()
     mapping, fallback = _workspace_map(project_state)
     report = {"sources": 0, "items": 0, "attachments": 0, "chunks": 0}
-    if not source_root.is_dir() or not fallback:
+    if not source_root.is_dir():
         return report
 
     sources: list[tuple[Path, str, int, int]] = []

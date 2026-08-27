@@ -16,6 +16,7 @@ from ..plugin.model_router import MODEL_ROUTER_PLUGIN
 from ..permission import runtime_permission_mode
 from ..prompt import DEFAULT_SYSTEM_PROMPT
 from .bridge import WorkbenchChatResult, WorkbenchSessionBridge
+from cyrene.localization import app_language
 
 _FINAL_REPLY_EVENTS = frozenset({"reply_start", "reply_delta", "reply_done"})
 
@@ -134,6 +135,7 @@ async def run_workbench_chat(
         "user_request_text": str(public_user_message or user_message or ""),
         "conversation_source": str(conversation_source or ""),
         "round_id": str(run.run_id),
+        "language": app_language(),
         "session_id": normalized_session_id,
         "ui_instance_id": str(ui_instance_id or ""),
         "workspace_dir": str(workspace_dir or ""),
@@ -187,22 +189,14 @@ async def run_workbench_chat(
         native_tools.seed_builtin_plugin_directory(plugin_root)
         registry = PluginRegistry()
         ensure_model_router(registry)
-        from agent.plugin import active_plugin_service
-        from cyrene.runtime.schedule_runtime import get_schedule_runtime
+        from agent.plugin import active_plugin_application_host
 
-        plugin_services: dict[str, Any] = {}
-        knowledge_service = active_plugin_service("knowledge")
-        memory_application = active_plugin_service("memory")
-        map_service = active_plugin_service("maps")
-        if knowledge_service is not None:
-            plugin_services["knowledge"] = knowledge_service
-        if map_service is not None:
-            plugin_services["maps"] = map_service
-        if str(db_path or "").strip():
-            plugin_services["schedules"] = (
-                active_plugin_service("schedules")
-                or get_schedule_runtime(str(db_path), bot=bot)
-            )
+        application_host = active_plugin_application_host()
+        plugin_services = (
+            application_host.active_services
+            if application_host is not None
+            else {}
+        )
         return WorkbenchSessionBridge.open(
             state_root,
             workspace_dir,
@@ -219,7 +213,6 @@ async def run_workbench_chat(
             },
             plugin_context_data={
                 "session_id": normalized_session_id,
-                "system_extra": str(system_extra or ""),
                 "project_id": str(project_id or ""),
                 "project_memory_snapshot": (
                     deepcopy(dict(project_memory_snapshot))
@@ -238,9 +231,6 @@ async def run_workbench_chat(
                 "memory_archive_enabled": bool(memory_archive_enabled),
                 "retry": bool(retry),
                 "completed_turn_count": max(0, int(completed_turn_count or 0)),
-                "memory_data_directory": str(
-                    getattr(memory_application, "data_directory", state_root)
-                ),
                 "background_submitter": submit_background,
                 "owner_call": call_on_owner,
                 "run_context": run_context,

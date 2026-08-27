@@ -653,6 +653,44 @@ def test_chat_summary_preserves_failed_cancelled_and_awaiting_run_outcomes():
     assert answered["runStatus"] == "completed"
 
 
+def test_public_chat_collection_resolves_historical_defaults_once(monkeypatch):
+    from cyrene.workbench import chat_application
+
+    class ComposerContext:
+        def __init__(self):
+            self.default_calls = 0
+
+        def default_input_context(self):
+            self.default_calls += 1
+            return {"soulActive": True, "workspaceActive": False}
+
+        def normalize(self, value):
+            return dict(value or {})
+
+    composer = ComposerContext()
+    monkeypatch.setattr(
+        chat_application,
+        "_composer_context_service",
+        lambda: composer,
+    )
+    chats = [
+        {
+            "id": f"chat_{index}",
+            "projectId": "project_one",
+            "kind": "chat",
+            "messages": [],
+        }
+        for index in range(133)
+    ]
+
+    summaries = chat_application.public_chats_light(chats)
+
+    assert len(summaries) == 133
+    assert composer.default_calls == 1
+    assert all(item["soulActive"] is True for item in summaries)
+    assert all(item["workspaceActive"] is False for item in summaries)
+
+
 def test_session_activity_reducer_tracks_parallel_work_and_resets_between_runs():
     script = _session_activity_script("""
 let state = {};

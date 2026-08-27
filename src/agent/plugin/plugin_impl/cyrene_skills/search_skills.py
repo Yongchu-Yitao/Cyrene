@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from agent.plugin import PluginContext
-from cyrene.learning.skills import search_skills
+from .skills import search_skills
 from .definitions import get_native_tool_def
 
 TOOL_NAME = "SearchSkills"

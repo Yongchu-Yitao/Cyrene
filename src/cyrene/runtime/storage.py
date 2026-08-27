@@ -6,12 +6,13 @@ Grouping differs (one storage chip may cover several backup roots), but when
 directories are added or removed all three lists must be updated together.
 
 Plugin-owned roots are supplied at runtime by the corresponding application
-service. Core deliberately does not know where memory files are stored.
+service. Core deliberately does not know their category names, locations, or
+legacy filename conventions. A path claimed by a Plugin is excluded from any
+enclosing core category and measured exactly once under the Plugin's category.
 
 A category tuple may carry a third element: a name filter. When present only
 entries whose name matches the filter are counted (a matching directory is
-walked recursively). This keeps store/ file families (knowledge bases, memory
-snapshots) split into separate chips without adding a third path list.
+walked recursively).
 """
 
 import fnmatch
@@ -21,7 +22,7 @@ from pathlib import Path
 from collections.abc import Iterable, Mapping
 from typing import Callable
 
-from cyrene.config import BASE_DIR, CACHE_DIR, DATA_DIR, STORE_DIR, WORKSPACE_DIR, cyrene_dir
+from cyrene.config import BASE_DIR, DATA_DIR, STORE_DIR, WORKSPACE_DIR, cyrene_dir
 
 _MAX_SCAN_ENTRIES = 200_000
 
@@ -37,47 +38,38 @@ def _name_excludes(*patterns: str) -> _NameFilter:
     return lambda name: not match(name)
 
 
-# store/ families: the core database and its remote-control satellites vs the
-# per-workspace knowledge bases. Memory documents now live in the shared
-# database; standalone memory files are reported by the memory Plugin.
-_KB_FILES = _name_matches("kb_*.db*")
-_DATABASE_FILES = _name_excludes("kb_*.db*")
-_STORE_FAMILIES: list[tuple[str, _NameFilter]] = [
-    ("database", _DATABASE_FILES),
-    ("knowledge", _KB_FILES),
-]
-_STORE_FAMILY_KEYS = {key for key, _ in _STORE_FAMILIES}
-
 STORAGE_CATEGORIES: list[tuple[str, tuple[Path, ...], _NameFilter | None]] = [
-    ("database", (STORE_DIR,), _DATABASE_FILES),
-    ("knowledge", (STORE_DIR,), _KB_FILES),
-    ("memory", (), None),
-    ("conversations", (), None),
+    ("database", (STORE_DIR,), None),
     ("plans", (cyrene_dir(WORKSPACE_DIR) / "plan",), None),
     ("projects", (cyrene_dir(WORKSPACE_DIR) / "projects",), None),
     ("sessions", (DATA_DIR / "sessions",), None),
     ("inbox", (DATA_DIR / "inbox",), None),
-    ("skills", (DATA_DIR / "installed_skills", DATA_DIR / "learned_skill_scripts"), None),
-    ("attachments", (DATA_DIR / "webui_uploads", DATA_DIR / "webui_exports", DATA_DIR / "behavior-media"), None),
+    ("attachments", (DATA_DIR / "webui_uploads", DATA_DIR / "webui_exports"), None),
     ("backups", (BASE_DIR / "backups",), None),
-    ("local_models", (CACHE_DIR / "knowledge_models",), None),
-    ("codex_cli", (CACHE_DIR / "codex_cli",), None),
-    ("opencv_runtime", (CACHE_DIR / "opencv_runtime",), None),
-    ("browser", (DATA_DIR / "browser_profile",), None),
-    # Mirrors backup.py _EXCLUDED_DATA_DIRECTORIES: the disposable data the
-    # backup deliberately omits.
-    ("caches", (DATA_DIR / "attachment_cache", DATA_DIR / "generated_reports", CACHE_DIR / "voice"), None),
+    # Disposable core data that portable backups deliberately omit.
+    ("caches", (DATA_DIR / "attachment_cache", DATA_DIR / "generated_reports"), None),
 ]
 
 
 def _active_plugin_storage_paths() -> Mapping[str, Iterable[Path]]:
     try:
-        from agent.plugin import active_plugin_service
+        from agent.plugin import active_plugin_application_host
 
-        service = active_plugin_service("memory")
-        provider = getattr(service, "storage_paths", None)
-        value = provider() if callable(provider) else {}
-        return value if isinstance(value, Mapping) else {}
+        host = active_plugin_application_host()
+        if host is None:
+            return {}
+        result: dict[str, list[Path]] = {}
+        for service in host.active_services.values():
+            provider = getattr(service, "storage_paths", None)
+            value = provider() if callable(provider) else {}
+            if not isinstance(value, Mapping):
+                continue
+            for raw_key, paths in value.items():
+                key = str(raw_key or "").strip()
+                if not key:
+                    continue
+                result.setdefault(key, []).extend(Path(path) for path in paths)
+        return result
     except Exception:
         return {}
 
@@ -88,8 +80,55 @@ def scan_storage(
     """Walk every category and return byte totals without blocking the loop."""
     remaining = _MAX_SCAN_ENTRIES
     totals: dict[str, list[int]] = {key: [0, 0] for key, _, _ in STORAGE_CATEGORIES}
+    dynamic_paths = (
+        _active_plugin_storage_paths()
+        if plugin_storage is None
+        else plugin_storage
+    )
 
-    def walk(root: Path, name_filter: _NameFilter | None) -> tuple[int, int]:
+    # Resolve declarations before scanning core roots. This is the generic
+    # ownership boundary that lets a Plugin classify legacy files living
+    # inside a core directory without teaching core their filenames.
+    normalized_dynamic: dict[str, list[tuple[Path, Path]]] = {}
+    claimed_paths: dict[Path, str] = {}
+    for raw_key, paths in dynamic_paths.items():
+        key = str(raw_key or "").strip()
+        if not key:
+            continue
+        totals.setdefault(key, [0, 0])
+        seen: set[Path] = set()
+        for raw_path in paths:
+            path = Path(raw_path).expanduser()
+            try:
+                identity = path.resolve(strict=False)
+            except OSError:
+                identity = path.absolute()
+            if identity in seen:
+                continue
+            seen.add(identity)
+            # The first active contribution owns an exact path. Services are
+            # traversed deterministically by the application host, and an
+            # accidental collision must not double-count the same bytes.
+            if identity in claimed_paths and claimed_paths[identity] != key:
+                continue
+            claimed_paths[identity] = key
+            normalized_dynamic.setdefault(key, []).append((path, identity))
+
+    def identity(path: Path) -> Path:
+        try:
+            return path.resolve(strict=False)
+        except OSError:
+            return path.absolute()
+
+    def claimed_elsewhere(path: Path, category: str) -> bool:
+        owner = claimed_paths.get(identity(path))
+        return owner is not None and owner != category
+
+    def walk(
+        root: Path,
+        name_filter: _NameFilter | None,
+        category: str,
+    ) -> tuple[int, int]:
         nonlocal remaining
         total = 0
         files = 0
@@ -99,12 +138,19 @@ def scan_storage(
                     if remaining <= 0:
                         return total, files
                     remaining -= 1
+                    entry_path = Path(entry.path)
+                    if claimed_elsewhere(entry_path, category):
+                        continue
                     if name_filter is not None and not name_filter(entry.name):
                         continue
                     try:
                         st = entry.stat(follow_symlinks=False)
                         if stat.S_ISDIR(st.st_mode):
-                            sub_total, sub_files = walk(Path(entry.path), name_filter)
+                            sub_total, sub_files = walk(
+                                entry_path,
+                                name_filter,
+                                category,
+                            )
                             total += sub_total
                             files += sub_files
                         elif stat.S_ISREG(st.st_mode):
@@ -116,14 +162,20 @@ def scan_storage(
             pass
         return total, files
 
-    def measure(path: Path, name_filter: _NameFilter | None) -> tuple[int, int]:
+    def measure(
+        path: Path,
+        name_filter: _NameFilter | None,
+        category: str,
+    ) -> tuple[int, int]:
         nonlocal remaining
+        if claimed_elsewhere(path, category):
+            return 0, 0
         try:
             st = path.stat(follow_symlinks=False)
         except OSError:
             return 0, 0
         if stat.S_ISDIR(st.st_mode):
-            return walk(path, name_filter)
+            return walk(path, name_filter, category)
         if stat.S_ISREG(st.st_mode):
             if remaining <= 0 or (name_filter is not None and not name_filter(path.name)):
                 return 0, 0
@@ -131,71 +183,15 @@ def scan_storage(
             return st.st_size, 1
         return 0, 0
 
-    def walk_store(root: Path) -> None:
-        # The three store/ families share one tree; walk it once and dispatch
-        # each entry (and its whole subtree) to the matching bucket.
-        nonlocal remaining
-        try:
-            with os.scandir(root) as iterator:
-                for entry in iterator:
-                    if remaining <= 0:
-                        return
-                    remaining -= 1
-                    for key, name_filter in _STORE_FAMILIES:
-                        if not name_filter(entry.name):
-                            continue
-                        try:
-                            st = entry.stat(follow_symlinks=False)
-                            if stat.S_ISDIR(st.st_mode):
-                                size, count = walk(Path(entry.path), name_filter)
-                            elif stat.S_ISREG(st.st_mode):
-                                size, count = st.st_size, 1
-                            else:
-                                break
-                            totals[key][0] += size
-                            totals[key][1] += count
-                        except OSError:
-                            pass
-                        break
-        except OSError:
-            pass
-
-    store_roots = {
-        path
-        for key, paths, _ in STORAGE_CATEGORIES
-        if key in _STORE_FAMILY_KEYS
-        for path in paths
-    }
-    for root in store_roots:
-        walk_store(root)
     for key, paths, name_filter in STORAGE_CATEGORIES:
-        if key in _STORE_FAMILY_KEYS:
-            continue
         for path in paths:
-            size, count = measure(path, name_filter)
+            size, count = measure(path, name_filter, key)
             totals[key][0] += size
             totals[key][1] += count
 
-    dynamic_paths = (
-        _active_plugin_storage_paths()
-        if plugin_storage is None
-        else plugin_storage
-    )
-    for raw_key, paths in dynamic_paths.items():
-        key = str(raw_key or "").strip()
-        if key not in totals:
-            continue
-        seen: set[Path] = set()
-        for raw_path in paths:
-            path = Path(raw_path).expanduser()
-            try:
-                identity = path.resolve(strict=False)
-            except OSError:
-                identity = path.absolute()
-            if identity in seen:
-                continue
-            seen.add(identity)
-            size, count = measure(path, None)
+    for key, paths in normalized_dynamic.items():
+        for path, _identity in paths:
+            size, count = measure(path, None, key)
             totals[key][0] += size
             totals[key][1] += count
 
@@ -203,7 +199,7 @@ def scan_storage(
         "total": sum(size for size, _ in totals.values()),
         "categories": [
             {"key": key, "bytes": totals[key][0], "files": totals[key][1]}
-            for key, _, _ in STORAGE_CATEGORIES
+            for key in totals
         ],
         "truncated": remaining <= 0,
     }

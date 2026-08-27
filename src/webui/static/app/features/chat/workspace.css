@@ -333,10 +333,6 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   width: min(100%, 920px);
 }
 
-.settings-overlay .settings-overlay-content[data-settings-active-tab="mcp-providers"] .settings-panel {
-  width: min(100%, 1120px);
-}
-
 .settings-overlay .settings-overlay-content[data-settings-active-tab="profile"] {
   padding: 0;
 }
@@ -1222,16 +1218,18 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   font-weight: 720;
 }
 .wbc-plugin-view-pane {
-  width: 100%;
-  height: 100%;
+  display: flex;
   min-width: 0;
   min-height: 0;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
-  /* An iframe plugin is transparent unless it deliberately paints its own
-     canvas. Let that default reveal the owning pane's shared surface instead
-     of introducing a plugin-only fallback colour. */
-  color: inherit;
-  background: transparent;
+  background: var(--wb-bg);
+}
+
+.wbc-plugin-view-pane.detached {
+  position: absolute;
+  inset: 0;
 }
 
 .wbc-plugin-view-frame {
@@ -1239,37 +1237,20 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   width: 100%;
   height: 100%;
   border: 0;
+  color-scheme: light dark;
   background: transparent;
 }
 
-html[data-theme="dark"] .wbc-plugin-view-frame { color-scheme: dark; }
-html[data-theme="light"] .wbc-plugin-view-frame { color-scheme: light; }
-
 .wbc-plugin-view-state {
-  display: flex;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
   width: 100%;
-  height: 100%;
   min-height: 180px;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
   padding: 24px;
   color: var(--wb-muted);
   text-align: center;
 }
 
 .wbc-plugin-view-state strong { color: var(--wb-text); }
-.wbc-plugin-view-state button {
-  margin-top: 6px;
-  padding: 7px 12px;
-  border: 1px solid var(--wb-line);
-  border-radius: 9px;
-  color: var(--wb-text);
-  background: var(--wb-card-bg);
-}
-
-.wbc-project-plugin-tool-icon {
-  font-size: 15px;
-  font-weight: 750;
-}

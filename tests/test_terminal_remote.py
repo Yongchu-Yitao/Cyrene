@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from cyrene.terminal.client import TerminalDaemonClient
-from cyrene.terminal.manager import TerminalManager, TerminalSession, _now_iso
-from cyrene.terminal.remote import build_managed_ssh_launch
-from cyrene.terminal.shell_integration import OscMetadataParser, prepare_shell_integration
+from agent.plugin.plugin_impl.cyrene_code.terminal.client import TerminalDaemonClient
+from agent.plugin.plugin_impl.cyrene_code.terminal.manager import TerminalManager, TerminalSession, _now_iso
+from agent.plugin.plugin_impl.cyrene_code.terminal.remote import build_managed_ssh_launch
+from agent.plugin.plugin_impl.cyrene_code.terminal.shell_integration import OscMetadataParser, prepare_shell_integration
 
 
 def _session(tmp_path: Path, **overrides) -> TerminalSession:

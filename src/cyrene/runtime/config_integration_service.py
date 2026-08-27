@@ -1,17 +1,12 @@
-"""Application service for configuration and integration settings."""
+"""Application service for core configuration settings."""
 
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
-import httpx
-
-from agent.plugin import active_plugin_service
-from cyrene.model_runtime import opencv_runtime
-from cyrene.runtime import config_store, integration_settings
+from cyrene.runtime import config_store
 from cyrene.runtime.host_bridge import HostBridgeError, call_host
 from cyrene.runtime.settings_service import (
     SettingsServiceError,
@@ -21,15 +16,7 @@ from cyrene.runtime.settings_service import (
 )
 from cyrene.runtime.storage import scan_storage
 
-logger = logging.getLogger(__name__)
 SettingsChangedPublisher = Callable[[str, int | None, list[str]], Awaitable[None]]
-
-
-def _knowledge_service() -> Any:
-    service = active_plugin_service("knowledge")
-    if service is None:
-        raise ConfigIntegrationError("knowledge Plugin is not available", 503)
-    return service
 
 
 class ConfigQueryPort(Protocol):
@@ -49,7 +36,7 @@ class ConfigIntegrationError(RuntimeError):
 
 
 class ConfigIntegrationApplicationService:
-    """Own settings projections and integration/local-model operations."""
+    """Own core settings projections and updates."""
 
     def __init__(
         self,
@@ -60,22 +47,10 @@ class ConfigIntegrationApplicationService:
         self.publish_settings_changed = publish_settings_changed
 
     def config(self) -> dict[str, Any]:
-        payload = dict(self.queries.config())
-        payload.update({
-            "external_agent_proxy_url": str(config_store.get_setting(
-                "external_agent_proxy_url", ""
-            ) or ""),
-            "proxy_search_enabled": config_store.get_setting(
-                "proxy_search_enabled", False
-            ) is True,
-            "proxy_browser_enabled": config_store.get_setting(
-                "proxy_browser_enabled", False
-            ) is True,
-            "proxy_extensions_enabled": config_store.get_setting(
-                "proxy_extensions_enabled", False
-            ) is True,
-        })
-        return payload
+        # Runtime settings are projected by the active application packs and
+        # the presentation query. Core only owns the generic configuration
+        # envelope; it must not special-case an optional proxy provider.
+        return dict(self.queries.config())
 
     async def storage(self) -> dict[str, Any]:
         return {"ok": True, **(await asyncio.to_thread(scan_storage))}
@@ -166,64 +141,3 @@ class ConfigIntegrationApplicationService:
             list(normalized),
         )
         return result
-
-    def integration_settings(self) -> dict[str, Any]:
-        return integration_settings.public_settings()
-
-    def local_model_status(self) -> dict[str, Any]:
-        return _knowledge_service().local_model_status()
-
-    def download_ocr_runtime(self) -> dict[str, Any]:
-        try:
-            return {"ok": True, **opencv_runtime.start_download()}
-        except Exception as exc:
-            raise ConfigIntegrationError(str(exc), 503) from exc
-
-    def download_local_model(self, model_id: str) -> dict[str, Any]:
-        try:
-            return {"ok": True, **_knowledge_service().start_local_model_download(model_id)}
-        except ValueError as exc:
-            raise ConfigIntegrationError(str(exc), 404) from exc
-
-    async def delete_local_model(self, model_id: str) -> dict[str, Any]:
-        try:
-            return {"ok": True, **(await _knowledge_service().delete_local_model(model_id))}
-        except ValueError as exc:
-            raise ConfigIntegrationError(str(exc), 404) from exc
-
-    def update_integration(self, body: dict[str, Any]) -> dict[str, Any]:
-        if "zotero" not in body:
-            raise ConfigIntegrationError(
-                "zotero settings are required",
-                400,
-            )
-        try:
-            return {"ok": True, **integration_settings.update_settings(body)}
-        except (TypeError, ValueError) as exc:
-            raise ConfigIntegrationError(str(exc), 400) from exc
-
-    async def test_integration(self, body: dict[str, Any]) -> dict[str, Any]:
-        service = str(body.get("service") or "").strip().lower()
-        draft = body.get("config", {})
-        try:
-            config = integration_settings.merged_test_config(service, draft)
-            if service == "zotero":
-                return await integration_settings.test_zotero(config)
-            raise ValueError("unknown integration service")
-        except (TypeError, ValueError) as exc:
-            raise ConfigIntegrationError(str(exc), 400) from exc
-        except httpx.HTTPStatusError as exc:
-            status = exc.response.status_code if exc.response is not None else 0
-            raise ConfigIntegrationError(
-                f"remote service returned HTTP {status}",
-                502,
-            ) from exc
-        except httpx.RequestError as exc:
-            raise ConfigIntegrationError(
-                "could not reach the configured service",
-                503,
-            ) from exc
-        except Exception as exc:
-            logger.info("Integration connectivity test failed", exc_info=True)
-            message = "connection test failed"
-            raise ConfigIntegrationError(message, 502) from exc

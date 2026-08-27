@@ -14,6 +14,7 @@ from typing import Any
 
 from agent.hook import CONTEXT_USED, SESSION_END, SESSION_START, STOP, ContextUsed, HookEvent
 from agent.plugin import PluginContext, PluginSetupContext
+from cyrene.localization import app_language, localized
 from .definitions import MEMORY_TOOL_NAMES
 
 MEMORY_SERVICE_ID = "memory.v1"
@@ -108,6 +109,15 @@ class MemoryService:
     def is_main(self) -> bool:
         return self.agent_id == "main"
 
+    @property
+    def language(self) -> str:
+        run_data = self.run_data
+        return app_language(
+            self.data.get("language")
+            or run_data.get("language")
+            or run_data.get("app_language")
+        )
+
     def configure_stores(self) -> None:
         if not self.db_path:
             return
@@ -121,12 +131,17 @@ class MemoryService:
 
         parts: list[str] = []
         run_data = self.run_data
+        language = self.language
         try:
             from .short_term import get_context
 
             short = get_context(
                 max_chars=2500,
-                header="[Short-term cross-session memory:]",
+                header=localized(
+                    "[Short-term cross-session memory:]",
+                    "[跨会话短期记忆：]",
+                    language=language,
+                ),
             ).strip()
             if short:
                 parts.append(short)
@@ -143,7 +158,12 @@ class MemoryService:
                     project_id,
                     limit=20,
                     max_chars=2400,
-                    header="Project durable memories:",
+                    header=localized(
+                        "Project durable memories:",
+                        "项目持久记忆：",
+                        language=language,
+                    ),
+                    language=language,
                 ).strip()
                 if structured:
                     parts.append(structured)
@@ -165,6 +185,7 @@ class MemoryService:
                 prompt = build_main_agent_suffix(
                     snapshot,
                     include_trigger=include_trigger,
+                    language=language,
                 ).strip()
                 if prompt:
                     parts.append(prompt)
@@ -213,12 +234,6 @@ class MemoryService:
             value = node.value if isinstance(node.value, Mapping) else {}
             role = str(value.get("role") or "")
             if role in {"system", "user"}:
-                if role == "user" and current_user is not None and node.id == current_user.id:
-                    metadata = value.get("metadata")
-                    metadata = metadata if isinstance(metadata, Mapping) else {}
-                    extra = str(metadata.get("ephemeral_context") or "").strip()
-                    if extra:
-                        self._append_system(messages, extra)
                 messages.append({"role": role, "content": str(value.get("content") or "")})
             elif role == "context":
                 if node.id not in current_context_ids:
@@ -348,8 +363,40 @@ class MemoryService:
         caller = self.data.get("owner_call")
         return caller(callback) if callable(caller) else callback()
 
-    async def on_session_start(self, _event: HookEvent) -> dict[str, str]:
-        return {"context": self.context_block()}
+    async def _proactive_conversation_context(self) -> str:
+        """Return recent dialogue needed only by proactive Agent runs."""
+
+        try:
+            from .archive import get_recent_conversations
+
+            conversations = str(await get_recent_conversations(days=1) or "")
+        except Exception:
+            logger.exception("Failed to render proactive conversation context")
+            return ""
+        if len(conversations) > 3000:
+            conversations = conversations[-3000:]
+            boundary = conversations.find("\n=== ")
+            if boundary > 100:
+                conversations = conversations[boundary + 1 :]
+        conversations = conversations.strip()
+        if not conversations:
+            return ""
+        header = localized(
+            "## Recent conversation",
+            "## 近期对话",
+            language=self.language,
+        )
+        return header + "\n" + conversations
+
+    async def on_session_start(self, event: HookEvent) -> dict[str, str]:
+        parts = [self.context_block()]
+        details = event.payload if isinstance(event.payload, Mapping) else {}
+        metadata = details.get("metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        if bool(metadata.get("proactive")):
+            parts.append(await self._proactive_conversation_context())
+        context = "\n\n".join(part for part in parts if part).strip()
+        return {"context": context} if context else {}
 
     async def on_context_used(self, event: HookEvent) -> None:
         usage = event.payload
@@ -378,6 +425,7 @@ class MemoryService:
                 workspace_dir=self.workspace,
                 session_title=str(self.data.get("session_title") or ""),
                 round_id=str(details.get("run_id") or ""),
+                language=self.language,
             )
         except Exception:
             logger.exception("Failed to archive conversation from memory Plugin")
@@ -406,6 +454,7 @@ class MemoryService:
                     "id": str(anchor_value.get("model") or details.get("model") or ""),
                     **(dict(anchor_value.get("model_identity") or {}) if isinstance(anchor_value.get("model_identity"), Mapping) else {}),
                 },
+                language=self.language,
             )
         except Exception:
             logger.exception("Could not persist ContextTree memory snapshot")
@@ -524,18 +573,27 @@ class MemoryService:
             logger.exception("Project-memory prompt learning failed")
 
     def trigger_project_learning(self, reason: str, *, node_id: str) -> dict[str, Any]:
+        language = self.language
         if not self.is_main:
             return {
                 "status": "error",
                 "type": "permission_denied",
-                "message": "Only the main Agent can trigger project-memory learning.",
+                "message": localized(
+                    "Only the main Agent can trigger project-memory learning.",
+                    "只有主 Agent 可以触发项目记忆学习。",
+                    language=language,
+                ),
             }
         project_id = self.project_id
         if not project_id:
             return {
                 "status": "error",
                 "type": "not_found",
-                "message": "Project-memory learning is only available in a Workbench project chat.",
+                "message": localized(
+                    "Project-memory learning is only available in a Workbench project chat.",
+                    "项目记忆学习仅可在 Workbench 项目对话中使用。",
+                    language=language,
+                ),
             }
         try:
             from cyrene.workbench.chat_repository import ChatRepository
@@ -545,28 +603,44 @@ class MemoryService:
                 return {
                     "status": "error",
                     "type": "unsupported_chat_kind",
-                    "message": "Only a root Workbench conversation can learn project memory.",
+                    "message": localized(
+                        "Only a root Workbench conversation can learn project memory.",
+                        "只有 Workbench 根对话可以学习项目记忆。",
+                        language=language,
+                    ),
                 }
         except Exception:
             logger.exception("Could not verify project-memory chat kind")
             return {
                 "status": "error",
                 "type": "context_unavailable",
-                "message": "The Workbench conversation could not be verified.",
+                "message": localized(
+                    "The Workbench conversation could not be verified.",
+                    "无法验证当前 Workbench 对话。",
+                    language=language,
+                ),
             }
         anchor_value = self._node_value(node_id)
         if anchor_value.get("role") != "assistant":
             return {
                 "status": "error",
                 "type": "no_completed_context",
-                "message": "Project-memory learning requires the current assistant tree node.",
+                "message": localized(
+                    "Project-memory learning requires the current assistant tree node.",
+                    "项目记忆学习需要当前助手树节点。",
+                    language=language,
+                ),
             }
         messages = self.messages(node_id, include_anchor=False)
         if not messages:
             return {
                 "status": "error",
                 "type": "no_completed_context",
-                "message": "No current Agent context is available.",
+                "message": localized(
+                    "No current Agent context is available.",
+                    "当前没有可用的 Agent 上下文。",
+                    language=language,
+                ),
             }
         self.configure_stores()
         from .project_memory import (
@@ -588,6 +662,7 @@ class MemoryService:
                 "id": str(anchor_value.get("model") or ""),
                 **model_identity,
             },
+            language=language,
         )
         return self._call_owner(
             lambda: schedule_learning(
@@ -635,7 +710,14 @@ def setup_memory(context: PluginSetupContext) -> None:
     from .archive import configure_archive
     from .short_term import init_short_term
 
-    memory_data_directory = Path(str(context.data.get("memory_data_directory") or context.data_directory)).expanduser().resolve()
+    application_memory = context.services.get("memory")
+    memory_data_directory = Path(
+        str(
+            getattr(application_memory, "data_directory", "")
+            or context.data.get("memory_data_directory")
+            or context.data_directory
+        )
+    ).expanduser().resolve()
     init_short_term(memory_data_directory, service.db_path)
     configure_archive(service.db_path)
     service.configure_stores()

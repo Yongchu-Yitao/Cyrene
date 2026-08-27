@@ -660,7 +660,7 @@ async def test_retire_project_memory_tool_is_idempotent(monkeypatch, tmp_path):
     payload = json.loads(result)
     assert payload["status"] == "success"
     assert payload["changed"] is False
-    assert payload["message"] == "Project memory was already retired."
+    assert payload["message"] == "项目记忆已经处于过时状态。"
 
 
 @pytest.mark.asyncio
@@ -834,11 +834,11 @@ def test_serialize_populates_citation_and_history_fields(monkeypatch, tmp_path):
     }
     serialized = memory._serialize(entry)
     assert len(serialized["citations"]) == 2
-    assert serialized["citations"][0]["source_label"]
+    assert serialized["citations"][0]["source_label"] == "agent"
     assert serialized["citations"][0]["snippet"] == "first cite"
     assert len(serialized["history"]) == 3
     assert serialized["history"][0]["action"] == "created"
-    assert serialized["history"][0]["action_label"]
+    assert serialized["history"][0]["action_label"] == "created"
     assert serialized["history"][2]["detail"] == "updated content"
 
 

@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from agent.context import ContextStoreRouter, TreeNotFoundError
 from agent.workbench.chat_runtime import workbench_agent_data_directory
 from cyrene.workbench import store
+from cyrene.workbench.conversation_context_service import AgentContextRepository
 from cyrene.workbench.session_presentation import WorkbenchSessionPresentation
 from route.agent.sessions import register_session_routes
 
@@ -65,12 +66,19 @@ def _seed_context(db_path):
             {
                 "role": "system",
                 "content": "Agent instructions",
-                "_cyrene_subagents": {
-                    "worker_one": {
-                        "task": "Inspect code",
-                        "status": "done",
-                        "result": "ready",
-                        "round_id": "run_one",
+                "_plugin_session_state": {
+                    "cyrene_subagent": {
+                        "child_context_ids": [],
+                        "public_snapshot": {
+                            "subagents": {
+                                "worker_one": {
+                                    "task": "Inspect code",
+                                    "status": "done",
+                                    "result": "ready",
+                                    "round_id": "run_one",
+                                },
+                            },
+                        },
                     }
                 },
             },
@@ -157,9 +165,40 @@ def test_sessions_project_sqlite_chat_and_context_tree(tmp_path):
     assert session["messageCount"] == 2
     assert session["summary"]["total_tokens"] == 30
     assert session["summary"]["toolCalls"] == 1
-    assert session["usedToolPackages"] == ["cyrene_code"]
+    assert session["usedPluginPacks"] == ["cyrene_code"]
     assert session["subagents"][0]["id"] == "worker_one"
     assert session["contextTree"]["treeId"] == "chat_one"
+
+
+def test_agent_context_batch_reads_only_indexed_trees_with_one_router(
+    tmp_path,
+    monkeypatch,
+):
+    db_path = tmp_path / "cyrene.sqlite3"
+    _seed_context(db_path)
+    context_directory = workbench_agent_data_directory(str(db_path)) / "context"
+    counts = {"routers": 0, "trees": []}
+    original_init = ContextStoreRouter.__init__
+    original_get_tree = ContextStoreRouter.get_tree
+
+    def counted_init(self, *args, **kwargs):
+        counts["routers"] += 1
+        original_init(self, *args, **kwargs)
+
+    def counted_get_tree(self, tree_id):
+        counts["trees"].append(tree_id)
+        return original_get_tree(self, tree_id)
+
+    monkeypatch.setattr(ContextStoreRouter, "__init__", counted_init)
+    monkeypatch.setattr(ContextStoreRouter, "get_tree", counted_get_tree)
+
+    states = AgentContextRepository(context_directory).read_many(
+        ("missing_one", "chat_one", "missing_two")
+    )
+
+    assert list(states) == ["chat_one"]
+    assert states["chat_one"]["checkpoint"]["status"] == "completed"
+    assert counts == {"routers": 1, "trees": ["chat_one"]}
 
 
 def test_export_merges_context_tree_activity_and_clear_removes_context(tmp_path):

@@ -51,6 +51,7 @@ function WorkbenchAppModals({
   onCloseEditProject,
   onUpdateProject,
   editMemoryProject,
+  memoryAvailable,
   onCloseEditMemory,
   newTaskOpen,
   onCloseNewTask,
@@ -78,7 +79,7 @@ function WorkbenchAppModals({
         }}
       />
     )}
-    {editMemoryProject && (
+    {memoryAvailable && editMemoryProject && (
       <WorkbenchProjectMemoryModal
         project={editMemoryProject}
         onClose={onCloseEditMemory}

@@ -29,7 +29,7 @@ function wbRecentSessionTabs(projects, chatsByProject, recentOpenedKeys, pinnedK
       items.push({
         id: String(session.id),
         kind: "task",
-        title: String(session.title || "New task"),
+        title: String(session.title || wbT("task.newTask", "New task")),
         projectId: projectId,
         projectName: String(project.name || ""),
         updatedAt: String(session.updatedAt || session.createdAt || ""),
@@ -44,7 +44,7 @@ function wbRecentSessionTabs(projects, chatsByProject, recentOpenedKeys, pinnedK
       items.push({
         id: String(chat.id),
         kind: "chat",
-        title: String(chat.title || "New chat"),
+        title: String(chat.title || wbT("chat.newChat", "New chat")),
         projectId: projectId,
         projectName: String(project.name || ""),
         updatedAt: String(chat.updatedAt || chat.createdAt || ""),
@@ -616,7 +616,7 @@ function wbLiveEventFromSse(data) {
       tool: toolName,
       actor: actor,
       argsPreview: wbArgsPreview(data.args),
-      body: actor + " 调用工具 " + toolName,
+      body: wbT("workbench.activity.toolCall", "{actor} called tool {tool}", { actor: actor, tool: toolName }),
       live: true,
     };
   }
@@ -631,7 +631,9 @@ function wbLiveEventFromSse(data) {
       actor: actor2,
       phase: phase,
       model: String(data.model || ""),
-      body: llmStatus === "started" ? actor2 + " 正在思考…" : actor2 + " 完成一轮思考",
+      body: llmStatus === "started"
+        ? wbT("workbench.activity.thinking", "{actor} is thinking…", { actor: actor2 })
+        : wbT("workbench.activity.thoughtComplete", "{actor} completed a reasoning turn", { actor: actor2 }),
       live: true,
     };
   }
@@ -645,7 +647,7 @@ function wbLiveEventFromSse(data) {
       actor: actor3,
       status: String(data.status || ""),
       body: actor3 + " " + wbSubagentStatusText(data.status)
-        + (data.message ? "：" + String(data.message).slice(0, 180) : (task ? "：" + task.slice(0, 120) : "")),
+        + (data.message ? ": " + String(data.message).slice(0, 180) : (task ? ": " + task.slice(0, 120) : "")),
       live: true,
     };
   }

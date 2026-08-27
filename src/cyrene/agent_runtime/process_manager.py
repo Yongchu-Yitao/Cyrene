@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import importlib
 import json
 import logging
 import os
@@ -25,6 +24,7 @@ from cyrene.agent_runtime.acp_transport import (
     is_valid_bare_command,
 )
 from cyrene.agent_runtime.errors import AgentRuntimeError
+from cyrene.localization import localized
 
 logger = logging.getLogger(__name__)
 
@@ -62,25 +62,24 @@ def _managed_runtime_bin_dir() -> str | None:
 
     ACP adapter shims are ``#!/usr/bin/env node`` wrappers, so the managed
     Node runtime must be visible to the child even when the parent process was
-    launched from a minimal GUI PATH. The npm discovery mirrors
-    ``cyrene.extensions.service._managed_npm_executable`` through a lazy
-    import so the runtime never depends on the extensions package at load
-    time (and vice versa). The result is memoized per process: it only feeds
-    newly spawned children, so re-running the discovery (which touches
-    extension settings and the filesystem) on every turn would be wasted work.
+    launched from a minimal GUI PATH. The optional environment Plugin exposes
+    this through the application service port. The result is memoized per
+    process because it only affects newly spawned children.
     """
     global _MANAGED_BIN_CHECKED, _MANAGED_BIN_RESULT
     if _MANAGED_BIN_CHECKED:
         return _MANAGED_BIN_RESULT
     try:
-        # Dynamic import: extensions.service statically imports this module,
-        # so a direct import would create an import cycle.
-        npm = importlib.import_module("cyrene.extensions.service")._managed_npm_executable()
+        from agent.plugin import active_plugin_service
+
+        service = active_plugin_service("extensions")
+        provider = getattr(service, "managed_runtime_bin_directory", None)
+        managed_bin = str(provider() or "") if callable(provider) else ""
     except Exception:
         logger.debug("managed npm runtime unavailable for ACP PATH injection", exc_info=True)
-        npm = None
+        managed_bin = ""
     _MANAGED_BIN_CHECKED = True
-    _MANAGED_BIN_RESULT = str(Path(npm).resolve().parent) if npm else None
+    _MANAGED_BIN_RESULT = managed_bin or None
     return _MANAGED_BIN_RESULT
 
 
@@ -161,33 +160,45 @@ class AcpProcessManager:
         if not isinstance(installation, dict):
             raise AgentRuntimeError(
                 "dependency_missing",
-                "agent installation record is missing",
+                localized("agent installation record is missing", "缺少智能体安装记录"),
             )
         driver = str(installation.get("driver") or "").strip()
         if driver and driver != ACP_STDIO_DRIVER:
             raise AgentRuntimeError(
                 "protocol_mismatch",
-                f"installation driver {driver!r} is not {ACP_STDIO_DRIVER!r}",
+                localized(
+                    f"installation driver {driver!r} is not {ACP_STDIO_DRIVER!r}",
+                    f"安装驱动 {driver!r} 不是 {ACP_STDIO_DRIVER!r}",
+                ),
                 detail={"driver": driver, "expected": ACP_STDIO_DRIVER},
             )
         if installation.get("enabled") is False:
             raise AgentRuntimeError(
                 "agent_disabled",
-                "agent is disabled; enable it before connecting",
+                localized(
+                    "agent is disabled; enable it before connecting",
+                    "智能体已停用，请先启用再连接",
+                ),
                 detail={"installationId": installation.get("installation_id")},
             )
         install_state = str(installation.get("install_state") or "installed")
         if install_state != "installed":
             raise AgentRuntimeError(
                 "dependency_missing",
-                f"agent is not installed (install_state={install_state!r})",
+                localized(
+                    f"agent is not installed (install_state={install_state!r})",
+                    f"智能体尚未安装（install_state={install_state!r}）",
+                ),
                 detail={"install_state": install_state},
             )
         runtime_state = str(installation.get("runtime_state") or "").strip().lower()
         if runtime_state in {"error", "crashed", "failed"}:
             raise AgentRuntimeError(
                 "agent_crashed",
-                f"agent runtime is in a failed state ({runtime_state!r}); restart the agent",
+                localized(
+                    f"agent runtime is in a failed state ({runtime_state!r}); restart the agent",
+                    f"智能体运行时处于失败状态（{runtime_state!r}），请重启智能体",
+                ),
                 detail={"runtime_state": runtime_state},
                 retryable=True,
             )
@@ -195,7 +206,10 @@ class AcpProcessManager:
         if not is_valid_bare_command(command):
             raise AgentRuntimeError(
                 "dependency_missing",
-                "agent command is not a bare executable name",
+                localized(
+                    "agent command is not a bare executable name",
+                    "智能体命令不是有效的可执行文件名",
+                ),
                 detail={"command": command},
             )
         managed_path = str(installation.get("managed_path") or "").strip()
@@ -209,35 +223,41 @@ class AcpProcessManager:
         if managed_path and not managed_command_available and not path_command:
             raise AgentRuntimeError(
                 "dependency_missing",
-                f"Agent executable {command!r} is unavailable in its managed install and on PATH",
+                localized(
+                    f"Agent executable {command!r} is unavailable in its managed install and on PATH",
+                    f"智能体可执行文件 {command!r} 在托管安装目录和 PATH 中均不可用",
+                ),
                 detail={"command": command},
             )
-        # Recommended npm agents may declare a runtime dependency (e.g. pi-acp
-        # spawns the ``pi`` executable); without its shim the adapter fails at
-        # session/new with a cryptic command-not-found, so treat the install as
-        # incomplete rather than spawning it.
-        agent_id = str(installation.get("agent_id") or "").strip()
-        version = str(installation.get("version") or "").strip()
-        if agent_id and version:
-            try:
-                from cyrene.extensions.catalog import RECOMMENDED_AGENTS
-            except ImportError:
-                RECOMMENDED_AGENTS = {}
-            profile = RECOMMENDED_AGENTS.get(agent_id) or {}
-            dependency = profile.get("dependency") if isinstance(profile.get("dependency"), dict) else {}
-            dependency_bin = str(dependency.get("bin") or "")
-            if dependency_bin:
-                shim_name = dependency_bin + (".cmd" if os.name == "nt" else "")
-                managed_dependency_available = bool(
-                    managed_path
-                    and (Path(managed_path).parent / shim_name).is_file()
+        # The owning Plugin records executable dependencies declaratively.
+        # The runtime validates those names without knowing which Plugin or
+        # catalog produced the installation record.
+        raw_dependencies = installation.get("runtime_dependencies")
+        dependencies = raw_dependencies if isinstance(raw_dependencies, list) else []
+        for raw_dependency in dependencies:
+            dependency_bin = str(raw_dependency or "").strip()
+            if not is_valid_bare_command(dependency_bin):
+                raise AgentRuntimeError(
+                    "dependency_missing",
+                    localized(
+                        "Agent runtime dependency is not a bare executable name",
+                        "智能体运行时依赖不是有效的可执行文件名",
+                    ),
+                    detail={"command": command, "dependency": dependency_bin},
                 )
-                if not managed_dependency_available and not self._which(dependency_bin, search_path):
-                    raise AgentRuntimeError(
-                        "dependency_missing",
+            shim_name = dependency_bin + (".cmd" if os.name == "nt" else "")
+            managed_dependency_available = bool(
+                managed_path and (Path(managed_path).parent / shim_name).is_file()
+            )
+            if not managed_dependency_available and not self._which(dependency_bin, search_path):
+                raise AgentRuntimeError(
+                    "dependency_missing",
+                    localized(
                         f"Agent runtime dependency {dependency_bin!r} is unavailable in its managed install and on PATH",
-                        detail={"command": command, "dependency": dependency_bin},
-                    )
+                        f"智能体运行时依赖 {dependency_bin!r} 在托管安装目录和 PATH 中均不可用",
+                    ),
+                    detail={"command": command, "dependency": dependency_bin},
+                )
 
     def _which(self, command: str, search_path: str) -> str | None:
         """Resolve a bare command with the same PATH policy used for spawning."""
@@ -323,7 +343,10 @@ class AcpProcessManager:
         if not installation_id:
             raise AgentRuntimeError(
                 "dependency_missing",
-                "installation record has no installation_id",
+                localized(
+                    "installation record has no installation_id",
+                    "安装记录缺少 installation_id",
+                ),
             )
         self.validate_installation(installation)
         args = self.resolve_args(installation)

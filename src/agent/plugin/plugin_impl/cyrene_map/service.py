@@ -15,6 +15,11 @@ from uuid import uuid4
 class MapServiceError(ValueError):
     """A map mutation could not be applied to the current session."""
 
+    def __init__(self, message: str, *, code: str, pin_name: str = "") -> None:
+        super().__init__(message)
+        self.code = str(code or "map_mutation_failed")
+        self.pin_name = str(pin_name or "")
+
 
 def map_database(data_directory: str | Path) -> Path:
     root = Path(data_directory).expanduser().resolve()
@@ -26,9 +31,32 @@ class MapService:
 
     def __init__(self, database: str | Path) -> None:
         self.database = Path(database).expanduser().resolve()
-        self.database.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._initialize()
+        self._initialized = False
+
+    @property
+    def initialized(self) -> bool:
+        return self._initialized
+
+    def initialize(self) -> None:
+        """Create the Plugin-owned store when the owning pack starts."""
+
+        with self._lock:
+            if self._initialized:
+                return
+            self.database.parent.mkdir(parents=True, exist_ok=True)
+            self._initialize()
+            self._initialized = True
+
+    def shutdown(self) -> None:
+        """Mark this attachment inactive after its pack is disabled."""
+
+        with self._lock:
+            self._initialized = False
+
+    def _require_initialized(self) -> None:
+        if not self._initialized:
+            raise RuntimeError("MapService has not been initialized")
 
     @staticmethod
     def _session_key(session_id: str) -> str:
@@ -115,6 +143,7 @@ class MapService:
         )
 
     def snapshot(self, session_id: str = "") -> dict[str, list[dict[str, Any]]]:
+        self._require_initialized()
         with self._lock, self._connection() as connection:
             return deepcopy(self._read_locked(connection, session_id))
 
@@ -127,9 +156,13 @@ class MapService:
         name: str,
         note: str = "",
     ) -> dict[str, Any]:
+        self._require_initialized()
         normalized_name = str(name or "").strip()
         if not normalized_name:
-            raise MapServiceError("name cannot be empty")
+            raise MapServiceError(
+                "name cannot be empty",
+                code="map_pin_name_required",
+            )
         with self._lock, self._connection() as connection:
             document = self._read_locked(connection, session_id)
             pin = {
@@ -153,6 +186,7 @@ class MapService:
         transport: str = "",
         note: str = "",
     ) -> dict[str, Any]:
+        self._require_initialized()
         origin = str(from_name or "").strip()
         destination = str(to_name or "").strip()
         with self._lock, self._connection() as connection:
@@ -163,9 +197,17 @@ class MapService:
                 if str(pin.get("name") or "")
             }
             if origin not in pin_names:
-                raise MapServiceError(f"未找到起点标记「{origin}」")
+                raise MapServiceError(
+                    f"Origin pin was not found: {origin}",
+                    code="map_origin_not_found",
+                    pin_name=origin,
+                )
             if destination not in pin_names:
-                raise MapServiceError(f"未找到终点标记「{destination}」")
+                raise MapServiceError(
+                    f"Destination pin was not found: {destination}",
+                    code="map_destination_not_found",
+                    pin_name=destination,
+                )
             route = {
                 "id": f"route_{uuid4().hex[:8]}",
                 "from_name": origin,
@@ -176,6 +218,33 @@ class MapService:
             document["routes"].append(route)
             self._write_locked(connection, session_id, document)
             return {"route": deepcopy(route), **deepcopy(document)}
+
+    def storage_paths(self) -> dict[str, tuple[Path, ...]]:
+        """Expose the map pack's durable directory to storage settings."""
+
+        return {"maps": (self.database.parent,)}
+
+    def backup_sources(self) -> dict[str, tuple[tuple[Path, str], ...]]:
+        """Contribute the complete durable map store to portable backups."""
+
+        return {
+            "directories": (
+                (self.database.parent, "data/plugin_data/cyrene_map"),
+            ),
+        }
+
+    @staticmethod
+    def editable_env_keys() -> dict[str, dict[str, object]]:
+        """Publish the map provider credential only while this pack is active."""
+
+        from cyrene.localization import localized
+
+        return {
+            "AMAP_API_KEY": {
+                "label": localized("Amap API key", "高德地图 API 密钥"),
+                "masked": True,
+            },
+        }
 
 
 __all__ = ["MapService", "MapServiceError", "map_database"]

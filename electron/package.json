@@ -159,6 +159,7 @@
       "browser-target.js",
       "agent-cursor.js",
       "terminal-lifecycle-soak.js",
+      "rotating-log.js",
       "preload.js",
       "browser-chat-overlay-preload.js",
       "browser-tab-picker-preload.js",

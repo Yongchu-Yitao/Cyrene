@@ -13,8 +13,9 @@ Namespace = Literal["runtime", "desktop", "appearance", "profile", "shortcuts"]
 _NAMESPACES = frozenset({"runtime", "desktop", "appearance", "profile", "shortcuts"})
 
 NON_MODEL_SETTINGS_TABS = (
-    "general", "channels", "remote", "agents", "appearance", "capabilities",
-    "skills", "shortcuts", "search", "data", "budget", "about",
+    "general", "channels", "remote", "agents", "appearance", "voice",
+    "media", "plugin-registry", "integrations",
+    "shortcuts", "search", "data", "budget", "about",
 )
 AGENT_VISIBLE_SETTINGS_TABS = ("models",) + NON_MODEL_SETTINGS_TABS
 
@@ -92,6 +93,20 @@ class SettingControlSpec:
     secret: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class PluginSettingsContribution:
+    """Typed settings descriptors published by one application Plugin pack."""
+
+    specs: tuple[SettingSpec, ...] = ()
+    controls: tuple[SettingControlSpec, ...] = ()
+
+    def setting_specs(self) -> tuple[SettingSpec, ...]:
+        return self.specs
+
+    def setting_control_specs(self) -> tuple[SettingControlSpec, ...]:
+        return self.controls
+
+
 def _spec(
     key: str,
     value_type: str,
@@ -114,46 +129,31 @@ def _spec(
     )
 
 
+def plugin_setting_spec(
+    key: str,
+    value_type: str,
+    default: Any,
+    **options: Any,
+) -> SettingSpec:
+    """Build a setting descriptor without exposing core registry internals."""
+
+    return _spec(key, value_type, default, **options)
+
+
 SETTING_SPECS: tuple[SettingSpec, ...] = (
-    _spec("spawn_policy", "string", "conservative", tab="agents", enum=("aggressive", "conservative", "off"), apply_mode="next_run"),
-    _spec("heartbeat_interval", "integer", 1800, tab="agents", minimum=60, maximum=86400),
-    _spec("background_skill_learning", "boolean", True, tab="agents"),
-    _spec("agent_proactive", "boolean", True, tab="agents", apply_mode="next_run"),
     _spec("app_language", "string", "", agent=True, risk="R1", enum=("", "en", "zh")),
     _spec("timezone", "string", "Asia/Shanghai", agent=True, risk="R1", enum=tuple(sorted(SUPPORTED_TIMEZONES))),
     _spec("performance_mode", "boolean", False, tab="appearance"),
-    _spec("external_agent_proxy_enabled", "boolean", False, tab="general", apply_mode="next_run"),
-    _spec("external_agent_proxy_url", "string", "", tab="general", apply_mode="next_run"),
-    _spec("external_agent_proxy_port", "integer", 7897, tab="general", minimum=1, maximum=65535, apply_mode="next_run"),
-    _spec("proxy_search_enabled", "boolean", False, tab="general", apply_mode="next_run"),
-    _spec("proxy_browser_enabled", "boolean", False, tab="general", apply_mode="immediate"),
-    _spec("proxy_extensions_enabled", "boolean", False, tab="general", apply_mode="next_run"),
-    _spec("notify_telegram", "boolean", True, tab="channels", agent=True, risk="R1"),
-    _spec("notify_wechat", "boolean", True, tab="channels", agent=True, risk="R1"),
     _spec("redact_secrets", "boolean", True, tab="data", readable=True),
     _spec("beta_updates", "boolean", False, tab="about"),
     _spec("auto_update", "boolean", True, tab="about"),
     _spec("budget_enabled", "boolean", False, tab="budget"),
-    _spec("codex_budget_enabled", "boolean", True, tab="budget"),
     _spec("budget_monthly", "number", 50.0, tab="budget", minimum=0, maximum=1_000_000),
     _spec("budget_currency", "string", "CNY", tab="budget", enum=("CNY", "USD")),
     _spec("budget_action", "string", "warn", tab="budget", enum=("warn", "block")),
     _spec("budget_start_day", "integer", 1, tab="budget", minimum=1, maximum=28),
-    _spec("subagent_execution_max_tool_calls", "integer", 200, tab="agents", minimum=1, maximum=5000),
-    _spec("subagent_execution_max_wall_seconds", "integer", 1800, tab="agents", minimum=30, maximum=86400),
-    _spec("subagent_execution_no_progress_turns", "integer", 3, tab="agents", minimum=1, maximum=20),
-    _spec("subagent_execution_checkpoint_calls", "integer", 20, tab="agents", minimum=1, maximum=500),
-    _spec("subagent_execution_max_cost_usd", "number", 5.0, tab="agents", minimum=0, maximum=1000),
-    _spec("subagent_execution_max_context_tokens", "integer", 0, tab="agents", minimum=0, maximum=4_000_000),
-    _spec("subagent_discussion_max_rounds", "integer", 5, tab="agents", minimum=1, maximum=50),
-    _spec("subagent_discussion_max_messages_per_agent", "integer", 4, tab="agents", minimum=1, maximum=50),
-    _spec("subagent_discussion_max_total_messages", "integer", 20, tab="agents", minimum=1, maximum=500),
-    _spec("subagent_discussion_max_message_chars", "integer", 2000, tab="agents", minimum=100, maximum=20000),
-    _spec("subagent_discussion_max_wall_seconds", "integer", 600, tab="agents", minimum=30, maximum=86400),
-    _spec("subagent_discussion_max_tool_calls", "integer", 50, tab="agents", minimum=1, maximum=1000),
-    _spec("subagent_discussion_no_new_info_rounds", "integer", 2, tab="agents", minimum=1, maximum=20),
-    _spec("enabled_plugins", "boolean_map", {}, tab="capabilities"),
-    _spec("enabled_plugin_packs", "boolean_map", {}, tab="capabilities", apply_mode="next_run"),
+    _spec("enabled_plugins", "boolean_map", {}, tab="plugin-registry"),
+    _spec("enabled_plugin_packs", "boolean_map", {}, tab="plugin-registry"),
     _spec("theme", "string", "system", namespace="appearance", tab="appearance", agent=True, risk="R1", enum=("system", "light", "dark")),
     _spec("accent", "string", "", namespace="appearance", tab="appearance", agent=True, risk="R1"),
     _spec("text_scale", "number", 1.0, namespace="appearance", tab="appearance", agent=True, risk="R1", minimum=0.8, maximum=1.4),
@@ -180,33 +180,10 @@ SPEC_BY_KEY = {item.key: item for item in SETTING_SPECS}
 
 
 SETTING_CONTROL_SPECS: tuple[SettingControlSpec, ...] = (
-    SettingControlSpec("models.connections", "models", "current_ui", "cyrene.ui.inspect", "R2"),
-    SettingControlSpec("models.credentials", "models", "current_ui", "cyrene.ui.type", "R3", secret=True),
-    SettingControlSpec("models.profiles", "models", "current_ui", "cyrene.ui.inspect", "R2"),
-    SettingControlSpec("models.routes", "models", "current_ui", "cyrene.ui.inspect", "R2", "next_run"),
-    SettingControlSpec("models.oauth", "models", "user_ceremony", "cyrene.oauth", "R3"),
     SettingControlSpec("general.desktop_notifications", "general", "current_ui", "cyrene.ui.inspect", "R2"),
-    SettingControlSpec("general.map_provider", "general", "current_ui", "cyrene.ui.inspect", "R1"),
-    SettingControlSpec("general.amap_api_key", "general", "user_ceremony", "cyrene.secret.input", "R3", secret=True),
-    SettingControlSpec("general.zotero", "general", "current_ui", "cyrene.ui.inspect", "R2"),
-    SettingControlSpec("general.zotero_test", "general", "current_ui", "cyrene.ui.inspect", "R2"),
-    SettingControlSpec("general.zotero_import", "general", "current_ui", "cyrene.ui.inspect", "R2"),
-    SettingControlSpec("channels.telegram_token", "channels", "user_ceremony", "cyrene.secret.input", "R3", secret=True),
-    SettingControlSpec("channels.wechat_login", "channels", "user_ceremony", "cyrene.ui.inspect", "R3"),
-    SettingControlSpec("channels.wechat_runtime", "channels", "current_ui", "cyrene.ui.inspect", "R2"),
-    SettingControlSpec("remote.service", "remote", "existing_capability", "cyrene_remote", "R2"),
-    SettingControlSpec("remote.pairing", "remote", "user_ceremony", "cyrene_remote", "R3", secret=True),
-    SettingControlSpec("remote.peer_grants", "remote", "existing_capability", "cyrene_remote", "R3"),
-    SettingControlSpec("agents.soul", "agents", "current_ui", "cyrene.ui.inspect", "R2"),
-    SettingControlSpec("capabilities.voice_settings", "capabilities", "current_ui", "cyrene.ui.inspect", "R2"),
-    SettingControlSpec("capabilities.voice_profile", "capabilities", "user_ceremony", "cyrene.file_picker", "R3"),
-    SettingControlSpec("capabilities.plugin_packs", "capabilities", "direct", "cyrene.settings.update", "R2", "next_run"),
-    SettingControlSpec("capabilities.mcp_servers", "capabilities", "existing_capability", "cyrene_skills", "R2", "immediate"),
-    SettingControlSpec("skills.installed", "skills", "existing_capability", "cyrene_skills", "R2"),
-    SettingControlSpec("skills.install_picker", "skills", "user_ceremony", "cyrene.file_picker", "R2"),
+    SettingControlSpec("plugin-registry.plugin_packs", "plugin-registry", "direct", "cyrene.settings.update", "R2", "next_run"),
     SettingControlSpec("shortcuts.workbench_bindings", "shortcuts", "direct", "cyrene.settings.update", "R2"),
     SettingControlSpec("shortcuts.quick_chat", "shortcuts", "direct", "cyrene.settings.update", "R2"),
-    SettingControlSpec("search.providers", "search", "current_ui", "cyrene.ui.inspect", "R3", secret=True),
     SettingControlSpec("data.backup_export", "data", "current_ui", "cyrene.ui.inspect", "R2"),
     SettingControlSpec("data.restore_reset", "data", "current_ui", "cyrene.ui.inspect", "R3"),
     SettingControlSpec("data.file_destination", "data", "user_ceremony", "cyrene.file_picker", "R2"),
@@ -225,8 +202,67 @@ if len(SPEC_BY_KEY) != len(SETTING_SPECS) or len(CONTROL_BY_ID) != len(SETTING_C
     raise RuntimeError("settings registry identifiers must be unique")
 if any(item.tab not in AGENT_VISIBLE_SETTINGS_TABS for item in SETTING_SPECS + SETTING_CONTROL_SPECS):
     raise RuntimeError("every settings registry entry must belong to an agent-visible tab")
-if {item.tab for item in SETTING_SPECS + SETTING_CONTROL_SPECS} != set(AGENT_VISIBLE_SETTINGS_TABS):
-    raise RuntimeError("settings registry must cover every agent-visible tab")
+
+
+def _active_plugin_setting_contributions(
+    provider_name: str,
+    expected_type: type,
+) -> tuple[Any, ...]:
+    """Collect descriptors only from currently active application packs."""
+
+    try:
+        from agent.plugin import active_plugin_application_host
+
+        host = active_plugin_application_host()
+        services = host.active_services.values() if host is not None else ()
+    except Exception:
+        return ()
+    contributions: list[Any] = []
+    seen: set[int] = set()
+    for service in services:
+        if id(service) in seen:
+            continue
+        seen.add(id(service))
+        provider = getattr(service, provider_name, None)
+        if not callable(provider):
+            continue
+        values = provider()
+        if not isinstance(values, (tuple, list)) or any(
+            not isinstance(item, expected_type) for item in values
+        ):
+            raise TypeError(
+                f"Plugin service returned invalid {provider_name} contribution"
+            )
+        contributions.extend(values)
+    return tuple(contributions)
+
+
+def setting_specs() -> tuple[SettingSpec, ...]:
+    specs = SETTING_SPECS + _active_plugin_setting_contributions(
+        "setting_specs", SettingSpec
+    )
+    keys = [item.key for item in specs]
+    if len(keys) != len(set(keys)):
+        raise RuntimeError("settings registry keys must be unique")
+    if any(item.tab not in AGENT_VISIBLE_SETTINGS_TABS for item in specs):
+        raise RuntimeError("settings registry contains an unknown settings tab")
+    return specs
+
+
+def setting_control_specs() -> tuple[SettingControlSpec, ...]:
+    controls = SETTING_CONTROL_SPECS + _active_plugin_setting_contributions(
+        "setting_control_specs", SettingControlSpec
+    )
+    identities = [item.setting_id for item in controls]
+    if len(identities) != len(set(identities)):
+        raise RuntimeError("settings control identifiers must be unique")
+    if any(item.tab not in AGENT_VISIBLE_SETTINGS_TABS for item in controls):
+        raise RuntimeError("settings registry contains an unknown settings tab")
+    return controls
+
+
+def setting_spec_by_key() -> dict[str, SettingSpec]:
+    return {item.key: item for item in setting_specs()}
 
 
 def _normalize(spec: SettingSpec, value: Any) -> Any:
@@ -362,7 +398,9 @@ def _validate_namespace(namespace: Namespace | str | None) -> None:
 
 def describe(namespace: Namespace | None = None) -> dict[str, Any]:
     _validate_namespace(namespace)
-    specs = [item for item in SETTING_SPECS if namespace is None or item.namespace == namespace]
+    all_specs = setting_specs()
+    all_controls = setting_control_specs()
+    specs = [item for item in all_specs if namespace is None or item.namespace == namespace]
     rows: list[dict[str, Any]] = []
     for item in specs:
         row = asdict(item)
@@ -375,15 +413,25 @@ def describe(namespace: Namespace | None = None) -> dict[str, Any]:
         if item.secret:
             row["default"] = None
         rows.append(row)
-    controls = [asdict(item) for item in SETTING_CONTROL_SPECS] if namespace is None else []
-    covered_tabs = AGENT_VISIBLE_SETTINGS_TABS if namespace is None else tuple(sorted({item.tab for item in specs}))
+    controls = [asdict(item) for item in all_controls] if namespace is None else []
+    visible_tabs = {item.tab for item in all_specs + all_controls}
+    covered_tabs = (
+        tuple(tab for tab in AGENT_VISIBLE_SETTINGS_TABS if tab in visible_tabs)
+        if namespace is None
+        else tuple(sorted({item.tab for item in specs}))
+    )
+    excluded_tabs = (
+        [tab for tab in AGENT_VISIBLE_SETTINGS_TABS if tab not in visible_tabs]
+        if namespace is None
+        else []
+    )
     return {
         "schema_version": 2,
         "revision": config_store.get_settings_revision(),
         "settings": rows,
         "controls": controls,
         "covered_tabs": list(covered_tabs),
-        "excluded_tabs": [],
+        "excluded_tabs": excluded_tabs,
         "shortcut_defaults": {
             action: list(keys) for action, keys in SHORTCUT_DEFAULTS.items()
         } if namespace in {None, "shortcuts"} else {},
@@ -396,7 +444,7 @@ def read_public(namespace: Namespace | None = None) -> dict[str, Any]:
         raise SettingsForbiddenError("desktop settings must be read from the Electron host settings store")
     saved = config_store.get_all_settings()
     values: dict[str, Any] = {}
-    for spec in SETTING_SPECS:
+    for spec in setting_specs():
         if not spec.readable or (namespace is not None and spec.namespace != namespace):
             continue
         value = deepcopy(saved.get(spec.key, spec.default))
@@ -425,8 +473,9 @@ def validate_changes(
 
     normalized: dict[str, Any] = {}
     specs: dict[str, SettingSpec] = {}
+    specs_by_key = setting_spec_by_key()
     for key, value in changes.items():
-        spec = SPEC_BY_KEY.get(str(key))
+        spec = specs_by_key.get(str(key))
         if spec is None or spec.namespace != namespace:
             raise SettingsValidationError(f"unknown {namespace} setting: {key}")
         if actor == "agent" and not spec.writable_by_agent and spec.risk not in approved_risks:
@@ -561,6 +610,7 @@ def update(
 __all__ = [
     "SETTING_SPECS", "SPEC_BY_KEY", "SETTING_CONTROL_SPECS", "CONTROL_BY_ID",
     "AGENT_VISIBLE_SETTINGS_TABS", "NON_MODEL_SETTINGS_TABS", "SHORTCUT_DEFAULTS", "SettingSpec", "SettingControlSpec", "SettingsForbiddenError",
-    "SettingsServiceError", "SettingsValidationError", "describe", "read_public", "update",
+    "PluginSettingsContribution", "SettingsServiceError", "SettingsValidationError", "describe", "plugin_setting_spec", "read_public", "update",
+    "setting_control_specs", "setting_spec_by_key", "setting_specs",
     "validate_changes",
 ]

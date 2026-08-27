@@ -42,6 +42,7 @@ from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
+from cyrene.localization import app_language, normalize_language
 from cyrene.runtime.version import get_version_label
 
 
@@ -72,6 +73,12 @@ _CONTEXT_LAYER_LABELS = {
     "messages": "对话消息",
 }
 
+_CONTEXT_LAYER_LABELS_EN = {
+    "system_prefix": "System prefix",
+    "ephemeral": "Ephemeral injection",
+    "messages": "Conversation messages",
+}
+
 _CONTEXT_BLOCK_LABELS = {
     "main.system.base": "基础指令",
     "main.system.effective": "系统提示",
@@ -98,12 +105,46 @@ _CONTEXT_BLOCK_LABELS = {
     "spawn_policy.deep-compare": "深度对比策略",
 }
 
+_CONTEXT_BLOCK_LABELS_EN = {
+    "main.system.base": "Base instructions",
+    "main.system.effective": "System prompt",
+    "main.system.static_extra": "Task framework",
+    "main.system.language": "Language preference",
+    "mode.plan.discovery": "Plan mode discovery",
+    "memory.context": "Memory context",
+    "skills.installed": "Enabled skills",
+    "skills.learned": "Learned skills",
+    "runtime.workspace_scope": "Workspace constraints",
+    "runtime.permission": "Permission mode",
+    "runtime.project_context": "Project memory",
+    "runtime.session_scope": "Session labels",
+    "runtime.spawn_policy": "Subagent policy",
+    "runtime.goal": "Goal prompt",
+    "ephemeral.run": "Ephemeral injection",
+    "short_term.restored": "Short-term memory",
+    "spawn_policy.conservative": "Conservative policy",
+    "spawn_policy.default": "Default policy",
+    "spawn_policy.off": "Subagents disabled",
+    "spawn_policy.deep-research": "Deep research policy",
+    "spawn_policy.help-me-decide": "Decision support policy",
+    "spawn_policy.learning-plan": "Learning plan policy",
+    "spawn_policy.deep-compare": "Deep comparison policy",
+}
+
 _CONTEXT_MESSAGE_LABELS = {
     "compacted": "压缩历史",
     "system": "系统",
     "user": "用户",
     "assistant": "助手",
     "tool": "工具",
+}
+
+_CONTEXT_MESSAGE_LABELS_EN = {
+    "compacted": "Compacted history",
+    "system": "System",
+    "user": "User",
+    "assistant": "Assistant",
+    "tool": "Tool",
 }
 
 _CONTEXT_MESSAGE_COLORS = {
@@ -133,15 +174,28 @@ class ChatClientError(RuntimeError):
 class NdjsonDecoder:
     """Incrementally decode newline-delimited JSON from arbitrary byte chunks."""
 
-    def __init__(self, *, max_line_bytes: int = 4 * 1024 * 1024) -> None:
+    def __init__(
+        self,
+        *,
+        max_line_bytes: int = 4 * 1024 * 1024,
+        language: Any = None,
+    ) -> None:
         self._buffer = bytearray()
         self.max_line_bytes = int(max_line_bytes)
+        self.language = app_language(language)
+
+    def _t(self, en: str, zh: str, /, **values: Any) -> str:
+        template = zh if self.language == "zh" else en
+        return template.format(**values)
 
     def feed(self, chunk: bytes) -> list[dict[str, Any]]:
         if chunk:
             self._buffer.extend(chunk)
         if len(self._buffer) > self.max_line_bytes and b"\n" not in self._buffer:
-            raise ChatClientError("NDJSON event exceeded the 4 MiB safety limit.")
+            raise ChatClientError(self._t(
+                "The NDJSON event exceeded the 4 MiB safety limit.",
+                "NDJSON 事件超过了 4 MiB 安全上限。",
+            ))
         events: list[dict[str, Any]] = []
         while True:
             newline = self._buffer.find(b"\n")
@@ -158,14 +212,20 @@ class NdjsonDecoder:
         self._buffer.clear()
         return [self._decode(raw)] if raw else []
 
-    @staticmethod
-    def _decode(raw: bytes) -> dict[str, Any]:
+    def _decode(self, raw: bytes) -> dict[str, Any]:
         try:
             value = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ChatClientError(f"Invalid NDJSON event: {exc}") from exc
+            raise ChatClientError(self._t(
+                "Invalid NDJSON event: {error}",
+                "NDJSON 事件无效：{error}",
+                error=exc,
+            )) from exc
         if not isinstance(value, dict):
-            raise ChatClientError("Invalid NDJSON event: expected an object.")
+            raise ChatClientError(self._t(
+                "Invalid NDJSON event: expected an object.",
+                "NDJSON 事件无效：应为 Object。",
+            ))
         return value
 
 
@@ -190,6 +250,7 @@ class ChatTransport:
         project_id: str = "",
         title: str = "",
         auth_token: str = "",
+        language: Any = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.base_url = str(base_url).rstrip("/")
@@ -198,21 +259,36 @@ class ChatTransport:
         self.project_id = str(project_id or "").strip()
         self.title = str(title or "").strip()
         self.auth_token = str(auth_token or os.environ.get("CYRENE_AUTH_TOKEN") or "").strip()
+        self.language = app_language(language)
         self._client = client
         self._owns_client = client is None
 
+    def set_language(self, language: Any) -> None:
+        self.language = app_language(language)
+
+    def _t(self, en: str, zh: str, /, **values: Any) -> str:
+        template = zh if self.language == "zh" else en
+        return template.format(**values)
+
     async def __aenter__(self) -> "ChatTransport":
         if self._client is None:
-            self._client = httpx.AsyncClient(
-                base_url=self.base_url,
-                timeout=httpx.Timeout(self.timeout, connect=10.0),
-                trust_env=False,
-                headers=(
-                    {"X-Cyrene-Token": self.auth_token}
-                    if self.auth_token
-                    else None
-                ),
-            )
+            try:
+                self._client = httpx.AsyncClient(
+                    base_url=self.base_url,
+                    timeout=httpx.Timeout(self.timeout, connect=10.0),
+                    trust_env=False,
+                    headers=(
+                        {"X-Cyrene-Token": self.auth_token}
+                        if self.auth_token
+                        else None
+                    ),
+                )
+            except (TypeError, ValueError) as exc:
+                raise ChatClientError(self._t(
+                    "Invalid Cyrene daemon URL or timeout: {error}",
+                    "Cyrene Daemon 地址或超时设置无效：{error}",
+                    error=exc,
+                )) from exc
         return self
 
     async def __aexit__(self, _exc_type, _exc, _traceback) -> None:
@@ -222,11 +298,14 @@ class ChatTransport:
 
     @property
     def session_label(self) -> str:
-        return self.chat_id or "new conversation"
+        return self.chat_id or self._t("new conversation", "新对话")
 
     def _require_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            raise RuntimeError("ChatTransport must be used as an async context manager.")
+            raise RuntimeError(self._t(
+                "ChatTransport must be used as an async context manager.",
+                "ChatTransport 必须作为异步上下文管理器使用。",
+            ))
         return self._client
 
     async def health(self) -> dict[str, Any]:
@@ -259,11 +338,18 @@ class ChatTransport:
     async def use_chat(self, chat_id: str) -> dict[str, Any]:
         target = str(chat_id or "").strip()
         if not target:
-            raise ChatClientError("Chat ID is required.")
+            raise ChatClientError(self._t(
+                "A Chat ID is required.",
+                "必须提供 Chat ID。",
+            ))
         payload = await self._json("GET", f"/api/workbench/chats/{target}")
         chat = payload.get("chat") if isinstance(payload, dict) else None
         if not isinstance(chat, dict):
-            raise ChatClientError(f"Conversation {target!r} was not found.")
+            raise ChatClientError(self._t(
+                "Conversation {target!r} was not found.",
+                "未找到对话 {target!r}。",
+                target=target,
+            ))
         self.chat_id = target
         self.project_id = str(chat.get("projectId") or self.project_id)
         return chat
@@ -276,7 +362,10 @@ class ChatTransport:
             if isinstance(default_project, dict):
                 target_project = str(default_project.get("id") or "").strip()
         if not target_project:
-            raise ChatClientError("No Workbench project is available for a new conversation.")
+            raise ChatClientError(self._t(
+                "No Workbench project is available for a new conversation.",
+                "没有可用于新对话的 Workbench Project。",
+            ))
         payload = await self._json(
             "POST",
             "/api/workbench/chats",
@@ -287,7 +376,10 @@ class ChatTransport:
         )
         chat = payload.get("chat") if isinstance(payload, dict) else None
         if not isinstance(chat, dict) or not str(chat.get("id") or ""):
-            raise ChatClientError("Daemon did not return the new conversation.")
+            raise ChatClientError(self._t(
+                "The daemon did not return the new conversation.",
+                "Daemon 未返回新对话。",
+            ))
         self.chat_id = str(chat["id"])
         self.project_id = str(chat.get("projectId") or target_project)
         return chat
@@ -354,7 +446,10 @@ class ChatTransport:
     ) -> StreamResult:
         question_id = str(question.get("id") or question.get("question_id") or "").strip()
         if not question_id:
-            raise ChatClientError("Pending question has no ID.")
+            raise ChatClientError(self._t(
+                "The pending question has no ID.",
+                "待回答问题没有 ID。",
+            ))
         return await self._stream(
             "POST",
             f"/api/workbench/chats/{self.chat_id}/answer",
@@ -369,7 +464,10 @@ class ChatTransport:
 
     async def resume(self, *, on_event: EventHandler, cursor: int = 0) -> StreamResult:
         if not self.chat_id:
-            raise ChatClientError("Use --chat CHAT_ID or /use CHAT_ID before resuming.")
+            raise ChatClientError(self._t(
+                "Use --chat CHAT_ID or /resume CHAT_ID before resuming.",
+                "请先使用 --chat CHAT_ID 或 /resume CHAT_ID 选择对话。",
+            ))
         return await self._stream(
             "GET",
             f"/api/workbench/chats/{self.chat_id}/run-stream",
@@ -398,14 +496,52 @@ class ChatTransport:
             for path in paths:
                 resolved = Path(path).expanduser().resolve()
                 if not resolved.is_file():
-                    raise ChatClientError(f"Attachment not found: {path}")
-                handle = resolved.open("rb")
+                    raise ChatClientError(self._t(
+                        "Attachment not found: {path}",
+                        "未找到附件：{path}",
+                        path=path,
+                    ))
+                try:
+                    handle = resolved.open("rb")
+                except OSError as exc:
+                    raise ChatClientError(self._t(
+                        "Cannot read attachment {path}: {error}",
+                        "无法读取附件 {path}：{error}",
+                        path=path,
+                        error=exc,
+                    )) from exc
                 opened.append(handle)
                 content_type = mimetypes.guess_type(resolved.name)[0] or "application/octet-stream"
                 files.append(("files", (resolved.name, handle, content_type)))
             response = await client.post("/api/workbench/uploads", files=files)
             await self._raise_for_status(response)
-            payload = response.json()
+            try:
+                payload = response.json()
+            except json.JSONDecodeError as exc:
+                raise ChatClientError(self._t(
+                    "The attachment upload response was not valid JSON.",
+                    "附件上传响应不是有效的 JSON。",
+                )) from exc
+        except httpx.ConnectError as exc:
+            raise ChatClientError(self._t(
+                "Cannot connect to the Cyrene daemon at {url}. "
+                "Start it with: cyrene start",
+                "无法连接到位于 {url} 的 Cyrene Daemon。"
+                "请运行 cyrene start 启动。",
+                url=self.base_url,
+            )) from exc
+        except httpx.TimeoutException as exc:
+            raise ChatClientError(self._t(
+                "The attachment upload timed out after {seconds:g} seconds.",
+                "附件上传在 {seconds:g} 秒后超时。",
+                seconds=self.timeout,
+            )) from exc
+        except httpx.HTTPError as exc:
+            raise ChatClientError(self._t(
+                "Attachment upload failed: {error}",
+                "附件上传失败：{error}",
+                error=exc,
+            )) from exc
         finally:
             for handle in opened:
                 handle.close()
@@ -422,7 +558,7 @@ class ChatTransport:
         params: dict[str, Any] | None = None,
     ) -> StreamResult:
         client = self._require_client()
-        decoder = NdjsonDecoder()
+        decoder = NdjsonDecoder(language=self.language)
         result = StreamResult()
         try:
             request_kwargs = {"json": payload} if payload is not None else {}
@@ -431,7 +567,7 @@ class ChatTransport:
             async with client.stream(method, path, **request_kwargs) as response:
                 if response.is_error:
                     body = await response.aread()
-                    raise self._http_error(response, body)
+                    raise self._http_error(response, body, language=self.language)
                 async for chunk in response.aiter_bytes():
                     for event in decoder.feed(chunk):
                         await on_event(event)
@@ -440,14 +576,25 @@ class ChatTransport:
                     await on_event(event)
                     self._update_result(result, event)
         except httpx.ConnectError as exc:
-            raise ChatClientError(
-                f"Cannot connect to Cyrene daemon at {self.base_url}. "
-                "Start it with: cyrene start"
-            ) from exc
+            raise ChatClientError(self._t(
+                "Cannot connect to the Cyrene daemon at {url}. "
+                "Start it with: cyrene start",
+                "无法连接到位于 {url} 的 Cyrene Daemon。"
+                "请运行 cyrene start 启动。",
+                url=self.base_url,
+            )) from exc
         except httpx.TimeoutException as exc:
-            raise ChatClientError(f"Cyrene request timed out after {self.timeout:g}s.") from exc
+            raise ChatClientError(self._t(
+                "The Cyrene request timed out after {seconds:g} seconds.",
+                "Cyrene 请求在 {seconds:g} 秒后超时。",
+                seconds=self.timeout,
+            )) from exc
         except httpx.HTTPError as exc:
-            raise ChatClientError(str(exc)) from exc
+            raise ChatClientError(self._t(
+                "Network request failed: {error}",
+                "网络请求失败：{error}",
+                error=exc,
+            )) from exc
         return result
 
     @staticmethod
@@ -472,26 +619,51 @@ class ChatTransport:
             await self._raise_for_status(response)
             payload = response.json()
         except httpx.ConnectError as exc:
-            raise ChatClientError(
-                f"Cannot connect to Cyrene daemon at {self.base_url}. "
-                "Start it with: cyrene start"
-            ) from exc
+            raise ChatClientError(self._t(
+                "Cannot connect to the Cyrene daemon at {url}. "
+                "Start it with: cyrene start",
+                "无法连接到位于 {url} 的 Cyrene Daemon。"
+                "请运行 cyrene start 启动。",
+                url=self.base_url,
+            )) from exc
         except httpx.TimeoutException as exc:
-            raise ChatClientError(f"Cyrene request timed out after {self.timeout:g}s.") from exc
+            raise ChatClientError(self._t(
+                "The Cyrene request timed out after {seconds:g} seconds.",
+                "Cyrene 请求在 {seconds:g} 秒后超时。",
+                seconds=self.timeout,
+            )) from exc
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
-            raise ChatClientError(str(exc)) from exc
+            raise ChatClientError(self._t(
+                "Invalid daemon response: {error}",
+                "Daemon 响应无效：{error}",
+                error=exc,
+            )) from exc
         if not isinstance(payload, dict):
-            raise ChatClientError(f"Invalid response from {path}: expected an object.")
+            raise ChatClientError(self._t(
+                "Invalid response from {path}: expected an object.",
+                "来自 {path} 的响应无效：应为 Object。",
+                path=path,
+            ))
         return payload
 
     async def _raise_for_status(self, response: httpx.Response) -> None:
         if not response.is_error:
             return
         body = await response.aread()
-        raise self._http_error(response, body)
+        raise self._http_error(response, body, language=self.language)
 
     @staticmethod
-    def _http_error(response: httpx.Response, body: bytes) -> ChatClientError:
+    def _http_error(
+        response: httpx.Response,
+        body: bytes,
+        *,
+        language: Any = None,
+    ) -> ChatClientError:
+        resolved_language = app_language(language)
+
+        def text(en: str, zh: str) -> str:
+            return zh if resolved_language == "zh" else en
+
         detail = ""
         try:
             payload = json.loads(body.decode("utf-8"))
@@ -499,13 +671,30 @@ class ChatTransport:
                 detail = str(payload.get("error") or payload.get("detail") or "")
         except (UnicodeDecodeError, json.JSONDecodeError):
             detail = body.decode("utf-8", errors="replace").strip()
-        message = detail or response.reason_phrase or "request failed"
-        if response.status_code == 401 and message == "bad token":
-            message = (
-                "daemon requires authentication; set CYRENE_AUTH_TOKEN to the "
-                "daemon token, or use a daemon started by `cyrene start`"
+        if detail:
+            message = detail
+        elif resolved_language == "zh":
+            message = {
+                400: "请求无效",
+                401: "未通过身份验证",
+                403: "没有权限",
+                404: "未找到资源",
+                409: "请求冲突",
+                429: "请求过于频繁",
+                500: "Daemon 内部错误",
+                503: "Daemon 暂不可用",
+            }.get(response.status_code, "请求失败")
+        else:
+            message = response.reason_phrase or "request failed"
+        if response.status_code == 401 and message.lower() == "bad token":
+            message = text(
+                "the daemon requires authentication; set CYRENE_AUTH_TOKEN to the "
+                "daemon token, or use a daemon started by `cyrene start`",
+                "Daemon 需要身份验证；请将 CYRENE_AUTH_TOKEN 设为 Daemon "
+                "Token，或使用 `cyrene start` 启动的 Daemon",
             )
-        return ChatClientError(f"Cyrene API error {response.status_code}: {message}")
+        prefix = text("Cyrene API error", "Cyrene API 错误")
+        return ChatClientError(f"{prefix} {response.status_code}: {message}")
 
 
 class JsonRenderer:
@@ -532,13 +721,13 @@ class JsonRenderer:
     def finish(self) -> None:
         return
 
-    async def begin_turn(self, _activity: str = "正在思考") -> None:
+    async def begin_turn(self, _activity: str | None = None) -> None:
         return
 
     async def end_turn(self, *, _success: bool) -> None:
         return
 
-    def resume_activity(self, _activity: str = "正在继续") -> None:
+    def resume_activity(self, _activity: str | None = None) -> None:
         return
 
 
@@ -584,7 +773,7 @@ class RichRenderer:
             highlight=False,
         )
         self.verbose = verbose
-        self.lang = str(lang or "zh")
+        self.lang = self._normalized_language(lang)
         self.reply_open = False
         self.saw_reply_delta = False
         self._last_done_response = ""
@@ -597,12 +786,33 @@ class RichRenderer:
         self._phase1_header_printed = False
         self._phase1_contents: set[str] = set()
         self._thought_summary_printed = False
-        self._activity = "正在思考"
+        self._activity = self._thinking_activity()
         self._thinking_phrase = ""
         self._thinking_phrase_deadline = 0.0
         self._status: Live | None = None
         self._activity_symbol = ""
         self._timer_task: asyncio.Task[None] | None = None
+
+    @staticmethod
+    def _normalized_language(lang: Any) -> str:
+        return app_language(lang)
+
+    def set_language(self, lang: str) -> None:
+        previous_thinking = self._thinking_activity()
+        self.lang = self._normalized_language(lang)
+        if self._activity == previous_thinking:
+            self._activity = self._thinking_activity()
+        self._thinking_phrase = ""
+        self._thinking_phrase_deadline = 0.0
+
+    def _t(self, zh: str, en: str) -> str:
+        return zh if self.lang == "zh" else en
+
+    def _thinking_activity(self) -> str:
+        return self._t("正在思考", "Thinking")
+
+    def _continuing_activity(self) -> str:
+        return self._t("正在继续", "Continuing")
 
     def header(
         self,
@@ -617,10 +827,12 @@ class RichRenderer:
         brand.append("  Agent", style="bold")
         brand.append(f"  {version}", style="dim")
         self.console.print(brand)
+        connected = self._t("已连接", "Connected")
         self.console.print(
-            f"[dim]{escape(session)}  ·  {escape(mode)}[/]  [green]● 已连接[/]"
+            f"[dim]{escape(session)}  ·  {escape(mode)}[/]  "
+            f"[green]● {connected}[/]"
         )
-        project = str(details.get("project") or "Project")
+        project = str(details.get("project") or self._t("项目", "Project"))
         workspace = str(details.get("workspace") or "?")
         self.console.print(
             f"[bold]{escape(project)}[/]  [dim]{escape(workspace)}[/]"
@@ -658,13 +870,12 @@ class RichRenderer:
                 self._reasoning_started_at = time.monotonic()
             self._reasoning_chunks = []
             if self._reasoning_phase == "phase1":
-                self.resume_activity(
-                    "正在理解指令"
-                    if self.lang.startswith("zh")
-                    else "Understanding the instruction"
-                )
+                self.resume_activity(self._t(
+                    "正在理解指令",
+                    "Understanding the instruction",
+                ))
             else:
-                self.resume_activity("正在思考")
+                self.resume_activity(self._thinking_activity())
             return
         if event_type == "reasoning_delta":
             event_phase = str(event.get("phase") or "")
@@ -734,9 +945,12 @@ class RichRenderer:
         if event_type == "tool_call_started":
             self._break_reply()
             self._reasoning_started_at = 0.0
-            tool = escape(str(event.get("tool") or "tool"))
-            self.console.print(f"  [bright_cyan]◌[/] [bold]{tool}[/]  [dim]运行中[/]")
-            self.resume_activity(f"正在执行 {tool}")
+            tool = escape(str(event.get("tool") or self._t("工具", "tool")))
+            running = self._t("运行中", "Running")
+            self.console.print(
+                f"  [bright_cyan]◌[/] [bold]{tool}[/]  [dim]{running}[/]"
+            )
+            self.resume_activity(self._t(f"正在执行 {tool}", f"Running {tool}"))
             return
         if event_type == "tool_call_progress":
             self._break_reply()
@@ -753,13 +967,13 @@ class RichRenderer:
             return
         if event_type == "tool_call_finished":
             self._break_reply()
-            tool = escape(str(event.get("tool") or "tool"))
+            tool = escape(str(event.get("tool") or self._t("工具", "tool")))
             failed = bool(event.get("failed")) or str(event.get("status") or "") == "failed"
             symbol, color = ("×", "red") if failed else ("✓", "green")
             self.console.print(f"  [{color}]{symbol}[/] [bold]{tool}[/]")
             self._reasoning_started_at = time.monotonic()
             self._thought_summary_printed = False
-            self.resume_activity("正在思考")
+            self.resume_activity(self._thinking_activity())
             return
         if event_type == "phase_transition":
             self._break_reply()
@@ -788,20 +1002,31 @@ class RichRenderer:
         if event_type == "awaiting_user":
             self._break_reply()
             self._stop_status()
-            self.console.print("[yellow]◆ 需要你的确认[/]")
+            self.console.print(self._t(
+                "[yellow]◆ 需要你的确认[/]",
+                "[yellow]◆ Your confirmation is required[/]",
+            ))
             return
         if event_type in {"interrupted", "run_interrupted"}:
             self._break_reply()
-            self.console.print("[yellow]■ 运行已中断[/]")
+            self.console.print(self._t(
+                "[yellow]■ 运行已中断[/]",
+                "[yellow]■ Run interrupted[/]",
+            ))
             return
         if event_type == "error":
             self._break_reply()
             self._stop_status()
-            message = str(event.get("message") or event.get("error") or "Unknown error")
-            self.console.print(f"[bold red]× 请求失败[/]  {escape(message)}")
+            message = str(
+                event.get("message")
+                or event.get("error")
+                or self._t("未知错误", "Unknown error")
+            )
+            heading = self._t("请求失败", "Request failed")
+            self.console.print(f"[bold red]× {heading}[/]  {escape(message)}")
             return
         if event_type == "run_finalizing":
-            self.resume_activity("正在完成")
+            self.resume_activity(self._t("正在完成", "Finishing"))
             return
         if event_type in {"ack", "saved", "heartbeat"}:
             return
@@ -812,20 +1037,44 @@ class RichRenderer:
     def _render_plan(self, event: dict[str, Any]) -> None:
         if str(event.get("type") or "") == "plan_progress":
             step = event.get("step") or event.get("step_number") or "?"
-            status = escape(str(event.get("status") or "updated"))
-            self.console.print(f"[bright_cyan]◆[/] 计划步骤 {step}  [dim]{status}[/]")
+            raw_status = str(event.get("status") or "updated")
+            status_labels = {
+                "pending": ("待处理", "pending"),
+                "in_progress": ("进行中", "in progress"),
+                "completed": ("已完成", "completed"),
+                "failed": ("失败", "failed"),
+                "skipped": ("已跳过", "skipped"),
+                "updated": ("已更新", "updated"),
+            }
+            zh_status, en_status = status_labels.get(
+                raw_status,
+                (raw_status, raw_status),
+            )
+            status = escape(self._t(zh_status, en_status))
+            label = self._t("计划步骤", "Plan step")
+            self.console.print(
+                f"[bright_cyan]◆[/] {label} {step}  [dim]{status}[/]"
+            )
             return
         plan = event.get("plan")
         if not isinstance(plan, dict):
             return
-        title = escape(str(plan.get("title") or "执行计划"))
+        title = escape(str(plan.get("title") or self._t("执行计划", "Execution plan")))
         self.console.print(f"[bold bright_cyan]◆ {title}[/]")
         for index, step in enumerate(plan.get("steps") or [], start=1):
             if not isinstance(step, dict):
                 continue
             status = str(step.get("status") or "pending")
-            symbol = {"completed": "✓", "in_progress": "◌", "failed": "×"}.get(status, "○")
-            self.console.print(f"  {symbol} {index}. {escape(str(step.get('title') or '步骤'))}")
+            symbol = {
+                "completed": "✓",
+                "in_progress": "◌",
+                "failed": "×",
+                "skipped": "−",
+            }.get(status, "○")
+            fallback = self._t("步骤", "Step")
+            self.console.print(
+                f"  {symbol} {index}. {escape(str(step.get('title') or fallback))}"
+            )
 
     def _break_reply(self) -> None:
         if self.reply_open:
@@ -848,7 +1097,7 @@ class RichRenderer:
     def has_reasoning(self) -> bool:
         return bool(self._reasoning_rounds)
 
-    async def begin_turn(self, activity: str = "正在思考") -> None:
+    async def begin_turn(self, activity: str | None = None) -> None:
         self._stop_status()
         if self._timer_task is not None:
             self._timer_task.cancel()
@@ -860,7 +1109,7 @@ class RichRenderer:
         self._phase1_header_printed = False
         self._phase1_contents = set()
         self._thought_summary_printed = False
-        self._activity = activity
+        self._activity = activity or self._thinking_activity()
         self._thinking_phrase = ""
         self._thinking_phrase_deadline = 0.0
         self._start_status()
@@ -880,18 +1129,18 @@ class RichRenderer:
             return
         duration = max(0.0, time.monotonic() - self._turn_started_at)
         if _success:
-            self.console.print(
-                f"[dim]✻ 完成，用时 {self._format_elapsed(duration)}[/]"
-            )
+            summary = self._t("完成，用时", "Completed in")
         else:
-            self.console.print(
-                f"[dim]✻ 已停止，用时 {self._format_elapsed(duration)}[/]"
-            )
+            summary = self._t("已停止，用时", "Stopped after")
+        self.console.print(
+            f"[dim]✻ {summary} {self._format_elapsed(duration)}[/]"
+        )
         self._turn_started_at = 0.0
 
-    def resume_activity(self, activity: str = "正在继续") -> None:
+    def resume_activity(self, activity: str | None = None) -> None:
         if not self._turn_started_at:
             return
+        activity = activity or self._continuing_activity()
         if activity != self._activity:
             self._thinking_phrase = ""
             self._thinking_phrase_deadline = 0.0
@@ -900,28 +1149,33 @@ class RichRenderer:
         self._update_status()
 
     def reasoning_overlay_text(self) -> str:
-        lines = ["思考详情", "Ctrl+O / Esc 返回", ""]
+        lines = [
+            self._t("思考详情", "Reasoning details"),
+            self._t("Ctrl+O / Esc 返回", "Ctrl+O / Esc to return"),
+            "",
+        ]
         for index, (duration, content) in enumerate(self._reasoning_rounds, start=1):
             if len(self._reasoning_rounds) > 1:
-                lines.append(f"第 {index} 段 · {self._format_elapsed(duration)}")
+                lines.append(self._t(
+                    f"第 {index} 段 · {self._format_elapsed(duration)}",
+                    f"Part {index} · {self._format_elapsed(duration)}",
+                ))
             lines.append(content)
             lines.append("")
         return "\n".join(lines).rstrip()
 
     def _print_thought(self, duration: float, _content: str) -> None:
-        self.console.print(
-            f"[dim]✻ 思考了 {self._format_elapsed(duration)}（Ctrl+O 查看）[/]"
-        )
+        elapsed = self._format_elapsed(duration)
+        self.console.print(self._t(
+            f"[dim]✻ 思考了 {elapsed}（Ctrl+O 查看）[/]",
+            f"[dim]✻ Thought for {elapsed} (Ctrl+O to view)[/]",
+        ))
 
     def _print_phase1_header(self) -> None:
         if self._phase1_header_printed:
             return
         self._stop_status()
-        label = (
-            "正在理解指令"
-            if self.lang.startswith("zh")
-            else "Understanding the instruction"
-        )
+        label = self._t("正在理解指令", "Understanding the instruction")
         self.console.print(f"[bright_cyan]◌[/] [bold]{escape(label)}[/]")
         self._phase1_header_printed = True
 
@@ -975,7 +1229,7 @@ class RichRenderer:
         return random.choice(choices)
 
     def _current_activity_label(self) -> str:
-        if self._activity != "正在思考":
+        if self._activity != self._thinking_activity():
             return self._activity
         now = time.monotonic()
         if self._thinking_phrase and now < self._thinking_phrase_deadline:
@@ -1067,7 +1321,10 @@ class InteractiveChat:
             if not isinstance(self.renderer, RichRenderer):
                 return
             if not self.renderer.has_reasoning:
-                self.renderer.info("当前还没有可查看的思考详情。")
+                self.renderer.info(self._config_t(
+                    "当前还没有可查看的思考详情。",
+                    "No reasoning details are available yet.",
+                ))
                 event.app.invalidate()
                 return
             if not self._reasoning_overlay_open:
@@ -1175,9 +1432,13 @@ class InteractiveChat:
 
     async def run(self) -> int:
         status = await self.transport.health()
+        session_label = (
+            str(getattr(self.transport, "chat_id", "") or "")
+            or self._config_t("新对话", "new conversation")
+        )
         self.renderer.header(
-            self.transport.session_label,
-            self.options.mode,
+            session_label,
+            self._permission_mode_label(),
             await self._header_details(status),
         )
         while True:
@@ -1192,16 +1453,28 @@ class InteractiveChat:
                         bottom_toolbar=self._input_bottom_toolbar,
                     )).strip()
             except EOFError:
-                self.renderer.info("会话已关闭；Daemon 继续运行。")
+                self.renderer.info(self._config_t(
+                    "会话已关闭；Daemon 继续运行。",
+                    "Session closed; the daemon is still running.",
+                ))
                 return 0
             except KeyboardInterrupt:
                 if self._arm_ctrl_c_exit():
-                    self.renderer.info("会话已关闭；Daemon 继续运行。")
+                    self.renderer.info(self._config_t(
+                        "会话已关闭；Daemon 继续运行。",
+                        "Session closed; the daemon is still running.",
+                    ))
                     return 0
-                self.renderer.info("再次按 Ctrl+C 退出。")
+                self.renderer.info(self._config_t(
+                    "再次按 Ctrl+C 退出。",
+                    "Press Ctrl+C again to exit.",
+                ))
                 continue
             if self._exit_requested:
-                self.renderer.info("会话已关闭；Daemon 继续运行。")
+                self.renderer.info(self._config_t(
+                    "会话已关闭；Daemon 继续运行。",
+                    "Session closed; the daemon is still running.",
+                ))
                 return 0
             if not text:
                 continue
@@ -1214,12 +1487,18 @@ class InteractiveChat:
                 if should_exit:
                     return 0
                 if self._exit_requested:
-                    self.renderer.info("会话已关闭；Daemon 继续运行。")
+                    self.renderer.info(self._config_t(
+                        "会话已关闭；Daemon 继续运行。",
+                        "Session closed; the daemon is still running.",
+                    ))
                     return 0
                 continue
             await self._run_turn(text, allow_prompt=True)
             if self._exit_requested:
-                self.renderer.info("会话已关闭；当前 Agent Run 继续在后台运行。")
+                self.renderer.info(self._config_t(
+                    "会话已关闭；当前 Agent Run 继续在后台运行。",
+                    "Session closed; the current Agent run continues in the background.",
+                ))
                 return 0
 
     @staticmethod
@@ -1247,7 +1526,9 @@ class InteractiveChat:
         if self._context_limit:
             model = f"{model}[{self._status_tokens(self._context_limit)}]"
         status = (
-            f"Model: {model} | Ctx: {self._status_tokens(self._context_used)}"
+            f"{self._config_t('模型', 'Model')}: {model} | "
+            f"{self._config_t('上下文', 'Ctx')}: "
+            f"{self._status_tokens(self._context_used)}"
             f" | {self._git_branch}"
         )
         permission = self._config_t("权限模式", "Permission mode")
@@ -1338,7 +1619,7 @@ class InteractiveChat:
         self._git_branch = self._workspace_git_branch(workspace)
         return {
             "model": model,
-            "project": project_name or "Project",
+            "project": project_name or self._config_t("项目", "Project"),
             "workspace": workspace or str(Path.cwd()),
             "version": get_version_label(),
         }
@@ -1389,13 +1670,20 @@ class InteractiveChat:
                 if not allow_prompt:
                     if not self.options.json_output:
                         self.renderer.error(
-                            "本次运行需要用户确认；请使用交互式 `cyrene chat` 继续。"
+                            self._config_t(
+                                "本次运行需要用户确认；请使用交互式 `cyrene chat` 继续。",
+                                "This run requires confirmation; continue in interactive "
+                                "`cyrene chat` mode.",
+                            )
                         )
                     return False
                 answer = await self._ask_question(result.pending_question)
                 if self._exit_requested:
                     return False
-                self.renderer.resume_activity("正在继续")
+                self.renderer.resume_activity(self._config_t(
+                    "正在继续",
+                    "Continuing",
+                ))
                 result = await self.transport.answer(
                     result.pending_question,
                     answer,
@@ -1422,7 +1710,10 @@ class InteractiveChat:
     async def resume(self, cursor: int = 0) -> bool:
         restore_interrupt = self._install_interrupt_handler()
         turn_success = False
-        await self.renderer.begin_turn("正在恢复运行")
+        await self.renderer.begin_turn(self._config_t(
+            "正在恢复运行",
+            "Resuming run",
+        ))
         try:
             result = await self.transport.resume(
                 on_event=self.renderer.handle,
@@ -1455,7 +1746,10 @@ class InteractiveChat:
                     if active_task is not None:
                         active_task.cancel()
                 else:
-                    self.renderer.info("再次按 Ctrl+C 退出。")
+                    self.renderer.info(self._config_t(
+                        "再次按 Ctrl+C 退出。",
+                        "Press Ctrl+C again to exit.",
+                    ))
 
             loop.add_signal_handler(signal.SIGINT, request_exit)
         except (NotImplementedError, RuntimeError, ValueError):
@@ -1468,7 +1762,10 @@ class InteractiveChat:
         return restore
 
     async def _ask_question(self, question: dict[str, Any]) -> str:
-        text = str(question.get("text") or "请确认后继续。")
+        text = str(question.get("text") or self._config_t(
+            "请确认后继续。",
+            "Please confirm to continue.",
+        ))
         options = question.get("options") if isinstance(question.get("options"), list) else []
         if isinstance(self.renderer, RichRenderer):
             self.renderer.console.print(f"\n[bold yellow]{escape(text)}[/]")
@@ -1477,7 +1774,9 @@ class InteractiveChat:
                 self.renderer.console.print(f"  [bright_cyan][{index}][/] {escape(label)}")
         while True:
             with patch_stdout(raw=True):
-                answer = (await self._prompt_session().prompt_async("确认 › ")).strip()
+                answer = (await self._prompt_session().prompt_async(
+                    self._config_t("确认 › ", "Confirm › ")
+                )).strip()
             if self._exit_requested:
                 return ""
             if not answer:
@@ -1504,16 +1803,25 @@ class InteractiveChat:
         command = parts[0].lower()
         args = parts[1:]
         if command in {"/exit", "/quit"}:
-            self.renderer.info("会话已关闭；Daemon 继续运行。")
+            self.renderer.info(self._config_t(
+                "会话已关闭；Daemon 继续运行。",
+                "Session closed; the daemon is still running.",
+            ))
             return True
         if command in {"/help", "/h"}:
             self._help()
         elif command == "/mode":
             if not args or args[0] not in {"default", "plan", "auto"}:
-                self.renderer.error("用法：/mode default|plan|auto")
+                self.renderer.error(self._config_t(
+                    "用法：/mode default|plan|auto",
+                    "Usage: /mode default|plan|auto",
+                ))
             else:
                 self.options.mode = args[0]
-                self.renderer.info(f"权限模式已切换为 {args[0]}。")
+                self.renderer.info(self._config_t(
+                    f"权限模式已切换为 {args[0]}。",
+                    f"Permission mode changed to {args[0]}.",
+                ))
         elif command == "/new":
             await self._new_chat()
         elif command == "/status":
@@ -1528,26 +1836,53 @@ class InteractiveChat:
             await self._config_menu()
         elif command == "/attach":
             if not args:
-                self.renderer.error("用法：/attach PATH [PATH ...]")
+                self.renderer.error(self._config_t(
+                    "用法：/attach PATH [PATH ...]",
+                    "Usage: /attach PATH [PATH ...]",
+                ))
             else:
                 uploaded = await self.transport.upload([Path(item) for item in args])
                 self.options.queued_attachments.extend(uploaded)
                 for item in uploaded:
-                    self.renderer.info(f"已附加：{item.get('name')} ({item.get('size', 0)} bytes)")
+                    size = int(item.get("size") or 0)
+                    en_unit = "byte" if size == 1 else "bytes"
+                    self.renderer.info(self._config_t(
+                        f"已附加：{item.get('name')} ({size} 字节)",
+                        f"Attached: {item.get('name')} ({size} {en_unit})",
+                    ))
         elif command == "/attachments":
             if not self.options.queued_attachments:
-                self.renderer.info("当前没有待发送附件。")
+                self.renderer.info(self._config_t(
+                    "当前没有待发送附件。",
+                    "No attachments are queued.",
+                ))
             for index, item in enumerate(self.options.queued_attachments, start=1):
-                self.renderer.info(f"{index}. {item.get('name')} ({item.get('size', 0)} bytes)")
+                size = int(item.get("size") or 0)
+                unit = self._config_t(
+                    "字节",
+                    "byte" if size == 1 else "bytes",
+                )
+                self.renderer.info(
+                    f"{index}. {item.get('name')} ({size} {unit})"
+                )
         elif command == "/detach":
             if not args or args[0] == "all":
                 self.options.queued_attachments.clear()
-                self.renderer.info("已移除全部待发送附件。")
+                self.renderer.info(self._config_t(
+                    "已移除全部待发送附件。",
+                    "Removed all queued attachments.",
+                ))
             elif args[0].isdigit() and 1 <= int(args[0]) <= len(self.options.queued_attachments):
                 item = self.options.queued_attachments.pop(int(args[0]) - 1)
-                self.renderer.info(f"已移除：{item.get('name')}")
+                self.renderer.info(self._config_t(
+                    f"已移除：{item.get('name')}",
+                    f"Removed: {item.get('name')}",
+                ))
             else:
-                self.renderer.error("用法：/detach INDEX|all")
+                self.renderer.error(self._config_t(
+                    "用法：/detach INDEX|all",
+                    "Usage: /detach INDEX|all",
+                ))
         elif command == "/deep-reflect":
             await self._run_turn(
                 "/deep-reflect",
@@ -1557,7 +1892,10 @@ class InteractiveChat:
         elif command == "/deep-research":
             topic = " ".join(args).strip()
             if not topic:
-                topic = await self._prompt_text("研究主题 › ")
+                topic = await self._prompt_text(self._config_t(
+                    "研究主题 › ",
+                    "Research topic › ",
+                ))
             if topic:
                 await self._run_turn(
                     topic,
@@ -1565,7 +1903,10 @@ class InteractiveChat:
                     command="deep-research",
                 )
         else:
-            self.renderer.error(f"未知命令：{command}。输入 /help 查看帮助。")
+            self.renderer.error(self._config_t(
+                f"未知命令：{command}。输入 /help 查看帮助。",
+                f"Unknown command: {command}. Type /help for help.",
+            ))
         return False
 
     def _help(self) -> None:
@@ -1576,22 +1917,22 @@ class InteractiveChat:
         table.add_column(style="bright_cyan", no_wrap=True)
         table.add_column(style="dim")
         rows = (
-            ("/new", "选择 Project 并创建新对话"),
-            ("/resume [SESSION_ID]", "选择并继续已有 Session"),
-            ("/mode default|plan|auto", "切换权限模式"),
-            ("/attach PATH...", "上传并附加文件"),
-            ("/attachments", "查看待发送附件"),
-            ("/detach INDEX|all", "移除待发送附件"),
-            ("/deep-reflect", "对当前对话运行深度反思"),
-            ("/deep-research [TOPIC]", "运行深度研究"),
-            ("/context", "查看当前 Session 的上下文占用"),
-            ("/config", "查看和修改设置"),
-            ("/status", "查看 Daemon 与模型状态"),
-            ("/mcp", "列出 MCP Server"),
-            ("/exit", "退出 CLI，保留 Daemon"),
+            ("/new", ("选择 Project 并创建新对话", "Select a Project and create a conversation")),
+            ("/resume [SESSION_ID]", ("选择并继续已有 Session", "Select and resume a Session")),
+            ("/mode default|plan|auto", ("切换权限模式", "Change permission mode")),
+            ("/attach PATH...", ("上传并附加文件", "Upload and attach files")),
+            ("/attachments", ("查看待发送附件", "Show queued attachments")),
+            ("/detach INDEX|all", ("移除待发送附件", "Remove queued attachments")),
+            ("/deep-reflect", ("对当前对话运行深度反思", "Deeply reflect on this conversation")),
+            ("/deep-research [TOPIC]", ("运行深度研究", "Run deep research")),
+            ("/context", ("查看当前 Session 的上下文占用", "Show context usage for this Session")),
+            ("/config", ("查看和修改设置", "View and change settings")),
+            ("/status", ("查看 Daemon 与模型状态", "Show daemon and model status")),
+            ("/mcp", ("列出 MCP Server", "List MCP servers")),
+            ("/exit", ("退出 CLI，保留 Daemon", "Exit the CLI and keep the daemon running")),
         )
-        for command, detail in rows:
-            table.add_row(command, detail)
+        for command, (zh_detail, en_detail) in rows:
+            table.add_row(command, self._config_t(zh_detail, en_detail))
         self.renderer.console.print(table)
 
     async def _prompt_text(self, message: str) -> str:
@@ -1620,7 +1961,10 @@ class InteractiveChat:
         item_gap: int = 0,
     ) -> dict[str, Any] | None:
         if not items:
-            self.renderer.info("没有可选择的项目。")
+            self.renderer.info(self._config_t(
+                "没有可选择的项目。",
+                "No items are available to select.",
+            ))
             return None
         if len(items) == 1 and auto_single:
             return items[0]
@@ -1633,12 +1977,18 @@ class InteractiveChat:
                 item_gap=item_gap,
             )
         while True:
-            answer = await self._prompt_text("选择 › ")
+            answer = await self._prompt_text(self._config_t(
+                "选择 › ",
+                "Select › ",
+            ))
             if answer in {"", "0"}:
                 return None
             if answer.isdigit() and 1 <= int(answer) <= len(items):
                 return items[int(answer) - 1]
-            self.renderer.error("请输入列表中的编号。")
+            self.renderer.error(self._config_t(
+                "请输入列表中的编号。",
+                "Enter a number from the list.",
+            ))
 
     async def _choose_with_arrows(
         self,
@@ -1682,7 +2032,10 @@ class InteractiveChat:
                     fragments.append(("", "\n" * gap))
             fragments.append((
                 "class:selection-help",
-                " ↑/↓ 选择  Enter 确认  Esc 取消",
+                self._config_t(
+                    " ↑/↓ 选择  Enter 确认  Esc 取消",
+                    " ↑/↓ Select  Enter Confirm  Esc Cancel",
+                ),
             ))
             return fragments
 
@@ -1742,11 +2095,15 @@ class InteractiveChat:
 
     async def _new_chat(self) -> None:
         projects = await self.transport.list_projects()
+        untitled = self._config_t("未命名", "Untitled")
         selected = await self._choose(
-            "选择新对话所属 Project",
+            self._config_t(
+                "选择新对话所属 Project",
+                "Select a Project for the new conversation",
+            ),
             projects,
             label=lambda item: (
-                f"{item.get('name') or 'Untitled'}  "
+                f"{item.get('name') or untitled}  "
                 f"[{item.get('workspacePath') or item.get('id') or ''}]"
             ),
             auto_single=True,
@@ -1758,8 +2115,12 @@ class InteractiveChat:
             title="",
         )
         self.renderer.info(
-            f"已在 {selected.get('name') or 'Project'} 创建对话："
-            f"{chat.get('title')} ({chat.get('id')})"
+            self._config_t(
+                f"已在 {selected.get('name') or '项目'} 创建对话："
+                f"{chat.get('title')} ({chat.get('id')})",
+                f"Created conversation in {selected.get('name') or 'Project'}: "
+                f"{chat.get('title')} ({chat.get('id')})",
+            )
         )
 
     async def _resume_chat(self, chat_id: str = "") -> None:
@@ -1769,13 +2130,22 @@ class InteractiveChat:
             None,
         )
         if chat_id and selected is None:
-            self.renderer.error(f"未找到 Session：{chat_id}")
+            self.renderer.error(self._config_t(
+                f"未找到 Session：{chat_id}",
+                f"Session not found: {chat_id}",
+            ))
             return
         if selected is None:
             selected = await self._choose(
-                "选择要继续的 Session",
+                self._config_t(
+                    "选择要继续的 Session",
+                    "Select a Session to resume",
+                ),
                 targets,
-                label=self._resume_session_label,
+                label=lambda item: self._resume_session_label(
+                    item,
+                    self.options.lang,
+                ),
                 item_lines=2,
                 item_gap=1,
             )
@@ -1783,22 +2153,34 @@ class InteractiveChat:
             return
         chat = await self.transport.use_chat(str(selected.get("chatId") or ""))
         self.renderer.info(
-            f"已进入：{chat.get('title')}  ·  "
-            f"{selected.get('projectName') or 'Unknown Project'}  "
-            f"({chat.get('id')})"
+            self._config_t(
+                f"已进入：{chat.get('title')}  ·  "
+                f"{selected.get('projectName') or '未知项目'}  "
+                f"({chat.get('id')})",
+                f"Resumed: {chat.get('title')}  ·  "
+                f"{selected.get('projectName') or 'Unknown Project'}  "
+                f"({chat.get('id')})",
+            )
         )
 
     @classmethod
-    def _resume_session_label(cls, item: dict[str, Any]) -> str:
+    def _resume_session_label(cls, item: dict[str, Any], lang: Any = "zh") -> str:
         width = max(
             30,
             shutil.get_terminal_size(fallback=(80, 24)).columns - 8,
         )
-        title = " ".join(str(item.get("title") or "Untitled").split())
-        project = " ".join(
-            str(item.get("projectName") or "Unknown Project").split()
+        zh = app_language(lang) == "zh"
+        title = " ".join(str(
+            item.get("title") or ("未命名" if zh else "Untitled")
+        ).split())
+        project = " ".join(str(
+            item.get("projectName") or ("未知项目" if zh else "Unknown Project")
+        ).split())
+        status = (
+            ("  ● 运行中" if zh else "  ● Running")
+            if item.get("running")
+            else ""
         )
-        status = "  ● 运行中" if item.get("running") else ""
         separator = "  ·  "
         reserved = get_cwidth(separator + status)
         project = cls._clip_display_width(
@@ -1816,9 +2198,11 @@ class InteractiveChat:
             + status
         )
         preview = (
-            "运行正在继续…"
+            ("运行正在继续…" if zh else "Run is continuing…")
             if item.get("running")
-            else " ".join(str(item.get("preview") or "空对话").split())
+            else " ".join(str(
+                item.get("preview") or ("空对话" if zh else "Empty conversation")
+            ).split())
         )
         second = cls._clip_display_width(preview, width)
         return f"{first}\n{second}"
@@ -2247,8 +2631,7 @@ class InteractiveChat:
         except (ValueError, ChatClientError) as exc:
             self.renderer.error(str(exc))
 
-    @staticmethod
-    def _coerce_value(raw: str, current: Any) -> Any:
+    def _coerce_value(self, raw: str, current: Any) -> Any:
         text = str(raw).strip()
         if isinstance(current, bool):
             lowered = text.lower()
@@ -2256,7 +2639,10 @@ class InteractiveChat:
                 return True
             if lowered in {"false", "0", "no", "off", "否"}:
                 return False
-            raise ValueError("请输入 true 或 false。")
+            raise ValueError(self._config_t(
+                "请输入 true 或 false。",
+                "Enter true or false.",
+            ))
         if isinstance(current, int) and not isinstance(current, bool):
             return int(text)
         if isinstance(current, float):
@@ -2264,7 +2650,7 @@ class InteractiveChat:
         return text
 
     async def _config_plugins(self) -> None:
-        payload = await self.transport.get_setting("/api/settings/plugins")
+        payload = await self.transport.get_setting("/api/plugins")
         items = [
             {
                 "id": str(item.get("id") or ""),
@@ -2292,14 +2678,14 @@ class InteractiveChat:
             items,
             label=lambda item: (
                 f"{'●' if item['enabled'] else '○'} {item['name']} "
-                f"({item['kind']})"
+                f"({self._config_t('插件包', 'pack') if item['kind'] == 'pack' else self._config_t('插件', 'plugin')})"
             ),
         )
         if selected is None:
             return
         key = "packs" if selected["kind"] == "pack" else "plugins"
         await self.transport.update_setting(
-            "/api/settings/plugins",
+            "/api/plugins/activation",
             {key: {selected["id"]: not selected["enabled"]}},
         )
         enabled = not selected["enabled"]
@@ -2426,8 +2812,10 @@ class InteractiveChat:
             self.options.mode = raw
         elif key == "language":
             self.options.lang = raw
+            if hasattr(self.transport, "set_language"):
+                self.transport.set_language(raw)
             if isinstance(self.renderer, RichRenderer):
-                self.renderer.lang = raw
+                self.renderer.set_language(raw)
         elif key == "color":
             self.options.color = bool(self._coerce_value(raw, True))
         elif key == "verbose":
@@ -2500,7 +2888,11 @@ class InteractiveChat:
 
     async def _show_context(self) -> None:
         if not self.transport.chat_id:
-            self.renderer.info("当前尚无 Session；输入消息后会在默认 Project 新建对话。")
+            self.renderer.info(self._config_t(
+                "当前尚无 Session；输入消息后会在默认 Project 新建对话。",
+                "There is no Session yet; sending a message will create one "
+                "in the default Project.",
+            ))
             return
         payload = await self.transport.context()
         if "ctxUsed" not in payload:
@@ -2515,20 +2907,29 @@ class InteractiveChat:
         limit = int(payload.get("ctxLimit") or 0)
         ratio = float(payload.get("ratio") or 0)
         if isinstance(self.renderer, RichRenderer):
-            table = Table("Model", "Used", "Limit", "Usage", "Messages", box=None)
+            table = Table(
+                self._config_t("模型", "Model"),
+                self._config_t("已用", "Used"),
+                self._config_t("上限", "Limit"),
+                self._config_t("占用", "Usage"),
+                self._config_t("消息", "Messages"),
+                box=None,
+            )
+            unknown = self._config_t("未知", "unknown")
             table.add_row(
                 str(payload.get("model") or "?"),
                 f"{used:,}",
-                f"{limit:,}" if limit else "unknown",
-                f"{ratio * 100:.1f}%" if limit else "unknown",
+                f"{limit:,}" if limit else unknown,
+                f"{ratio * 100:.1f}%" if limit else unknown,
                 str(payload.get("messageCount") or 0),
             )
             self.renderer.console.print(table)
             for segment in payload.get("segments") or []:
                 if isinstance(segment, dict) and int(segment.get("tokens") or 0):
+                    token_unit = self._config_t("Token", "tokens")
                     self.renderer.info(
                         f"  {segment.get('key')}: "
-                        f"{int(segment.get('tokens') or 0):,} tokens"
+                        f"{int(segment.get('tokens') or 0):,} {token_unit}"
                     )
         else:
             self._print_json(payload)
@@ -2551,9 +2952,13 @@ class InteractiveChat:
         )
         bar_total = sum(int(layer.get("totalTokens") or 0) for layer in layers)
 
-        self.renderer.console.print("[bold]对话上下文[/]")
+        self.renderer.console.print(self._config_t(
+            "[bold]对话上下文[/]",
+            "[bold]Conversation context[/]",
+        ))
         self.renderer.console.print(
-            f"\n[bold]{self._compact_tokens(message_tokens)}[/] [dim]tokens[/]"
+            f"\n[bold]{self._compact_tokens(message_tokens)}[/] "
+            f"[dim]{self._config_t('Token', 'tokens')}[/]"
         )
         segments = self._context_segments(layers)
         if segments and bar_total > 0:
@@ -2568,8 +2973,13 @@ class InteractiveChat:
         order = {"system_prefix": 0, "ephemeral": 1, "messages": 2}
         for layer in sorted(layers, key=lambda item: order.get(str(item.get("id")), 99)):
             layer_id = str(layer.get("id") or "")
+            layer_labels = (
+                _CONTEXT_LAYER_LABELS
+                if self.options.lang.lower().startswith("zh")
+                else _CONTEXT_LAYER_LABELS_EN
+            )
             self.renderer.console.print(
-                f"\n[bold]{escape(_CONTEXT_LAYER_LABELS.get(layer_id, str(layer.get('label') or layer_id)))}[/]"
+                f"\n[bold]{escape(layer_labels.get(layer_id, str(layer.get('label') or layer_id)))}[/]"
             )
             rows = Table.grid(padding=(0, 1))
             rows.add_column(width=3, no_wrap=True)
@@ -2586,7 +2996,11 @@ class InteractiveChat:
                     "tokens_est": int(layer.get("totalTokens") or 0),
                 }]
             for block in blocks:
-                label, color = self._context_block_style(layer_id, block)
+                label, color = self._context_block_style(
+                    layer_id,
+                    block,
+                    self.options.lang,
+                )
                 rows.add_row(
                     Text("  ■", style=color),
                     label,
@@ -2599,13 +3013,18 @@ class InteractiveChat:
         ratio = float(overview.get("ratio") or 0)
         model = str(overview.get("model") or "?")
         message_count = int(overview.get("messageCount") or 0)
+        message_unit = self._config_t(
+            "条消息",
+            "message" if message_count == 1 else "messages",
+        )
         window = (
             f"{used:,} / {limit:,} · {ratio * 100:.1f}%"
             if limit > 0
-            else f"{used:,} tokens"
+            else f"{used:,} {self._config_t('Token', 'tokens')}"
         )
         self.renderer.console.print(
-            f"\n[dim]{escape(model)} · {window} · {message_count} messages[/]"
+            f"\n[dim]{escape(model)} · {window} · {message_count} "
+            f"{message_unit}[/]"
         )
 
     @classmethod
@@ -2653,22 +3072,31 @@ class InteractiveChat:
     def _context_block_style(
         layer_id: str,
         block: dict[str, Any],
+        lang: Any = "zh",
     ) -> tuple[str, str]:
         block_id = str(block.get("id") or "")
         block_type = str(block.get("type") or "")
+        zh = app_language(lang) == "zh"
         if layer_id == "messages":
+            labels = _CONTEXT_MESSAGE_LABELS if zh else _CONTEXT_MESSAGE_LABELS_EN
             return (
-                _CONTEXT_MESSAGE_LABELS.get(block_type, block_type or block_id),
+                labels.get(block_type, block_type or block_id),
                 _CONTEXT_MESSAGE_COLORS.get(block_type, "#798593"),
             )
         if layer_id == "ephemeral":
-            return ("临时注入", "#db7373")
+            return (
+                "临时注入" if zh else "Ephemeral injection",
+                "#db7373",
+            )
 
-        label = _CONTEXT_BLOCK_LABELS.get(block_id)
+        labels = _CONTEXT_BLOCK_LABELS if zh else _CONTEXT_BLOCK_LABELS_EN
+        label = labels.get(block_id)
         if label is None and block_id.startswith("command."):
-            label = f"{block_id.removeprefix('command.')} 指令"
+            command = block_id.removeprefix("command.")
+            label = f"{command} 指令" if zh else f"{command} instructions"
         if label is None and block_id.startswith("spawn_policy."):
-            label = f"{block_id.removeprefix('spawn_policy.')} 策略"
+            policy = block_id.removeprefix("spawn_policy.")
+            label = f"{policy} 策略" if zh else f"{policy} policy"
         label = label or str(block.get("label") or block_id or block_type)
         shade = {
             "memory": 1,
@@ -2706,50 +3134,115 @@ class InteractiveChat:
         if not isinstance(self.renderer, RichRenderer):
             self.renderer.info(json.dumps(chats, ensure_ascii=False))
             return
-        table = Table("ID", "Title", "Project", "Status", box=None)
+        table = Table(
+            "ID",
+            self._config_t("标题", "Title"),
+            self._config_t("项目", "Project"),
+            self._config_t("状态", "Status"),
+            box=None,
+        )
         for chat in chats[:30]:
             table.add_row(
                 str(chat.get("chatId") or ""),
                 str(chat.get("title") or ""),
                 str(chat.get("projectName") or ""),
-                "running" if chat.get("running") else "idle",
+                self._config_t("运行中", "running")
+                if chat.get("running")
+                else self._config_t("空闲", "idle"),
             )
         self.renderer.console.print(table)
 
     async def _show_status(self) -> None:
         status = await self.transport.status()
+        session_label = (
+            str(getattr(self.transport, "chat_id", "") or "")
+            or self._config_t("新对话", "new conversation")
+        )
         self.renderer.info(
-            f"Model: {status.get('model', '?')} · "
-            f"Endpoint: {status.get('base_url', '?')} · "
-            f"Session: {self.transport.session_label}"
+            f"{self._config_t('模型', 'Model')}: {status.get('model', '?')} · "
+            f"{self._config_t('端点', 'Endpoint')}: {status.get('base_url', '?')} · "
+            f"{self._config_t('会话', 'Session')}: {session_label}"
         )
 
     async def _show_mcp(self) -> None:
         servers = await self.transport.list_mcp()
         if not servers:
-            self.renderer.info("没有配置 MCP Server。")
+            self.renderer.info(self._config_t(
+                "没有配置 MCP Server。",
+                "No MCP servers are configured.",
+            ))
             return
         for server in servers:
+            raw_status = str(server.get("status") or "disconnected")
+            status_labels = {
+                "connected": ("已连接", "connected"),
+                "connecting": ("连接中", "connecting"),
+                "disconnected": ("未连接", "disconnected"),
+                "error": ("错误", "error"),
+            }
+            zh_status, en_status = status_labels.get(
+                raw_status,
+                (raw_status, raw_status),
+            )
+            tool_count = server.get("tool_count") or 0
+            tool_unit = self._config_t(
+                "个工具",
+                "tool" if tool_count == 1 else "tools",
+            )
             self.renderer.info(
                 f"{server.get('name', '?')} · {server.get('transport', '?')} · "
-                f"{server.get('status', 'disconnected')} · {server.get('tool_count', 0)} tools"
+                f"{self._config_t(zh_status, en_status)} · "
+                f"{tool_count} {tool_unit}"
             )
+
+
+def _canonical_cli_language(value: Any) -> str:
+    return normalize_language(value) or app_language()
+
+
+async def _resolve_chat_language(
+    requested: Any,
+    transport: ChatTransport,
+) -> str:
+    explicit = normalize_language(requested)
+    if explicit:
+        return explicit
+    try:
+        config = await transport.get_setting("/api/settings/config")
+    except ChatClientError:
+        return app_language()
+    return normalize_language(config.get("app_language")) or app_language()
 
 
 async def run_chat(args: Any) -> int:
     """Entry point called by :mod:`cyrene.cli`."""
     json_output = bool(getattr(args, "json", False))
+    requested_language = (
+        getattr(args, "lang", None)
+        if bool(getattr(args, "_lang_resolved", False))
+        else getattr(
+            args,
+            "_lang_explicit",
+            getattr(args, "lang", None),
+        )
+    )
+    initial_language = _canonical_cli_language(getattr(args, "lang", None))
     text = str(getattr(args, "text", "") or "").strip()
     if not text and not sys.stdin.isatty():
         text = sys.stdin.read().strip()
     if json_output and not text and not bool(getattr(args, "list_chats", False)):
         if not bool(getattr(args, "resume", False)):
-            print("cyrene chat --json requires TEXT, stdin input, or --resume.", file=sys.stderr)
+            message = (
+                "cyrene chat --json 需要 TEXT、stdin 输入或 --resume。"
+                if initial_language == "zh"
+                else "cyrene chat --json requires TEXT, stdin input, or --resume."
+            )
+            print(message, file=sys.stderr)
             return 2
 
     options = ChatOptions(
         mode=str(getattr(args, "mode", "default") or "default"),
-        lang=str(getattr(args, "lang", "zh") or "zh"),
+        lang=initial_language,
         json_output=json_output,
         color=not bool(getattr(args, "no_color", False)),
         verbose=bool(getattr(args, "verbose", False)),
@@ -2768,9 +3261,17 @@ async def run_chat(args: Any) -> int:
         project_id=str(getattr(args, "project", "") or ""),
         title=str(getattr(args, "title", "") or ""),
         auth_token=str(getattr(args, "auth_token", "") or ""),
+        language=initial_language,
     )
     try:
         async with transport:
+            options.lang = await _resolve_chat_language(
+                requested_language,
+                transport,
+            )
+            if isinstance(renderer, RichRenderer):
+                renderer.set_language(options.lang)
+            transport.set_language(options.lang)
             app = InteractiveChat(transport, renderer, options)
             if bool(getattr(args, "list_chats", False)):
                 await transport.health()

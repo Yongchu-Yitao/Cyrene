@@ -5,7 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from agent.plugin import PluginContext
-from agent.plugin.native_runtime import publish_runtime_event, run_context_value
+from agent.plugin.native_runtime import (
+    plugin_localized,
+    publish_runtime_event,
+    run_context_value,
+)
 
 TOOL_NAME = "update_task_plan"
 TOOL_DEF = {
@@ -78,12 +82,24 @@ async def _tool_update_task_plan(
     from cyrene.workbench.context import resolve_workbench_session_kind
 
     if str(run_context_value(context, "agent_id", "main") or "main") != "main":
-        return "Only the main agent can update a Workbench task plan."
+        return plugin_localized(
+            context,
+            "Only the main agent can update a Workbench task plan.",
+            "只有主 Agent 可以更新工作台任务计划。",
+        )
     session_id = str(run_context_value(context, "session_id", "") or "").strip()
     if not session_id:
-        return "No active Workbench task session."
+        return plugin_localized(
+            context,
+            "No active Workbench task session.",
+            "当前没有活动的工作台任务会话。",
+        )
     if resolve_workbench_session_kind(session_id) != "task":
-        return "update_task_plan is only available inside Workbench task sessions."
+        return plugin_localized(
+            context,
+            "update_task_plan is only available inside Workbench task sessions.",
+            "update_task_plan 只能在工作台任务会话中使用。",
+        )
 
     operation = str(args.get("operation") or "").strip().lower()
     from cyrene.workbench.project_repository import update_task_plan_for_session
@@ -99,7 +115,11 @@ async def _tool_update_task_plan(
         reason=str(args.get("reason") or "").strip(),
     )
     if not result.get("ok"):
-        return "Task plan not updated: " + str(result.get("error") or "unknown error")
+        return plugin_localized(
+            context,
+            "The task plan could not be updated.",
+            "无法更新任务计划。",
+        )
 
     await publish_runtime_event(
         context,
@@ -110,7 +130,12 @@ async def _tool_update_task_plan(
             "planDefinitionRevision": result.get("planDefinitionRevision"),
         },
     )
-    return "Task plan updated. Current plan revision: " + str(result.get("planDefinitionRevision") or "")
+    return plugin_localized(
+        context,
+        "Task plan updated. Current plan revision: {revision}",
+        "任务计划已更新。当前计划修订版本：{revision}",
+        revision=str(result.get("planDefinitionRevision") or ""),
+    )
 
 
 handler = _tool_update_task_plan

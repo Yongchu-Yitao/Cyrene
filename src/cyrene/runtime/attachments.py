@@ -14,6 +14,7 @@ from PIL import Image
 from pypdf import PdfReader
 
 from cyrene.config import DATA_DIR
+from cyrene.localization import localized
 from cyrene.model_runtime.messages import assistant_text, truncate
 from cyrene.runtime.file_hashing import sha256_file
 
@@ -66,11 +67,15 @@ def _file_content_hash(path: Path) -> str:
 def _vision_model_fingerprint() -> str:
     """A stable, secret-free fingerprint of models that may receive images."""
     try:
-        from cyrene.runtime.model_configuration import candidates_for_route
+        from agent.plugin import active_plugin_service
+
+        service = active_plugin_service("model_configuration")
+        if service is None:
+            return ""
 
         candidates = [
-            *candidates_for_route("primary"),
-            *candidates_for_route("vision"),
+            *service.candidates_for_route("primary"),
+            *service.candidates_for_route("vision"),
         ]
         public = [
             {
@@ -94,11 +99,11 @@ def _local_ocr_fingerprint() -> str:
 
         service = active_plugin_service("knowledge")
         if service is None:
-            return "pp-ocrv6-medium:0"
+            return "unavailable:0"
         model_id = service.ocr_model_id
         return f"{model_id}:{int(service.is_local_model_ready(model_id))}"
     except Exception:
-        return "pp-ocrv6-medium:0"
+        return "unavailable:0"
 
 
 def _analysis_cache_key(path: Path, prompt: str) -> str:
@@ -220,9 +225,10 @@ def is_image_path(path: Path) -> bool:
 def model_supports_multimodal(model: str | None = None) -> bool:
     if model is None:
         try:
-            from cyrene.runtime.model_configuration import candidates_for_route
+            from agent.plugin import active_plugin_service
 
-            vision = candidates_for_route("vision")
+            service = active_plugin_service("model_configuration")
+            vision = service.candidates_for_route("vision") if service is not None else []
             return bool(
                 vision
                 and "vision" in set(vision[0].get("capabilities") or [])
@@ -233,12 +239,14 @@ def model_supports_multimodal(model: str | None = None) -> bool:
     if not model_name:
         return False
     try:
-        from cyrene.runtime.model_configuration import get_model_configuration
+        from agent.plugin import active_plugin_service
 
+        service = active_plugin_service("model_configuration")
+        configuration = service.get_model_configuration() if service is not None else {}
         matched = next(
             (
                 profile
-                for profile in get_model_configuration().get("profiles") or []
+                for profile in configuration.get("profiles") or []
                 if model_name
                 in {
                     str(profile.get("id") or "").strip().lower(),
@@ -262,9 +270,10 @@ def primary_model_supports_vision() -> bool:
     model-name heuristics are intentionally not used for that high-cost path.
     """
     try:
-        from cyrene.runtime.model_configuration import candidates_for_route
+        from agent.plugin import active_plugin_service
 
-        models = candidates_for_route("primary")
+        service = active_plugin_service("model_configuration")
+        models = service.candidates_for_route("primary") if service is not None else []
         primary = models[0] if models else {}
         return isinstance(primary, dict) and "vision" in set(
             primary.get("capabilities") or []
@@ -521,17 +530,23 @@ def _build_attachment_preview(result: dict[str, Any]) -> str:
     kind = str(result.get("kind") or "file")
     if kind == "pdf":
         preview = str(result.get("text_preview") or "").strip()
-        return preview or "PDF detected, but no text could be extracted."
+        return preview or localized(
+            "PDF detected, but no text could be extracted.",
+            "已识别 PDF，但未能提取文本。",
+        )
     if kind == "image":
         ocr_text = str(result.get("ocr_text") or "").strip()
         vision_text = str(result.get("vision_text") or "").strip()
         if ocr_text and vision_text:
             return truncate(
-                f"OCR text:\n{ocr_text}\n\nVisual analysis:\n{vision_text}",
+                localized(
+                    f"OCR text:\n{ocr_text}\n\nVisual analysis:\n{vision_text}",
+                    f"OCR 文本：\n{ocr_text}\n\n视觉分析：\n{vision_text}",
+                ),
                 12000,
             )
         if ocr_text:
-            return truncate(f"OCR text:\n{ocr_text}", 12000)
+            return truncate(localized(f"OCR text:\n{ocr_text}", f"OCR 文本：\n{ocr_text}"), 12000)
         if vision_text:
             return vision_text
         meta = result.get("image_meta", {})
@@ -539,12 +554,18 @@ def _build_attachment_preview(result: dict[str, Any]) -> str:
         height = meta.get("height")
         fmt = meta.get("format") or "image"
         if width and height:
-            return f"Image metadata only: {fmt}, {width}x{height}."
-        return "Image uploaded."
+            return localized(
+                f"Image metadata only: {fmt}, {width}x{height}.",
+                f"仅有图片元数据：{fmt}，{width}×{height}。",
+            )
+        return localized("Image uploaded.", "图片已上传。")
     if kind == "document":
         preview = str(result.get("text_preview") or "").strip()
-        return preview or "Document detected, but no text could be extracted."
-    return str(result.get("note") or "File uploaded.")
+        return preview or localized(
+            "Document detected, but no text could be extracted.",
+            "已识别文档，但未能提取文本。",
+        )
+    return str(result.get("note") or localized("File uploaded.", "文件已上传。"))
 
 
 def _read_cache(key: str) -> dict[str, Any] | None:
@@ -670,7 +691,7 @@ async def analyze_attachment(path_str: str, prompt: str = "", force_refresh: boo
             from agent.plugin import active_plugin_service
 
             service = active_plugin_service("knowledge")
-            model_id = service.ocr_model_id if service is not None else "pp-ocrv6-medium"
+            model_id = service.ocr_model_id if service is not None else ""
             payload["local_ocr_available"] = bool(
                 service is not None and service.is_local_model_ready(model_id)
             )

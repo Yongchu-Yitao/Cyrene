@@ -10,7 +10,6 @@ from agent.plugin import (
     PluginApplicationContext,
     PluginPack,
     PluginSetupContext,
-    active_plugin_service,
 )
 
 from . import analyze_attachment, read_tool_result, web_fetch, web_search
@@ -19,26 +18,66 @@ from .tool_result_store import get_tool_result_store
 
 
 def setup(context: PluginSetupContext) -> None:
-    if context.services.get("web_search") is None:
-        context.provide(
-            "web_search",
-            active_plugin_service("web_search") or get_search_service(),
-            replace=True,
-        )
-    if context.services.get("tool_results") is None:
-        context.provide(
-            "tool_results",
-            active_plugin_service("tool_results") or get_tool_result_store(),
-            replace=True,
+    missing = [
+        name
+        for name in ("content", "web_search", "tool_results")
+        if context.services.get(name) is None
+    ]
+    if missing:
+        raise RuntimeError(
+            "cyrene_content application services are unavailable: "
+            + ", ".join(missing)
         )
 
 
 def application_setup(context: PluginApplicationContext) -> None:
+    from agent.plugin import active_plugin_application_host
+    from cyrene.workbench.presentation_service import PresentationQueryService
+
+    from .pdf_routes import register_pdf_routes
+    from .routes import register_search_routes
+    from .search_settings import install_search_settings
+
     search_service = get_search_service()
+    context.provide("content", search_service)
     context.provide("web_search", search_service)
     context.provide("tool_results", get_tool_result_store())
     context.on_startup(search_service.startup)
     context.on_shutdown(search_service.shutdown)
+    register_pdf_routes(context.router)
+    register_search_routes(
+        context.router,
+        PresentationQueryService(
+            db_path=context.db_path,
+            plugin_host=active_plugin_application_host(),
+        ),
+    )
+    context.expose_frontend("content")
+    if install_search_settings(context, canonical_name=web_search.TOOL_NAME):
+        from cyrene.runtime.settings_service import (
+            PluginSettingsContribution,
+            SettingControlSpec,
+            plugin_setting_spec,
+        )
+
+        context.provide(
+            "search_settings_schema",
+            PluginSettingsContribution(
+                specs=(
+                    plugin_setting_spec(
+                        "proxy_search_enabled", "boolean", False,
+                        tab="general", apply_mode="next_run",
+                    ),
+                ),
+                controls=(
+                    SettingControlSpec(
+                        "search.providers", "search", "current_ui",
+                        "cyrene.ui.inspect", "R3", secret=True,
+                    ),
+                ),
+            ),
+        )
+        context.expose_frontend("search")
 
 
 def _plugin(module: ModuleType) -> Plugin:

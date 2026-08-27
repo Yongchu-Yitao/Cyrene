@@ -5,7 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from agent.plugin import PluginContext
-from agent.plugin.native_runtime import json_result, run_context_value
+from agent.plugin.native_runtime import (
+    json_result,
+    plugin_localized,
+    run_context_value,
+)
 
 from .definitions import get_native_tool_def
 from .services import terminal_service
@@ -29,7 +33,11 @@ async def _tool_delete_shell(
         or str(terminal.get("ownerChatId") or "")
         != str(run_context_value(context, "session_id") or "")
     ):
-        raise PermissionError("The Agent can delete only terminals it created in this conversation.")
+        raise PermissionError(plugin_localized(
+            context,
+            "The Agent can delete only terminals it created in this conversation.",
+            "Agent 只能删除自己在当前会话中创建的终端。",
+        ))
     result = await terminals.remove(str(terminal.get("id") or ""))
     return json_result({
         "shell_id": terminal.get("id", ""),

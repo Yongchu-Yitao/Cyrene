@@ -1,14 +1,16 @@
-"""Search installable MCP servers, CLI tools, and runtimes."""
+"""Search installable MCP servers and runtimes."""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any
 
 from agent.plugin import PluginContext
+from agent.plugin.native_runtime import plugin_localized
 
-from cyrene.extensions.service import get_extension_service
+from agent.plugin.plugin_impl.cyrene_extensions.extension_service import get_extension_service
 from .list_environment import (
     environment_items,
     environment_key,
@@ -25,7 +27,8 @@ TOOL_METADATA = {
     "requires_order": False,
 }
 
-_KINDS = ("toolchain", "cli", "mcp")
+_KINDS = ("toolchain", "mcp")
+logger = logging.getLogger(__name__)
 
 
 def _extension_keys(service: Any) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
@@ -60,7 +63,7 @@ def _install_request(item: dict[str, Any]) -> dict[str, Any] | None:
                 "source": {"type": "mcp-registry-package", "id": item.get("id"), "version": version},
             }
         return None
-    if kind in {"cli", "toolchain"}:
+    if kind == "toolchain":
         spec_keys = (
             "name", "kind", "manager", "tool", "ref", "version",
             "recommended_version", "executables", "version_args",
@@ -107,13 +110,36 @@ def _compact_candidate(item: dict[str, Any], installed: set[tuple[str, str]]) ->
     }
 
 
-async def _tool_search_environment(args: dict[str, Any], _context: PluginContext) -> str:
+async def _tool_search_environment(args: dict[str, Any], context: PluginContext) -> str:
     query = str(args.get("query") or "").strip()
     if not query:
-        return json.dumps({"ok": False, "error": "query is required"}, ensure_ascii=False)
+        return json.dumps(
+            {
+                "ok": False,
+                "code": "query_required",
+                "error": plugin_localized(
+                    context,
+                    "A search query is required.",
+                    "必须提供搜索关键词。",
+                ),
+            },
+            ensure_ascii=False,
+        )
     kind = str(args.get("kind") or "all").strip().lower()
     if kind != "all" and kind not in _KINDS:
-        return json.dumps({"ok": False, "error": f"unsupported environment kind: {kind}"}, ensure_ascii=False)
+        return json.dumps(
+            {
+                "ok": False,
+                "code": "unsupported_environment_kind",
+                "error": plugin_localized(
+                    context,
+                    "Unsupported environment kind: {kind}",
+                    "不支持的环境类型：{kind}",
+                    kind=kind,
+                ),
+            },
+            ensure_ascii=False,
+        )
     limit = max(1, min(int(args.get("limit") or 20), 50))
     advanced = bool(args.get("advanced", False))
     cursor = str(args.get("cursor") or "")
@@ -128,7 +154,16 @@ async def _tool_search_environment(args: dict[str, Any], _context: PluginContext
     next_cursors: dict[str, str] = {}
     for selected, outcome in zip(kinds, outcomes):
         if isinstance(outcome, BaseException):
-            errors[selected] = str(outcome)
+            logger.warning(
+                "Environment source search failed for %s",
+                selected,
+                exc_info=(type(outcome), outcome, outcome.__traceback__),
+            )
+            errors[selected] = plugin_localized(
+                context,
+                "This catalog source is temporarily unavailable.",
+                "此目录源暂时不可用。",
+            )
             continue
         for item in outcome.get("results", []) or []:
             if isinstance(item, dict):
@@ -147,7 +182,11 @@ async def _tool_search_environment(args: dict[str, Any], _context: PluginContext
         "results": candidates[:limit],
         "source_errors": errors,
         "next_cursors": next_cursors,
-        "next_step": "Disabled entries are intentionally hidden. For installable results, use toolbox.describe for ManageExtensions, then toolbox.invoke it with action=install and only the exact install_request returned here. If installable is false, use the exact fallback_request when present; otherwise stop and report reason_code. Never guess request fields or retry alternate payload shapes. Installation remains subject to Plugin permission review.",
+        "next_step": plugin_localized(
+            context,
+            "Disabled entries are intentionally hidden. Use the cyrene_cli Plugin pack for CLI tools. For results here, invoke ManageExtensions with only the exact install_request returned here. Never guess request fields.",
+            "已禁用的条目会被隐藏。CLI 工具请使用 cyrene_cli 插件包；此处的结果只能把返回的精确 install_request 交给 ManageExtensions，绝不能猜测请求字段。",
+        ),
     }, ensure_ascii=False)
 
 

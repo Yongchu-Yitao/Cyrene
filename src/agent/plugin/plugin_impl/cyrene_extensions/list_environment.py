@@ -1,4 +1,4 @@
-"""List installed and detected Cyrene runtimes, CLI tools, and MCP servers."""
+"""List installed and detected Cyrene runtimes and MCP servers."""
 
 from __future__ import annotations
 
@@ -6,8 +6,9 @@ import json
 from typing import Any
 
 from agent.plugin import PluginContext
+from agent.plugin.native_runtime import plugin_localized
 
-from cyrene.extensions.service import get_extension_service
+from agent.plugin.plugin_impl.cyrene_extensions.extension_service import get_extension_service
 from .definitions import get_native_tool_def
 
 TOOL_NAME = "ListEnvironment"
@@ -20,7 +21,6 @@ TOOL_METADATA = {
 
 _COLLECTIONS = {
     "mcp": "mcp",
-    "cli": "cli",
     "toolchain": "toolchains",
 }
 
@@ -104,10 +104,22 @@ def environment_items(state: dict[str, Any]):
             yield kind, item
 
 
-async def _tool_list_environment(args: dict[str, Any], _context: PluginContext) -> str:
+async def _tool_list_environment(args: dict[str, Any], context: PluginContext) -> str:
     kind = str(args.get("kind") or "all").strip().lower()
     if kind != "all" and kind not in _COLLECTIONS:
-        return json.dumps({"ok": False, "error": f"unsupported environment kind: {kind}"}, ensure_ascii=False)
+        return json.dumps(
+            {
+                "ok": False,
+                "code": "unsupported_environment_kind",
+                "error": plugin_localized(
+                    context,
+                    "Unsupported environment kind: {kind}",
+                    "不支持的环境类型：{kind}",
+                    kind=kind,
+                ),
+            },
+            ensure_ascii=False,
+        )
 
     query = str(args.get("query") or "").strip().casefold()
     state = get_extension_service().list_extensions()
@@ -129,7 +141,11 @@ async def _tool_list_environment(args: dict[str, Any], _context: PluginContext) 
         "query": query,
         "count": len(items),
         "items": items,
-        "note": "This is discovery metadata only. Disabled entries are intentionally hidden. CLI and runtime binaries are exposed through Cyrene's Agent process environment. Skills are discovered through the cyrene_skills Plugin pack.",
+        "note": plugin_localized(
+            context,
+            "This is discovery metadata only. Disabled entries are intentionally hidden. Use the cyrene_cli Plugin pack for CLI tools and cyrene_skills for Skills.",
+            "这里只返回发现元数据，并会隐藏已禁用的条目。CLI 工具由 cyrene_cli 插件包提供，技能由 cyrene_skills 插件包提供。",
+        ),
     }, ensure_ascii=False)
 
 

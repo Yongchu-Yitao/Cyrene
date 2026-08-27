@@ -6,8 +6,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from agent.plugin import PluginContext
+from agent.plugin.native_runtime import plugin_localized
 
-from .tool_result_store import ToolResultReferenceError, read_tool_result
+from .tool_result_store import ToolResultReferenceError
 
 TOOL_NAME = "read_tool_result"
 TOOL_DEF = {
@@ -60,6 +61,8 @@ async def _tool_read_tool_result(
     )
     service = context.services.get("tool_results")
     reader = getattr(service, "read", None)
+    if not callable(reader) or context.services.get("content") is None:
+        raise RuntimeError("cyrene_content application service is unavailable")
     try:
         options = {
             "session_id": session_id,
@@ -67,11 +70,13 @@ async def _tool_read_tool_result(
             "limit": int(args.get("limit") or 4000),
             "query": str(args.get("query") or ""),
         }
-        if callable(reader):
-            return str(reader(str(args.get("content_ref") or ""), **options))
-        return read_tool_result(str(args.get("content_ref") or ""), **options)
-    except (TypeError, ValueError, ToolResultReferenceError) as exc:
-        return f"Tool failed: {exc}"
+        return str(reader(str(args.get("content_ref") or ""), **options))
+    except (TypeError, ValueError, ToolResultReferenceError):
+        return plugin_localized(
+            context,
+            "Tool failed: the result reference or paging arguments are invalid.",
+            "工具失败：结果引用或分页参数无效。",
+        )
 
 
 handler = _tool_read_tool_result

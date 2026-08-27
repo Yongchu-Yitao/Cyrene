@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 import re
 import shutil
 from dataclasses import dataclass
@@ -13,9 +12,16 @@ from pathlib import Path
 from typing import Any
 
 from agent.plugin import PluginApplicationContext
+from cyrene.localization import app_language, localized
 
 
 logger = logging.getLogger(__name__)
+
+
+def _soul_application() -> Any | None:
+    from agent.plugin import active_plugin_service
+
+    return active_plugin_service("soul")
 
 
 def _normalize_search_text(value: Any) -> str:
@@ -154,9 +160,8 @@ class MemoryApplication:
         from cyrene.workbench.conversation_context_service import AgentContextRepository
         from .archive import CONVERSATIONS_DIR
         from .short_term import load_entries
-        from .soul import get_soul_path, read_soul
-
-        soul_content = read_soul()
+        soul = _soul_application()
+        soul_content = str(soul.read() or "") if soul is not None else ""
         now = datetime.now(timezone.utc)
         sections, temporary_count, temporary_expired = _soul_overview(
             soul_content,
@@ -202,7 +207,7 @@ class MemoryApplication:
         return {
             "soul": {
                 "exists": bool(soul_content),
-                "path": str(get_soul_path()),
+                "path": str(soul.path()) if soul is not None else "",
                 "sections": sections,
                 "temporary_count": temporary_count,
                 "temporary_expired": temporary_expired,
@@ -239,7 +244,10 @@ class MemoryApplication:
         from cyrene.workbench.store import list_document_keys, read_document
 
         projects = [project for project in read_projects() if isinstance(project, dict) and str(project.get("id") or "").strip()]
-        project_names = {str(project.get("id")): str(project.get("name") or project.get("id") or "Workspace") for project in projects}
+        project_names = {
+            str(project.get("id")): str(project.get("name") or "").strip()
+            for project in projects
+        }
         storage_to_project: dict[str, str] = {}
         for project in projects:
             project_id = str(project.get("id") or "").strip()
@@ -271,10 +279,12 @@ class MemoryApplication:
                     {
                         "id": memory_id,
                         "type": "memory",
-                        "title": content[:80] or "Memory",
+                        "title": content[:80],
+                        "titleKey": "" if content else "search.default.memory",
                         "snippet": _snippet(content, query),
                         "projectId": project_id,
-                        "projectName": project_names.get(project_id, "Workspace"),
+                        "projectName": project_names.get(project_id, ""),
+                        "projectNameDefault": not bool(project_names.get(project_id, "")),
                         "memId": memory_id,
                         "category": entry.get("category") or entry.get("type") or "fact",
                         "tags": tags,
@@ -319,7 +329,6 @@ class MemoryApplication:
             "memory": (
                 self.data_directory / "short_term.json",
                 self.data_directory / "memory_steward.json",
-                self.soul_path(),
             ),
             "conversations": (self.conversations_directory,),
         }
@@ -328,7 +337,6 @@ class MemoryApplication:
         """Describe Plugin-owned files for the host's generic backup service."""
 
         return {
-            "files": ((self.soul_path(), "workspace/SOUL.md"),),
             "directories": ((self.conversations_directory, "workspace/conversations"),),
         }
 
@@ -339,18 +347,25 @@ class MemoryApplication:
         soul_enabled: bool = True,
     ) -> str:
         from .short_term import get_context
-        from .soul import read_shallow_memory
-
-        parts = [read_shallow_memory().strip()] if soul_enabled else []
+        soul = _soul_application() if soul_enabled else None
+        parts = [str(soul.persona_context() or "").strip()] if soul is not None else []
         if include_short_term:
-            parts.append(get_context(max_chars=5000).strip())
+            language = app_language()
+            parts.append(get_context(
+                max_chars=5000,
+                header=localized(
+                    "[Short-term cross-session memory:]",
+                    "[跨会话短期记忆：]",
+                    language=language,
+                ),
+            ).strip())
         return "\n\n".join(part for part in parts if part)
 
     def short_term_context(
         self,
         *,
         max_chars: int = 5000,
-        header: str = "[Previous context:]",
+        header: str | None = None,
     ) -> str:
         from .short_term import get_context
 
@@ -398,53 +413,6 @@ class MemoryApplication:
             session_id=session_id,
             model_gateway=self.model_gateway,
         )
-
-    def soul_path(self) -> Path:
-        from .soul import get_soul_path
-
-        return get_soul_path()
-
-    def default_soul(self, name: str | None = None) -> str:
-        from .soul import get_default_soul_content
-
-        return get_default_soul_content(name)
-
-    def ensure_soul(self) -> None:
-        from .soul import ensure_soul
-
-        ensure_soul()
-
-    def read_soul(self) -> str:
-        from .soul import read_soul
-
-        return read_soul()
-
-    def write_soul(self, content: str) -> None:
-        path = self.soul_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(content or ""), encoding="utf-8")
-
-    def reset_persona_memory(self) -> None:
-        """Reset persona and short-term stores without exposing file mutation."""
-
-        from .short_term import save_entries
-
-        try:
-            self.soul_path().unlink()
-        except FileNotFoundError:
-            pass
-        self.ensure_soul()
-        save_entries([])
-
-    def read_shallow_memory(self) -> str:
-        from .soul import read_shallow_memory
-
-        return read_shallow_memory()
-
-    def apply_soul_update(self, commands: str) -> list[str]:
-        from .soul import apply_soul_update
-
-        return apply_soul_update(commands)
 
     async def archive_exchange(self, *args: Any, **kwargs: Any) -> Any:
         from .archive import archive_exchange
@@ -634,92 +602,13 @@ class MemoryApplication:
         project_id = project.get("id") if isinstance(project, dict) else None
         return _safe_workspace_id(project_id)
 
-    def compose_workbench_context(
-        self,
-        project: dict[str, Any] | None,
-        session: dict[str, Any],
-        *,
-        entries: list[dict[str, Any]] | None = None,
-    ) -> tuple[str, str]:
-        """Build the cache-stable and volatile memory blocks for one Task run.
-
-        The first call in a session snapshots the memories that existed at that
-        point. Newly learned memories remain visible in a volatile tail without
-        changing the already established prompt prefix. This selection policy is
-        part of the memory backend and therefore lives entirely inside the
-        editable Plugin.
-        """
-
-        if not isinstance(project, dict):
-            return "", ""
-        from .structured import (
-            _load,
-            memory_injection_ids,
-            render_memory_for_injection,
-        )
-
-        memory_key = self.project_key(project)
-        try:
-            loaded_entries = _load(memory_key) if entries is None else entries
-            current_ids = memory_injection_ids(
-                memory_key,
-                entries=loaded_entries,
-            )
-        except Exception:
-            logger.exception("Failed to load project memory for prompt injection")
-            return "", ""
-
-        stored_key = str(session.get("_promptMemoryKey") or "")
-        raw_base_ids = session.get("_promptMemoryBaseIds")
-        is_new_snapshot = stored_key != memory_key or not isinstance(raw_base_ids, list)
-        if is_new_snapshot:
-            base_ids = list(current_ids)
-            session["_promptMemoryKey"] = memory_key
-            session["_promptMemoryBaseIds"] = list(base_ids)
-        else:
-            base_ids = [str(item) for item in raw_base_ids if str(item).strip()]
-
-        raw_inject_ids = session.get("_promptMemoryInjectIds")
-        if is_new_snapshot or not isinstance(raw_inject_ids, list):
-            inject_ids = base_ids[:20]
-            if len(base_ids) > 20:
-                inject_ids.extend(random.sample(base_ids[20:], min(5, len(base_ids) - 20)))
-            session["_promptMemoryInjectIds"] = list(inject_ids)
-        else:
-            inject_ids = [str(item) for item in raw_inject_ids if str(item).strip()]
-
-        base_set = set(base_ids)
-        new_ids = [memory_id for memory_id in current_ids if memory_id not in base_set]
-        try:
-            fixed = render_memory_for_injection(
-                memory_key,
-                include_ids=inject_ids,
-                preserve_id_order=True,
-                limit=25,
-                entries=loaded_entries,
-            )
-            volatile = (
-                render_memory_for_injection(
-                    memory_key,
-                    include_ids=new_ids,
-                    preserve_id_order=True,
-                    header=("## 本 session 新增项目记忆（刚写入，放在最后供本轮参考；与当前任务无关则忽略）"),
-                    entries=loaded_entries,
-                )
-                if new_ids
-                else ""
-            )
-        except Exception:
-            logger.exception("Failed to render project memory for prompt injection")
-            return "", ""
-        return fixed, volatile
-
     def render_past_task_reports(
         self,
         project: dict[str, Any] | None,
         *,
         limit: int = 3,
         max_chars: int = 2500,
+        language: str = "",
     ) -> str:
         """Render project completion reports for the planning prompt."""
 
@@ -731,6 +620,7 @@ class MemoryApplication:
             self.project_key(project),
             limit=limit,
             max_chars=max_chars,
+            language=language,
         )
 
     def store_reflection_insights(
@@ -746,9 +636,15 @@ class MemoryApplication:
 
         memory_key = self.project_key(project)
         stored = 0
-        for prefix, field, tags in (
-            ("避免：", "excluded_paths", ["反思", "死路"]),
-            ("有效方向：", "promising_directions", ["反思", "有效方向"]),
+        for field, tags in (
+            (
+                "excluded_paths",
+                ["reflection", "dead_end"],
+            ),
+            (
+                "promising_directions",
+                ["reflection", "promising_direction"],
+            ),
         ):
             values = packet.get(field)
             for value in values[:5] if isinstance(values, list) else ():
@@ -757,7 +653,7 @@ class MemoryApplication:
                     continue
                 add_agent_memory(
                     memory_key,
-                    prefix + text,
+                    text,
                     category="reflection",
                     source="agent",
                     tags=tags,
@@ -781,7 +677,7 @@ class MemoryApplication:
             self.project_key(project),
             content,
             category="task_report",
-            tags=["任务报告", "自动生成"],
+            tags=["task_report", "auto_generated"],
             source="agent",
         )
         return True
@@ -799,7 +695,12 @@ class MemoryApplication:
     ) -> bool:
         from .steward import run_steward_if_needed
 
-        return await run_steward_if_needed(self, interval=interval, now=now)
+        return await run_steward_if_needed(
+            self,
+            interval=interval,
+            now=now,
+            soul_application=_soul_application(),
+        )
 
     def session_conversations_directory(
         self,
@@ -853,17 +754,15 @@ class MemoryApplication:
         await asyncio.to_thread(delete_chat_context, chat_id)
 
     async def shutdown(self) -> None:
-        from .project_memory import wait_for_pending_jobs
+        from .project_memory import cancel_pending_jobs
 
-        await wait_for_pending_jobs()
+        await cancel_pending_jobs()
 
     def startup(self) -> None:
         from .archive import ensure_conversations_dir
         from .short_term import init_short_term
-        from .soul import ensure_soul
 
         init_short_term(self.data_directory, self.db_path)
-        ensure_soul()
         ensure_conversations_dir()
 
     async def reset_data(self) -> None:
@@ -871,7 +770,6 @@ class MemoryApplication:
 
         from .archive import CONVERSATIONS_DIR
         from .short_term import init_short_term, save_entries
-        from .soul import get_soul_path
         from cyrene.workbench.store import delete_document, list_document_keys
 
         await self.shutdown()
@@ -884,10 +782,7 @@ class MemoryApplication:
                 for key in list_document_keys(self.db_path, prefix=prefix):
                     delete_document(self.db_path, key)
         shutil.rmtree(CONVERSATIONS_DIR, ignore_errors=True)
-        for path in (
-            get_soul_path(),
-            self.data_directory / "memory_steward.json",
-        ):
+        for path in (self.data_directory / "memory_steward.json",):
             try:
                 path.unlink()
             except FileNotFoundError:
@@ -901,7 +796,6 @@ def setup_application(context: PluginApplicationContext) -> None:
     from .routes_overview import (
         register_conversation_search_routes,
         register_memory_routes,
-        register_soul_routes,
     )
     from .routes_structured import register_workbench_memory_routes
     from .routes_project import register_project_memory_routes
@@ -914,7 +808,6 @@ def setup_application(context: PluginApplicationContext) -> None:
     register_workbench_memory_routes(context.router, application.memory)
     register_project_memory_routes(context.router, application.project_memory)
     register_memory_routes(context.router, application)
-    register_soul_routes(context.router, application)
     register_conversation_search_routes(context.router, application)
     context.provide("memory", application)
     context.provide_search("memory", application.search_workbench)

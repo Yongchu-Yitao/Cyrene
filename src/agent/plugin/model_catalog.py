@@ -9,7 +9,10 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from .native_tools import seed_builtin_plugin_directory
+from .activation import PluginActivationState
+from .customization import PluginCustomizationState
 from .registry import PluginLoadFailure, PluginRegistry, default_plugin_impl_directory
+from .runtime import PluginRuntime
 
 _SESSION_MODEL_PREFERENCE_SETTING = "llm_session_model_preferences"
 _LAST_SUCCESS_SETTING = "llm_last_success_endpoints"
@@ -21,6 +24,24 @@ _CACHE_ROOT: Path | None = None
 _CACHE_SIGNATURE: tuple[tuple[str, int, int], ...] = ()
 _CACHE_REGISTRY: PluginRegistry | None = None
 _CACHE_FAILURES: tuple[PluginLoadFailure, ...] = ()
+_CACHE_SETTINGS_SIGNATURE: tuple[Any, ...] = ()
+
+
+def _model_configuration_port() -> Any:
+    """Resolve the optional model pack's configuration port.
+
+    Model configuration is deliberately not part of the plugin host.  This
+    accessor keeps the host's routing/candidate helpers generic while avoiding
+    a dependency from core code to ``plugin_impl`` (and makes a disabled model
+    pack fail closed).
+    """
+
+    from .application import active_plugin_service
+
+    service = active_plugin_service("model_configuration")
+    if service is None:
+        raise RuntimeError("model configuration Plugin is not available")
+    return service
 
 
 def _model_pack_signature(root: Path) -> tuple[tuple[str, int, int], ...]:
@@ -40,49 +61,86 @@ def _model_pack_signature(root: Path) -> tuple[tuple[str, int, int], ...]:
 def editable_model_registry(
     directory: str | Path | None = None,
 ) -> tuple[PluginRegistry, tuple[PluginLoadFailure, ...]]:
-    """Return a registry refreshed whenever an editable model file changes."""
+    """Return an offline registry that honors persisted Plugin state.
+
+    Live application code must use :func:`application_model_registry` so it
+    cannot accidentally bypass pack activation, provider activation, or
+    customizations by loading a second registry.
+    """
 
     global _CACHE_ROOT, _CACHE_SIGNATURE, _CACHE_REGISTRY, _CACHE_FAILURES
+    global _CACHE_SETTINGS_SIGNATURE
     root = Path(directory or default_plugin_impl_directory()).expanduser().resolve()
     with _LOCK:
         seed_builtin_plugin_directory(root)
         signature = _model_pack_signature(root)
-        if _CACHE_REGISTRY is not None and _CACHE_ROOT == root and _CACHE_SIGNATURE == signature:
+        from cyrene.runtime import settings_store
+
+        enabled_plugins = settings_store.get_enabled_plugins()
+        enabled_packs = settings_store.get_enabled_plugin_packs()
+        raw_customizations = settings_store.get("plugin_tool_customizations", {}) or {}
+        customizations = (
+            raw_customizations if isinstance(raw_customizations, Mapping) else {}
+        )
+        settings_signature = (
+            tuple(sorted(enabled_plugins.items())),
+            tuple(sorted(enabled_packs.items())),
+            repr(sorted((str(key), repr(value)) for key, value in customizations.items())),
+        )
+        if (
+            _CACHE_REGISTRY is not None
+            and _CACHE_ROOT == root
+            and _CACHE_SIGNATURE == signature
+            and _CACHE_SETTINGS_SIGNATURE == settings_signature
+        ):
             return _CACHE_REGISTRY, _CACHE_FAILURES
-        registry = PluginRegistry(include_core=False)
+        registry = PluginRegistry(
+            include_core=False,
+            activation=PluginActivationState(
+                plugins=enabled_plugins,
+                packs=enabled_packs,
+            ),
+            customizations=PluginCustomizationState(customizations),
+        )
         failures = registry.load_directory(root)
         _CACHE_ROOT = root
         _CACHE_SIGNATURE = signature
         _CACHE_REGISTRY = registry
         _CACHE_FAILURES = failures
+        _CACHE_SETTINGS_SIGNATURE = settings_signature
         return registry, failures
+
+
+def application_model_registry(
+    directory: str | Path | None = None,
+) -> tuple[PluginRegistry, tuple[PluginLoadFailure, ...]]:
+    """Return the live application registry, or a stateful offline fallback."""
+
+    if directory is None:
+        from .application import active_plugin_application_host
+
+        host = active_plugin_application_host()
+        if host is not None:
+            return host.registry, host.load_failures
+    return editable_model_registry(directory)
+
+
+def application_model_runtime(registry: PluginRegistry) -> PluginRuntime:
+    """Reuse the active host runtime when ``registry`` belongs to that host."""
+
+    from .application import active_plugin_application_host
+
+    host = active_plugin_application_host()
+    if host is not None and host.registry is registry:
+        return host.runtime
+    return PluginRuntime(registry)
 
 
 def model_plugin_catalog(
     directory: str | Path | None = None,
 ) -> list[dict[str, Any]]:
-    registry, _failures = editable_model_registry(directory)
-    result: list[dict[str, Any]] = []
-    for registered in registry.list_plugins():
-        plugin = registered.plugin
-        if plugin.kind != "model":
-            continue
-        provider = plugin.metadata.get("provider")
-        if not isinstance(provider, Mapping):
-            continue
-        provider_id = str(provider.get("id") or "").strip().lower()
-        if not provider_id:
-            continue
-        result.append(
-            {
-                **dict(provider),
-                "id": provider_id,
-                "plugin_name": plugin.name,
-                "description": plugin.description,
-                "pack_id": registered.pack_id or "",
-            }
-        )
-    return sorted(result, key=lambda item: (str(item.get("name") or ""), item["id"]))
+    registry, _failures = application_model_registry(directory)
+    return registered_model_plugin_catalog(registry)
 
 
 def registered_model_plugin_catalog(registry: PluginRegistry) -> list[dict[str, Any]]:
@@ -92,6 +150,11 @@ def registered_model_plugin_catalog(registry: PluginRegistry) -> list[dict[str, 
     for registered in registry.list_plugins():
         plugin = registered.plugin
         if plugin.kind != "model":
+            continue
+        try:
+            if not registry.plugin_enabled(plugin.name):
+                continue
+        except Exception:
             continue
         provider = plugin.metadata.get("provider")
         if not isinstance(provider, Mapping):
@@ -126,17 +189,35 @@ def resolve_registered_model_plugin(
 ):
     """Resolve a Provider from the Registry used by the active AgentSession."""
 
-    catalog = registered_model_plugin_catalog(registry)
-    by_id = {str(item.get("id") or ""): item for item in catalog}
     normalized_provider = str(provider_id or "").strip().lower()
     normalized_adapter = str(adapter_id or "").strip().lower()
-    item = by_id.get(normalized_provider)
-    if item is None:
-        fallback_id = {
-            "openai": "openai_compatible",
-            "openai_responses": "openai",
-        }.get(normalized_adapter, normalized_adapter)
-        item = by_id.get(fallback_id)
+    all_by_id: dict[str, Any] = {}
+    for registered in registry.list_plugins():
+        provider = registered.plugin.metadata.get("provider")
+        if registered.plugin.kind != "model" or not isinstance(provider, Mapping):
+            continue
+        identity = str(provider.get("id") or "").strip().lower()
+        if identity:
+            all_by_id[identity] = registered
+    registered = all_by_id.get(normalized_provider)
+    if registered is not None:
+        try:
+            return registry.resolve(registered.plugin.name)
+        except Exception:
+            return None
+    if normalized_provider:
+        # A named Provider that was disabled, deleted, or is no longer
+        # installed must not silently cross its activation boundary by
+        # falling back to a different protocol implementation.
+        return None
+
+    catalog = registered_model_plugin_catalog(registry)
+    by_id = {str(item.get("id") or ""): item for item in catalog}
+    fallback_id = {
+        "openai": "openai_compatible",
+        "openai_responses": "openai",
+    }.get(normalized_adapter, normalized_adapter)
+    item = by_id.get(fallback_id)
     return registry.resolve(str(item["plugin_name"])) if item is not None else None
 
 
@@ -183,7 +264,7 @@ def configured_model_candidates(
 ) -> list[dict[str, Any]]:
     """Resolve one configured model route without the retired Agent client."""
 
-    from cyrene.runtime.model_configuration import candidates_for_route
+    candidates_for_route = _model_configuration_port().candidates_for_route
     from cyrene.runtime.settings_store import get as get_setting
 
     normalized_route = str(route or "primary").strip().lower()
@@ -253,8 +334,18 @@ def configured_context_limit(
 ) -> int:
     """Return the smallest declared window across one automatic route."""
 
+    # Catalog consumers such as the Memory overview are informational and
+    # must remain available when the optional model-configuration pack is not
+    # installed (or has been disabled).  Actual model selection still uses
+    # ``configured_model_candidates`` directly and therefore fails closed.
+    try:
+        candidates = configured_model_candidates(session_id, route=route)
+    except RuntimeError as exc:
+        if "model configuration Plugin is not available" not in str(exc):
+            raise
+        return 0
     limits: list[int] = []
-    for candidate in configured_model_candidates(session_id, route=route):
+    for candidate in candidates:
         try:
             limit = int(
                 candidate.get("context_limit") or candidate.get("ctx_limit") or 0
@@ -276,8 +367,7 @@ def resolve_session_model_candidate(session_id: str) -> dict[str, Any] | None:
 def resolve_model_profile_candidate(profile_id: str) -> dict[str, Any] | None:
     """Resolve one enabled chat-capable model profile by its durable id."""
 
-    from cyrene.runtime.model_configuration import candidate_for_profile
-
+    candidate_for_profile = _model_configuration_port().candidate_for_profile
     candidate = candidate_for_profile(str(profile_id or "").strip())
     if candidate is None or "chat" not in set(candidate.get("capabilities") or ()):
         return None
@@ -287,7 +377,9 @@ def resolve_model_profile_candidate(profile_id: str) -> dict[str, Any] | None:
 def resolve_exact_model_candidate(identity: Mapping[str, Any]) -> dict[str, Any] | None:
     """Resolve exactly one configured profile from a secret-free identity."""
 
-    from cyrene.runtime.model_configuration import candidate_for_profile, get_model_configuration
+    service = _model_configuration_port()
+    candidate_for_profile = service.candidate_for_profile
+    get_model_configuration = service.get_model_configuration
 
     candidate_id = str(identity.get("candidateId") or "").strip()
     profile_id = str(identity.get("profileId") or identity.get("profile_id") or "").strip()
@@ -428,20 +520,10 @@ def resolve_model_plugin(
 ):
     """Resolve a provider preset first, then a generic protocol Plugin."""
 
-    registry, failures = editable_model_registry(directory)
-    catalog = model_plugin_catalog(directory)
-    normalized_provider = str(provider_id or "").strip().lower()
-    normalized_adapter = str(adapter_id or "").strip().lower()
-    by_id = {str(item.get("id") or ""): item for item in catalog}
-    item = by_id.get(normalized_provider)
-    if item is None:
-        fallback_id = {
-            "openai": "openai_compatible",
-            "openai_responses": "openai",
-        }.get(normalized_adapter, normalized_adapter)
-        item = by_id.get(fallback_id)
-    if item is not None:
-        return registry, registry.resolve(str(item["plugin_name"]))
+    registry, failures = application_model_registry(directory)
+    plugin = resolve_registered_model_plugin(registry, provider_id, adapter_id)
+    if plugin is not None:
+        return registry, plugin
     model_failures = [failure.error for failure in failures if failure.path.name == "cyrene_model"]
     if model_failures:
         raise RuntimeError("failed to load editable model Plugins: " + "; ".join(model_failures))
@@ -449,6 +531,8 @@ def resolve_model_plugin(
 
 
 __all__ = [
+    "application_model_registry",
+    "application_model_runtime",
     "candidate_identity",
     "candidate_provider_id",
     "configured_context_limit",

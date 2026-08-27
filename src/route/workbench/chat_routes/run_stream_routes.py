@@ -4,13 +4,14 @@ import asyncio
 from typing import Any
 
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from cyrene.workbench.chat_guidance_service import (
     ChatGuidanceApplicationService,
     ChatGuidanceDependencies,
 )
 from route import schemas as api_models
+from route.errors import localized_error_response
 from route.workbench.chat_routes.context import ChatRouteContext
 
 
@@ -38,9 +39,11 @@ def register_run_stream_routes(
         run = replay_lookup(chat_id)
         if run is None:
             await asyncio.to_thread(service.settle_chat_running_status, chat_id)
-            return JSONResponse(
-                {"error": "chat has no running reply", "code": "chat_run_not_found"},
-                status_code=404,
+            return localized_error_response(
+                "This chat has no running reply.",
+                "此对话当前没有正在生成的回复。",
+                404,
+                "chat_run_not_found",
             )
         return StreamingResponse(
             run_manager.stream(run, cursor=max(0, int(cursor or 0))),
@@ -71,7 +74,35 @@ def register_run_stream_routes(
             client_request_id=str(body.get("clientRequestId") or "").strip(),
         )
         if result.status_code != 200:
-            return JSONResponse(result.payload, status_code=result.status_code)
+            code = str(
+                result.payload.get("code")
+                or ("chat_not_found" if result.status_code == 404 else "guidance_failed")
+            )
+            messages = {
+                "guidance_empty": (
+                    "A guidance message is required.",
+                    "请输入指导消息。",
+                ),
+                "chat_not_running": (
+                    "This chat has no running reply to guide.",
+                    "此对话当前没有可指导的运行中回复。",
+                ),
+                "guidance_persistence_failed": (
+                    "The guidance could not be saved. Please try again.",
+                    "无法保存指导消息，请重试。",
+                ),
+                "chat_not_found": ("Chat not found.", "未找到对话。"),
+            }
+            en, zh = messages.get(
+                code,
+                ("The guidance request failed.", "指导请求失败。"),
+            )
+            return localized_error_response(
+                en,
+                zh,
+                result.status_code,
+                code,
+            )
         return result.payload
 
     return {"guide_chat": api_workbench_chat_guidance}

@@ -42,6 +42,7 @@ const {
 const { BROWSER_FIND_TARGET_SCRIPT } = require('./browser-target');
 const { HostControl } = require('./host-control');
 const { runTerminalLifecycleSoak } = require('./terminal-lifecycle-soak');
+const { RotatingFileLog } = require('./rotating-log');
 
 const APP_NAME = 'Cyrene';
 const TEMP_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -49,7 +50,7 @@ const BROWSER_UPLOAD_TARGET_TTL_MS = 15 * 60 * 1000;
 const BROWSER_UPLOAD_MAX_FILES = 10;
 const BROWSER_UPLOAD_MAX_FILE_BYTES = 100 * 1024 * 1024;
 const CLI_CONNECTION_FILENAME = 'cli-connection.json';
-let _errorLogStream = null;
+let _errorLog = null;
 
 function getCyreneUserDataDir() {
   if (process.env.CYRENE_USER_DATA_DIR) return process.env.CYRENE_USER_DATA_DIR;
@@ -112,19 +113,11 @@ function publishCliConnection(port) {
   }
 }
 
-function getErrorLogStream() {
-  if (!_errorLogStream) {
-    try {
-      fs.mkdirSync(getCyreneTempDir(), { recursive: true });
-      _errorLogStream = fs.createWriteStream(getErrorLogPath(), { flags: 'a' });
-    } catch (_) {}
-  }
-  return _errorLogStream;
-}
-
 function appendErrorLog(text) {
-  const s = getErrorLogStream();
-  if (s) s.write(text);
+  if (!_errorLog) {
+    _errorLog = new RotatingFileLog(getErrorLogPath());
+  }
+  _errorLog.append(text);
 }
 
 function installWindowDiagnostics(window, label) {
@@ -471,6 +464,32 @@ const DESKTOP_TRANSLATIONS = Object.freeze({
     installQuitDetail: 'Wait to keep the installations running, or cancel them before quitting. Interrupted tasks remain visible for a safe retry on the next launch.',
     installQuitWait: 'Wait',
     installQuitCancel: 'Cancel installs and quit',
+    startupErrorTitle: 'Cyrene - Startup Error',
+    startupErrorMessage: 'Failed to start the Python backend.',
+    startupErrorDevDetail: 'Make sure Python 3 is installed and accessible as "python3".',
+    startupErrorPackagedDetail: 'The application may be corrupted. Please reinstall.',
+    backendErrorTitle: 'Cyrene - Backend Error',
+    backendErrorMessage: 'The Python backend stopped unexpectedly (exit code {code}).',
+    backendErrorClose: 'The application will now close.',
+    backendErrorLog: 'If this keeps happening, check cyrene_error.log in {path}',
+    startupTimeoutTitle: 'Cyrene - Startup Timeout',
+    startupTimeoutMessage: 'The Python backend did not start within 30 seconds.',
+    startupTimeoutLog: 'Check cyrene_error.log in {path} for details.',
+    windowErrorTitle: 'Cyrene - Window Error',
+    windowErrorMessage: 'The application window could not be rendered.',
+    windowErrorLog: 'Check cyrene_error.log in {path} for details.',
+    filePathRequired: 'File path is required.',
+    fileNoLongerExists: 'File no longer exists.',
+    directoryPickerUnsupported: 'The native directory picker is only available on Linux.',
+    selectWorkspaceDirectory: 'Select workspace directory',
+    selectExtensionFolder: 'Select extension folder',
+    selectExecutable: 'Select executable',
+    saveBackupTitle: 'Save Cyrene backup',
+    chooseBackupTitle: 'Choose a Cyrene backup',
+    backupFilterName: 'Cyrene backup',
+    browserAccessGateMessage: 'Page content is temporarily unavailable. One cooldown-limited recovery attempt is allowed; ask the user to take over if it still fails.',
+    videoWindowTitle: 'Cyrene Video',
+    quickChatWindowTitle: 'Cyrene Quick Chat',
   },
   zh: {
     open: '打开 Cyrene',
@@ -502,6 +521,32 @@ const DESKTOP_TRANSLATIONS = Object.freeze({
     installQuitDetail: '可以等待安装完成，或取消安装后退出。异常中断的任务会保留记录，下次启动时可安全重试。',
     installQuitWait: '等待',
     installQuitCancel: '取消安装并退出',
+    startupErrorTitle: 'Cyrene - 启动错误',
+    startupErrorMessage: '无法启动 Python 后端。',
+    startupErrorDevDetail: '请确认已安装 Python 3，且可通过“python3”命令访问。',
+    startupErrorPackagedDetail: '应用可能已损坏，请重新安装。',
+    backendErrorTitle: 'Cyrene - 后端错误',
+    backendErrorMessage: 'Python 后端意外停止（退出代码 {code}）。',
+    backendErrorClose: '应用即将关闭。',
+    backendErrorLog: '如果问题反复出现，请检查 {path} 中的 cyrene_error.log。',
+    startupTimeoutTitle: 'Cyrene - 启动超时',
+    startupTimeoutMessage: 'Python 后端未能在 30 秒内启动。',
+    startupTimeoutLog: '详情请检查 {path} 中的 cyrene_error.log。',
+    windowErrorTitle: 'Cyrene - 窗口错误',
+    windowErrorMessage: '无法渲染应用窗口。',
+    windowErrorLog: '详情请检查 {path} 中的 cyrene_error.log。',
+    filePathRequired: '必须提供文件路径。',
+    fileNoLongerExists: '文件已不存在。',
+    directoryPickerUnsupported: '原生目录选择器仅在 Linux 上可用。',
+    selectWorkspaceDirectory: '选择工作区目录',
+    selectExtensionFolder: '选择扩展文件夹',
+    selectExecutable: '选择可执行文件',
+    saveBackupTitle: '保存 Cyrene 备份',
+    chooseBackupTitle: '选择 Cyrene 备份',
+    backupFilterName: 'Cyrene 备份',
+    browserAccessGateMessage: '页面内容暂不可用；允许一次有冷却时间的恢复尝试，仍失败时请求用户接管。',
+    videoWindowTitle: 'Cyrene 视频',
+    quickChatWindowTitle: 'Cyrene 快捷对话',
   },
 });
 
@@ -851,7 +896,7 @@ function browserPageSignal(url, title, text) {
       retryAllowed: true,
       maxRetries: 1,
       cooldownMs: 10000,
-      message: '页面内容暂不可用；允许一次有冷却时间的恢复尝试，仍失败时请求用户接管。',
+      message: desktopT('browserAccessGateMessage', readDesktopSettings()),
     };
   }
   return { kind: 'normal', requiresUserTakeover: false, retryAllowed: true, message: '' };
@@ -1096,7 +1141,7 @@ function installBrowserSessionGuards(partition = BROWSER_PARTITION) {
     details.requestHeaders = {
       ...details.requestHeaders,
       'User-Agent': browserUserAgent(),
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      'Accept-Language': desktopAcceptLanguage(),
     };
     callback({ requestHeaders: details.requestHeaders });
   });
@@ -1426,7 +1471,7 @@ class BrowserTabManager {
         y: Number(displayBounds.y) || 0,
         width: Math.max(640, Number(displayBounds.width) || 1280),
         height: Math.max(360, Number(displayBounds.height) || 720),
-        title: 'Cyrene Video',
+        title: desktopT('videoWindowTitle', readDesktopSettings()),
         show: false,
         frame: false,
         fullscreenable: true,
@@ -4976,6 +5021,31 @@ function desktopT(key, settings) {
   return dict[key] || DESKTOP_TRANSLATIONS.en[key] || key;
 }
 
+function desktopFormat(key, settings, params = {}) {
+  return desktopT(key, settings).replace(/\{([^{}]+)\}/g, (match, name) => (
+    Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match
+  ));
+}
+
+function desktopAcceptLanguage(settings) {
+  let resolved = settings;
+  if (!resolved) {
+    try { resolved = readDesktopSettings(); } catch (_) { resolved = null; }
+  }
+  return getDesktopLanguage(resolved) === 'zh'
+    ? 'zh-CN,zh;q=0.9,en;q=0.8'
+    : 'en-US,en;q=0.9,zh-CN;q=0.5';
+}
+
+function broadcastDesktopLanguage(settings) {
+  const language = getDesktopLanguage(settings);
+  for (const window of BrowserWindow.getAllWindows()) {
+    try {
+      if (!window.isDestroyed()) window.webContents.send('desktop-language:changed', language);
+    } catch (_) {}
+  }
+}
+
 // ---------------------------------------------------------------------------
 // macOS 应用菜单（i18n 原生菜单栏）
 // ---------------------------------------------------------------------------
@@ -5212,6 +5282,7 @@ function saveDesktopSettings(updates, expectedRevision) {
   syncTrayWithSettings(next);
   if (getDesktopLanguage(current) !== getDesktopLanguage(next)) {
     rebuildApplicationMenu(next);
+    broadcastDesktopLanguage(next);
   }
 
   let shortcutUpdateOk = true;
@@ -5249,6 +5320,9 @@ function resetDesktopSettings() {
   destroyQuickChatWindow();
   syncTrayWithSettings(next);
   rebuildApplicationMenu(next);
+  if (getDesktopLanguage(current) !== getDesktopLanguage(next)) {
+    broadcastDesktopLanguage(next);
+  }
   return next;
 }
 
@@ -5448,12 +5522,11 @@ function spawnPython() {
 
   pythonProcess.on('error', (err) => {
     console.error('[electron] Failed to start Python backend:', err.message);
+    const settings = readDesktopSettings();
     dialog.showErrorBox(
-      'Cyrene - Startup Error',
-      `Failed to start the Python backend.\n\n${err.message}\n\n`
-        + (isDev
-          ? 'Make sure Python 3 is installed and accessible as "python3".'
-          : 'The application may be corrupted. Please reinstall.')
+      desktopT('startupErrorTitle', settings),
+      `${desktopT('startupErrorMessage', settings)}\n\n${err.message}\n\n`
+        + desktopT(isDev ? 'startupErrorDevDetail' : 'startupErrorPackagedDetail', settings)
     );
     if (pendingPortResolve) {
       pendingPortResolve(null);
@@ -5488,11 +5561,12 @@ function spawnPython() {
       // Show error regardless of window state — if Python crashed before
       // printing PORT= the window doesn't exist yet and the user would see
       // a silent flash-quit without this unconditional dialog.
+      const settings = readDesktopSettings();
       dialog.showErrorBox(
-        'Cyrene - Backend Error',
-        `The Python backend stopped unexpectedly (exit code ${code}).\n`
-        + 'The application will now close.\n\n'
-        + `If this keeps happening, check cyrene_error.log in ${getCyreneTempDir()}`
+        desktopT('backendErrorTitle', settings),
+        `${desktopFormat('backendErrorMessage', settings, { code })}\n`
+        + `${desktopT('backendErrorClose', settings)}\n\n`
+        + desktopFormat('backendErrorLog', settings, { path: getCyreneTempDir() })
       );
       app.quit();
     }
@@ -5819,7 +5893,7 @@ async function createQuickChatWindow() {
     height: 460,
     minWidth: 560,
     minHeight: 400,
-    title: 'Cyrene Quick Chat',
+    title: desktopT('quickChatWindowTitle', readDesktopSettings()),
     show: false,
     frame: false,
     resizable: true,
@@ -7083,10 +7157,11 @@ async function createMainWindow() {
       app.exit(1);
       return;
     }
+    const settings = readDesktopSettings();
     dialog.showErrorBox(
-      'Cyrene - Startup Timeout',
-      'The Python backend did not start within 30 seconds.\n\n'
-      + `Check cyrene_error.log in ${getCyreneTempDir()} for details.`
+      desktopT('startupTimeoutTitle', settings),
+      `${desktopT('startupTimeoutMessage', settings)}\n\n`
+      + desktopFormat('startupTimeoutLog', settings, { path: getCyreneTempDir() })
     );
     killPython();
     app.quit();
@@ -7202,10 +7277,11 @@ async function createMainWindow() {
     }
     const detail = err && err.stack ? err.stack : String(err);
     appendErrorLog(`[electron:main] load failed: ${detail}\n`);
+    const settings = readDesktopSettings();
     dialog.showErrorBox(
-      'Cyrene - Window Error',
-      'The application window could not be rendered.\n\n'
-      + `Check cyrene_error.log in ${getCyreneTempDir()} for details.`
+      desktopT('windowErrorTitle', settings),
+      `${desktopT('windowErrorMessage', settings)}\n\n`
+      + desktopFormat('windowErrorLog', settings, { path: getCyreneTempDir() })
     );
   }
 }
@@ -7501,22 +7577,24 @@ if (!gotSingleInstanceLock) {
       new Notification({ title, body, ...(icon ? { icon } : {}) }).show();
     });
     ipcMain.handle('shell:show-item-in-folder', (_event, info) => {
+      const settings = readDesktopSettings();
       const target = String(info && info.path || '').trim();
-      if (!target) return { ok: false, error: 'File path is required.' };
+      if (!target) return { ok: false, error: desktopT('filePathRequired', settings) };
       const resolved = path.resolve(target);
       if (!fs.existsSync(resolved)) {
-        return { ok: false, error: 'File no longer exists.' };
+        return { ok: false, error: desktopT('fileNoLongerExists', settings) };
       }
       shell.showItemInFolder(resolved);
       return { ok: true };
     });
     ipcMain.handle('dialog:pick-directory', async (event) => {
+      const settings = readDesktopSettings();
       if (!isLinux) {
-        return { path: '', error: 'Native directory picker is only enabled on Linux' };
+        return { path: '', error: desktopT('directoryPickerUnsupported', settings) };
       }
       const owner = BrowserWindow.fromWebContents(event.sender);
       const result = await dialog.showOpenDialog(owner || mainWindow, {
-        title: 'Select workspace directory',
+        title: desktopT('selectWorkspaceDirectory', settings),
         properties: ['openDirectory', 'createDirectory'],
       });
       if (result.canceled || !result.filePaths.length) {
@@ -7525,22 +7603,24 @@ if (!gotSingleInstanceLock) {
       return { path: result.filePaths[0] };
     });
     ipcMain.handle('dialog:pick-extension-path', async (event, info) => {
+      const settings = readDesktopSettings();
       const owner = BrowserWindow.fromWebContents(event.sender);
       const directory = !!(info && info.directory);
       const result = await dialog.showOpenDialog(owner || mainWindow, {
-        title: String(info && info.title || (directory ? 'Select extension folder' : 'Select executable')),
+        title: String(info && info.title || desktopT(directory ? 'selectExtensionFolder' : 'selectExecutable', settings)),
         properties: [directory ? 'openDirectory' : 'openFile'],
       });
       if (result.canceled || !result.filePaths.length) return { path: '', cancelled: true };
       return { path: result.filePaths[0] };
     });
     ipcMain.handle('dialog:pick-backup-save-path', async (event, info) => {
+      const settings = readDesktopSettings();
       const owner = BrowserWindow.fromWebContents(event.sender);
       const requestedName = path.basename(String(info && info.defaultName || '').trim()) || 'cyrene_backup.zip';
       const result = await dialog.showSaveDialog(owner || mainWindow, {
-        title: String(info && info.title || 'Save Cyrene backup'),
+        title: String(info && info.title || desktopT('saveBackupTitle', settings)),
         defaultPath: path.join(app.getPath('documents'), requestedName),
-        filters: [{ name: 'Cyrene backup', extensions: ['zip'] }],
+        filters: [{ name: desktopT('backupFilterName', settings), extensions: ['zip'] }],
         properties: ['createDirectory', 'showOverwriteConfirmation'],
       });
       if (result.canceled || !result.filePath) return { path: '', cancelled: true };
@@ -7550,10 +7630,11 @@ if (!gotSingleInstanceLock) {
       return { path: selectedPath };
     });
     ipcMain.handle('dialog:pick-backup-file', async (event, info) => {
+      const settings = readDesktopSettings();
       const owner = BrowserWindow.fromWebContents(event.sender);
       const result = await dialog.showOpenDialog(owner || mainWindow, {
-        title: String(info && info.title || 'Choose a Cyrene backup'),
-        filters: [{ name: 'Cyrene backup', extensions: ['zip'] }],
+        title: String(info && info.title || desktopT('chooseBackupTitle', settings)),
+        filters: [{ name: desktopT('backupFilterName', settings), extensions: ['zip'] }],
         properties: ['openFile'],
       });
       if (result.canceled || !result.filePaths.length) return { path: '', cancelled: true };

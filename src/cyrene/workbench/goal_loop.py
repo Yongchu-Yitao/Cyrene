@@ -44,6 +44,7 @@ from cyrene.workbench.goal_loop_repository import (
     utc_iso,
     utc_now,
 )
+from cyrene.localization import app_language, localized
 from cyrene.workbench.notifications import append_notification
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,12 @@ def _json_dumps(value: Any) -> str:
 
 def _json_loads(value: Any, fallback: Any) -> Any:
     return json_loads(value, fallback)
+
+
+def _l(en: str, zh: str, **values: Any) -> str:
+    """Localize one goal-loop message using the effective app language."""
+
+    return localized(en, zh, language=app_language(), **values)
 
 
 async def _ensure_schema(db_path: str) -> None:
@@ -221,7 +228,10 @@ class WorkbenchGoalLoopTransaction:
         plan, acceptance, generated, _operation = await self.agent_runtime.generate_plan(
             session,
             project,
-            feedback="目标已由用户在持续执行配置中更新，请基于新目标重新生成完整计划。",
+            feedback=_l(
+                "The user updated the goal in continuous-execution settings. Regenerate the complete plan for the new goal.",
+                "目标已由用户在持续执行配置中更新，请基于新目标重新生成完整计划。",
+            ),
             requested_operation="replace",
         )
         return plan, acceptance, generated
@@ -346,21 +356,53 @@ def _recoverable_step(plan: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 def _step_prompt(session: dict[str, Any], step: dict[str, Any]) -> str:
     lines = [
-        "你正在持续执行模式中完成一个有界工作片段。",
-        f"总目标：{str(session.get('goal') or session.get('title') or '').strip()}",
-        f"当前步骤：{str(step.get('title') or '').strip()}",
+        _l(
+            "You are completing one bounded work slice in continuous-execution mode.",
+            "你正在持续执行模式中完成一个有界工作片段。",
+        ),
+        _l(
+            "Overall goal: {goal}",
+            "总目标：{goal}",
+            goal=str(session.get('goal') or session.get('title') or '').strip(),
+        ),
+        _l(
+            "Current step: {step}",
+            "当前步骤：{step}",
+            step=str(step.get('title') or '').strip(),
+        ),
     ]
     if step.get("description"):
-        lines.append("步骤说明：" + str(step.get("description") or "").strip())
+        lines.append(_l(
+            "Step description: {description}",
+            "步骤说明：{description}",
+            description=str(step.get("description") or "").strip(),
+        ))
     if step.get("promptOverride"):
-        lines.append("用户为本步骤指定的执行命令：" + str(step.get("promptOverride") or "").strip())
+        lines.append(_l(
+            "User-specified instruction for this step: {instruction}",
+            "用户为本步骤指定的执行命令：{instruction}",
+            instruction=str(step.get("promptOverride") or "").strip(),
+        ))
     if step.get("currentAction"):
-        lines.append("上一次结果或验证反馈：" + str(step.get("currentAction") or "").strip())
+        lines.append(_l(
+            "Previous result or verification feedback: {feedback}",
+            "上一次结果或验证反馈：{feedback}",
+            feedback=str(step.get("currentAction") or "").strip(),
+        ))
     lines.extend(
         [
-            "请直接使用工具完成本步骤并验证关键结果。",
-            "输出最终文本只会结束当前工作片段，不代表整个目标完成。",
-            "如果必须获得用户输入或权限，请使用 ask_user。",
+            _l(
+                "Use the available tools to complete this step and verify the key result.",
+                "请直接使用工具完成本步骤并验证关键结果。",
+            ),
+            _l(
+                "Returning final text ends only this work slice; it does not mean the overall goal is complete.",
+                "输出最终文本只会结束当前工作片段，不代表整个目标完成。",
+            ),
+            _l(
+                "If user input or permission is required, use ask_user.",
+                "如果必须获得用户输入或权限，请使用 ask_user。",
+            ),
         ]
     )
     return "\n".join(lines)
@@ -398,14 +440,17 @@ async def _verify_step(
     step: dict[str, Any],
     agent_reply: str,
 ) -> dict[str, Any]:
-    prompt = (
-        "你是独立步骤验收 Agent。请只根据步骤定义、工作区真实产物和必要的只读检查，"
-        "判断该步骤是否已经产生足够结果，可以进入下一步骤。不要因为执行 Agent 自称完成就通过。\n\n"
-        f"总目标：{session.get('goal') or session.get('title') or ''}\n"
-        f"步骤：{step.get('title') or ''}\n"
-        f"步骤说明：{step.get('description') or ''}\n"
-        f"执行结果摘要：{agent_reply[:2000]}\n\n"
-        '只返回 JSON：{"passed": true/false, "evidence": "简短依据", "retry_guidance": "未通过时下一次应如何修复"}。'
+    prompt = _l(
+        "You are an independent step-verification agent. Judge only from the step definition, real workspace artifacts, and any necessary read-only checks whether the step produced enough results to continue. Do not pass it merely because the execution agent claims completion.\n\n"
+        "Overall goal: {goal}\nStep: {step}\nStep description: {description}\nExecution result summary: {reply}\n\n"
+        'Return JSON only: {{"passed": true/false, "evidence": "brief basis", "retry_guidance": "how to fix the next attempt if it failed"}}.',
+        "你是独立步骤验收 Agent。请只根据步骤定义、工作区真实产物和必要的只读检查，判断该步骤是否已经产生足够结果，可以进入下一步骤。不要因为执行 Agent 自称完成就通过。\n\n"
+        "总目标：{goal}\n步骤：{step}\n步骤说明：{description}\n执行结果摘要：{reply}\n\n"
+        '只返回 JSON：{{"passed": true/false, "evidence": "简短依据", "retry_guidance": "未通过时下一次应如何修复"}}。',
+        goal=session.get('goal') or session.get('title') or '',
+        step=step.get('title') or '',
+        description=step.get('description') or '',
+        reply=agent_reply[:2000],
     )
     try:
         parsed = await agent_runtime._independent_json_agent(
@@ -416,10 +461,15 @@ async def _verify_step(
         )
     except Exception as exc:
         logger.warning("Goal-loop step verification unavailable", exc_info=True)
-        message = exc.message if isinstance(exc, TaskAgentRuntimeError) else str(exc)
-        raise RuntimeError(f"步骤独立验收暂时不可用：{message}") from exc
+        raise RuntimeError(_l(
+            "Independent step verification is temporarily unavailable.",
+            "步骤独立验收暂时不可用。",
+        )) from exc
     if not isinstance(parsed, dict) or not isinstance(parsed.get("passed"), bool):
-        raise RuntimeError("步骤独立验收没有返回有效结果。")
+        raise RuntimeError(_l(
+            "Independent step verification returned no valid result.",
+            "步骤独立验收没有返回有效结果。",
+        ))
     return {
         "passed": bool(parsed["passed"]),
         "evidence": str(parsed.get("evidence") or "").strip(),
@@ -470,14 +520,18 @@ async def _generate_repair_steps(
     ]
     reflection = session.get("reflection") if isinstance(session.get("reflection"), dict) else {}
     packet = reflection.get("packet") if isinstance(reflection.get("packet"), dict) else {}
-    prompt = (
-        "你是持续任务的返工规划 Agent。当前计划已经执行完，但独立验收未通过。"
-        "请检查工作区，并只生成修复这些失败项所需的新增步骤，不要重复已经完成且无关的步骤。\n\n"
-        f"目标：{session.get('goal') or ''}\n"
-        f"失败验收项：{_json_dumps(failed)}\n"
-        f"深度反思：{_json_dumps(packet)}\n\n"
-        '只返回 JSON：{"steps":[{"title":"修复步骤","description":"具体修改和验证方式"}]}。'
-        "生成 1-5 个步骤，每步必须可执行并包含验证方式。"
+    prompt = _l(
+        "You are the repair-planning agent for a continuous task. The current plan finished, but independent acceptance failed. Inspect the workspace and generate only the new steps required to fix the failed criteria; do not repeat completed unrelated work.\n\n"
+        "Goal: {goal}\nFailed acceptance criteria: {failed}\nDeep reflection: {reflection}\n\n"
+        'Return JSON only: {{"steps":[{{"title":"repair step","description":"specific changes and verification"}}]}}. '
+        "Generate 1-5 executable steps, each with a verification method.",
+        "你是持续任务的返工规划 Agent。当前计划已经执行完，但独立验收未通过。请检查工作区，并只生成修复这些失败项所需的新增步骤，不要重复已经完成且无关的步骤。\n\n"
+        "目标：{goal}\n失败验收项：{failed}\n深度反思：{reflection}\n\n"
+        '只返回 JSON：{{"steps":[{{"title":"修复步骤","description":"具体修改和验证方式"}}]}}。'
+        "生成 1-5 个步骤，每步必须可执行并包含验证方式。",
+        goal=session.get('goal') or '',
+        failed=_json_dumps(failed),
+        reflection=_json_dumps(packet),
     )
     parsed: dict[str, Any] | None = None
     try:
@@ -507,11 +561,23 @@ async def _generate_repair_steps(
                 )
             )
     if not steps:
-        failed_text = "；".join(str(item.get("evidence") or item.get("id") or "") for item in failed)
+        failed_text = (
+            "；" if app_language() == "zh" else "; "
+        ).join(str(item.get("evidence") or item.get("id") or "") for item in failed)
         steps = [
             planning_runtime._workbench_new_plan_step(
-                "修复未通过的验收项",
-                ("根据独立验收证据修复问题并重新验证。" + (f" 证据：{failed_text}" if failed_text else ""))[:4000],
+                _l(
+                    "Fix failed acceptance criteria",
+                    "修复未通过的验收项",
+                ),
+                _l(
+                    "Fix the issues from independent acceptance evidence and verify again.{evidence}",
+                    "根据独立验收证据修复问题并重新验证。{evidence}",
+                    evidence=(
+                        _l(" Evidence: {text}", " 证据：{text}", text=failed_text)
+                        if failed_text else ""
+                    ),
+                )[:4000],
                 0,
                 str(session.get("id") or ""),
             )
@@ -556,7 +622,10 @@ class GoalLoopManager:
                 ) -> None:
                     session["status"] = "running"
                     session["goalLoop"] = _public_run(recovered)
-                    session["agentReply"] = "检测到上次执行被中断，正在用原 Agent run ID 从 ContextTree 恢复。"
+                    session["agentReply"] = _l(
+                        "The previous execution was interrupted. Restoring it from ContextTree with the original Agent run ID.",
+                        "检测到上次执行被中断，正在用原 Agent run ID 从 ContextTree 恢复。",
+                    )
 
                 try:
                     _write_session(str(row["session_id"]), apply)
@@ -578,7 +647,10 @@ class GoalLoopManager:
                 if paused:
                     await self.sync_projection(
                         paused,
-                        message="恢复持续执行时发现该任务已有其他运行，已安全暂停。",
+                        message=_l(
+                            "Another run was already active while restoring continuous execution, so this run was safely paused.",
+                            "恢复持续执行时发现该任务已有其他运行，已安全暂停。",
+                        ),
                     )
 
     async def shutdown(self) -> None:
@@ -891,11 +963,20 @@ class GoalLoopManager:
                 candidate.setdefault("startedAt", _utc_iso())
                 candidate["goalLoopAgentRunId"] = agent_run_id
                 candidate["currentAction"] = (
-                    "正在将你的回复写回原 Agent run 并继续此步骤。"
+                    _l(
+                        "Applying your reply to the original Agent run and continuing this step.",
+                        "正在将你的回复写回原 Agent run 并继续此步骤。",
+                    )
                     if resume_answer
-                    else "正在从原 Agent run 恢复此步骤。"
+                    else _l(
+                        "Restoring this step from the original Agent run.",
+                        "正在从原 Agent run 恢复此步骤。",
+                    )
                     if persisted_agent_run_id
-                    else "持续执行模式正在处理此步骤。"
+                    else _l(
+                        "Continuous-execution mode is processing this step.",
+                        "持续执行模式正在处理此步骤。",
+                    )
                 )
             fresh["goalLoop"] = _public_run(current_run)
             fresh["status"] = "running"
@@ -910,7 +991,11 @@ class GoalLoopManager:
         )
         await self.sync_projection(
             current_run,
-            message=f"持续执行中：{step.get('title') or '当前步骤'}",
+            message=_l(
+                "Continuous execution: {step}",
+                "持续执行中：{step}",
+                step=step.get('title') or _l("Current step", "当前步骤"),
+            ),
         )
 
         _payload, current_project, current_session = _read_session(session_id)
@@ -989,7 +1074,11 @@ class GoalLoopManager:
                 await self._pause_run(
                     await _get_run_by_id(self.db_path, run_id) or current_run,
                     stop_reason=str(exc.code),
-                    message=f"预算限制阻止了继续执行，持续任务已暂停：{exc.message}",
+                    message=_l(
+                        "A budget limit prevented further execution, so the continuous task was paused: {message}",
+                        "预算限制阻止了继续执行，持续任务已暂停：{message}",
+                        message=exc.message,
+                    ),
                     event_type="budget_blocked",
                     last_error=exc.message,
                     step_id=step_id,
@@ -998,7 +1087,10 @@ class GoalLoopManager:
             execution_error = exc.message
         except Exception as exc:
             logger.exception("Goal-loop Agent step failed")
-            execution_error = f"步骤执行失败：{exc}"
+            execution_error = _l(
+                "Step execution failed.",
+                "步骤执行失败。",
+            )
 
         latest_run = await _get_run_by_id(self.db_path, run_id)
         if not latest_run or str(latest_run.get("status") or "") != "running":
@@ -1010,7 +1102,10 @@ class GoalLoopManager:
             pending_question.setdefault("ownerLane", "execution")
             display_reply = (
                 str(pending_question.get("text") or agent_result.text).strip()
-                or "需要你的回复后才能继续。"
+                or _l(
+                    "Your reply is required before execution can continue.",
+                    "需要你的回复后才能继续。",
+                )
             )
 
             def wait_for_user(
@@ -1034,7 +1129,10 @@ class GoalLoopManager:
                         candidate["status"] = "running"
                         candidate["goalLoopAgentRunId"] = agent_run_id
                         candidate.pop("goalLoopResumeAnswer", None)
-                        candidate["currentAction"] = "等待用户确认后继续。"
+                        candidate["currentAction"] = _l(
+                            "Waiting for user confirmation before continuing.",
+                            "等待用户确认后继续。",
+                        )
 
             _write_session(session_id, wait_for_user)
             waiting = await _set_inactive_status(
@@ -1076,7 +1174,10 @@ class GoalLoopManager:
             verification = {
                 "passed": False,
                 "evidence": execution_error,
-                "retry_guidance": "修复 Agent 执行错误后重新运行本步骤。",
+                "retry_guidance": _l(
+                    "Fix the Agent execution error, then run this step again.",
+                    "修复 Agent 执行错误后重新运行本步骤。",
+                ),
             }
         else:
             try:
@@ -1089,13 +1190,20 @@ class GoalLoopManager:
                 )
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
+            except Exception:
+                safe_error = _l(
+                    "Independent step verification is temporarily unavailable.",
+                    "步骤独立验收暂时不可用。",
+                )
                 await self._pause_run(
                     latest_run,
                     stop_reason="step_verification_unavailable",
-                    message=f"步骤独立验收暂时不可用，持续执行已暂停：{exc}",
+                    message=_l(
+                        "Independent step verification is temporarily unavailable, so continuous execution was paused.",
+                        "步骤独立验收暂时不可用，持续执行已暂停。",
+                    ),
                     event_type="step_verification_unavailable",
-                    last_error=str(exc),
+                    last_error=safe_error,
                     step_id=step_id,
                 )
                 return False
@@ -1233,7 +1341,10 @@ class GoalLoopManager:
                     candidate.pop("goalLoopAgentRunId", None)
                     candidate["currentAction"] = (
                         str(verification.get("evidence") or "").strip()
-                        or "步骤执行完成；最终目标将在全部步骤后独立验收。"
+                        or _l(
+                            "Step completed; the overall goal will be independently verified after all steps finish.",
+                            "步骤执行完成；最终目标将在全部步骤后独立验收。",
+                        )
                     )
                     if outcome:
                         candidate["outcome"] = outcome
@@ -1246,7 +1357,10 @@ class GoalLoopManager:
                     candidate["currentAction"] = (
                         str(verification.get("retry_guidance") or "").strip()
                         or str(verification.get("evidence") or "").strip()
-                        or "步骤验收未通过，请继续修复。"
+                        or _l(
+                            "Step verification failed. Continue fixing the issues.",
+                            "步骤验收未通过，请继续修复。",
+                        )
                     )
             artifact_runtime._workbench_apply_step_file_changes(
                 fresh, step_id, file_changes
@@ -1277,17 +1391,24 @@ class GoalLoopManager:
             if reflecting:
                 await self.sync_projection(
                     reflecting,
-                    message="步骤反复未通过验收，正在深度思考失败根因。",
+                    message=_l(
+                        "The step repeatedly failed verification. Analyzing the root cause.",
+                        "步骤反复未通过验收，正在深度思考失败根因。",
+                    ),
                 )
             await self._reflect_safely(
                 session_id,
                 focus=str(
                     verification.get("retry_guidance")
-                    or f"步骤「{current_step.get('title') or ''}」反复未通过验收"
+                    or _l(
+                        'Step "{step}" repeatedly failed verification',
+                        '步骤「{step}」反复未通过验收',
+                        step=current_step.get('title') or '',
+                    )
                 ),
-                goal_gap=(
-                    "同一步骤连续多次独立验收未通过，需要分析根因并改变方案，"
-                    "而不是继续机械重试。"
+                goal_gap=_l(
+                    "The same step failed independent verification several times in succession. Analyze the root cause and change the approach instead of retrying mechanically.",
+                    "同一步骤连续多次独立验收未通过，需要分析根因并改变方案，而不是继续机械重试。",
                 ),
                 trigger="goal_loop_step_blocked",
             )
@@ -1299,6 +1420,7 @@ class GoalLoopManager:
                 stop_reason="step_stuck",
             )
             if blocked:
+                language = app_language()
                 await _event(
                     self.db_path,
                     run_id,
@@ -1308,22 +1430,37 @@ class GoalLoopManager:
                 )
                 await self.sync_projection(
                     blocked,
-                    message=(
-                        f"步骤「{current_step.get('title') or '当前步骤'}」连续 "
-                        f"{step_attempts} 次未通过独立验收，持续执行已阻塞。"
-                        "请调整计划或目标后再继续。"
+                    message=localized(
+                        'Step "{step}" failed independent verification {attempts} consecutive times, so continuous execution is blocked. Adjust the plan or goal before continuing.',
+                        '步骤「{step}」连续 {attempts} 次未通过独立验收，持续执行已阻塞。请调整计划或目标后再继续。',
+                        language=language,
+                        step=current_step.get('title') or localized(
+                            "Current step", "当前步骤", language=language
+                        ),
+                        attempts=step_attempts,
                     ),
                 )
                 append_notification(
-                    title="持续执行已阻塞",
-                    body=(
-                        f"步骤「{current_step.get('title') or '当前步骤'}」"
-                        "反复未通过验收，需要你介入。"
+                    title=localized(
+                        "Continuous execution blocked",
+                        "持续执行已阻塞",
+                        language=language,
+                    ),
+                    body=localized(
+                        'Step "{step}" repeatedly failed verification and needs your attention.',
+                        '步骤「{step}」反复未通过验收，需要你介入。',
+                        language=language,
+                        step=current_step.get('title') or localized(
+                            "Current step", "当前步骤", language=language
+                        ),
                     ),
                     tab="system",
                     source="goal_loop_blocked",
-                    source_label="持续执行",
+                    source_label=localized(
+                        "Continuous execution", "持续执行", language=language
+                    ),
                     meta={"sessionId": session_id, "runId": run_id},
+                    language=language,
                 )
             return False
 
@@ -1333,19 +1470,32 @@ class GoalLoopManager:
             if reflecting:
                 await self.sync_projection(
                     reflecting,
-                    message="步骤完成，正在进行深度思考。",
+                    message=_l(
+                        "Step completed. Reflecting on the direction.",
+                        "步骤完成，正在进行深度思考。",
+                    ),
                 )
             await self._reflect_safely(
                 session_id,
-                focus=f"步骤「{current_step.get('title') or ''}」完成后的方向检查",
-                goal_gap="检查当前成果是否真正缩小了目标差距，以及后续计划是否需要调整。",
+                focus=_l(
+                    'Direction check after completing step "{step}"',
+                    '步骤「{step}」完成后的方向检查',
+                    step=current_step.get('title') or '',
+                ),
+                goal_gap=_l(
+                    "Check whether the current result genuinely narrows the goal gap and whether the remaining plan needs adjustment.",
+                    "检查当前成果是否真正缩小了目标差距，以及后续计划是否需要调整。",
+                ),
                 trigger="goal_loop_step",
             )
         elif not passed and reflection_mode == "frequent":
             await self._reflect_safely(
                 session_id,
                 focus=str(verification.get("retry_guidance") or ""),
-                goal_gap="当前步骤独立验收未通过，需要分析根因并改变执行方式。",
+                goal_gap=_l(
+                    "The current step failed independent verification. Analyze the root cause and change the execution approach.",
+                    "当前步骤独立验收未通过，需要分析根因并改变执行方式。",
+                ),
                 trigger="goal_loop_step_failure",
             )
         await _update_run(
@@ -1401,23 +1551,39 @@ class GoalLoopManager:
                         stop_reason="max_runtime",
                     )
                     if paused:
+                        language = app_language()
                         await _event(
                             self.db_path, run_id, "runtime_limit_reached"
                         )
                         await self.sync_projection(
                             paused,
-                            message="已达到最大运行时间，持续执行已暂停。",
+                            message=localized(
+                                "Continuous execution paused after reaching the maximum runtime.",
+                                "已达到最大运行时间，持续执行已暂停。",
+                                language=language,
+                            ),
                         )
                         append_notification(
-                            title="持续执行已暂停",
-                            body="任务达到最大运行时间，可调整限制后继续。",
+                            title=localized(
+                                "Continuous execution paused",
+                                "持续执行已暂停",
+                                language=language,
+                            ),
+                            body=localized(
+                                "The task reached its maximum runtime. Adjust the limit before continuing.",
+                                "任务达到最大运行时间，可调整限制后继续。",
+                                language=language,
+                            ),
                             tab="system",
                             source="goal_loop_paused",
-                            source_label="持续执行",
+                            source_label=localized(
+                                "Continuous execution", "持续执行", language=language
+                            ),
                             meta={
                                 "sessionId": str(run["session_id"]),
                                 "runId": run_id,
                             },
+                            language=language,
                         )
                     return
 
@@ -1476,7 +1642,10 @@ class GoalLoopManager:
                         await _event(self.db_path, run_id, "dependency_blocked")
                         await self.sync_projection(
                             blocked,
-                            message="没有可执行步骤，任务被计划依赖阻塞。",
+                            message=_l(
+                                "No step is currently executable; plan dependencies are blocking the task.",
+                                "没有可执行步骤，任务被计划依赖阻塞。",
+                            ),
                         )
                     return
 
@@ -1493,14 +1662,20 @@ class GoalLoopManager:
                     if reflecting:
                         await self.sync_projection(
                             reflecting,
-                            message="全部步骤已处理，正在最终验收前深度思考。",
+                            message=_l(
+                                "All steps have been processed. Reflecting before final acceptance.",
+                                "全部步骤已处理，正在最终验收前深度思考。",
+                            ),
                         )
                     await self._reflect_safely(
                         str(run["session_id"]),
-                        focus="最终验收前检查遗漏、假完成和表面满足",
-                        goal_gap=(
-                            "全部计划步骤已执行，需要确认是否仍存在影响验收的"
-                            "目标差距。"
+                        focus=_l(
+                            "Check for omissions, false completion, and superficial compliance before final acceptance",
+                            "最终验收前检查遗漏、假完成和表面满足",
+                        ),
+                        goal_gap=_l(
+                            "All planned steps have run. Confirm whether any remaining goal gap could still prevent acceptance.",
+                            "全部计划步骤已执行，需要确认是否仍存在影响验收的目标差距。",
                         ),
                         trigger="goal_loop_pre_verification",
                     )
@@ -1514,7 +1689,11 @@ class GoalLoopManager:
                 if not verifying:
                     return
                 await self.sync_projection(
-                    verifying, message="正在独立验收目标。"
+                    verifying,
+                    message=_l(
+                        "Independently verifying the goal.",
+                        "正在独立验收目标。",
+                    ),
                 )
                 _payload, project, session = _read_session(
                     str(run["session_id"])
@@ -1525,20 +1704,30 @@ class GoalLoopManager:
                     )
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:
+                except Exception:
+                    safe_error = _l(
+                        "Independent acceptance is temporarily unavailable.",
+                        "独立验收暂时不可用。",
+                    )
                     await self._pause_run(
                         verifying,
                         stop_reason="verification_unavailable",
-                        message=f"独立验收暂时不可用，持续执行已暂停：{exc}",
+                        message=_l(
+                            "Independent acceptance is temporarily unavailable, so continuous execution was paused.",
+                            "独立验收暂时不可用，持续执行已暂停。",
+                        ),
                         event_type="verification_unavailable",
-                        last_error=str(exc),
+                        last_error=safe_error,
                     )
                     return
                 if not isinstance(verdict, dict):
                     await self._pause_run(
                         verifying,
                         stop_reason="verification_unavailable",
-                        message="独立验收没有返回有效结果，持续执行已暂停。",
+                        message=_l(
+                            "Independent acceptance returned no valid result, so continuous execution was paused.",
+                            "独立验收没有返回有效结果，持续执行已暂停。",
+                        ),
                         event_type="verification_unavailable",
                     )
                     return
@@ -1571,8 +1760,9 @@ class GoalLoopManager:
                         result = by_id.get(str(criterion.get("id") or ""))
                         if not isinstance(result, dict):
                             criterion["status"] = "failed"
-                            criterion["evidence"] = (
-                                "验收器未返回这一项的结论。"
+                            criterion["evidence"] = _l(
+                                "The verifier returned no conclusion for this criterion.",
+                                "验收器未返回这一项的结论。",
                             )
                             any_failed = True
                             continue
@@ -1588,9 +1778,9 @@ class GoalLoopManager:
                     if acceptance_passed:
                         project_runtime._workbench_mark_completed_if_acceptance_passed(
                             fresh,
-                            event_body=(
-                                "持续执行独立验收通过，所有验收标准均已通过，"
-                                "任务自动标记为已完成。"
+                            event_body=_l(
+                                "Continuous execution passed independent acceptance. All acceptance criteria passed, and the task was marked complete automatically.",
+                                "持续执行独立验收通过，所有验收标准均已通过，任务自动标记为已完成。",
                             ),
                         )
 
@@ -1608,9 +1798,14 @@ class GoalLoopManager:
                         stop_reason="acceptance_passed",
                     )
                     if completed:
+                        language = app_language()
                         await self.sync_projection(
                             completed,
-                            message="自动验收通过，任务已自动标记为已完成。",
+                            message=localized(
+                                "Automatic acceptance passed; the task was marked complete.",
+                                "自动验收通过，任务已自动标记为已完成。",
+                                language=language,
+                            ),
                         )
                         try:
                             _payload, final_project, final_session = (
@@ -1624,20 +1819,31 @@ class GoalLoopManager:
                                 "Goal-loop Plugin knowledge archive failed"
                             )
                         append_notification(
-                            title="持续执行验收通过",
-                            body=(
-                                f"任务「{session.get('title') or '未命名任务'}」"
-                                "已通过自动验收。"
+                            title=localized(
+                                "Continuous execution passed acceptance",
+                                "持续执行验收通过",
+                                language=language,
+                            ),
+                            body=localized(
+                                'Task "{title}" passed automatic acceptance.',
+                                '任务「{title}」已通过自动验收。',
+                                language=language,
+                                title=session.get('title') or localized(
+                                    "Untitled task", "未命名任务", language=language
+                                ),
                             ),
                             tab="comment",
                             project_ref=project.get("id"),
                             source="goal_loop_passed",
-                            source_label="持续执行",
+                            source_label=localized(
+                                "Continuous execution", "持续执行", language=language
+                            ),
                             link_label=str(session.get("title") or ""),
                             meta={
                                 "sessionId": str(run["session_id"]),
                                 "runId": run_id,
                             },
+                            language=language,
                         )
                     return
 
@@ -1652,20 +1858,36 @@ class GoalLoopManager:
                         stop_reason="max_repair_rounds",
                     )
                     if paused:
+                        language = app_language()
                         await self.sync_projection(
                             paused,
-                            message="已达到最大返工轮数，持续执行已暂停。",
+                            message=localized(
+                                "Continuous execution paused after reaching the maximum repair rounds.",
+                                "已达到最大返工轮数，持续执行已暂停。",
+                                language=language,
+                            ),
                         )
                         append_notification(
-                            title="持续执行已暂停",
-                            body="任务达到最大返工轮数，可调整限制后继续。",
+                            title=localized(
+                                "Continuous execution paused",
+                                "持续执行已暂停",
+                                language=language,
+                            ),
+                            body=localized(
+                                "The task reached the maximum repair rounds. Adjust the limit before continuing.",
+                                "任务达到最大返工轮数，可调整限制后继续。",
+                                language=language,
+                            ),
                             tab="system",
                             source="goal_loop_paused",
-                            source_label="持续执行",
+                            source_label=localized(
+                                "Continuous execution", "持续执行", language=language
+                            ),
                             meta={
                                 "sessionId": str(run["session_id"]),
                                 "runId": run_id,
                             },
+                            language=language,
                         )
                     return
 
@@ -1675,13 +1897,19 @@ class GoalLoopManager:
                 if reflecting:
                     await self.sync_projection(
                         reflecting,
-                        message="验收未通过，正在深度思考失败原因。",
+                        message=_l(
+                            "Acceptance failed. Reflecting on the cause.",
+                            "验收未通过，正在深度思考失败原因。",
+                        ),
                     )
                 await self._reflect_safely(
                     str(run["session_id"]),
-                    focus=str(verdict.get("reason") or "验收未通过"),
-                    goal_gap=(
-                        "独立验收未通过，需要分析失败根因并生成新的返工路径。"
+                    focus=str(verdict.get("reason") or _l(
+                        "Acceptance failed", "验收未通过"
+                    )),
+                    goal_gap=_l(
+                        "Independent acceptance failed. Analyze the root cause and generate a new repair path.",
+                        "独立验收未通过，需要分析失败根因并生成新的返工路径。",
                     ),
                     trigger="goal_loop_verification_failure",
                 )
@@ -1722,8 +1950,10 @@ class GoalLoopManager:
                             criterion["status"] = "pending"
                             criterion.pop("evidence", None)
                     fresh["status"] = "running"
-                    fresh["agentReply"] = (
-                        f"验收未通过，已生成第 {repair_round + 1} 轮返工步骤。"
+                    fresh["agentReply"] = _l(
+                        "Acceptance failed. Generated repair-round {round} steps.",
+                        "验收未通过，已生成第 {round} 轮返工步骤。",
+                        round=repair_round + 1,
                     )
 
                 _payload, _project, updated_session = _write_session(
@@ -1759,12 +1989,19 @@ class GoalLoopManager:
             logger.exception("Goal-loop worker failed [run=%s]", run_id)
             current = await _get_run_by_id(self.db_path, run_id)
             if current and str(current.get("status") or "") == "running":
+                safe_error = _l(
+                    "Continuous execution encountered an unexpected error.",
+                    "持续执行发生意外错误。",
+                )
                 await self._pause_run(
                     current,
                     stop_reason="goal_loop_runtime_error",
-                    message=f"持续执行发生错误并已安全暂停：{exc}",
+                    message=_l(
+                        "Continuous execution encountered an error and was safely paused.",
+                        "持续执行发生错误并已安全暂停。",
+                    ),
                     event_type="goal_loop_runtime_error",
-                    last_error=str(exc),
+                    last_error=safe_error,
                 )
 
 
@@ -1844,9 +2081,15 @@ async def begin_async_answer(
                 step["goalLoopResumeAnswer"] = {"questionId": str(question_id or ""), "answer": str(answer_text or "")}
                 step["goalLoopAgentRunId"] = agent_run_id
                 step["status"] = "running"
-                step["currentAction"] = "已收到你的回复，正在继续执行此步骤。"
+                step["currentAction"] = _l(
+                    "Your reply was received. Continuing this step.",
+                    "已收到你的回复，正在继续执行此步骤。",
+                )
         fresh["status"] = "running"
-        fresh["agentReply"] = "已收到你的回复，持续执行将在后台继续。"
+        fresh["agentReply"] = _l(
+            "Your reply was received. Continuous execution will continue in the background.",
+            "已收到你的回复，持续执行将在后台继续。",
+        )
         fresh["goalLoop"] = _public_run(run)
 
     _write_session(session_id, apply)
@@ -1866,7 +2109,10 @@ async def begin_async_answer(
             if paused:
                 await manager.sync_projection(
                     paused,
-                    message="任务已有其他运行，持续执行已安全暂停。",
+                    message=_l(
+                        "Another task run is already active, so continuous execution was safely paused.",
+                        "任务已有其他运行，持续执行已安全暂停。",
+                    ),
                 )
     return True
 
@@ -1892,7 +2138,10 @@ async def resume_after_answer(db_path: str, session_id: str, *, permission_denie
             if manager:
                 await manager.sync_projection(
                     paused,
-                    message="权限请求已拒绝，持续执行已暂停。",
+                    message=_l(
+                        "The permission request was denied, so continuous execution was paused.",
+                        "权限请求已拒绝，持续执行已暂停。",
+                    ),
                 )
             else:
                 def apply(
@@ -1902,7 +2151,10 @@ async def resume_after_answer(db_path: str, session_id: str, *, permission_denie
                 ) -> None:
                     session["status"] = "paused"
                     session["goalLoop"] = _public_run(paused)
-                    session["agentReply"] = "权限请求已拒绝，持续执行已暂停。"
+                    session["agentReply"] = _l(
+                        "The permission request was denied, so continuous execution was paused.",
+                        "权限请求已拒绝，持续执行已暂停。",
+                    )
 
                 try:
                     _write_session(session_id, apply)
@@ -1952,7 +2204,10 @@ async def resume_after_answer(db_path: str, session_id: str, *, permission_denie
             if paused:
                 await manager.sync_projection(
                     paused,
-                    message="任务已有其他运行，持续执行已安全暂停。",
+                    message=_l(
+                        "Another task run is already active, so continuous execution was safely paused.",
+                        "任务已有其他运行，持续执行已安全暂停。",
+                    ),
                 )
     await _publish(run)
 

@@ -245,8 +245,7 @@ function WorkbenchEditProjectModal({ project, onClose, onSave }) {
 
 function wbProjectMemoryDate(value) {
   if (!value) return "—";
-  var parsed = new Date(value);
-  return isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
+  return workbenchServices.i18n().formatDate(value, { dateStyle: "medium", timeStyle: "short" }) || "—";
 }
 
 function WorkbenchProjectMemoryModal({ project, onClose }) {
@@ -260,17 +259,22 @@ function WorkbenchProjectMemoryModal({ project, onClose }) {
   var draftRef = useWorkbenchRef("");
   var payloadRef = useWorkbenchRef(null);
   var selectedModifiedAtRef = useWorkbenchRef("");
+  var loadControllerRef = useWorkbenchRef(null);
   draftRef.current = draft;
   payloadRef.current = payload;
   selectedModifiedAtRef.current = selectedModifiedAt;
 
   function load(options) {
     options = options || {};
+    if (loadControllerRef.current) loadControllerRef.current.abort();
+    var controller = new AbortController();
+    loadControllerRef.current = controller;
     if (!options.background) setLoading(true);
     return workbenchServices.api().json(
       "/api/projects/" + encodeURIComponent(project.id) + "/memory-prompt?include_memories=false",
-      { toast: false }
+      { toast: false, signal: controller.signal }
     ).then(function (next) {
+      if (controller.signal.aborted) return null;
       var previousPrompt = String(payloadRef.current && payloadRef.current.current && payloadRef.current.current.prompt || "");
       var hasLocalEdit = options.keepDraft && draftRef.current.trim() !== previousPrompt.trim();
       setPayload(next);
@@ -282,15 +286,22 @@ function WorkbenchProjectMemoryModal({ project, onClose }) {
       setError("");
       return next;
     }).catch(function (err) {
-      setError(wbErrorText(err));
+      if (!(err && err.name === "AbortError")) setError(wbErrorText(err));
       return null;
     }).then(function (value) {
-      if (!options.background) setLoading(false);
+      if (loadControllerRef.current === controller) loadControllerRef.current = null;
+      if (!controller.signal.aborted && !options.background) setLoading(false);
       return value;
     });
   }
 
-  useWorkbenchEffect(function () { load(); }, [project.id]);
+  useWorkbenchEffect(function () {
+    load();
+    return function () {
+      if (loadControllerRef.current) loadControllerRef.current.abort();
+      loadControllerRef.current = null;
+    };
+  }, [project.id]);
   var learningStatus = payload && payload.learningStatus;
   var learningPhase = String(learningStatus && learningStatus.status || "");
   useWorkbenchEffect(function () {
@@ -379,8 +390,8 @@ function WorkbenchProjectMemoryModal({ project, onClose }) {
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M8 11h8"/></svg>
             <span><b>{t("projectMemory.overview")}</b><em>{selectedVersion ? t("projectMemory.historyStatus") : current.modifiedAt ? t("projectMemory.currentStatus") : t("projectMemory.unsavedStatus")}</em></span>
           </span>
-          <span className="workbench-project-memory-overview-metric"><small>{t("projectMemory.versionCount")}</small><b>{versions.length.toLocaleString()}</b></span>
-          <span className="workbench-project-memory-overview-metric"><small>{t("projectMemory.characterCount")}</small><b>{displayedPrompt.length.toLocaleString()}</b></span>
+          <span className="workbench-project-memory-overview-metric"><small>{t("projectMemory.versionCount")}</small><b>{workbenchServices.i18n().formatNumber(versions.length)}</b></span>
+          <span className="workbench-project-memory-overview-metric"><small>{t("projectMemory.characterCount")}</small><b>{workbenchServices.i18n().formatNumber(displayedPrompt.length)}</b></span>
           <div className="workbench-project-memory-head-version">
             <label htmlFor="workbench-project-memory-version">{t("projectMemory.versionSelector")}</label>
             <select id="workbench-project-memory-version" value={selectedModifiedAt} onChange={function (event) { setSelectedModifiedAt(event.target.value); }}>
@@ -417,7 +428,7 @@ function WorkbenchProjectMemoryModal({ project, onClose }) {
                 </div> : null}
                 <div className="workbench-project-memory-editor-field">
                   <textarea className={selectedVersion ? "is-historical" : ""} value={displayedPrompt} readOnly={!!selectedVersion} maxLength={16000} onChange={function (event) { if (!selectedVersion) setDraft(event.target.value); }} placeholder={t("projectMemory.promptPlaceholder")} />
-                  <div className="workbench-project-memory-count">{displayedPrompt.length.toLocaleString()} / 16,000</div>
+                  <div className="workbench-project-memory-count">{workbenchServices.i18n().formatNumber(displayedPrompt.length)} / {workbenchServices.i18n().formatNumber(16000)}</div>
                 </div>
               </div>
             </section>

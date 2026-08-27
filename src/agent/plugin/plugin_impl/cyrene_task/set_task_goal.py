@@ -14,6 +14,7 @@ from typing import Any
 
 from agent.plugin import PluginContext
 from agent.plugin.native_runtime import run_context_value
+from cyrene.localization import app_language, localized
 
 TOOL_NAME = 'set_task_goal'
 TOOL_DEF = {
@@ -43,17 +44,30 @@ async def _tool_set_task_goal(
     context: PluginContext,
 ) -> str:
     """Set/correct the current Workbench task's goal, title, and/or summary."""
+    language = app_language(context.data.get("lang"))
     goal = str(args.get("goal", "") or "").strip()
     title = str(args.get("title", "") or "").strip()
     summary = str(args.get("summary", "") or "").strip()
     if not goal and not title and not summary:
-        return "Not set: provide at least one of goal, title, or summary."
+        return localized(
+            "Not set: provide at least one of goal, title, or summary.",
+            "未更新：请至少提供目标、标题或简介中的一项。",
+            language=language,
+        )
     if goal and len(goal) < 3:
-        return "Not set: 'goal' is too short."
+        return localized(
+            "Not set: the goal is too short.",
+            "未更新：目标过短。",
+            language=language,
+        )
 
     session_id = str(run_context_value(context, "session_id", "") or "").strip()
     if not session_id:
-        return "Not set: set_task_goal is only available inside a Workbench task."
+        return localized(
+            "Not set: set_task_goal is available only inside a Workbench task.",
+            "未更新：set_task_goal 仅可在工作台任务中使用。",
+            language=language,
+        )
 
     # Lazy import: the store lives in the webui layer (loaded in the server
     # process); importing it at module load would invert package layering.
@@ -61,7 +75,16 @@ async def _tool_set_task_goal(
 
     result = await set_task_goal_for_session(session_id, goal, title, summary)
     if not result.get("ok"):
-        return "Not set: " + str(result.get("error") or "could not update the task.")
+        return localized(
+            "Not set: {error}",
+            "未更新：{error}",
+            language=language,
+            error=str(result.get("error") or localized(
+                "Could not update the task.",
+                "无法更新任务。",
+                language=language,
+            )),
+        )
     parts: list[str] = []
     if result.get("goal"):
         parts.append("goal=" + str(result.get("goal")))
@@ -69,9 +92,22 @@ async def _tool_set_task_goal(
         parts.append("title=" + str(result.get("title")))
     if result.get("summary"):
         parts.append("summary=" + str(result.get("summary")))
-    msg = "Task updated: " + ", ".join(parts) if parts else "Task updated."
+    msg = (
+        localized(
+            "Task updated: {fields}",
+            "任务已更新：{fields}",
+            language=language,
+            fields=", ".join(parts),
+        )
+        if parts
+        else localized("Task updated.", "任务已更新。", language=language)
+    )
     if result.get("titleBlocked"):
-        msg += "（注意：标题已被用户手动设定，未改动；其余字段已更新。）"
+        msg += localized(
+            " (The title was manually set by the user and was not changed; other fields were updated.)",
+            "（注意：标题已被用户手动设定，未改动；其余字段已更新。）",
+            language=language,
+        )
     return msg
 
 

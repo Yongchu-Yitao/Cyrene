@@ -7,6 +7,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from cyrene.localization import localized
 from cyrene.workbench.inbox import GuidanceAdmissionClosed
 
 logger = logging.getLogger(__name__)
@@ -42,16 +43,24 @@ class ChatGuidanceApplicationService:
         origin_session_id: str = "",
     ) -> ChatGuidanceResult:
         if not message:
-            return self._error("guidance message is empty", "guidance_empty", 422)
+            return self._error(
+                localized("Guidance message is empty.", "引导消息不能为空。"),
+                "guidance_empty",
+                422,
+            )
         run = self.dependencies.run_manager.get(chat_id)
         if run is None or run.status != "running":
-            return self._error("chat has no running reply", "chat_not_running", 409)
+            return self._not_running()
         await run.ready.wait()
         if run.status != "running":
-            return self._error("chat has no running reply", "chat_not_running", 409)
+            return self._not_running()
         chat = await asyncio.to_thread(self.dependencies.get_chat, chat_id)
         if not chat:
-            return ChatGuidanceResult({"error": "chat not found"}, 404)
+            return self._error(
+                localized("Chat not found.", "未找到对话。"),
+                "chat_not_found",
+                404,
+            )
         now = self.dependencies.utc_now_iso()
         message_id = self.dependencies.short_id("msg")
         try:
@@ -63,11 +72,14 @@ class ChatGuidanceApplicationService:
             )
         except GuidanceAdmissionClosed:
             await run.done.wait()
-            return self._error("chat has no running reply", "chat_not_running", 409)
+            return self._not_running()
         except RuntimeError:
             logger.exception("Failed to persist guidance for chat %s", chat_id)
             return self._error(
-                "guidance could not be saved; please retry",
+                localized(
+                    "Guidance could not be saved. Please retry.",
+                    "无法保存引导消息，请重试。",
+                ),
                 "guidance_persistence_failed",
                 503,
             )
@@ -95,7 +107,10 @@ class ChatGuidanceApplicationService:
                 "eventId": event["event_id"],
                 "runId": run.run_id,
                 "userMessage": self.dependencies.public_message(entry),
-                "message": "Guidance queued for the running agent.",
+                "message": localized(
+                    "Guidance queued for the running agent.",
+                    "引导消息已加入当前智能体的队列。",
+                ),
             }
         )
         return ChatGuidanceResult(
@@ -171,6 +186,14 @@ class ChatGuidanceApplicationService:
     @staticmethod
     def _error(message: str, code: str, status_code: int) -> ChatGuidanceResult:
         return ChatGuidanceResult({"error": message, "code": code}, status_code)
+
+    @classmethod
+    def _not_running(cls) -> ChatGuidanceResult:
+        return cls._error(
+            localized("This chat has no active reply.", "此对话当前没有正在生成的回复。"),
+            "chat_not_running",
+            409,
+        )
 
 
 __all__ = ["ChatGuidanceApplicationService", "ChatGuidanceDependencies", "ChatGuidanceResult"]

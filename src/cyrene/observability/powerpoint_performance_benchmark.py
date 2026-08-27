@@ -126,7 +126,7 @@ async def _default_caller(method: str, args: dict[str, Any]) -> dict[str, Any]:
     office_error = _office_load_error(failures)
     if office_error:
         raise RuntimeError("PowerPoint Plugin failed to refresh: " + office_error)
-    call = await runtime.call(
+    call = await runtime.call_canonical(
         plugin_name,
         args,
         PluginContext(workspace=Path.cwd(), data={"source": "powerpoint_benchmark"}),
@@ -148,7 +148,7 @@ class _GatewayCaller:
     def __init__(self) -> None:
         import httpx
 
-        from cyrene.office.gateway import OfficeGatewayFiles
+        from agent.plugin.plugin_impl.cyrene_office.gateway import OfficeGatewayFiles
 
         material = OfficeGatewayFiles()
         material.ensure()

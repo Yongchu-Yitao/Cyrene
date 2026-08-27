@@ -200,6 +200,55 @@ async def _telemetry_flush_loop() -> None:
             logger.exception("Failed to flush telemetry stats batch")
 
 
+def _usage_int(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _accounting_usage(event: dict) -> dict[str, int]:
+    """Normalize Provider Plugin usage into the durable analytics schema."""
+
+    raw = event.get("usage")
+    raw = raw if isinstance(raw, dict) else {}
+    observed = event.get("usage_observation")
+    observed = observed if isinstance(observed, dict) else {}
+    prompt = _usage_int(
+        observed.get("prompt_tokens")
+        or raw.get("prompt_tokens")
+        or raw.get("input_tokens")
+    )
+    completion = _usage_int(
+        observed.get("completion_tokens")
+        or raw.get("completion_tokens")
+        or raw.get("output_tokens")
+    )
+    total = _usage_int(
+        observed.get("total_tokens") or raw.get("total_tokens")
+    ) or prompt + completion
+    details = raw.get("prompt_tokens_details")
+    details = details if isinstance(details, dict) else {}
+    cache_hit = _usage_int(
+        observed.get("cached_prompt_tokens")
+        or raw.get("prompt_cache_hit_tokens")
+        or raw.get("cached_input_tokens")
+        or raw.get("cache_read_input_tokens")
+        or details.get("cached_tokens")
+    )
+    cache_miss = _usage_int(
+        observed.get("cache_miss_tokens")
+        or raw.get("prompt_cache_miss_tokens")
+    )
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total,
+        "prompt_cache_hit_tokens": cache_hit,
+        "prompt_cache_miss_tokens": cache_miss,
+    }
+
+
 async def _flush_telemetry_batch() -> None:
     if not _telemetry_pending:
         return
@@ -208,14 +257,32 @@ async def _flush_telemetry_batch() -> None:
     model_events: list[tuple] = []
     tool_events: list[tuple] = []
     permission_events: list[dict] = []
+    token_events: list[dict] = []
     for event in events:
         timestamp = str(event.get("timestamp") or "")
         event_type = str(event.get("type") or "")
         if event_type == "llm_call":
-            runtime_events.append((timestamp, event.get("usage") or {}))
+            status = str(event.get("status") or "completed").strip().lower()
+            if status not in {"completed", "success", "succeeded", "ok"}:
+                continue
+            usage = _accounting_usage(event)
+            runtime_events.append((timestamp, usage))
             model = str(event.get("model") or "").strip()
             if model:
-                model_events.append((timestamp, model, event.get("usage") or {}))
+                model_events.append((timestamp, model, usage))
+            token_events.append({
+                "created_at": timestamp,
+                "model": model,
+                "round_id": str(event.get("round_id") or event.get("run_id") or ""),
+                "session_id": str(event.get("session_id") or ""),
+                "caller": str(event.get("caller") or "main_agent"),
+                "prompt_tokens": usage["prompt_tokens"],
+                "completion_tokens": usage["completion_tokens"],
+                "total_tokens": usage["total_tokens"],
+                "cache_hit_tokens": usage["prompt_cache_hit_tokens"],
+                "cache_miss_tokens": usage["prompt_cache_miss_tokens"],
+                "duration_ms": int(event.get("duration_ms") or 0),
+            })
         elif event_type == "tool_call":
             tool_events.append((timestamp, str(event.get("tool") or "")))
         elif event_type in _PERMISSION_EVENT_TYPES:
@@ -228,6 +295,7 @@ async def _flush_telemetry_batch() -> None:
         model_events=model_events,
         tool_events=tool_events,
         permission_events=permission_events,
+        token_events=token_events,
     )
     # Only drop the batch once the DB write succeeded; on failure the queue
     # keeps the events and the next flush cycle retries (the queue cap bounds

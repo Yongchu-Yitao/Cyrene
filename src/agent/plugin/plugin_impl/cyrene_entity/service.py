@@ -3,10 +3,81 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Protocol
+
+from cyrene.localization import localized
 
 from .store import EntityRepository
-from cyrene.runtime.persistence.scheduler import SchedulerRepository
+
+
+class ReminderSchedulePort(Protocol):
+    """The Schedule Plugin operations needed by entity reminders."""
+
+    async def create_reminder(
+        self,
+        *,
+        chat_id: int,
+        prompt: str,
+        due_at: str,
+        project_id: str,
+        origin_session_id: str = "",
+    ) -> str: ...
+
+    async def reminder(self, task_id: str) -> Any | None: ...
+
+    async def edit_reminder(
+        self,
+        task_id: str,
+        *,
+        prompt: str,
+        due_at: str,
+    ) -> bool: ...
+
+    async def set_reminder_status(self, task_id: str, status: str) -> bool: ...
+
+    async def delete_reminder(self, task_id: str) -> bool: ...
+
+
+class _ActiveReminderSchedulePort:
+    """Resolve Schedule at every call so activation changes fail closed."""
+
+    @staticmethod
+    def _service() -> ReminderSchedulePort:
+        from agent.plugin import active_plugin_service
+
+        service = active_plugin_service("schedules")
+        if service is None:
+            raise RuntimeError(
+                "Schedule Plugin is unavailable or disabled; "
+                "entity reminders require cyrene_schedule"
+            )
+        return service
+
+    async def create_reminder(self, **values: Any) -> str:
+        return await self._service().create_reminder(**values)
+
+    async def reminder(self, task_id: str) -> Any | None:
+        return await self._service().reminder(task_id)
+
+    async def edit_reminder(
+        self,
+        task_id: str,
+        *,
+        prompt: str,
+        due_at: str,
+    ) -> bool:
+        return await self._service().edit_reminder(
+            task_id,
+            prompt=prompt,
+            due_at=due_at,
+        )
+
+    async def set_reminder_status(self, task_id: str, status: str) -> bool:
+        return await self._service().set_reminder_status(task_id, status)
+
+    async def delete_reminder(self, task_id: str) -> bool:
+        return await self._service().delete_reminder(task_id)
+
 
 _CREATE_FIELDS = frozenset(
     {
@@ -90,12 +161,16 @@ class EntityService:
         reminder_chat_id: Any = None,
         origin_session_id: str = "",
         repository: EntityRepository | None = None,
-        scheduler: SchedulerRepository | None = None,
+        reminders: ReminderSchedulePort | None = None,
+        language: Any = None,
     ) -> None:
         self.repository = repository or EntityRepository(db_path)
-        self.scheduler = scheduler or SchedulerRepository(self.repository.db_path)
+        self._reminders = (
+            reminders if reminders is not None else _ActiveReminderSchedulePort()
+        )
         self.reminder_chat_id = reminder_chat_id
         self.origin_session_id = str(origin_session_id or "").strip()
+        self.language = language
 
     @property
     def db_path(self) -> str:
@@ -105,6 +180,9 @@ class EntityService:
         """Initialize the Plugin-owned database schema."""
 
         await self.repository.ensure_ready()
+
+    def _reminder_port(self) -> ReminderSchedulePort:
+        return self._reminders
 
     def _chat_id(self) -> int:
         value = self.reminder_chat_id
@@ -133,23 +211,43 @@ class EntityService:
             raise TypeError("entity metadata must be an object")
         return dict(value)
 
-    async def _create_reminder(self, entity: Mapping[str, Any]) -> str:
+    async def _create_reminder(
+        self,
+        entity: Mapping[str, Any],
+        *,
+        language: Any = None,
+    ) -> str:
         due_date = _required_text(entity.get("due_date"), "due_date")
-        return await self.scheduler.create(
+        return await self._reminder_port().create_reminder(
             chat_id=self._chat_id(),
-            prompt=f"提醒用户：{entity['title']} 到期了",
-            schedule_type="once",
-            schedule_value=due_date,
-            next_run=due_date,
+            prompt=self._reminder_prompt(entity, language=language),
+            due_at=due_date,
             project_id=str(entity.get("project_id") or "default"),
             origin_session_id=self.origin_session_id,
-            action_type="agent_task",
         )
 
-    async def _attach_new_reminder(self, entity: dict[str, Any]) -> dict[str, Any]:
+    def _reminder_prompt(
+        self,
+        entity: Mapping[str, Any],
+        *,
+        language: Any = None,
+    ) -> str:
+        return localized(
+            "Remind the user that {title} is due.",
+            "提醒用户：{title} 到期了。",
+            language=language or self.language,
+            title=entity["title"],
+        )
+
+    async def _attach_new_reminder(
+        self,
+        entity: dict[str, Any],
+        *,
+        language: Any = None,
+    ) -> dict[str, Any]:
         task_id = ""
         try:
-            task_id = await self._create_reminder(entity)
+            task_id = await self._create_reminder(entity, language=language)
             metadata = self._metadata(entity.get("metadata"))
             metadata["reminder_task_id"] = task_id
             updated = await self.repository.update(entity["id"], metadata=metadata)
@@ -158,11 +256,16 @@ class EntityService:
             return updated
         except BaseException:
             if task_id:
-                await self.scheduler.delete(task_id)
+                await self._reminder_port().delete_reminder(task_id)
             await self.repository.delete(entity["id"], permanent=True)
             raise
 
-    async def _sync_reminder(self, entity: dict[str, Any]) -> dict[str, Any]:
+    async def _sync_reminder(
+        self,
+        entity: dict[str, Any],
+        *,
+        language: Any = None,
+    ) -> dict[str, Any]:
         metadata = self._metadata(entity.get("metadata"))
         task_id = str(metadata.get("reminder_task_id") or "").strip()
         should_exist = (
@@ -172,36 +275,38 @@ class EntityService:
         )
 
         if should_exist:
-            if task_id and await self.scheduler.get(task_id) is not None:
+            reminders = self._reminder_port()
+            if task_id and await reminders.reminder(task_id) is not None:
                 due_date = str(entity["due_date"])
-                await self.scheduler.edit(
+                await reminders.edit_reminder(
                     task_id,
-                    {
-                        "prompt": f"提醒用户：{entity['title']} 到期了",
-                        "schedule_type": "once",
-                        "schedule_value": due_date,
-                        "next_run": due_date,
-                    },
+                    prompt=self._reminder_prompt(entity, language=language),
+                    due_at=due_date,
                 )
-                await self.scheduler.update_status(task_id, "active")
+                await reminders.set_reminder_status(task_id, "active")
                 return entity
 
-            new_task_id = await self._create_reminder(entity)
+            new_task_id = await self._create_reminder(entity, language=language)
             metadata["reminder_task_id"] = new_task_id
             updated = await self.repository.update(entity["id"], metadata=metadata)
             if updated is None:
-                await self.scheduler.delete(new_task_id)
+                await reminders.delete_reminder(new_task_id)
                 raise RuntimeError("entity disappeared while attaching its reminder")
             return updated
 
         if not task_id:
             return entity
-        await self.scheduler.update_status(task_id, "cancelled")
+        await self._reminder_port().set_reminder_status(task_id, "cancelled")
         metadata.pop("reminder_task_id", None)
         updated = await self.repository.update(entity["id"], metadata=metadata)
         return updated or entity
 
-    async def create(self, **values: Any) -> dict[str, Any]:
+    async def create(
+        self,
+        *,
+        language: Any = None,
+        **values: Any,
+    ) -> dict[str, Any]:
         unsupported = sorted(set(values) - _CREATE_FIELDS)
         if unsupported:
             raise ValueError("unsupported entity field(s): " + ", ".join(unsupported))
@@ -247,10 +352,16 @@ class EntityService:
         }
         entity = await self.repository.create(**normalized)
         if normalized["source"] == "explicit" and normalized["due_date"]:
-            return await self._attach_new_reminder(entity)
+            return await self._attach_new_reminder(entity, language=language)
         return entity
 
-    async def update(self, entity_id: str, **fields: Any) -> dict[str, Any] | None:
+    async def update(
+        self,
+        entity_id: str,
+        *,
+        language: Any = None,
+        **fields: Any,
+    ) -> dict[str, Any] | None:
         normalized_id = _required_text(entity_id, "id")
         unsupported = sorted(set(fields) - _UPDATE_FIELDS)
         if unsupported:
@@ -305,7 +416,7 @@ class EntityService:
             return None
         if {"title", "due_date", "metadata", "status"}.intersection(normalized):
             try:
-                return await self._sync_reminder(updated)
+                return await self._sync_reminder(updated, language=language)
             except Exception:
                 rollback = {field: previous.get(field) for field in normalized}
                 await self.repository.update(normalized_id, **rollback)
@@ -319,7 +430,7 @@ class EntityService:
         metadata = self._metadata(entity.get("metadata"))
         task_id = str(metadata.get("reminder_task_id") or "").strip()
         if task_id:
-            await self.scheduler.update_status(task_id, "cancelled")
+            await self._reminder_port().set_reminder_status(task_id, "cancelled")
         return await self.repository.delete(entity["id"], permanent=permanent)
 
     async def get(self, entity_id: str) -> dict[str, Any] | None:
@@ -398,4 +509,4 @@ class EntityService:
         )
 
 
-__all__ = ["EntityService"]
+__all__ = ["EntityService", "ReminderSchedulePort"]

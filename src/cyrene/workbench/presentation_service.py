@@ -31,8 +31,10 @@ class PresentationQueryService:
         db_path: str | Path | None = None,
         frontend_modules: Sequence[str] = (),
         search_providers: Mapping[str, Callable[[str, int], Any]] | None = None,
+        plugin_host: Any = None,
     ) -> None:
         self._db_path = str(Path(db_path or DB_PATH).expanduser().resolve())
+        self._plugin_host = plugin_host
         self._frontend_modules = tuple(
             dict.fromkeys(
                 str(module or "").strip()
@@ -42,11 +44,30 @@ class PresentationQueryService:
         )
         self._search_providers = dict(search_providers or {})
 
+    def _current_frontend_modules(self) -> tuple[str, ...]:
+        values = (
+            self._plugin_host.frontend_modules
+            if self._plugin_host is not None
+            else self._frontend_modules
+        )
+        return tuple(
+            dict.fromkeys(
+                str(module or "").strip()
+                for module in values
+                if str(module or "").strip()
+            )
+        )
+
+    def _current_search_providers(self) -> dict[str, Callable[[str, int], Any]]:
+        if self._plugin_host is not None:
+            return dict(self._plugin_host.search_providers)
+        return dict(self._search_providers)
+
     @property
     def search_types(self) -> frozenset[str]:
         """Return every result type currently reachable through global search."""
 
-        return _CORE_SEARCH_TYPES | frozenset(self._search_providers)
+        return _CORE_SEARCH_TYPES | frozenset(self._current_search_providers())
 
     async def search_workbench(
         self,
@@ -54,7 +75,8 @@ class PresentationQueryService:
         types: set[str],
         per_type_limit: int,
     ) -> dict[str, list[dict[str, Any]]]:
-        provider_types = set(types) & set(self._search_providers)
+        providers = self._current_search_providers()
+        provider_types = set(types) & set(providers)
         results = await presentation_runtime._search_workbench_items(
             query,
             set(types) - provider_types,
@@ -63,7 +85,7 @@ class PresentationQueryService:
         )
         for result_type in provider_types:
             try:
-                value = self._search_providers[result_type](query, per_type_limit)
+                value = providers[result_type](query, per_type_limit)
                 if inspect.isawaitable(value):
                     value = await value
                 results[result_type] = (
@@ -81,7 +103,7 @@ class PresentationQueryService:
             timezone_name,
             self._db_path,
         )
-        payload["pluginModules"] = list(self._frontend_modules)
+        payload["pluginModules"] = list(self._current_frontend_modules())
         return payload
 
     async def dashboard(self, timezone_name: str = "") -> dict[str, Any]:
@@ -94,27 +116,14 @@ class PresentationQueryService:
     def user(self) -> dict[str, Any]:
         return presentation_runtime._build_user()
 
-    def search_config(self) -> dict[str, Any]:
-        return presentation_runtime._build_search_config()
-
-
 class WorkbenchSessionApplicationService:
     """Manage Workbench conversation presentation, export, and cleanup."""
 
     def __init__(
         self,
         db_path: str | Path,
-        *,
-        memory_service: Any = None,
     ) -> None:
-        self._presentation = WorkbenchSessionPresentation(
-            db_path,
-            memory_service=(
-                memory_service
-                if memory_service is not None
-                else active_plugin_service("memory")
-            ),
-        )
+        self._presentation = WorkbenchSessionPresentation(db_path)
 
     async def list_sessions(self) -> dict[str, Any]:
         return {

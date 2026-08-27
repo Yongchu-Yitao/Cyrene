@@ -37,7 +37,15 @@ function applicationFiles() {
   return [
     ...sourceFiles(path.join(REPOSITORY_ROOT, "electron")),
     ...sourceFiles(path.join(WEBUI_ROOT, "frontend")),
-    ...sourceFiles(path.join(REPOSITORY_ROOT, "src", "cyrene", "office", "static")),
+    ...sourceFiles(path.join(
+      REPOSITORY_ROOT,
+      "src",
+      "agent",
+      "plugin",
+      "plugin_impl",
+      "cyrene_office",
+      "static",
+    )),
     path.join(WEBUI_ROOT, "build-jsx.mjs"),
   ].sort()
 }

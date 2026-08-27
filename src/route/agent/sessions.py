@@ -11,13 +11,19 @@ from cyrene.workbench.presentation_service import (
     WorkbenchSessionApplicationService,
 )
 from cyrene.workbench.session_presentation import WorkbenchSessionError
+from route.errors import error_response
 
 
 async def _session_call(call: Callable[[], Awaitable[Any]]) -> Any:
     try:
         return await call()
     except WorkbenchSessionError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=exc.status_code)
+        code = {
+            404: "conversation_not_found",
+            409: "conversation_running",
+            503: "session_service_unavailable",
+        }.get(exc.status_code, "invalid_session_request")
+        return error_response(str(exc), exc.status_code, code)
 
 
 def register_session_routes(router: APIRouter, bot: Any, db_path: str) -> None:

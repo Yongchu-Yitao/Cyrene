@@ -14,6 +14,7 @@ from typing import Any, AsyncIterator, Callable, Protocol, runtime_checkable
 
 from cyrene.agent_runtime.errors import AgentRuntimeError
 from cyrene.agent_runtime.models import AgentDescriptor
+from cyrene.localization import localized
 
 
 @dataclass(frozen=True)
@@ -107,7 +108,10 @@ class DriverRegistry:
         if factory is None:
             raise AgentRuntimeError(
                 kind="protocol_mismatch",
-                message=f"no agent driver registered for {name!r}",
+                message=localized(
+                    f"no agent driver registered for {name!r}",
+                    f"没有为 {name!r} 注册智能体驱动",
+                ),
             )
         return factory()
 

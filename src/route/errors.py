@@ -9,6 +9,8 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from cyrene.localization import app_language, localized
+
 logger = logging.getLogger(__name__)
 
 
@@ -16,6 +18,45 @@ def error_response(message: str, status_code: int, code: str, **details: Any) ->
     payload: dict[str, Any] = {"error": message, "code": code}
     payload.update(details)
     return JSONResponse(payload, status_code=status_code)
+
+
+def localized_error_payload(
+    en: str,
+    zh: str,
+    code: str,
+    *,
+    language: Any = None,
+    **details: Any,
+) -> dict[str, Any]:
+    """Build a stable error envelope without exposing exception text."""
+
+    payload: dict[str, Any] = {
+        "error": localized(en, zh, language=app_language(language)),
+        "code": code,
+    }
+    payload.update(details)
+    return payload
+
+
+def localized_error_response(
+    en: str,
+    zh: str,
+    status_code: int,
+    code: str,
+    *,
+    language: Any = None,
+    **details: Any,
+) -> JSONResponse:
+    return JSONResponse(
+        localized_error_payload(
+            en,
+            zh,
+            code,
+            language=language,
+            **details,
+        ),
+        status_code=status_code,
+    )
 
 
 def install_api_exception_handlers(app: FastAPI) -> None:
@@ -26,13 +67,13 @@ def install_api_exception_handlers(app: FastAPI) -> None:
         fields = [
             {
                 "field": ".".join(str(part) for part in error.get("loc", ()) if part != "body"),
-                "message": str(error.get("msg") or "invalid value"),
+                "message": localized("Invalid value.", "值无效。"),
                 "type": str(error.get("type") or "validation_error"),
             }
             for error in exc.errors()
         ]
         return error_response(
-            "invalid request",
+            localized("Invalid request.", "请求无效。"),
             400,
             "validation_error",
             details=fields,
@@ -47,7 +88,7 @@ def install_api_exception_handlers(app: FastAPI) -> None:
             exc_info=(type(exc), exc, exc.__traceback__),
         )
         return error_response(
-            "internal server error",
+            localized("Internal server error.", "服务器内部错误。"),
             500,
             "internal_server_error",
         )

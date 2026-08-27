@@ -22,6 +22,35 @@ from .validation import check_input_schema
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
+def _localized_i18n_fields(
+    translations: Any,
+    locale: str,
+) -> Mapping[str, Any]:
+    """Resolve a locale tag while preserving an exact authored override."""
+
+    if not isinstance(translations, Mapping):
+        return {}
+    requested = str(locale or "").strip()
+    normalized = requested.replace("_", "-").lower()
+    language = normalized.split("-", 1)[0]
+    candidates = tuple(
+        dict.fromkeys(
+            candidate
+            for candidate in (requested, normalized, language)
+            if candidate
+        )
+    )
+    for candidate in candidates:
+        value = translations.get(candidate)
+        if isinstance(value, Mapping):
+            return value
+    for authored_locale, value in translations.items():
+        authored = str(authored_locale or "").replace("_", "-").lower()
+        if authored in {normalized, language} and isinstance(value, Mapping):
+            return value
+    return {}
+
+
 @dataclass(frozen=True, slots=True)
 class PluginContext:
     """Handles a Plugin may use while deciding how to apply its result.
@@ -78,6 +107,10 @@ PluginHandler: TypeAlias = Callable[
 PluginSetupHandler: TypeAlias = Callable[[PluginSetupContext], None]
 PluginLifecycleHandler: TypeAlias = Callable[[], Any | Awaitable[Any]]
 PluginSearchHandler: TypeAlias = Callable[[str, int], Any | Awaitable[Any]]
+PluginFrontendHandler: TypeAlias = Callable[
+    [Any, Mapping[str, Any]],
+    Any | Awaitable[Any],
+]
 
 
 @dataclass(slots=True)
@@ -102,6 +135,10 @@ class PluginApplicationContext:
     search_providers: MutableMapping[str, PluginSearchHandler]
     startup_handlers: MutableSequence[PluginLifecycleHandler]
     shutdown_handlers: MutableSequence[PluginLifecycleHandler]
+    frontend_methods: MutableMapping[str, PluginFrontendHandler] = field(
+        default_factory=dict
+    )
+    registry: Any | None = None
 
     @staticmethod
     def _name(value: str, label: str) -> str:
@@ -120,6 +157,22 @@ class PluginApplicationContext:
         normalized = self._name(module, "Plugin frontend module")
         if normalized not in self.frontend_modules:
             self.frontend_modules.append(normalized)
+
+    def provide_frontend_method(
+        self,
+        name: str,
+        handler: PluginFrontendHandler,
+        *,
+        replace: bool = False,
+    ) -> None:
+        """Expose one pack-scoped JSON RPC method to sandboxed Plugin views."""
+
+        normalized = self._name(name, "Plugin frontend method name")
+        if not callable(handler):
+            raise TypeError("Plugin frontend method handler must be callable")
+        if normalized in self.frontend_methods and not replace:
+            raise ValueError(f"Plugin frontend method already exists: {normalized}")
+        self.frontend_methods[normalized] = handler
 
     def provide_search(
         self,
@@ -243,11 +296,14 @@ class Plugin:
         """Return localized authored metadata with source text as fallback."""
 
         translations = self.metadata.get("i18n", {})
-        value = translations.get(str(locale)) if isinstance(translations, Mapping) else None
-        value = value if isinstance(value, Mapping) else {}
+        value = _localized_i18n_fields(translations, locale)
         return (
             str(value.get("name") or self.name),
-            str(value.get("description") or self.description),
+            str(
+                self.description
+                if self.metadata.get("customized_description") is True
+                else value.get("description") or self.description
+            ),
         )
 
     def tool_definition(self) -> dict[str, Any]:
@@ -300,15 +356,74 @@ class PluginPack:
             not isinstance(value, Mapping) for value in translations.values()
         ):
             raise TypeError("Plugin pack metadata.i18n must map locales to objects")
+        metadata = deepcopy(dict(self.metadata))
+        views = metadata.get("frontend_views", ())
+        tools = metadata.get("project_tools", ())
+        if not isinstance(views, (list, tuple)):
+            raise TypeError("Plugin pack metadata.frontend_views must be an array")
+        if not isinstance(tools, (list, tuple)):
+            raise TypeError("Plugin pack metadata.project_tools must be an array")
+        view_ids: set[str] = set()
+        for raw in views:
+            if not isinstance(raw, Mapping):
+                raise TypeError("Plugin frontend view must be an object")
+            view_id = str(raw.get("id") or "").strip()
+            if not _IDENTIFIER.fullmatch(view_id):
+                raise ValueError(f"invalid Plugin frontend view id: {view_id!r}")
+            if view_id in view_ids:
+                raise ValueError(f"duplicate Plugin frontend view id: {view_id}")
+            view_ids.add(view_id)
+            entry = str(raw.get("entry") or "").strip().replace("\\", "/")
+            entry_path = Path(entry)
+            if not entry or entry_path.is_absolute() or ".." in entry_path.parts:
+                raise ValueError(
+                    f"Plugin frontend view entry must stay inside the pack: {entry!r}"
+                )
+            item_i18n = raw.get("i18n", {})
+            if not isinstance(item_i18n, Mapping) or any(
+                not isinstance(value, Mapping) for value in item_i18n.values()
+            ):
+                raise TypeError("Plugin frontend view i18n must map locales to objects")
+        tool_ids: set[str] = set()
+        for raw in tools:
+            if not isinstance(raw, Mapping):
+                raise TypeError("Plugin project tool must be an object")
+            tool_id = str(raw.get("id") or "").strip()
+            if not _IDENTIFIER.fullmatch(tool_id):
+                raise ValueError(f"invalid Plugin project tool id: {tool_id!r}")
+            if tool_id in tool_ids:
+                raise ValueError(f"duplicate Plugin project tool id: {tool_id}")
+            tool_ids.add(tool_id)
+            view_id = str(raw.get("view") or "").strip()
+            if view_id not in view_ids:
+                raise ValueError(
+                    f"Plugin project tool {tool_id} references missing view: {view_id}"
+                )
+            item_i18n = raw.get("i18n", {})
+            if not isinstance(item_i18n, Mapping) or any(
+                not isinstance(value, Mapping) for value in item_i18n.values()
+            ):
+                raise TypeError("Plugin project tool i18n must map locales to objects")
         object.__setattr__(self, "id", pack_id)
         object.__setattr__(self, "description", str(self.description).strip())
         object.__setattr__(self, "plugins", plugins)
-        object.__setattr__(self, "metadata", deepcopy(dict(self.metadata)))
+        object.__setattr__(self, "metadata", metadata)
+
+    @property
+    def frontend_views(self) -> tuple[Mapping[str, Any], ...]:
+        """Sandboxed Workbench views contributed by this pack."""
+
+        return tuple(self.metadata.get("frontend_views", ()))
+
+    @property
+    def project_tools(self) -> tuple[Mapping[str, Any], ...]:
+        """Workbench project-tool entries that open contributed views."""
+
+        return tuple(self.metadata.get("project_tools", ()))
 
     def localized(self, locale: str) -> tuple[str, str]:
         translations = self.metadata.get("i18n", {})
-        value = translations.get(str(locale)) if isinstance(translations, Mapping) else None
-        value = value if isinstance(value, Mapping) else {}
+        value = _localized_i18n_fields(translations, locale)
         return (
             str(value.get("name") or self.id),
             str(value.get("description") or self.description),
@@ -387,6 +502,7 @@ __all__ = [
     "PluginCall",
     "PluginCallResult",
     "PluginContext",
+    "PluginFrontendHandler",
     "PluginHandler",
     "PluginLifecycleHandler",
     "PluginPack",

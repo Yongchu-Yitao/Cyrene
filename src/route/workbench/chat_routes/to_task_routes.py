@@ -5,11 +5,12 @@ import copy
 from typing import Any
 
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
 
+from cyrene.localization import app_language, localized
 from cyrene.workbench.chat_events import publish_chat_changed
 from cyrene.workbench.notifications import append_notification
 from route import schemas as api_models
+from route.errors import localized_error_response
 from route.workbench.chat_routes.context import ChatRouteContext
 
 
@@ -29,14 +30,27 @@ def register_to_task_routes(router: APIRouter, context: ChatRouteContext) -> Non
         """Promote a conversation into a task session of its project (开始执行)."""
         body = api_models.body_dict(body_model)
         chat = await asyncio.to_thread(_get_workbench_chat, chat_id)
+        language = app_language()
         if not chat:
-            return JSONResponse({"error": "chat not found"}, status_code=404)
+            return localized_error_response(
+                "Chat not found.",
+                "未找到对话。",
+                404,
+                "chat_not_found",
+                language=language,
+            )
         base_chat = copy.deepcopy(chat)
         R = _routes()
         store = await asyncio.to_thread(R.read_store)
         project = R.find_project(store, str(chat.get("projectId") or ""))
         if not project:
-            return JSONResponse({"error": "project not found"}, status_code=404)
+            return localized_error_response(
+                "Project not found.",
+                "未找到项目。",
+                404,
+                "project_not_found",
+                language=language,
+            )
         # Fallback signal when synthesis is unavailable: the last user message.
         last_user = ""
         for message in reversed(chat.get("messages") or []):
@@ -55,7 +69,10 @@ def register_to_task_routes(router: APIRouter, context: ChatRouteContext) -> Non
                 brief = synthesized
 
         from_synthesis = bool(brief)
-        title = (override_title or str(brief.get("title") or "").strip() or str(chat.get("title") or "").strip() or "新任务")[:80] or "新任务"
+        default_task_title = localized(
+            "New task", "新任务", language=language
+        )
+        title = (override_title or str(brief.get("title") or "").strip() or str(chat.get("title") or "").strip() or default_task_title)[:80] or default_task_title
         goal = (override_goal or str(brief.get("goal") or "").strip() or last_user or title).strip()
         constraints = _coerce_brief_constraints(brief.get("constraints"))
         acceptance = _coerce_brief_acceptance(brief.get("acceptanceCriteria"))
@@ -71,7 +88,25 @@ def register_to_task_routes(router: APIRouter, context: ChatRouteContext) -> Non
                 "id": _short_id("event"),
                 "type": "CreatedFromChat",
                 "createdAt": _utc_now_iso(),
-                "body": (f"由对话「{chat.get('title') or '新对话'}」综合整理而来（已通读完整对话）。" if from_synthesis else f"由对话「{chat.get('title') or '新对话'}」创建。"),
+                "body": (
+                    localized(
+                        'Synthesized from the full conversation "{chat}".',
+                        '由对话「{chat}」综合整理而来（已通读完整对话）。',
+                        language=language,
+                        chat=chat.get('title') or localized(
+                            "New chat", "新对话", language=language
+                        ),
+                    )
+                    if from_synthesis
+                    else localized(
+                        'Created from conversation "{chat}".',
+                        '由对话「{chat}」创建。',
+                        language=language,
+                        chat=chat.get('title') or localized(
+                            "New chat", "新对话", language=language
+                        ),
+                    )
+                ),
                 "chatId": chat_id,
             }
         ]
@@ -95,13 +130,26 @@ def register_to_task_routes(router: APIRouter, context: ChatRouteContext) -> Non
         )
         await asyncio.to_thread(
             append_notification,
-            title="对话已转为任务",
-            body=f"对话「{chat.get('title') or '新对话'}」已创建任务「{title}」。",
+            title=localized(
+                "Conversation converted to task",
+                "对话已转为任务",
+                language=language,
+            ),
+            body=localized(
+                'Conversation "{chat}" created task "{task}".',
+                '对话「{chat}」已创建任务「{task}」。',
+                language=language,
+                chat=chat.get('title') or localized(
+                    "New chat", "新对话", language=language
+                ),
+                task=title,
+            ),
             tab="comment",
             project_ref=project.get("id"),
             source="chat_to_task",
-            source_label="任务",
+            source_label=localized("Task", "任务", language=language),
             link_label=title,
             meta={"chatId": chat_id, "sessionId": session["id"]},
+            language=language,
         )
         return {"ok": True, "session": session, **store}

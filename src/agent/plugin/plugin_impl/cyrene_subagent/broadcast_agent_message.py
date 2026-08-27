@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.plugin import PluginContext
+from agent.plugin.native_runtime import plugin_localized
 
 from ._service import current_agent_id, current_effect_key, subagent_manager
 from .definitions import get_native_tool_def
@@ -20,7 +21,11 @@ async def _tool_broadcast_agent_message(
     """Broadcast a message to all peer sub-agents in the current round."""
     content = str(args.get("content", ""))
     if not content:
-        return "Error: 'content' is required."
+        return plugin_localized(
+            context,
+            "Error: 'content' is required.",
+            "错误：必须提供 'content'。",
+        )
     result = await subagent_manager(context).broadcast(
         current_agent_id(context),
         content,
@@ -29,10 +34,19 @@ async def _tool_broadcast_agent_message(
     delivered = list(result.get("delivered") or ())
     errors = dict(result.get("errors") or {})
     total = len(delivered) + len(errors)
-    text = f"Broadcast sent to {len(delivered)}/{total} peers."
+    text = plugin_localized(
+        context,
+        "Broadcast sent to {delivered}/{total} peers.",
+        "广播已发送给 {delivered}/{total} 个同级 Agent。",
+        delivered=len(delivered),
+        total=total,
+    )
     if errors:
-        text += " Skipped: " + ", ".join(
-            f"{agent_id}: {error}" for agent_id, error in sorted(errors.items())
+        text += plugin_localized(
+            context,
+            " Skipped: {agents}.",
+            " 已跳过：{agents}。",
+            agents=", ".join(sorted(errors)),
         )
     return text
 

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-
-from agent.plugin import PluginContext, PluginRegistry, PluginRuntime
+from agent.plugin import (
+    PluginContext,
+    PluginRegistry,
+    PluginRuntime,
+)
 from agent.plugin.plugin_impl.cyrene_map import plugin_pack
 from agent.plugin.plugin_impl.cyrene_map.service import MapService, map_database
 
@@ -14,6 +17,7 @@ def run(coroutine):
 
 def test_map_pack_completes_toolbox_list_describe_invoke_chain(tmp_path):
     service = MapService(map_database(tmp_path))
+    service.initialize()
     registry = PluginRegistry()
     registry.register_pack(plugin_pack, source="test-map")
     runtime = PluginRuntime(registry)

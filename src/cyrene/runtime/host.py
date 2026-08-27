@@ -70,6 +70,7 @@ from cyrene.config import (
     WORKSPACE_DIR,
     WEB_PORT,
 )
+from cyrene.localization import localized
 from cyrene.runtime.application import ApplicationLifecycle
 from cyrene.runtime.bootstrap import create_runtime_context
 
@@ -226,7 +227,6 @@ async def _prepare_application(
         plugin_host,
         close=close_plugin_host,
     )
-    await application.start_external_services()
     return application
 
 
@@ -241,29 +241,54 @@ async def _prepare_cli() -> None:
 
 
 def _cli_mcp_service():
-    from agent.plugin.mcp_service import get_mcp_service
+    from agent.plugin import active_plugin_service
 
-    return get_mcp_service()
+    service = active_plugin_service("mcp")
+    if service is None:
+        raise RuntimeError(localized(
+            "The MCP Plugin is disabled or unavailable.",
+            "MCP 插件已禁用或不可用。",
+        ))
+    return service
+
+
+def _cli_mcp_status_label(value: object) -> str:
+    normalized = str(value or "disconnected").strip().lower()
+    return {
+        "connected": localized("connected", "已连接"),
+        "connecting": localized("connecting", "连接中"),
+        "disconnected": localized("disconnected", "未连接"),
+        "disabled": localized("disabled", "已禁用"),
+        "error": localized("error", "错误"),
+        "failed": localized("failed", "失败"),
+    }.get(normalized, normalized)
 
 
 async def _cli_mcp_list() -> None:
     service = _cli_mcp_service()
     configs = service.configs()
     if not configs:
-        print("  No MCP servers configured.")
+        print(localized("  No MCP servers configured.", "  尚未配置 MCP 服务器。"))
         return
     statuses = {s["name"]: s for s in service.status()}
-    print(f"\n  {'Name':<16} {'Transport':<10} {'Status':<14} {'Tools':<6} Endpoint")
+    print("\n" + localized(
+        "  {name:<16} {transport:<10} {status:<14} {tools:<6} Endpoint",
+        "  {name:<16} {transport:<10} {status:<14} {tools:<6} 接口",
+        name=localized("Name", "名称"),
+        transport=localized("Transport", "传输"),
+        status=localized("Status", "状态"),
+        tools=localized("Tools", "工具"),
+    ))
     print(f"  {'-'*16} {'-'*10} {'-'*14} {'-'*6} {'-'*40}")
     for cfg in configs:
         name = cfg.get("name", "?")
         st = statuses.get(name, {})
-        status = st.get("status", "disconnected")
+        status = _cli_mcp_status_label(st.get("status", "disconnected"))
         tools = st.get("tool_count", 0)
         transport = cfg.get("transport", "stdio")
         endpoint = cfg.get("command", "") if transport == "stdio" else cfg.get("url", "")
         enabled = cfg.get("enabled", True)
-        enabled_mark = "" if enabled else " [disabled]"
+        enabled_mark = "" if enabled else localized(" [disabled]", " [已禁用]")
         print(f"  {name:<16} {transport:<10} {status:<14} {tools:<6} {endpoint}{enabled_mark}")
     tools = [
         tool
@@ -271,7 +296,11 @@ async def _cli_mcp_list() -> None:
         for tool in status.get("tools") or ()
     ]
     if tools:
-        print(f"\n  Total MCP Plugins available: {len(tools)}")
+        print("\n" + localized(
+            "  Total MCP Plugins available: {count}",
+            "  可用 MCP 插件总数：{count}",
+            count=len(tools),
+        ))
         for tool in tools:
             print(
                 f"    - {tool.get('plugin') or tool.get('name')}: "
@@ -281,8 +310,14 @@ async def _cli_mcp_list() -> None:
 
 async def _cli_mcp_add(args: list[str]) -> None:
     if len(args) < 3:
-        print("  Usage: add <name> stdio <command> [args...]")
-        print("         add <name> sse <url>")
+        print(localized(
+            "  Usage: add <name> stdio <command> [args...]",
+            "  用法：add <名称> stdio <命令> [参数...]",
+        ))
+        print(localized(
+            "         add <name> sse <url>",
+            "        add <名称> sse <网址>",
+        ))
         return
     name, transport = args[0], args[1]
     if transport == "stdio":
@@ -293,7 +328,11 @@ async def _cli_mcp_add(args: list[str]) -> None:
         url = args[2]
         server = {"name": name, "transport": "sse", "url": url, "enabled": True}
     else:
-        print(f"  Unknown transport: {transport} (use stdio or sse)")
+        print(localized(
+            "  Unknown transport: {transport} (use stdio or sse)",
+            "  未知传输方式：{transport}（请使用 stdio 或 sse）",
+            transport=transport,
+        ))
         return
     service = _cli_mcp_service()
     servers = service.configs()
@@ -303,27 +342,42 @@ async def _cli_mcp_add(args: list[str]) -> None:
     status = service.server_status(name) or {}
     state = str(status.get("status") or "disconnected")
     if state == "connected":
-        print(f"  ✅ MCP server '{name}' added and connected.")
+        print(localized(
+            "  ✅ MCP server '{name}' was added and connected.",
+            "  ✅ MCP 服务器“{name}”已添加并连接。",
+            name=name,
+        ))
     else:
-        detail = str(status.get("error") or state)
-        print(f"  MCP server '{name}' was saved but is not connected: {detail}")
+        print(localized(
+            "  MCP server '{name}' was saved but could not connect.",
+            "  MCP 服务器“{name}”已保存，但无法连接。",
+            name=name,
+        ))
 
 
 async def _cli_mcp_remove(args: list[str]) -> None:
     if not args:
-        print("  Usage: remove <name>")
+        print(localized("  Usage: remove <name>", "  用法：remove <名称>"))
         return
     name = args[0]
     removed = await _cli_mcp_service().remove(name)
     if removed is None:
-        print(f"  Server '{name}' not found.")
+        print(localized(
+            "  Server '{name}' was not found.",
+            "  未找到服务器“{name}”。",
+            name=name,
+        ))
         return
-    print(f"  ✅ MCP server '{name}' removed.")
+    print(localized(
+        "  ✅ MCP server '{name}' was removed.",
+        "  ✅ 已移除 MCP 服务器“{name}”。",
+        name=name,
+    ))
 
 
 async def _cli_mcp_toggle(args: list[str]) -> None:
     if not args:
-        print("  Usage: toggle <name>")
+        print(localized("  Usage: toggle <name>", "  用法：toggle <名称>"))
         return
     name = args[0]
     service = _cli_mcp_service()
@@ -332,33 +386,54 @@ async def _cli_mcp_toggle(args: list[str]) -> None:
         None,
     )
     if existing is None:
-        print(f"  Server '{name}' not found.")
+        print(localized(
+            "  Server '{name}' was not found.",
+            "  未找到服务器“{name}”。",
+            name=name,
+        ))
         return
     enabled = not bool(existing.get("enabled", True))
     await service.set_enabled(name, enabled)
-    status = "enabled" if enabled else "disabled"
-    print(f"  ✅ MCP server '{name}' {status}.")
+    status = localized("enabled", "已启用") if enabled else localized("disabled", "已禁用")
+    print(localized(
+        "  ✅ MCP server '{name}' is {status}.",
+        "  ✅ MCP 服务器“{name}”{status}。",
+        name=name,
+        status=status,
+    ))
 
 
 async def _cli_mcp_test(args: list[str]) -> None:
     if not args:
-        print("  Usage: test <name>")
+        print(localized("  Usage: test <name>", "  用法：test <名称>"))
         return
     name = args[0]
     status = _cli_mcp_service().server_status(name)
     if status and status.get("status") == "connected":
         tools = list(status.get("tools") or ())
-        print(f"  ✅ Server '{name}' connected, {len(tools)} tools available.")
+        print(localized(
+            "  ✅ Server '{name}' is connected; {count} tools are available.",
+            "  ✅ 服务器“{name}”已连接，可用工具 {count} 个。",
+            name=name,
+            count=len(tools),
+        ))
         for tool in tools[:10]:
             print(
                 f"    - {tool.get('plugin') or tool.get('name')}: "
                 f"{str(tool.get('description') or '')[:60]}"
             )
         if len(tools) > 10:
-            print(f"    ... and {len(tools) - 10} more")
+            print(localized(
+                "    ... and {count} more",
+                "    ……另有 {count} 个",
+                count=len(tools) - 10,
+            ))
         return
-    detail = str((status or {}).get("error") or "not connected")
-    print(f"  Server '{name}' is {detail}. Check config with '/mcp list'.")
+    print(localized(
+        "  Server '{name}' is not connected. Check its configuration with '/mcp list'.",
+        "  服务器“{name}”未连接。请使用“/mcp list”检查配置。",
+        name=name,
+    ))
 
 
 async def _handle_mcp_command(cmd_line: str) -> None:
@@ -378,79 +453,146 @@ async def _handle_mcp_command(cmd_line: str) -> None:
     elif sub == "test":
         await _cli_mcp_test(rest)
     else:
-        print(f"  Unknown mcp command: {sub}")
-        print("  Commands: list, add, remove, toggle, test")
+        print(localized(
+            "  Unknown MCP command: {command}",
+            "  未知 MCP 命令：{command}",
+            command=sub,
+        ))
+        print(localized(
+            "  Commands: list, add, remove, toggle, test",
+            "  可用命令：list、add、remove、toggle、test",
+        ))
 
 
 def _show_help():
     print()
     print("=" * 40)
-    print("  Cyrene 帮助菜单")
+    print(localized("  Cyrene Help", "  Cyrene 帮助菜单"))
     print("=" * 40)
-    print("  1) 重新注入人格（重新运行设置向导）")
-    print("  2) 清除对话上下文（session）")
-    print("  3) 重置人格（恢复默认 SOUL.md）")
-    print("  4) 检查系统状态")
-    print("  0) 返回对话")
+    print(localized(
+        "  1) Reconfigure personality (run setup again)",
+        "  1) 重新注入人格（重新运行设置向导）",
+    ))
+    print(localized(
+        "  2) Clear conversation context (session)",
+        "  2) 清除对话上下文（session）",
+    ))
+    print(localized(
+        "  3) Reset personality (restore the default SOUL.md)",
+        "  3) 重置人格（恢复默认 SOUL.md）",
+    ))
+    print(localized("  4) Check system status", "  4) 检查系统状态"))
+    print(localized("  0) Return to the conversation", "  0) 返回对话"))
     print("=" * 40)
 
 
 async def _handle_menu():
     while True:
-        choice = input("\n选择操作 (0-4): ").strip()
+        choice = input(localized(
+            "\nChoose an action (0-4): ",
+            "\n选择操作 (0-4): ",
+        )).strip()
 
         if choice == "0":
-            print("返回对话。")
+            print(localized("Returning to the conversation.", "返回对话。"))
             return
 
         elif choice == "1":
             from cyrene.runtime.setup import init_setup_flag, run_setup
             init_setup_flag()
-            print("\n--- 重新注入人格 ---")
+            print(localized(
+                "\n--- Reconfigure personality ---",
+                "\n--- 重新注入人格 ---",
+            ))
             await run_setup()
-            print("人格设置完成。输入 /h 可以重新设置。")
+            print(localized(
+                "Personality setup is complete. Enter /h to configure it again.",
+                "人格设置完成。输入 /h 可以重新设置。",
+            ))
             return
 
         elif choice == "2":
             await _clear_cli_context()
-            print("✅ 对话上下文已清除。")
+            print(localized(
+                "✅ Conversation context was cleared.",
+                "✅ 对话上下文已清除。",
+            ))
             return
 
         elif choice == "3":
             from agent.plugin import active_plugin_service
 
-            memory_service = active_plugin_service("memory")
-            if memory_service is None:
-                print("❌ 记忆插件当前不可用。")
+            soul_service = active_plugin_service("soul")
+            if soul_service is None:
+                print(localized(
+                    "❌ The SOUL Plugin is currently unavailable.",
+                    "❌ SOUL 插件当前不可用。",
+                ))
                 return
-            memory_service.reset_persona_memory()
-            print("✅ SOUL.md 已重置为默认。短期记忆已清空。")
+            memory_service = active_plugin_service("memory")
+            soul_service.reset()
+            if memory_service is not None:
+                memory_service.save_short_term_entries([])
+                print(localized(
+                    "✅ SOUL.md was reset to the default, and short-term memory was cleared.",
+                    "✅ SOUL.md 已重置为默认。短期记忆已清空。",
+                ))
+            else:
+                print(localized(
+                    "✅ SOUL.md was reset to the default. The Memory Plugin is not enabled.",
+                    "✅ SOUL.md 已重置为默认。记忆插件当前未启用。",
+                ))
             return
 
         elif choice == "4":
             from agent.plugin import active_plugin_service
-            from cyrene.runtime.model_configuration import candidates_for_route
 
-            primary = candidates_for_route("primary")
+            model_service = active_plugin_service("model_configuration")
+            primary = model_service.candidates_for_route("primary") if model_service is not None else []
             candidate = primary[0] if primary else {}
             memory_service = active_plugin_service("memory")
-            print("\n--- 系统状态 ---")
-            print(f"  模型: {candidate.get('model') or '未配置'}")
-            print(f"  地址: {candidate.get('base_url') or '未配置'}")
-            soul_path = memory_service.soul_path() if memory_service is not None else None
-            print(
-                f"  SOUL.md: {'存在' if soul_path and soul_path.exists() else '不存在'}"
-                f" ({soul_path or 'memory Plugin unavailable'})"
+            soul_service = active_plugin_service("soul")
+            not_configured = localized("Not configured", "未配置")
+            print(localized("\n--- System status ---", "\n--- 系统状态 ---"))
+            print(localized(
+                "  Model: {value}",
+                "  模型：{value}",
+                value=candidate.get("model") or not_configured,
+            ))
+            print(localized(
+                "  Endpoint: {value}",
+                "  地址：{value}",
+                value=candidate.get("base_url") or not_configured,
+            ))
+            soul_path = soul_service.path() if soul_service is not None else None
+            soul_state = localized("present", "存在") if soul_path and soul_path.exists() else localized("missing", "不存在")
+            soul_location = soul_path or localized(
+                "SOUL Plugin unavailable",
+                "SOUL 插件不可用",
             )
-            if soul_path and soul_path.exists() and memory_service is not None:
-                soul_content = memory_service.read_soul()
-                print(f"  人格内容: {len(soul_content)} 字符")
+            print(localized(
+                "  SOUL.md: {state} ({location})",
+                "  SOUL.md：{state}（{location}）",
+                state=soul_state,
+                location=soul_location,
+            ))
+            if soul_path and soul_path.exists() and soul_service is not None:
+                soul_content = soul_service.read()
+                print(localized(
+                    "  Personality content: {count} characters",
+                    "  人格内容：{count} 个字符",
+                    count=len(soul_content),
+                ))
             st_entries = (
                 memory_service.short_term_entries()
                 if memory_service is not None
                 else []
             )
-            print(f"  短期记忆: {len(st_entries)} 条")
+            print(localized(
+                "  Short-term memories: {count}",
+                "  短期记忆：{count} 条",
+                count=len(st_entries),
+            ))
             from agent.workbench.chat_runtime import workbench_agent_data_directory
             from cyrene.workbench.conversation_context_service import AgentContextRepository
 
@@ -458,26 +600,57 @@ async def _handle_menu():
                 workbench_agent_data_directory(str(DB_PATH)) / "context"
             ).read(_CLI_SESSION_ID)
             cli_messages = cli_state.get("messages") if isinstance(cli_state, dict) else []
-            print(f"  当前 session: {len(cli_messages or [])} 条消息")
-            # MCP 状态
-            mcp_service = _cli_mcp_service()
-            mcp_cfgs = mcp_service.configs()
-            if mcp_cfgs:
-                print(f"  MCP 服务器: {len(mcp_cfgs)} 个已配置")
-                for st in mcp_service.status():
-                    print(f"    {st['name']}: {st['status']} ({st['tool_count']} tools)")
+            print(localized(
+                "  Current session: {count} messages",
+                "  当前 session：{count} 条消息",
+                count=len(cli_messages or []),
+            ))
+            # Optional Plugin sections never make the generic status view fail.
+            mcp_service = active_plugin_service("mcp")
+            if mcp_service is None:
+                print(localized(
+                    "  MCP: Plugin not enabled",
+                    "  MCP：插件未启用",
+                ))
+            else:
+                mcp_cfgs = mcp_service.configs()
+                if mcp_cfgs:
+                    print(localized(
+                        "  MCP servers: {count} configured",
+                        "  MCP 服务器：已配置 {count} 个",
+                        count=len(mcp_cfgs),
+                    ))
+                    for st in mcp_service.status():
+                        print(
+                            localized(
+                                "    {name}: {status} ({count} tools)",
+                                "    {name}：{status}（{count} 个工具）",
+                                name=st["name"],
+                                status=_cli_mcp_status_label(st["status"]),
+                                count=st["tool_count"],
+                            )
+                        )
             print("------------------")
             return
 
         else:
-            print("无效选择，请输入 0-4。")
+            print(localized(
+                "Invalid choice. Enter a number from 0 to 4.",
+                "无效选择，请输入 0-4。",
+            ))
 
 
 async def _cli_loop() -> None:
-    print(f"{ASSISTANT_NAME} CLI mode. '/h' for menu, '/clear' to reset session, '/mcp' for MCP management, 'quit' to exit.")
+    print(localized(
+        "{name} CLI mode. '/h' opens the menu, '/clear' resets the session, "
+        "'/mcp' manages MCP, and 'quit' exits.",
+        "{name} CLI 模式。输入“/h”打开菜单，“/clear”重置会话，"
+        "“/mcp”管理 MCP，“quit”退出。",
+        name=ASSISTANT_NAME,
+    ))
     while True:
         try:
-            user_input = input("\nYou: ").strip()
+            user_input = input(localized("\nYou: ", "\n你：")).strip()
             if not user_input:
                 continue
             if user_input.lower() == "quit":
@@ -488,7 +661,7 @@ async def _cli_loop() -> None:
                 continue
             if user_input.lower() == "/clear":
                 await _clear_cli_context()
-                print("Session cleared.")
+                print(localized("Session cleared.", "会话已清除。"))
                 continue
             if user_input.lower().startswith("/mcp "):
                 cmd = user_input[5:].strip()
@@ -589,7 +762,6 @@ def _run_electron_mode() -> None:
         _sp.Popen.__init__ = _patched_popen_init
 
     import asyncio
-    from cyrene.runtime.scheduler import setup_scheduler
     from webui.server import create_app, WebBot
 
     selected_port = _pick_web_port(WEB_PORT)
@@ -599,26 +771,18 @@ def _run_electron_mode() -> None:
         application = ApplicationLifecycle(
             create_runtime_context(host_mode="electron")
         )
-        await application.initialize(events=True, learning=True)
+        await application.initialize(events=True)
 
         bot = WebBot()
-        scheduler = setup_scheduler(bot, str(DB_PATH))
-        scheduler.start()
-        application.register_manager(
-            "scheduler",
-            scheduler,
-            close=lambda: scheduler.shutdown(wait=False),
-        )
-
         application.start_update_check()
 
-        # Fire-and-forget: background services don't block server start
-        application.create_task(
-            application.start_external_services(),
-            label="external service startup",
+        app = create_app(
+            bot,
+            str(DB_PATH),
+            instance_id=instance_id,
+            ui_mode=ui_mode,
+            enable_background_plugins=True,
         )
-
-        app = create_app(bot, str(DB_PATH), instance_id=instance_id, ui_mode=ui_mode)
         app.state.web_port = int(selected_port)
         from cyrene.agent_runtime.model_gateway import configure_model_gateway
         configure_model_gateway(selected_port)
@@ -674,30 +838,30 @@ def _run_web_mode(ui_mode: str = "workbench") -> None:
     selected_port = _pick_web_port(preferred_port)
 
     import asyncio
-    from cyrene.runtime.scheduler import setup_scheduler
     from webui.server import run_web, WebBot
 
     async def _start():
         application = ApplicationLifecycle(
             create_runtime_context(host_mode="web")
         )
-        await application.initialize(events=True, learning=True)
-        await application.start_external_services()
-
+        await application.initialize(events=True)
         bot = WebBot()
-        scheduler = setup_scheduler(bot, str(DB_PATH))
-        scheduler.start()
-        application.register_manager(
-            "scheduler",
-            scheduler,
-            close=lambda: scheduler.shutdown(wait=False),
-        )
         logger.info(
             "Web UI starting at http://127.0.0.1:%s (ui_mode=%s)", selected_port, ui_mode
         )
-        print(f"{ASSISTANT_NAME} Web UI starting at http://127.0.0.1:{selected_port}")
+        print(localized(
+            "{name} Web UI is starting at http://127.0.0.1:{port}",
+            "{name} Web UI 正在启动：http://127.0.0.1:{port}",
+            name=ASSISTANT_NAME,
+            port=selected_port,
+        ))
         if selected_port != preferred_port:
-            print(f"Port {preferred_port} is busy; using {selected_port} instead.")
+            print(localized(
+                "Port {preferred} is busy; using {selected} instead.",
+                "端口 {preferred} 已被占用，改用端口 {selected}。",
+                preferred=preferred_port,
+                selected=selected_port,
+            ))
             logger.info("Port %s is busy; using %s instead.", preferred_port, selected_port)
 
         # 后台检查更新（不阻塞启动）
@@ -784,7 +948,6 @@ def _run_web_gui() -> None:
     import threading
     import time
     from pathlib import Path
-    from cyrene.runtime.scheduler import setup_scheduler
     from webui.server import create_app, WebBot
 
     selected_port = _pick_web_port(WEB_PORT)
@@ -799,25 +962,15 @@ def _run_web_gui() -> None:
         await application.initialize(events=True)
 
         bot = WebBot()
-        scheduler = setup_scheduler(bot, str(DB_PATH))
-        scheduler.start()
-        application.register_manager(
-            "scheduler",
-            scheduler,
-            close=lambda: scheduler.shutdown(wait=False),
-        )
-
         application.start_update_check()
 
-        # Fire-and-forget: SearXNG + MCP start in the background so the
-        # web server is available immediately (SearXNG health-check can
-        # take up to 30 s, which would otherwise cause "Server not responding").
-        application.create_task(
-            application.start_external_services(),
-            label="external service startup",
+        app = create_app(
+            bot,
+            str(DB_PATH),
+            instance_id=instance_id,
+            ui_mode=ui_mode,
+            enable_background_plugins=True,
         )
-
-        app = create_app(bot, str(DB_PATH), instance_id=instance_id, ui_mode=ui_mode)
         app.state.web_port = int(selected_port)
         from cyrene.agent_runtime.model_gateway import configure_model_gateway
         configure_model_gateway(selected_port)
@@ -832,8 +985,12 @@ def _run_web_gui() -> None:
     def _run_server():
         try:
             asyncio.run(_start_all())
-        except Exception as exc:
-            server_error.append(str(exc))
+        except Exception:
+            logger.exception("Cyrene GUI web server failed")
+            server_error.append(localized(
+                "The server failed to start.",
+                "服务器启动失败。",
+            ))
             server_failed.set()
 
     _server_thread = threading.Thread(target=_run_server, daemon=True)
@@ -859,13 +1016,25 @@ def _run_web_gui() -> None:
         except Exception:
             time.sleep(0.25)
     if not _sock_ok and not server_failed.is_set():
-        _show_error("Cyrene - Server Starting",
-                     f"Web server is taking longer than expected.\n"
-                     f"If it doesn't load automatically, open:\n"
-                     f"{url}")
+        _show_error(
+            localized("Cyrene - Server Starting", "Cyrene - 服务器启动中"),
+            localized(
+                "The web server is taking longer than expected.\n"
+                "If it does not load automatically, open:\n{url}",
+                "Web 服务器启动时间超出预期。\n"
+                "如果没有自动加载，请打开：\n{url}",
+                url=url,
+            ),
+        )
 
     if server_failed.is_set():
-        _show_error("Cyrene - Server Error", server_error[0] if server_error else "Server failed to start.")
+        _show_error(
+            localized("Cyrene - Server Error", "Cyrene - 服务器错误"),
+            server_error[0] if server_error else localized(
+                "The server failed to start.",
+                "服务器启动失败。",
+            ),
+        )
         _sys.exit(1)
 
     # macOS: use compiled Swift WKWebView helper (native, zero deps).
@@ -890,9 +1059,15 @@ def _run_web_gui() -> None:
     try:
         import webview
     except ImportError:
-        _show_error("Cyrene - Missing Dependency",
-                     "pywebview is not installed.\n\n"
-                     "Install it with: pip install pywebview>=5.0")
+        _show_error(
+            localized("Cyrene - Missing Dependency", "Cyrene - 缺少依赖"),
+            localized(
+                "pywebview is not installed.\n\n"
+                "Install it with: pip install pywebview>=5.0",
+                "尚未安装 pywebview。\n\n"
+                "请运行以下命令安装：pip install pywebview>=5.0",
+            ),
+        )
         _sys.exit(1)
 
     # On Windows, the Edge Chromium backend requires WebView2 Runtime.
@@ -902,40 +1077,64 @@ def _run_web_gui() -> None:
         try:
             from webview.platforms.edgechromium import _version as edge_v  # noqa: F401
         except Exception:
-            _show_error("Cyrene - WebView2 Required",
-                         "Microsoft Edge WebView2 Runtime is not installed.\n\n"
-                         "Download it from:\n"
-                         "https://go.microsoft.com/fwlink/p/?LinkId=2124703\n\n"
-                         "After installing, restart Cyrene.")
+            _show_error(
+                localized("Cyrene - WebView2 Required", "Cyrene - 需要 WebView2"),
+                localized(
+                    "Microsoft Edge WebView2 Runtime is not installed.\n\n"
+                    "Download it from:\n"
+                    "https://go.microsoft.com/fwlink/p/?LinkId=2124703\n\n"
+                    "After installing, restart Cyrene.",
+                    "尚未安装 Microsoft Edge WebView2 Runtime。\n\n"
+                    "请从以下地址下载：\n"
+                    "https://go.microsoft.com/fwlink/p/?LinkId=2124703\n\n"
+                    "安装后请重启 Cyrene。",
+                ),
+            )
             _fallback_to_browser(url, _server_thread)
 
     try:
         webview.create_window("Cyrene", url, width=1200, height=800, min_size=(800, 600))
         webview.start()
     except Exception as exc:
-        logger.warning("pywebview failed (%s)", exc)
+        logger.warning("pywebview failed", exc_info=True)
         _dump_error(f"pywebview failed: {exc}")
-        _hint = ""
+        hint = ""
         if _sys.platform == "win32":
-            _hint = ("\n\nOn Windows this usually means the Edge WebView2 Runtime\n"
-                     "is missing. Download from:\n"
-                     "https://go.microsoft.com/fwlink/p/?LinkId=2124703")
-        _show_error("Cyrene - Window Error",
-                     f"Failed to create native window:\n{exc}{_hint}\n\n"
-                     f"Server running at {url}\n"
-                     "Open this address in your browser.")
+            hint = localized(
+                "\n\nOn Windows, check that Edge WebView2 Runtime is installed:\n"
+                "https://go.microsoft.com/fwlink/p/?LinkId=2124703",
+                "\n\n在 Windows 上，请确认已安装 Edge WebView2 Runtime：\n"
+                "https://go.microsoft.com/fwlink/p/?LinkId=2124703",
+            )
+        _show_error(
+            localized("Cyrene - Window Error", "Cyrene - 窗口错误"),
+            localized(
+                "The native window could not be created.{hint}\n\n"
+                "The server is running at {url}.\n"
+                "Open this address in your browser.",
+                "无法创建原生窗口。{hint}\n\n"
+                "服务器正在 {url} 运行。\n"
+                "请在浏览器中打开此地址。",
+                hint=hint,
+                url=url,
+            ),
+        )
         _fallback_to_browser(url, _server_thread)
 
 
 def _fallback_to_browser(url: str, _server_thread=None) -> None:
     """Open the web UI in the default browser and keep the process alive."""
-    print(f"Cyrene server is running at {url}", flush=True)
+    print(localized(
+        "Cyrene server is running at {url}",
+        "Cyrene 服务器正在 {url} 运行",
+        url=url,
+    ), flush=True)
     try:
         import webbrowser
         webbrowser.open(url)
     except Exception:
         pass
-    print("Press Ctrl+C to stop.", flush=True)
+    print(localized("Press Ctrl+C to stop.", "按 Ctrl+C 停止。"), flush=True)
     import http.client
     _health_host = "127.0.0.1"
     _health_port = int(url.rsplit(":", 1)[1])
@@ -949,7 +1148,10 @@ def _fallback_to_browser(url: str, _server_thread=None) -> None:
             if _server_thread is not None and not _server_thread.is_alive():
                 _health_skip += 1
                 if _health_skip > 3:  # 3 × 5s = 15s grace period
-                    print("Server stopped responding — keeping process alive for browser connections.", flush=True)
+                    print(localized(
+                        "The server stopped responding; the process will remain available for browser connections.",
+                        "服务器已停止响应；进程将继续保留以供浏览器连接。",
+                    ), flush=True)
             # Also try a lightweight health check to detect frozen server.
             if _health_skip <= 0:
                 try:
@@ -1018,7 +1220,14 @@ def main() -> None:
             elif flag == "--mcp-toggle" and idx + 1 < len(sys.argv):
                 asyncio.run(_run_one_shot_mcp(["toggle", sys.argv[idx + 1]]))
             else:
-                print("Usage: --mcp-list | --mcp-test <name> | --mcp-add <name> stdio <cmd> [args...] | --mcp-add <name> sse <url> | --mcp-remove <name> | --mcp-toggle <name>")
+                print(localized(
+                    "Usage: --mcp-list | --mcp-test <name> | --mcp-add <name> "
+                    "stdio <cmd> [args...] | --mcp-add <name> sse <url> | "
+                    "--mcp-remove <name> | --mcp-toggle <name>",
+                    "用法：--mcp-list | --mcp-test <名称> | --mcp-add <名称> "
+                    "stdio <命令> [参数...] | --mcp-add <名称> sse <网址> | "
+                    "--mcp-remove <名称> | --mcp-toggle <名称>",
+                ))
         return
 
     if "--verbose" in sys.argv:
@@ -1027,7 +1236,11 @@ def main() -> None:
         _debug.init_debug_log()
         lp = _debug.get_log_path()
         if lp:
-            print(f"Debug log: {lp}")
+            print(localized(
+                "Debug log: {path}",
+                "调试日志：{path}",
+                path=lp,
+            ))
 
     asyncio.run(_run_cli_host())
 

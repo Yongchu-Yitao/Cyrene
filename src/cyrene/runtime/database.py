@@ -1,10 +1,8 @@
-"""Persistence facade for analytics and shared runtime database setup.
-
-Scheduled-task lifecycle operations belong exclusively to the schedule Plugin
-and its :class:`SchedulerRepository` service.
-"""
+"""Persistence facade for analytics and shared runtime database setup."""
 
 from __future__ import annotations
+
+import aiosqlite
 
 from cyrene.runtime.persistence.analytics import (
     activity_column,
@@ -32,7 +30,6 @@ from cyrene.runtime.persistence.analytics import (
     record_usage_stats_batch,
 )
 from cyrene.runtime.persistence.migrations import initialize_runtime_database
-from cyrene.runtime.persistence.scheduler import SchedulerRepository
 from cyrene.runtime.persistence.schema import RUNTIME_SCHEMA
 
 # Historical diagnostic helper retained without importing a private repository
@@ -50,4 +47,29 @@ async def init_db(db_path: str) -> None:
 
 
 async def get_task_time_totals(db_path: str) -> dict:
-    return (await SchedulerRepository(db_path).time_totals()).to_dict()
+    async with aiosqlite.connect(str(db_path)) as connection:
+        cursor = await connection.execute(
+            "SELECT COALESCE(SUM(active_seconds), 0), "
+            "COALESCE(MAX(active_seconds), 0), COUNT(*) FROM goal_runs"
+        )
+        goal_total_s, goal_longest_s, goal_runs = await cursor.fetchone()
+
+    goal_total_ms = int(round(float(goal_total_s or 0) * 1000))
+    goal_longest_ms = int(round(float(goal_longest_s or 0) * 1000))
+    task_total_ms = 0
+    task_longest_ms = 0
+    task_runs = 0
+    from agent.plugin import active_plugin_service
+
+    schedules = active_plugin_service("schedules")
+    time_totals = getattr(schedules, "time_totals", None)
+    if callable(time_totals):
+        schedule_totals = await time_totals()
+        task_total_ms = int(getattr(schedule_totals, "total_ms", 0) or 0)
+        task_longest_ms = int(getattr(schedule_totals, "longest_ms", 0) or 0)
+        task_runs = int(getattr(schedule_totals, "runs", 0) or 0)
+    return {
+        "total_ms": goal_total_ms + task_total_ms,
+        "longest_ms": max(goal_longest_ms, task_longest_ms),
+        "runs": int(goal_runs or 0) + task_runs,
+    }

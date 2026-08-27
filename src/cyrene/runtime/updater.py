@@ -14,6 +14,7 @@ from typing import Callable
 import httpx
 from packaging.version import Version
 
+from cyrene.localization import app_language, localized, localized_plural
 from cyrene.runtime.paths import TEMP_DIR
 from cyrene.runtime.version import get_version
 
@@ -241,9 +242,13 @@ async def check_for_update(include_prerelease: bool | None = None) -> UpdateInfo
             # 由调用方提示用户手动下载。
             if not asset_url:
                 arch = platform.machine() or "unknown"
-                msg = (
-                    f"该版本（{latest}）暂无适配当前平台的安装包"
-                    f"（{sys.platform}/{arch}，匹配关键词 {platform_key!r}）"
+                msg = localized(
+                    "Version {version} has no package for this platform ({platform}/{arch}; match token {token!r}).",
+                    "该版本（{version}）暂无适配当前平台的安装包（{platform}/{arch}，匹配关键词 {token!r}）。",
+                    version=latest,
+                    platform=sys.platform,
+                    arch=arch,
+                    token=platform_key,
                 )
                 logger.warning("Update available but no matching asset: %s", msg)
                 return UpdateInfo(
@@ -376,7 +381,14 @@ async def _download_to(
 
             if total and downloaded != total:
                 raise ValueError(
-                    f"update download incomplete: {downloaded} of {total} bytes"
+                    localized_plural(
+                        "Update download is incomplete: {downloaded} of {total} byte.",
+                        "Update download is incomplete: {downloaded} of {total} bytes.",
+                        "更新下载不完整：已下载 {downloaded}/{total} 字节。",
+                        count=total,
+                        downloaded=downloaded,
+                        total=total,
+                    )
                 )
 
     checksum = hasher.hexdigest()
@@ -419,7 +431,7 @@ def get_restart_script(update_file: Path) -> str:
 # 注意：不再提供旧版捆绑运行时（codex_cli_bin / cv2）的迁移。
 # 捆绑运行时无法跨版本迁移：旧版本（0.7.x）进程没有迁移代码，且各平台重启脚本
 # （macOS rm -rf / Windows NSIS / Linux mv）在新代码运行前已删除旧 bundle。
-# 新版本依赖按需下载兜底（codex_cli.py / opencv_runtime.py 的 on-demand 下载器）。
+# 新版本依赖由各自所有者的按需下载器兜底。
 
 def _current_app_executable() -> Path | None:
     raw = os.environ.get("CYRENE_APP_EXECUTABLE", "").strip()
@@ -645,7 +657,10 @@ def _restore_download_state() -> None:
                     "actual_sha256": actual_sha256,
                     "verified": verified,
                     "verification_error": "" if verified else (
-                        "Restored update package failed SHA-256 verification."
+                        localized(
+                            "The restored update package failed SHA-256 verification.",
+                            "恢复的更新包未通过 SHA-256 校验。",
+                        )
                     ),
                 })
                 if not verified:
@@ -746,7 +761,10 @@ class DownloadProgressRepository:
         return validator(_download_progress, validate_only=True)
 
     def checksum_missing(self, info: UpdateInfo) -> str:
-        message = "无法验证更新包：发布资产缺少 sha256 校验值。"
+        message = localized(
+            "The update package cannot be verified because the release asset has no SHA-256 checksum.",
+            "无法验证更新包：发布资产缺少 SHA-256 校验值。",
+        )
         _download_progress.update({
             "downloaded": 0,
             "total": info.asset_size,
@@ -809,7 +827,14 @@ def _format_bytes(size: int) -> str:
     return f"{n / (1024 * 1024 * 1024):.1f} GB"
 
 
-def _push_update_notification(info: UpdateInfo, stage: str, title: str, body: str) -> None:
+def _push_update_notification(
+    info: UpdateInfo,
+    stage: str,
+    title: str,
+    body: str,
+    *,
+    language: str,
+) -> None:
     """推送一条更新相关通知，stage 参与去重 key（available/ready/failed 各自只发一次）。"""
     if not info.available or not info.latest_version:
         return
@@ -826,8 +851,12 @@ def _push_update_notification(info: UpdateInfo, stage: str, title: str, body: st
             body=body,
             tab="system",
             source="updater",
-            source_label="更新检查",
-            link_label="打开设置",
+            source_label=localized(
+                "Update check", "更新检查", language=language
+            ),
+            link_label=localized(
+                "Open settings", "打开设置", language=language
+            ),
             meta={
                 "category": "app_update",
                 "stage": stage,
@@ -839,43 +868,118 @@ def _push_update_notification(info: UpdateInfo, stage: str, title: str, body: st
                 "checksumAvailable": bool(info.asset_sha256),
                 "error": info.error,
             },
+            language=language,
         )
     except Exception:
         logger.debug("Failed to append update notification", exc_info=True)
 
 
 def _append_update_notification(info: UpdateInfo) -> None:
+    language = app_language()
     version = f"v{info.latest_version}"
     if info.asset_name:
-        body = f"发现新版本 {version}，安装包 {info.asset_name}"
+        body = localized(
+            "A new version, {version}, is available. Package: {asset}",
+            "发现新版本 {version}，安装包 {asset}",
+            language=language,
+            version=version,
+            asset=info.asset_name,
+        )
         if info.asset_size:
-            body += f"（{_format_bytes(info.asset_size)}）"
+            body += localized(
+                " ({size})", "（{size}）", language=language,
+                size=_format_bytes(info.asset_size),
+            )
         if not info.asset_sha256:
-            body += "。该版本缺少 sha256 校验值，无法自动安装。"
+            body += localized(
+                ". This release has no SHA-256 checksum, so it cannot be installed automatically.",
+                "。该版本缺少 SHA-256 校验值，无法自动安装。",
+                language=language,
+            )
     else:
-        body = f"发现新版本 {version}，但当前平台暂无可自动安装的更新包。"
+        body = localized(
+            "A new version, {version}, is available, but there is no automatically installable package for this platform.",
+            "发现新版本 {version}，但当前平台暂无可自动安装的更新包。",
+            language=language,
+            version=version,
+        )
         if info.error:
             body += f" {info.error}"
-    _push_update_notification(info, "available", f"Cyrene {version} 可用", body)
+    _push_update_notification(
+        info,
+        "available",
+        localized(
+            "Cyrene {version} is available",
+            "Cyrene {version} 可用",
+            language=language,
+            version=version,
+        ),
+        body,
+        language=language,
+    )
 
 
 def _append_update_ready_notification(info: UpdateInfo) -> None:
     if not info.asset_name:
         return
+    language = app_language()
     version = f"v{info.latest_version}"
-    body = f"更新包 {info.asset_name} 已自动下载并校验通过"
+    body = localized(
+        "Update package {asset} was downloaded and verified",
+        "更新包 {asset} 已自动下载并校验通过",
+        language=language,
+        asset=info.asset_name,
+    )
     if info.asset_size:
-        body += f"（{_format_bytes(info.asset_size)}）"
-    body += "。打开设置点击「重启更新」即可完成安装。"
-    _push_update_notification(info, "ready", f"Cyrene {version} 已就绪", body)
+        body += localized(
+            " ({size})", "（{size}）", language=language,
+            size=_format_bytes(info.asset_size),
+        )
+    body += localized(
+        '. Open settings and select "Restart to update" to finish installing.',
+        "。打开设置点击「重启更新」即可完成安装。",
+        language=language,
+    )
+    _push_update_notification(
+        info,
+        "ready",
+        localized(
+            "Cyrene {version} is ready",
+            "Cyrene {version} 已就绪",
+            language=language,
+            version=version,
+        ),
+        body,
+        language=language,
+    )
 
 
 def _append_update_failed_notification(info: UpdateInfo, reason: str) -> None:
     if not info.asset_name:
         return
+    language = app_language()
     version = f"v{info.latest_version}"
-    body = f"自动下载 {version} 更新包失败：{reason or '未知原因'}。可在设置中手动下载。"
-    _push_update_notification(info, "failed", f"Cyrene {version} 下载失败", body)
+    body = localized(
+        "Automatic download of {version} failed: {reason}. Download it manually in settings.",
+        "自动下载 {version} 更新包失败：{reason}。可在设置中手动下载。",
+        language=language,
+        version=version,
+        reason=reason or localized(
+            "Unknown reason", "未知原因", language=language
+        ),
+    )
+    _push_update_notification(
+        info,
+        "failed",
+        localized(
+            "Cyrene {version} download failed",
+            "Cyrene {version} 下载失败",
+            language=language,
+            version=version,
+        ),
+        body,
+        language=language,
+    )
 
 
 async def _auto_download_latest(info: UpdateInfo) -> None:
@@ -897,16 +1001,24 @@ async def _auto_download_latest(info: UpdateInfo) -> None:
             lambda current, total: progress.update({"downloaded": current, "total": total}),
         )
         if result is None:
-            raise ValueError("update download failed")
+            raise ValueError(localized(
+                "Update download failed.", "更新下载失败。"
+            ))
         progress.update({
             "done": True,
             "path": str(result.path),
             "actual_sha256": result.sha256,
         })
         if info.asset_size and result.size != info.asset_size:
-            raise ValueError("downloaded package size does not match the release asset")
+            raise ValueError(localized(
+                "The downloaded package size does not match the release asset.",
+                "下载的更新包大小与发布资产不一致。",
+            ))
         if result.sha256.lower() != (info.asset_sha256 or "").lower():
-            raise ValueError("downloaded package SHA-256 verification failed")
+            raise ValueError(localized(
+                "The downloaded package failed SHA-256 verification.",
+                "下载的更新包未通过 SHA-256 校验。",
+            ))
         progress["verified"] = True
         # 清掉历史失败/冲突的残留文案，避免"验证失败"误显示在已就绪的包上。
         progress["verification_error"] = ""

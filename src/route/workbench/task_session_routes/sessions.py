@@ -13,6 +13,7 @@ from cyrene.workbench.task_services import (
     TaskSessionNotFoundError,
 )
 from route import schemas as api_models
+from route.errors import error_response, localized_error_response
 from route.workbench.task_session_routes.context import TaskSessionRouteContext
 from route.workbench.task_session_routes.responses import service_response
 
@@ -23,7 +24,12 @@ def register_session_read_routes(router: APIRouter, context: TaskSessionRouteCon
         try:
             return context.tasks.read(session_id)
         except TaskSessionNotFoundError:
-            return JSONResponse({"error": "session not found"}, status_code=404)
+            return localized_error_response(
+                "Task session not found.",
+                "未找到任务会话。",
+                404,
+                "task_session_not_found",
+            )
 
     @router.get("/api/task-sessions/{session_id}/files/diff")
     async def api_workbench_file_diff(session_id: str, path: str = ""):
@@ -37,10 +43,25 @@ def register_session_read_routes(router: APIRouter, context: TaskSessionRouteCon
         try:
             result = context.tasks.workspace_path_status(session_id, path)
         except TaskSessionNotFoundError:
-            return JSONResponse({"error": "session not found"}, status_code=404)
+            return localized_error_response(
+                "Task session not found.",
+                "未找到任务会话。",
+                404,
+                "task_session_not_found",
+            )
         except ValueError:
-            return JSONResponse({"error": "no workspace configured"}, status_code=400)
-        return JSONResponse(result, status_code=400) if result.get("error") else result
+            return localized_error_response(
+                "No workspace is configured.",
+                "尚未配置工作区。",
+                400,
+                "workspace_not_configured",
+            )
+        if result.get("error"):
+            return JSONResponse(
+                {**result, "code": "workspace_path_outside_root"},
+                status_code=400,
+            )
+        return result
 
     return api_workbench_get_session
 
@@ -52,22 +73,31 @@ def register_session_mutation_routes(router: APIRouter, context: TaskSessionRout
         try:
             return context.planning.mutate(session_id, body, base_plan_revision=body_model.basePlanRevision)
         except PlanningMutationError as exc:
-            payload = {"error": exc.message}
-            if exc.code:
-                payload["code"] = exc.code
-            return JSONResponse(payload, status_code=exc.status_code)
+            return error_response(
+                exc.message,
+                exc.status_code,
+                exc.code or "plan_mutation_failed",
+            )
 
     @router.patch("/api/task-sessions/{session_id}")
     async def api_workbench_update_session(session_id: str, body_model: api_models.SessionUpdateBody):
         try:
             return context.tasks.update(session_id, api_models.body_dict(body_model))
         except TaskSessionNotFoundError:
-            return JSONResponse({"error": "session not found"}, status_code=404)
+            return localized_error_response(
+                "Task session not found.",
+                "未找到任务会话。",
+                404,
+                "task_session_not_found",
+            )
         except TaskMutationError as exc:
-            payload = {"error": exc.message}
-            if exc.code:
-                payload["code"] = exc.code
-            return JSONResponse(payload, status_code=exc.status_code)
+            details = {"category": exc.category} if exc.category else {}
+            return error_response(
+                exc.message,
+                exc.status_code,
+                exc.code or "task_mutation_failed",
+                **details,
+            )
 
     @router.delete("/api/task-sessions/{session_id}")
     async def api_workbench_delete_session(session_id: str):
@@ -81,12 +111,20 @@ def register_session_mutation_routes(router: APIRouter, context: TaskSessionRout
                 store_lock=deps.store_lock,
             )
         except TaskSessionNotFoundError:
-            return JSONResponse({"error": "session not found"}, status_code=404)
+            return localized_error_response(
+                "Task session not found.",
+                "未找到任务会话。",
+                404,
+                "task_session_not_found",
+            )
         except TaskMutationError as exc:
-            payload = {"error": exc.message}
-            if exc.code:
-                payload["code"] = exc.code
-            return JSONResponse(payload, status_code=exc.status_code)
+            details = {"category": exc.category} if exc.category else {}
+            return error_response(
+                exc.message,
+                exc.status_code,
+                exc.code or "task_delete_failed",
+                **details,
+            )
 
     return api_workbench_update_session
 

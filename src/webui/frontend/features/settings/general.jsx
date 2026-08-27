@@ -106,6 +106,13 @@ function OfficeIntegrationSection(p) {
 
 function GeneralPanel(p) {
   var { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved } = p;
+  var pluginModules = Array.isArray(p.pluginModules) ? p.pluginModules : [];
+  var hasMap = pluginModules.indexOf("map") >= 0;
+  var hasExtensions = pluginModules.indexOf("extensions") >= 0;
+  var hasSearch = pluginModules.indexOf("search") >= 0;
+  var hasBrowser = pluginModules.indexOf("browser") >= 0;
+  var hasOffice = pluginModules.indexOf("office") >= 0;
+  var hasKnowledge = pluginModules.indexOf("knowledge") >= 0;
   var timezoneOptions = GENERAL_TIMEZONE_OPTIONS;
   var [selectedTimezone, setSelectedTimezone] = useStateSt(function () {
     try {
@@ -139,8 +146,10 @@ function GeneralPanel(p) {
   var [proxyExtensionsEnabled, setProxyExtensionsEnabled] = useStateSt(false);
   var [agentProxyStatus, setAgentProxyStatus] = useStateSt("");
   useEffectSt(function () {
+    if (!hasKnowledge && !hasExtensions) return undefined;
     var cancelled = false;
-    settingsFetch("/api/settings/config").then(readSettingsResponse).then(function (payload) {
+    var controller = new AbortController();
+    settingsFetch("/api/settings/config", { signal: controller.signal }).then(readSettingsResponse).then(function (payload) {
       if (cancelled) return;
       var savedTimezone = String(payload.timezone || "");
       setAgentProxyEnabled(payload.external_agent_proxy_enabled === true);
@@ -160,19 +169,24 @@ function GeneralPanel(p) {
         try { workbenchServices.data().reload(); } catch (e) {}
       }
     }).catch(function () {});
-    return function () { cancelled = true; };
-  }, []);
+    return function () { cancelled = true; controller.abort(); };
+  }, [hasKnowledge, hasExtensions]);
 
   useEffectSt(function () {
+    if (!hasKnowledge) {
+      setZoteroStatus(null);
+      return undefined;
+    }
     var cancelled = false;
-    settingsFetch("/api/settings/integrations").then(readSettingsResponse).then(function (payload) {
+    var controller = new AbortController();
+    settingsFetch("/api/settings/integrations", { signal: controller.signal }).then(readSettingsResponse).then(function (payload) {
       if (cancelled) return;
       if (payload.zotero) setZoteroSettings(payload.zotero);
     }).catch(function () {
       if (!cancelled) setZoteroStatus({ kind: "error", text: t("settings.integrationLoadFailed") });
     });
-    return function () { cancelled = true; };
-  }, []);
+    return function () { cancelled = true; controller.abort(); };
+  }, [hasKnowledge]);
 
   useEffectSt(function () {
     if (!supportsDesktop) return undefined;
@@ -181,11 +195,6 @@ function GeneralPanel(p) {
       if (cancelled || !s) return;
       setRunInBackground(s.runInBackground === true);
       setQuickChatEnabled(s.quickChatEnabled === true);
-      if ((s.language === "en" || s.language === "zh") && s.language !== lang) {
-        setLang(s.language);
-      } else if (!s.language) {
-        window.cyrene.updateDesktopSettings({ language: lang }).catch(function () {});
-      }
     }).catch(function () {});
     return function () { cancelled = true; };
   }, []);
@@ -396,7 +405,7 @@ function GeneralPanel(p) {
       Toggle(desktopNotifications, toggleDesktopNotifications),
       undefined, "setting-desktop-notifications",
     ),
-    !p.integrationsOnly && React.cloneElement(SectionBlock(t("settings.agentProxy"), t("settings.agentProxyHint"),
+    !p.integrationsOnly && hasExtensions && React.cloneElement(SectionBlock(t("settings.agentProxy"), t("settings.agentProxyHint"),
       FieldRow(t("settings.agentProxyEnabled"), t("settings.agentProxyEnabledHint"),
         Toggle(agentProxyEnabled, function () { saveAgentProxy(!agentProxyEnabled, agentProxyAddress); }, false, t("settings.agentProxyEnabled")),
       ),
@@ -422,24 +431,24 @@ function GeneralPanel(p) {
       FieldRow(t("settings.proxyExternalAgents"), t("settings.proxyExternalAgentsHint"),
         React.createElement("span", { className: "wb-proxy-scope-status" }, agentProxyEnabled ? t("settings.proxyScopeActive") : t("settings.proxyScopeWaiting")),
       ),
-      FieldRow(t("settings.proxySearch"), t("settings.proxySearchHint"),
+      hasSearch && FieldRow(t("settings.proxySearch"), t("settings.proxySearchHint"),
         Toggle(proxySearchEnabled, function () { saveAgentProxy(agentProxyEnabled, agentProxyAddress, { search: !proxySearchEnabled }); }, !agentProxyEnabled, t("settings.proxySearch")),
       ),
-      FieldRow(t("settings.proxyBrowser"), t("settings.proxyBrowserHint"),
+      hasBrowser && FieldRow(t("settings.proxyBrowser"), t("settings.proxyBrowserHint"),
         Toggle(proxyBrowserEnabled, function () { saveAgentProxy(agentProxyEnabled, agentProxyAddress, { browser: !proxyBrowserEnabled }); }, !agentProxyEnabled, t("settings.proxyBrowser")),
       ),
       FieldRow(t("settings.proxyExtensions"), t("settings.proxyExtensionsHint"),
         Toggle(proxyExtensionsEnabled, function () { saveAgentProxy(agentProxyEnabled, agentProxyAddress, { extensions: !proxyExtensionsEnabled }); }, !agentProxyEnabled, t("settings.proxyExtensions")),
       ),
     ), { className: "wb-section-block wb-agent-proxy-settings", id: "setting-agent-proxy" }),
-    !p.integrationsOnly && FieldRow(t("settings.mapProvider"), t("settings.mapProviderHint"),
+    !p.integrationsOnly && hasMap && FieldRow(t("settings.mapProvider"), t("settings.mapProviderHint"),
       React.createElement("div", { className: "wb-seg" },
         React.createElement("button", { className: "wb-seg-btn" + (mapProvider === "direct" ? " active" : ""), onClick: function () { setMapProvider("direct"); localStorage.setItem("cyrene-tweak-map-provider", "direct"); } }, t("settings.mapProviderDirect")),
         React.createElement("button", { className: "wb-seg-btn" + (mapProvider === "amap" ? " active" : ""), onClick: function () { setMapProvider("amap"); } }, t("settings.mapProviderAmap")),
       ),
       undefined, "setting-map-provider",
     ),
-    !p.integrationsOnly && mapProvider === "amap" && FieldRow(t("settings.amapKey"), t("settings.amapKeyHint"),
+    !p.integrationsOnly && hasMap && mapProvider === "amap" && FieldRow(t("settings.amapKey"), t("settings.amapKeyHint"),
       [
         React.createElement("div", { className: "wb-inline-row" },
           React.createElement("input", { className: "wb-input mono", type: "password", value: amapKey, onChange: function (e) { setAmapKey(e.target.value); }, placeholder: t("settings.amapKeyPlaceholder") }),
@@ -460,8 +469,8 @@ function GeneralPanel(p) {
     ),
     !p.integrationsOnly && supportsDesktop && desktopNotice
       && React.createElement("div", { className: "wb-hint", style: { color: "var(--wb-error-text)" } }, desktopNotice),
-    p.integrationsOnly && React.createElement(OfficeIntegrationSection, { t: t }),
-    p.integrationsOnly && React.cloneElement(SectionBlock(t("settings.zoteroIntegration"), t("settings.zoteroIntegrationHint"),
+    p.integrationsOnly && hasOffice && React.createElement(OfficeIntegrationSection, { t: t }),
+    p.integrationsOnly && hasKnowledge && React.cloneElement(SectionBlock(t("settings.zoteroIntegration"), t("settings.zoteroIntegrationHint"),
       FieldRow(t("settings.zoteroLocalApiUrl"), t("settings.zoteroLocalApiUrlHint"),
         React.createElement("div", { className: "wb-integration-control" },
           React.createElement("input", {

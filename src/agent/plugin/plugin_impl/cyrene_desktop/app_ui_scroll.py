@@ -7,5 +7,5 @@ TOOL_DEF = action_tool_def(TOOL_NAME, "scroll", "Invoke a semantic scroll action
     "direction": {"type": "string", "enum": ["up", "down", "left", "right"]}, "amount": {"type": "integer", "minimum": 1, "maximum": 100},
 }, ("direction",))
 TOOL_METADATA = ACTION_METADATA
-async def handler(args: dict[str, Any], _context: PluginContext) -> str: return await run_action("scroll", args)
+async def handler(args: dict[str, Any], context: PluginContext) -> str: return await run_action("scroll", args, context)
 __all__ = ["TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler"]

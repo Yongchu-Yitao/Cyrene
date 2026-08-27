@@ -8,19 +8,26 @@ import math
 from array import array
 from typing import Any
 
-from agent.plugin import PluginContext, PluginRuntime
-from agent.plugin.model_catalog import candidate_provider_id, resolve_model_plugin
-from cyrene.runtime.model_configuration import (
-    candidates_for_route,
-    get_model_configuration,
+from agent.plugin import PluginContext
+from agent.plugin.model_catalog import (
+    application_model_runtime,
+    candidate_provider_id,
+    resolve_model_plugin,
 )
+
+
+def _configuration_service():
+    from agent.plugin import active_plugin_service
+
+    return active_plugin_service("model_configuration")
 
 
 def _configured_candidate() -> dict[str, Any]:
     """Resolve the canonical embedding route without caching credentials."""
 
     try:
-        candidates = candidates_for_route("embedding")
+        service = _configuration_service()
+        candidates = service.candidates_for_route("embedding") if service is not None else []
     except Exception:
         return {}
     return dict(candidates[0]) if candidates else {}
@@ -75,7 +82,10 @@ async def embed_texts(texts: list[str], *, input_type: str = "document") -> list
         raise RuntimeError("Embeddings not configured")
 
     candidate = _configured_candidate()
-    configuration = get_model_configuration()
+    service = _configuration_service()
+    if service is None:
+        raise RuntimeError("Model configuration Plugin is not available")
+    configuration = service.get_model_configuration()
     connection = next(
         (
             dict(item)
@@ -129,7 +139,7 @@ async def _invoke_embedding_plugin(
         for key, value in candidate.items()
         if key not in {"api_key", "base_url", "endpoints", "preferred_endpoint"}
     }
-    outcome = await PluginRuntime(registry).call(
+    outcome = await application_model_runtime(registry).call(
         plugin.name,
         arguments,
         PluginContext(

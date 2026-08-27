@@ -29,6 +29,7 @@ var STORAGE_LABEL = {
   opencv_runtime: "settings.storageOpencvRuntime",
   browser: "settings.storageBrowser",
   caches: "settings.storageCaches",
+  maps: "settings.storageMaps",
 };
 
 var STORAGE_COLORS = {
@@ -46,6 +47,7 @@ var STORAGE_COLORS = {
   local_models: "#14b8a6",
   codex_cli: "#0ea5e9",
   opencv_runtime: "#eab308",
+  maps: "#38bdf8",
   browser: "#6366f1",
   caches: "#78716c",
 };
@@ -105,7 +107,9 @@ function requestDataPanelStorage() {
   dataPanelStorageRequest = settingsFetch("/api/settings/storage")
     .then(function (response) { return response.json(); })
     .then(function (payload) {
-      if (!isDataPanelStorageSnapshot(payload)) throw new Error("Invalid storage snapshot");
+      if (!isDataPanelStorageSnapshot(payload)) {
+        throw new Error(workbenchServices.i18n().t("settings.invalidStorageSnapshot"));
+      }
       dataPanelStorageCache = payload;
       dataPanelStorageCachedAt = Date.now();
       persistDataPanelStorageCache(payload, dataPanelStorageCachedAt);

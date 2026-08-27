@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 
 from agent.plugin import PluginContext
 
-from cyrene.runtime.remote_control import (
+from agent.plugin.plugin_impl.cyrene_remote.control import (
     BASE_REMOTE_CAPABILITIES,
     DEFAULT_REMOTE_CAPABILITIES,
     InMemoryRemoteRelay,
@@ -32,14 +32,14 @@ from cyrene.runtime.remote_control import (
     register_remote_gateway,
     unregister_remote_gateway,
 )
-from cyrene.runtime.remote_commands import (
+from agent.plugin.plugin_impl.cyrene_remote.commands import (
     RemoteCommandExecutor,
     RemoteControlRuntime,
     _chat_detail,
     public_remote_event,
 )
-from cyrene.runtime.remote_relay import CyreneRelayServer
-from cyrene.runtime.remote_pairing import (
+from agent.plugin.plugin_impl.cyrene_remote.relay import CyreneRelayServer
+from agent.plugin.plugin_impl.cyrene_remote.pairing import (
     DirectPairingServer,
     connect_by_address,
     normalize_pairing_address,
@@ -48,7 +48,7 @@ from agent.plugin.plugin_impl.cyrene_remote.list_devices import handler as list_
 from agent.plugin.plugin_impl.cyrene_remote.harness import handler as remote_harness
 from agent.plugin.plugin_impl.cyrene_remote.run import handler as run_remote_cyrene
 from agent.plugin.plugin_impl.cyrene_remote.status import handler as remote_cyrene_status
-from route.remote import register_remote_routes
+from agent.plugin.plugin_impl.cyrene_remote.application import register_remote_routes
 
 
 def _register_remote_test_routes(router, app, db_path, *, projects=None):
@@ -64,7 +64,6 @@ def _register_remote_test_routes(router, app, db_path, *, projects=None):
         projects=SimpleNamespace(list_projects=list_projects),
         tasks=SimpleNamespace(),
         goals=SimpleNamespace(),
-        utc_now=lambda: "2026-07-27T00:00:00+00:00",
     )
 
 
@@ -82,6 +81,43 @@ def test_remote_identity_uses_owner_only_local_file(tmp_path):
     ).get_or_create()
 
     assert identity_path.stat().st_mode & 0o777 == 0o600
+    assert reloaded.device_id == first.device_id
+
+    encoded = identity_path.read_text(encoding="utf-8").strip()
+    payload = json.loads(
+        base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+    )
+    assert payload["version"] == 1
+
+
+def test_remote_identity_accepts_protocol_v2_version_tag(tmp_path):
+    identity_path = tmp_path / "device.remote-identity"
+    db_path = str(tmp_path / "remote.sqlite3")
+    first = RemoteIdentityStore(db_path, fallback_path=identity_path).get_or_create()
+    encoded = identity_path.read_text(encoding="utf-8").strip()
+    payload = json.loads(
+        base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+    )
+    payload["version"] = 2
+    identity_path.write_text(
+        base64.urlsafe_b64encode(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        .decode("ascii")
+        .rstrip("="),
+        encoding="utf-8",
+    )
+
+    reloaded = RemoteIdentityStore(
+        db_path,
+        fallback_path=identity_path,
+    ).get_or_create()
+
     assert reloaded.device_id == first.device_id
 
 
@@ -771,6 +807,74 @@ def test_peer_grant_scope_and_revocation_are_enforced(paired_stores):
     ) == (False, "peer_not_trusted")
 
 
+def test_remote_shell_requires_live_code_plugin_even_with_stale_grant(
+    paired_stores,
+    monkeypatch,
+):
+    target = paired_stores["target"]
+    controller = paired_stores["controller"]
+    controller_id = controller.identity.device_id
+    target.update_peer_grant(
+        controller_id,
+        capabilities=["pluginpack:cyrene_code"],
+        project_scopes=["project_1"],
+    )
+    target.update_peer_received_grant(
+        controller_id,
+        capabilities=["pluginpack:cyrene_code"],
+        project_scopes=["project_1"],
+    )
+    monkeypatch.setattr(
+        "agent.plugin.plugin_impl.cyrene_remote.control._remote_shell_plugin_available",
+        lambda: True,
+    )
+    shell_commands = (
+        "shell.open",
+        "shell.read",
+        "shell.write",
+        "shell.interrupt",
+        "shell.close",
+    )
+    for command in shell_commands:
+        assert target.authorize_inbound(
+            controller_id, command, "project_1"
+        ) == (True, "")
+        assert target.authorize_outbound(
+            controller_id, command, "project_1"
+        ) == (True, "")
+
+    monkeypatch.setattr(
+        "agent.plugin.plugin_impl.cyrene_remote.control._remote_shell_plugin_available",
+        lambda: False,
+    )
+    for command in shell_commands:
+        assert target.authorize_inbound(
+            controller_id, command, "project_1"
+        ) == (False, "plugin_pack_unavailable")
+        assert target.authorize_outbound(
+            controller_id, command, "project_1"
+        ) == (False, "plugin_pack_unavailable")
+
+    async def scenario():
+        from cyrene.localization import localized
+
+        monkeypatch.setattr(
+            "agent.plugin.plugin_impl.cyrene_remote.commands.active_plugin_service",
+            lambda _name: None,
+        )
+        executor = RemoteCommandExecutor(store=target, db_path=target.db_path)
+        for command in shell_commands:
+            result = await executor(controller_id, command, {}, "project_1")
+            assert result["ok"] is False
+            assert result["code"] == "remote_plugin_unavailable"
+            assert result["error"] == localized(
+                "The remote Plugin is unavailable.",
+                "远程插件不可用。",
+            )
+
+    asyncio.run(scenario())
+
+
 def test_remote_executor_filters_projects_and_public_run_events(
     paired_stores,
     monkeypatch,
@@ -1070,14 +1174,14 @@ def test_remote_harness_filters_by_granted_plugin_pack_and_uses_bound_context(
             project_scopes=["project_1"],
         )
         monkeypatch.setattr(
-            "cyrene.runtime.remote_commands._remote_project",
+            "agent.plugin.plugin_impl.cyrene_remote.commands._remote_project",
             lambda project_id: {
                 "id": project_id,
                 "workspacePath": str(tmp_path),
             },
         )
         monkeypatch.setattr(
-            "cyrene.runtime.remote_commands._remote_project_workspace",
+            "agent.plugin.plugin_impl.cyrene_remote.commands._remote_project_workspace",
             lambda _project: str(tmp_path),
         )
         observed = {"calls": []}
@@ -1142,7 +1246,7 @@ def test_remote_harness_filters_by_granted_plugin_pack_and_uses_bound_context(
             services={},
         )
         monkeypatch.setattr(
-            "cyrene.runtime.remote_commands.active_plugin_application_host",
+            "agent.plugin.plugin_impl.cyrene_remote.commands.active_plugin_application_host",
             lambda: host,
         )
         executor = RemoteCommandExecutor(
@@ -1253,7 +1357,7 @@ def test_remote_shell_is_direct_project_scoped_and_device_owned(
             project_scopes=["project_1"],
         )
         monkeypatch.setattr(
-            "cyrene.runtime.remote_commands._remote_project",
+            "agent.plugin.plugin_impl.cyrene_remote.commands._remote_project",
             lambda project_id: {
                 "id": project_id,
                 "name": "Authorized project",
@@ -1261,7 +1365,7 @@ def test_remote_shell_is_direct_project_scoped_and_device_owned(
             },
         )
         monkeypatch.setattr(
-            "cyrene.runtime.remote_commands._remote_project_workspace",
+            "agent.plugin.plugin_impl.cyrene_remote.commands._remote_project_workspace",
             lambda _project: str(tmp_path),
         )
         observed = {}
@@ -1297,8 +1401,8 @@ def test_remote_shell_is_direct_project_scoped_and_device_owned(
 
         fake_client = FakeTerminalClient()
         monkeypatch.setattr(
-            "cyrene.runtime.remote_commands.get_terminal_daemon_client",
-            lambda: fake_client,
+            "agent.plugin.plugin_impl.cyrene_remote.commands.active_plugin_service",
+            lambda name: fake_client if name == "remote_shell" else None,
         )
         executor = RemoteCommandExecutor(
             store=target,
@@ -1425,7 +1529,9 @@ def test_remote_command_reads_only_attachment_referenced_by_shared_chat(
     async def scenario():
         from cyrene import config as cyrene_config
         from cyrene.runtime import attachments as managed_attachments
-        from cyrene.runtime import remote_commands as remote_commands_module
+        from agent.plugin.plugin_impl.cyrene_remote import (
+            commands as remote_commands_module,
+        )
 
         # Several legacy test modules install PIL stubs during collection.
         # Reuse the real modules captured by test_app_use (or import them
@@ -1891,7 +1997,7 @@ def test_remote_settings_api_manages_identity_pairing_grants_and_audit(
         assert "pairing_invitation_created" in event_types
 
 
-def test_remote_context_accepts_only_trusted_controller_grants(
+def test_remote_device_catalog_projects_only_trusted_controller_grants(
     monkeypatch,
     tmp_path,
 ):
@@ -1912,14 +2018,6 @@ def test_remote_context_accepts_only_trusted_controller_grants(
     accepted = controller.accept_pairing_invitation(invitation["invitation"])
     target.complete_pairing_response(accepted["response"])
 
-    from cyrene.workbench.chat_repository import ChatRepository
-
-    chats = ChatRepository()
-    chats.configure(controller_db)
-    chats.write({"chats": [{
-        "id": "chat_1", "projectId": "local_project", "remoteDeviceIds": [],
-    }]})
-
     app = FastAPI()
     router = APIRouter()
     _register_remote_test_routes(router, app, controller_db)
@@ -1932,22 +2030,11 @@ def test_remote_context_accepts_only_trusted_controller_grants(
         assert catalog.json()["devices"][0]["state"] == "ready"
         assert catalog.json()["devices"][0]["eligible"] is True
 
-        selected = client.put(
+        removed_context_route = client.put(
             "/api/workbench/chats/chat_1/remote-context",
             json={"device_ids": [target.identity.device_id]},
         )
-        assert selected.status_code == 200
-        assert selected.json()["device_ids"] == [target.identity.device_id]
-        assert chats.get("chat_1")["remoteDeviceIds"] == [
-            target.identity.device_id
-        ]
-
-        rejected = client.put(
-            "/api/workbench/chats/chat_1/remote-context",
-            json={"device_ids": ["dev_unknown"]},
-        )
-        assert rejected.status_code == 400
-        assert rejected.json()["code"] == "remote_context_device_invalid"
+        assert removed_context_route.status_code == 404
 
 
 def test_real_websocket_relay_connects_two_encrypted_gateways(paired_stores):
@@ -2141,37 +2228,41 @@ def test_remote_relay_requires_tls_except_on_localhost():
 
 
 def test_mobile_model_copy_exports_api_key_but_never_codex_oauth(monkeypatch):
-    monkeypatch.setattr(
-        "cyrene.runtime.model_configuration.get_model_configuration",
-        lambda: {
-            "version": 10,
-            "connections": [
-                {
-                    "id": "deepseek",
-                    "name": "DeepSeek",
-                    "adapter": "openai",
-                    "base_url": "https://api.deepseek.com/v1",
-                    "api_key": "mobile-copy-key",
-                    "options": {"provider_preset": "deepseek"},
-                },
-                {
-                    "id": "codex",
-                    "name": "Codex",
-                    "adapter": "codex_oauth",
-                    "base_url": "codex://oauth",
-                    "api_key": "",
-                    "options": {"provider_preset": "codex_oauth"},
-                },
-            ],
-            "profiles": [],
-            "routes": {
-                "primary": [],
-                "secondary": [],
-                "vision": [],
-                "embedding": [],
+    from agent.plugin.plugin_impl.cyrene_remote import commands as commands_module
+
+    graph = {
+        "version": 10,
+        "connections": [
+            {
+                "id": "deepseek",
+                "name": "DeepSeek",
+                "adapter": "openai",
+                "base_url": "https://api.deepseek.com/v1",
+                "api_key": "mobile-copy-key",
+                "options": {"provider_preset": "deepseek"},
             },
+            {
+                "id": "codex",
+                "name": "Codex",
+                "adapter": "codex_oauth",
+                "base_url": "codex://oauth",
+                "api_key": "",
+                "options": {"provider_preset": "codex_oauth"},
+            },
+        ],
+        "profiles": [],
+        "routes": {
+            "primary": [],
+            "secondary": [],
+            "vision": [],
+            "embedding": [],
         },
+    }
+    service = SimpleNamespace(get_model_configuration=lambda: dict(graph))
+    host = SimpleNamespace(
+        service=lambda name: service if name == "model_configuration" else None
     )
+    monkeypatch.setattr(commands_module, "active_plugin_application_host", lambda: host)
 
     copied = RemoteCommandExecutor._settings_models_copy({})["models"]
 

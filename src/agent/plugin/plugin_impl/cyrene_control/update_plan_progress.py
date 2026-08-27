@@ -7,7 +7,11 @@ from collections.abc import Mapping
 from typing import Any
 
 from agent.plugin import PluginContext
-from agent.plugin.native_runtime import publish_runtime_event, run_context_value
+from agent.plugin.native_runtime import (
+    plugin_localized,
+    publish_runtime_event,
+    run_context_value,
+)
 
 from .definitions import get_native_tool_def
 
@@ -60,22 +64,34 @@ async def _tool_update_plan_progress(
     context: PluginContext,
 ) -> str:
     if str(run_context_value(context, "agent_id", "main")) != "main":
-        return "Only the main agent can update plan progress."
+        return plugin_localized(
+            context,
+            "Only the main agent can update plan progress.",
+            "只有主 Agent 可以更新计划进度。",
+        )
     session_id = str(run_context_value(context, "session_id") or "").strip()
     if not session_id:
-        return "No active Workbench conversation plan."
+        return plugin_localized(
+            context,
+            "No active Workbench conversation plan.",
+            "当前没有活动的工作台对话计划。",
+        )
     try:
         step = int(args.get("step"))
     except (TypeError, ValueError):
-        return "Invalid plan step."
+        return plugin_localized(context, "Invalid plan step.", "计划步骤无效。")
     status = str(args.get("status") or "").strip()
     note = str(args.get("note") or "").strip()
     if status not in {"in_progress", "completed", "failed", "skipped"}:
-        return "Invalid plan status."
+        return plugin_localized(context, "Invalid plan status.", "计划状态无效。")
     plan = _current_plan(context)
     steps = plan.get("steps") if isinstance(plan, dict) else None
     if not isinstance(steps, list) or step < 1 or step > len(steps):
-        return "No active approved plan was found."
+        return plugin_localized(
+            context,
+            "No active approved plan was found.",
+            "未找到活动且已批准的计划。",
+        )
     target = steps[step - 1]
     target["status"] = status
     target["note"] = note
@@ -99,7 +115,23 @@ async def _tool_update_plan_progress(
         "status": status,
         "note": note,
     })
-    return f"Plan step {step} updated to {status}."
+    status_label = plugin_localized(
+        context,
+        status,
+        {
+            "in_progress": "进行中",
+            "completed": "已完成",
+            "failed": "失败",
+            "skipped": "已跳过",
+        }.get(status, status),
+    )
+    return plugin_localized(
+        context,
+        "Plan step {step} was updated to {status}.",
+        "计划步骤 {step} 已更新为{status}。",
+        step=step,
+        status=status_label,
+    )
 
 
 handler = _tool_update_plan_progress

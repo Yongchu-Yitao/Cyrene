@@ -84,11 +84,6 @@ def test_source_launch_uses_parent_watching_wrapper(monkeypatch, tmp_path):
     from agent.plugin.plugin_impl.cyrene_content import search_service as manager_module
 
     monkeypatch.setattr(manager_module.sys, "frozen", False, raising=False)
-    monkeypatch.setattr(
-        manager_module.importlib.util,
-        "find_spec",
-        lambda name: object() if name == "simplexng.simplexng" else None,
-    )
 
     command = manager_module._build_simplexng_launch_cmd(
         8888,

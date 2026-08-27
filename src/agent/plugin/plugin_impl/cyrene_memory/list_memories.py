@@ -8,7 +8,7 @@ from agent.plugin import PluginContext
 from .short_term import entry_id, load_entries
 from .definitions import get_native_tool_def
 from ._native import create_tool, service as memory_service
-from agent.plugin.native_runtime import json_result
+from agent.plugin.native_runtime import json_result, plugin_localized
 
 TOOL_NAME = "ListMemories"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -106,9 +106,11 @@ async def _tool_list_memories(
             return json_result({
                 "status": "error",
                 "type": "not_found",
-                "message": (
+                "message": plugin_localized(
+                    context,
                     "Project memory is only available inside a Workbench "
-                    "project task/chat."
+                    "project task/chat.",
+                    "项目记忆仅可在 Workbench 项目任务或对话中使用。",
                 ),
             })
 
@@ -154,7 +156,11 @@ async def _tool_list_memories(
         "memories": page,
     }
     if not page:
-        payload["note"] = "No memories match the requested filters."
+        payload["note"] = plugin_localized(
+            context,
+            "No memories match the requested filters.",
+            "没有匹配当前筛选条件的记忆。",
+        )
     return json_result(payload)
 
 

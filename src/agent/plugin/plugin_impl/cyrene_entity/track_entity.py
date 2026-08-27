@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.plugin import PluginContext
+from agent.plugin.native_runtime import plugin_language, plugin_localized
 
 from ._plugin import create_tool_plugin
 from ._service import current_project_id, entity_service
@@ -17,6 +18,7 @@ async def track_entity(
     context: PluginContext,
 ) -> dict[str, Any]:
     entity = await entity_service(context).create(
+        language=plugin_language(context),
         type=arguments["type"],
         title=arguments["title"],
         content=arguments.get("content", ""),
@@ -36,7 +38,13 @@ async def track_entity(
     return {
         "ok": True,
         "entity": entity,
-        "message": f"已记录事务：{entity['title']}（ID: {entity['id']}）",
+        "message": plugin_localized(
+            context,
+            "Recorded item: {title} (ID: {entity_id})",
+            "已记录事务：{title}（ID: {entity_id}）",
+            title=entity["title"],
+            entity_id=entity["id"],
+        ),
     }
 
 

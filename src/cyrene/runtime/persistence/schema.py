@@ -3,50 +3,6 @@
 from __future__ import annotations
 
 RUNTIME_SCHEMA = """
-CREATE TABLE IF NOT EXISTS scheduled_tasks (
-    id TEXT PRIMARY KEY,
-    chat_id INTEGER NOT NULL,
-    origin_session_id TEXT DEFAULT '',
-    project_id TEXT DEFAULT 'default',
-    prompt TEXT NOT NULL,
-    action_type TEXT DEFAULT 'agent_task',
-    schedule_type TEXT NOT NULL,
-    schedule_value TEXT NOT NULL,
-    schedule_timezone TEXT DEFAULT 'UTC',
-    next_run TEXT,
-    last_run TEXT,
-    last_result TEXT,
-    status TEXT DEFAULT 'active',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT '',
-    permission_mode TEXT DEFAULT 'workspace_only',
-    definition_revision INTEGER NOT NULL DEFAULT 1,
-    schedule_revision INTEGER NOT NULL DEFAULT 1,
-    lease_token TEXT,
-    lease_until TEXT,
-    current_run_id TEXT,
-    scheduled_for TEXT,
-    last_error TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run);
-CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_status ON scheduled_tasks(status);
-
-CREATE TABLE IF NOT EXISTS task_run_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id TEXT NOT NULL,
-    run_at TEXT NOT NULL,
-    duration_ms INTEGER NOT NULL,
-    status TEXT NOT NULL,
-    result TEXT,
-    error TEXT,
-    run_id TEXT NOT NULL DEFAULT '',
-    scheduled_for TEXT,
-    started_at TEXT,
-    completed_at TEXT,
-    FOREIGN KEY (task_id) REFERENCES scheduled_tasks(id)
-);
-CREATE INDEX IF NOT EXISTS idx_task_run_logs_task_id ON task_run_logs(task_id);
-
 CREATE TABLE IF NOT EXISTS goal_loop_drafts (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -262,65 +218,6 @@ CREATE INDEX IF NOT EXISTS idx_runtime_trace_spans_trace
 ON runtime_trace_spans(trace_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_runtime_trace_spans_run
 ON runtime_trace_spans(run_id, started_at);
-
-CREATE TABLE IF NOT EXISTS kb_documents (
-    id            TEXT PRIMARY KEY,
-    name          TEXT NOT NULL,
-    path          TEXT NOT NULL,
-    content_hash  TEXT DEFAULT '',
-    content_type  TEXT DEFAULT '',
-    kind          TEXT DEFAULT 'file',
-    size          INTEGER DEFAULT 0,
-    status        TEXT DEFAULT 'pending',
-    source        TEXT DEFAULT 'upload',
-    title         TEXT DEFAULT '',
-    summary       TEXT DEFAULT '',
-    tags          TEXT DEFAULT '[]',
-    char_count    INTEGER DEFAULT 0,
-    chunk_count   INTEGER DEFAULT 0,
-    entity_id     TEXT,
-    error         TEXT DEFAULT '',
-    created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL,
-    indexed_at    TEXT,
-    metadata      TEXT DEFAULT '{}'
-);
-CREATE INDEX IF NOT EXISTS idx_kb_documents_status ON kb_documents(status);
-CREATE INDEX IF NOT EXISTS idx_kb_documents_kind   ON kb_documents(kind);
-CREATE INDEX IF NOT EXISTS idx_kb_documents_updated_at ON kb_documents(updated_at DESC);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_documents_path ON kb_documents(path);
-
-CREATE TABLE IF NOT EXISTS kb_chunks (
-    id              TEXT PRIMARY KEY,
-    document_id     TEXT NOT NULL,
-    ordinal         INTEGER NOT NULL,
-    content         TEXT NOT NULL,
-    char_start      INTEGER DEFAULT 0,
-    char_end        INTEGER DEFAULT 0,
-    token_count     INTEGER DEFAULT 0,
-    embedding       BLOB,
-    embedding_dim   INTEGER DEFAULT 0,
-    embedding_model TEXT DEFAULT '',
-    created_at      TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_kb_chunks_document ON kb_chunks(document_id);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunks_fts USING fts5(
-    content, chunk_id UNINDEXED, document_id UNINDEXED, tokenize='trigram'
-);
-
-CREATE TABLE IF NOT EXISTS kb_relations (
-    id          TEXT PRIMARY KEY,
-    src_id      TEXT NOT NULL,
-    dst_id      TEXT NOT NULL,
-    relation    TEXT DEFAULT 'related',
-    weight      REAL DEFAULT 1.0,
-    source      TEXT DEFAULT 'manual',
-    created_at  TEXT NOT NULL,
-    UNIQUE(src_id, dst_id, relation)
-);
-CREATE INDEX IF NOT EXISTS idx_kb_relations_src ON kb_relations(src_id);
-CREATE INDEX IF NOT EXISTS idx_kb_relations_dst ON kb_relations(dst_id);
 
 CREATE TABLE IF NOT EXISTS workbench_state (
     key TEXT PRIMARY KEY,

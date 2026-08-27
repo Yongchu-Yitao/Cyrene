@@ -1442,7 +1442,7 @@ function WbcDetachedPaneApp() {
     if (kind === "plugin-view") {
       return <section className="wbc-plugin-view-pane detached">
         <PluginView
-          projectId={String(context.payload && context.payload.projectId || context.project && context.project.id || "")}
+          projectId={String(context.payload && (context.payload.projectId || context.payload.project_id) || context.project && context.project.id || "")}
           payload={context.payload}
         />
       </section>;

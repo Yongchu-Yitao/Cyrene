@@ -58,7 +58,7 @@ async def test_analyze_attachment_missing_file_returns_terminal_upload_error(tmp
 
     result = await _tool_analyze_attachment(
         {"path": str(UPLOADS_DIR / "missing-test-attachment.png")},
-        PluginContext(),
+        PluginContext(services={"content": object()}),
     )
 
     payload = json.loads(result)

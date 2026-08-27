@@ -19,12 +19,10 @@ from cyrene.config import (
     BASE_DIR,
     DATA_DIR,
     DB_PATH,
-    SEARXNG_HOST,
-    SEARXNG_PORT,
     WORKSPACE_DIR,
 )
+from cyrene.localization import localized
 from cyrene.runtime.onboarding import get_onboarding_status
-from cyrene.runtime.settings_store import get_all as get_web_settings
 from cyrene.runtime.version import get_version_label
 from cyrene.workbench import (
     project_repository,
@@ -43,19 +41,35 @@ logger = logging.getLogger(__name__)
 def _memory_service():
     return active_plugin_service("memory")
 
+
 def load_entries() -> list[dict[str, Any]]:
     service = _memory_service()
     return service.short_term_entries() if service is not None else []
 
 
-def read_soul() -> str:
-    service = _memory_service()
-    return service.read_soul() if service is not None else ""
-
-
-def get_soul_path() -> Path | None:
-    service = _memory_service()
-    return service.soul_path() if service is not None else None
+def _soul_presentation() -> dict[str, Any]:
+    service = active_plugin_service("soul")
+    projection = getattr(service, "presentation_state", None)
+    if not callable(projection):
+        return {
+            "path": "",
+            "content": "",
+            "updated_at": "",
+            "recent_items": [],
+            "section_count": 0,
+        }
+    try:
+        value = projection()
+    except Exception:
+        logger.warning("Soul UI projection is unavailable", exc_info=True)
+        return {
+            "path": "",
+            "content": "",
+            "updated_at": "",
+            "recent_items": [],
+            "section_count": 0,
+        }
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _normalize_search_text(text: Any) -> str:
@@ -118,7 +132,10 @@ async def _search_workbench_items(
     store = await asyncio.to_thread(project_repository._read_workbench_store_lightweight)
     projects = store.get('projects', [])
     project_by_id: dict[str, dict[str, Any]] = {str(p.get('id') or ''): p for p in projects if p.get('id')}
-    project_names: dict[str, str] = {pid: str(p.get('name') or p.get('id') or '').strip() or 'Workspace' for pid, p in project_by_id.items()}
+    project_names: dict[str, str] = {
+        pid: str(p.get('name') or p.get('id') or '').strip()
+        for pid, p in project_by_id.items()
+    }
     if 'project' in types:
         for project in projects:
             pid = str(project.get('id') or '')
@@ -126,7 +143,7 @@ async def _search_workbench_items(
             desc = str(project.get('description') or '')
             summary = str((project.get('context') or {}).get('summary') or '')
             if _search_matches(query, name) or _search_matches(query, desc) or _search_matches(query, summary):
-                groups['project'].append({'id': pid, 'type': 'project', 'title': name or 'Workspace', 'snippet': _search_snippet(desc or summary, query), 'projectId': pid, 'projectName': project_names.get(pid, ''), 'updatedAt': project.get('updatedAt') or project.get('createdAt') or ''})
+                groups['project'].append({'id': pid, 'type': 'project', 'title': name, 'titleKey': '' if name else 'search.default.workspace', 'snippet': _search_snippet(desc or summary, query), 'projectId': pid, 'projectName': project_names.get(pid, ''), 'projectNameDefault': not bool(project_names.get(pid, '')), 'updatedAt': project.get('updatedAt') or project.get('createdAt') or ''})
                 if len(groups['project']) >= per_type_limit:
                     break
     if 'task' in types:
@@ -137,7 +154,7 @@ async def _search_workbench_items(
                 title = str(session.get('title') or '')
                 goal = str(session.get('goal') or '')
                 if _search_matches(query, title) or _search_matches(query, goal):
-                    groups['task'].append({'id': sid, 'type': 'task', 'title': title or 'New task', 'snippet': _search_snippet(goal or title, query), 'projectId': pid, 'projectName': project_names.get(pid, ''), 'sessionId': sid, 'status': session.get('status') or 'idle', 'updatedAt': session.get('updatedAt') or session.get('createdAt') or ''})
+                    groups['task'].append({'id': sid, 'type': 'task', 'title': title, 'titleKey': '' if title else 'search.default.newTask', 'snippet': _search_snippet(goal or title, query), 'projectId': pid, 'projectName': project_names.get(pid, ''), 'projectNameDefault': not bool(project_names.get(pid, '')), 'sessionId': sid, 'status': session.get('status') or 'idle', 'updatedAt': session.get('updatedAt') or session.get('createdAt') or ''})
                     if len(groups['task']) >= per_type_limit:
                         break
             if len(groups['task']) >= per_type_limit:
@@ -165,7 +182,8 @@ async def _search_workbench_items(
                                 break
                     if not matched:
                         continue
-                    found.append({'id': chat_id, 'type': 'chat', 'title': title or 'New chat', 'snippet': _search_snippet(preview or title, query), 'projectId': pid, 'projectName': project_names.get(pid, 'Workspace'), 'chatId': chat_id, 'updatedAt': chat.get('updatedAt') or chat.get('createdAt') or ''})
+                    project_name = project_names.get(pid, '')
+                    found.append({'id': chat_id, 'type': 'chat', 'title': title, 'titleKey': '' if title else 'search.default.newChat', 'snippet': _search_snippet(preview or title, query), 'projectId': pid, 'projectName': project_name, 'projectNameDefault': not bool(project_name), 'chatId': chat_id, 'updatedAt': chat.get('updatedAt') or chat.get('createdAt') or ''})
                     if len(found) >= per_type_limit:
                         break
                 return found
@@ -245,7 +263,10 @@ async def _delete_chat_session(
             str(session_id),
         )
     except WorkbenchSessionError as exc:
-        return ({'error': str(exc)}, exc.status_code)
+        return (
+            {"error": exc.message, "code": exc.code},
+            exc.status_code,
+        )
     return (
         {
             'ok': True,
@@ -281,10 +302,10 @@ async def _build_status(
     sessions: list[dict[str, Any]] | None = None,
 ) -> dict:
     """Status data for the Status / Dashboard page."""
-    soul_path = get_soul_path()
+    soul = _soul_presentation()
     session_rows = sessions if sessions is not None else await asyncio.to_thread(_build_sessions, db_path)
     subagents = [agent for session in session_rows for agent in session.get('subagents', [])]
-    return {'phase': 'evolve', 'state': '进化', 'metrics': [], 'sparkData': [], 'workers': subagents, 'logs': [], 'services': [], 'model': project_runtime._get_model(), 'base_url': project_runtime._get_base_url(), 'short_term_entries': len(load_entries()), 'session_messages': sum(int(session.get('messageCount') or 0) for session in session_rows), 'scheduled_tasks': 0, 'soul_exists': bool(soul_path and soul_path.exists())}
+    return {'phase': 'evolve', 'state': localized('Evolving', '进化'), 'metrics': [], 'sparkData': [], 'workers': subagents, 'logs': [], 'services': [], 'model': project_runtime._get_model(), 'base_url': project_runtime._get_base_url(), 'short_term_entries': len(load_entries()), 'session_messages': sum(int(session.get('messageCount') or 0) for session in session_rows), 'scheduled_tasks': 0, 'soul_exists': bool(soul.get('path'))}
 
 
 async def build_status(db_path: str | Path | None = None) -> dict:
@@ -316,11 +337,7 @@ async def _build_dashboard(
         logger.warning('Failed to load tasks from the schedule Plugin; task list empty', exc_info=True)
         tasks = []
     today = now_local.strftime('%Y-%m-%d')
-    soul_content = read_soul()
-    soul_path = get_soul_path()
-    soul_stat = soul_path.stat() if soul_path and soul_path.exists() else None
-    soul_lines = [line.strip() for line in soul_content.splitlines() if line.strip().startswith('- ')]
-    recent_soul_items = soul_lines[-3:]
+    soul = _soul_presentation()
     recent_memories = sorted(st_entries, key=lambda entry: (str(entry.get('last_mentioned', '')), int(entry.get('mention_count', 0))), reverse=True)[:6]
     today_entries = [entry for entry in st_entries if str(entry.get('last_mentioned', '')).strip() == today]
     learned_today = sorted(today_entries, key=lambda entry: (int(entry.get('mention_count', 0)), abs(int(entry.get('emotional_valence', 0)))), reverse=True)[:4]
@@ -410,7 +427,7 @@ async def _build_dashboard(
         column = heatmap_column_map[label]
         heatmap_buckets[label] = [int((stats_by_day.get(day) or {}).get(column) or 0) for day in heatmap_days]
     activity_heatmap = {'days': heatmap_days, 'rows': [{'label': label, 'values': heatmap_buckets[label]} for label, _, _ in heatmap_row_defs]}
-    return {'today': {'learned': learned_today, 'learned_count': len(today_entries), 'memory_count': len(st_entries), 'archive_days': archive_day_count}, 'soul': {'path': str(soul_path), 'updated_at': datetime.fromtimestamp(soul_stat.st_mtime, tz=timezone.utc).isoformat() if soul_stat else '', 'recent_items': recent_soul_items, 'section_count': soul_content.count('\n## ') + (1 if soul_content.strip().startswith('# ') else 0)}, 'topic_cloud': topic_rows, 'emotion': emotion_series, 'usage': {'requests': historical_requests, 'tokens': session_metrics.format_tokens({'prompt_tokens': historical_prompt, 'completion_tokens': historical_completion, 'total_tokens': historical_total}), 'spend': spend_str, 'spend_cny': round(total_spend_cny, 6), 'spend_usd': round(total_spend_usd, 6), 'prompt_tokens': historical_prompt, 'completion_tokens': historical_completion, 'total_tokens': historical_total, 'cache_hit_tokens': historical_cache_hit, 'cache_miss_tokens': historical_cache_miss, 'total_messages': session_message_count, 'active_days': sum((1 for row in stats_by_day.values() if int(row.get('llm_requests') or 0) > 0)), 'current_streak': _calc_current_streak(stats_by_day, today), 'longest_streak': _calc_longest_streak(stats_by_day), 'peak_hour': _calc_peak_hour(stats_by_day), 'task_time': task_time, 'top_tools': tool_rows, 'timeline': [{'date': day, 'prompt': values['prompt'], 'completion': values['completion'], 'requests': values['requests']} for day, values in token_timeline.items()]}, 'reminders': reminder_items, 'recent_memories': recent_memories, 'recent_archive': archive_snippets, 'activity_heatmap': activity_heatmap, 'model_stats': model_stats_rows}
+    return {'today': {'learned': learned_today, 'learned_count': len(today_entries), 'memory_count': len(st_entries), 'archive_days': archive_day_count}, 'soul': {'path': str(soul.get('path') or ''), 'updated_at': str(soul.get('updated_at') or ''), 'recent_items': list(soul.get('recent_items') or ()), 'section_count': int(soul.get('section_count') or 0)}, 'topic_cloud': topic_rows, 'emotion': emotion_series, 'usage': {'requests': historical_requests, 'tokens': session_metrics.format_tokens({'prompt_tokens': historical_prompt, 'completion_tokens': historical_completion, 'total_tokens': historical_total}), 'spend': spend_str, 'spend_cny': round(total_spend_cny, 6), 'spend_usd': round(total_spend_usd, 6), 'prompt_tokens': historical_prompt, 'completion_tokens': historical_completion, 'total_tokens': historical_total, 'cache_hit_tokens': historical_cache_hit, 'cache_miss_tokens': historical_cache_miss, 'total_messages': session_message_count, 'active_days': sum((1 for row in stats_by_day.values() if int(row.get('llm_requests') or 0) > 0)), 'current_streak': _calc_current_streak(stats_by_day, today), 'longest_streak': _calc_longest_streak(stats_by_day), 'peak_hour': _calc_peak_hour(stats_by_day), 'task_time': task_time, 'top_tools': tool_rows, 'timeline': [{'date': day, 'prompt': values['prompt'], 'completion': values['completion'], 'requests': values['requests']} for day, values in token_timeline.items()]}, 'reminders': reminder_items, 'recent_memories': recent_memories, 'recent_archive': archive_snippets, 'activity_heatmap': activity_heatmap, 'model_stats': model_stats_rows}
 
 def _extract_topic_terms(text: str, limit: int=12) -> list[str]:
     """Extract simple high-signal topic terms from mixed Chinese/English text."""
@@ -461,34 +478,63 @@ def _read_recent_logs() -> list[dict]:
             tool = entry.get('tool', '?')
             rows.append({'t': ts, 'lvl': 'ok', 'msg': f'{caller} → {tool}'})
         elif kind == 'session_start':
-            rows.append({'t': ts, 'lvl': 'info', 'msg': 'session started'})
+            rows.append({
+                't': ts,
+                'lvl': 'info',
+                'msg': localized('Session started', '会话已开始'),
+            })
     return list(reversed(rows[-20:]))
 
 def _placeholder_logs() -> list[dict]:
     now = datetime.now(timezone.utc).strftime('%H:%M:%S')
-    return [{'t': now, 'lvl': 'info', 'msg': 'no debug logs yet — verbose mode is enabled, logs appear after agent runs'}]
+    return [{
+        't': now,
+        'lvl': 'info',
+        'msg': localized(
+            'No debug logs yet — verbose mode is enabled; logs appear after agent runs.',
+            '暂无调试日志——详细模式已启用，智能体运行后会显示日志。',
+        ),
+    }]
 
 def _build_settings_meta() -> dict:
-    return {'sections': [{'id': 'general', 'label': 'General'}, {'id': 'search', 'label': 'Search'}, {'id': 'channels', 'label': 'Channels'}, {'id': 'models', 'label': 'Models'}, {'id': 'agents', 'label': 'Agents'}, {'id': 'appearance', 'label': 'Appearance'}, {'id': 'capabilities', 'label': 'Capabilities'}, {'id': 'data', 'label': 'Data'}, {'id': 'about', 'label': 'About'}]}
+    labels = {
+        'general': localized('General', '通用'),
+        'search': localized('Search', '搜索'),
+        'channels': localized('Channels', '渠道'),
+        'models': localized('Models', '模型'),
+        'agents': localized('Agents', '智能体'),
+        'appearance': localized('Appearance', '外观'),
+        'capabilities': localized('Capabilities', '能力'),
+        'data': localized('Data', '数据'),
+        'about': localized('About', '关于'),
+    }
+    return {
+        'sections': [
+            {'id': section_id, 'label': label}
+            for section_id, label in labels.items()
+        ]
+    }
 
 def _build_config() -> dict:
-    settings = get_web_settings()
     from cyrene.runtime.config_store import get_settings_revision
+    from cyrene.runtime.settings_service import read_public
+
     live_model, live_base_url = project_runtime._live_llm_config()
-    return {'revision': get_settings_revision(), 'model': live_model, 'base_url': live_base_url, 'assistant_name': ASSISTANT_NAME, 'base_dir': str(BASE_DIR), 'data_dir': str(DATA_DIR), 'soul_path': str(get_soul_path() or ''), 'workspace_dir': str(WORKSPACE_DIR), 'soul_content': _read_soul(), 'search_mode': 'builtin', 'search_external_url': '', 'spawn_policy': settings.get('spawn_policy', 'conservative'), 'heartbeat_interval': settings.get('heartbeat_interval', 1800), 'background_skill_learning': settings.get('background_skill_learning', True), 'agent_proactive': settings.get('agent_proactive', True), 'app_language': settings.get('app_language', ''), 'timezone': settings.get('timezone', 'Asia/Shanghai'), 'performance_mode': settings.get('performance_mode', False), 'external_agent_proxy_enabled': settings.get('external_agent_proxy_enabled', False), 'external_agent_proxy_port': settings.get('external_agent_proxy_port', 7897), 'subagent_execution_max_tool_calls': settings.get('subagent_execution_max_tool_calls', 200), 'subagent_execution_max_wall_seconds': settings.get('subagent_execution_max_wall_seconds', 1800), 'subagent_execution_no_progress_turns': settings.get('subagent_execution_no_progress_turns', 3), 'subagent_execution_checkpoint_calls': settings.get('subagent_execution_checkpoint_calls', 20), 'subagent_execution_max_cost_usd': settings.get('subagent_execution_max_cost_usd', 5.0), 'subagent_execution_max_context_tokens': settings.get('subagent_execution_max_context_tokens', 0), 'subagent_discussion_max_rounds': settings.get('subagent_discussion_max_rounds', 5), 'subagent_discussion_max_messages_per_agent': settings.get('subagent_discussion_max_messages_per_agent', 4), 'subagent_discussion_max_total_messages': settings.get('subagent_discussion_max_total_messages', 20), 'subagent_discussion_max_message_chars': settings.get('subagent_discussion_max_message_chars', 2000), 'subagent_discussion_max_wall_seconds': settings.get('subagent_discussion_max_wall_seconds', 600), 'subagent_discussion_max_tool_calls': settings.get('subagent_discussion_max_tool_calls', 50), 'subagent_discussion_no_new_info_rounds': settings.get('subagent_discussion_no_new_info_rounds', 2), 'notify_telegram': settings.get('notify_telegram', True), 'notify_wechat': settings.get('notify_wechat', True), 'redact_secrets': settings.get('redact_secrets', True), 'beta_updates': settings.get('beta_updates', False), 'auto_update': settings.get('auto_update', True), 'budget_enabled': settings.get('budget_enabled', False), 'codex_budget_enabled': settings.get('codex_budget_enabled', True), 'budget_monthly': settings.get('budget_monthly', 50), 'budget_currency': settings.get('budget_currency', 'CNY'), 'budget_action': settings.get('budget_action', 'warn'), 'budget_start_day': settings.get('budget_start_day', 1), 'search_port': str(SEARXNG_PORT), 'search_host': SEARXNG_HOST}
+    soul = _soul_presentation()
+    plugin_values = dict(read_public("runtime").get("values") or {})
+    return {
+        "revision": get_settings_revision(),
+        "model": live_model,
+        "base_url": live_base_url,
+        "assistant_name": ASSISTANT_NAME,
+        "base_dir": str(BASE_DIR),
+        "data_dir": str(DATA_DIR),
+        "workspace_dir": str(WORKSPACE_DIR),
+        "soul_path": str(soul.get("path") or ""),
+        "soul_content": str(soul.get("content") or ""),
+        **plugin_values,
+    }
 
-def _build_context_chips() -> list[dict]:
-    """Build context chips reflecting current SOUL.md and workspace state."""
-    from cyrene.runtime.settings_store import is_workspace_active, is_soul_active
-    chips = []
-    if is_soul_active():
-        chips.append({'icon': '🧠', 'label': 'SOUL.md', 'key': 'soul'})
-    if is_workspace_active():
-        chips.append({'icon': '📁', 'label': 'workspace', 'key': 'workspace'})
-    return chips
-
-def _build_search_config() -> dict:
-    return {'search_mode': 'builtin', 'search_external_url': '', 'auto_start_enabled': os.getenv('SEARXNG_AUTO_START', '1') not in ('0', 'false', 'no')}
 
 def _load_messages(db_path: str | Path | None = None) -> list[dict]:
     """Load the latest Workbench transcript from the SQLite chat repository."""
@@ -533,9 +579,6 @@ def _load_state_messages(db_path: str | Path | None = None) -> list[dict]:
         for message in (chat or {}).get('messages') or []
         if isinstance(message, dict)
     ]
-
-def _read_soul() -> str:
-    return read_soul()
 
 def _model_pricing(model: str='') -> dict[str, float] | None:
     """Return token pricing for an actual response model, or the active model.
@@ -650,7 +693,5 @@ def _calc_peak_hour(stats_by_day: dict[str, dict]) -> str:
 __all__ = [
     "build_sessions",
     "build_status",
-    "get_soul_path",
     "load_entries",
-    "read_soul",
 ]

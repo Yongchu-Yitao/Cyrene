@@ -2,6 +2,11 @@
 // backed by the same platform data, event, and API services.
 var { useState: useStateBootstrap, useEffect: useEffectBootstrap } = React;
 
+function bootstrapT(key, fallback) {
+  try { return window.CyreneUI.require("i18n").t(key, null, fallback); }
+  catch (error) { return fallback; }
+}
+
 function readWorkbenchTweak(key, fallback) {
   try {
     var value = localStorage.getItem("cyrene-tweak-" + key);
@@ -249,7 +254,7 @@ function WorkbenchRoot() {
   if (typeof WorkbenchApp !== "function") {
     return (
       <main className="workbench-bootstrap-error" role="alert">
-        Cyrene Workbench failed to load.
+        {bootstrapT("workbench.bootstrapLoadFailed", "Cyrene Workbench failed to load.")}
       </main>
     );
   }
@@ -275,7 +280,7 @@ function QuickChatRoot() {
   if (typeof QuickChatApp !== "function") {
     return (
       <main className="workbench-bootstrap-error" role="alert">
-        Cyrene Quick Chat failed to load.
+        {bootstrapT("workbench.quickChatLoadFailed", "Cyrene Quick Chat failed to load.")}
       </main>
     );
   }
@@ -307,7 +312,7 @@ function DetachedPaneRoot() {
   var DetachedPaneApp = window.CyreneUI.require("chat").DetachedPaneApp;
   return typeof DetachedPaneApp === "function"
     ? <DetachedPaneApp />
-    : <main className="workbench-bootstrap-error" role="alert">Cyrene pane failed to load.</main>;
+    : <main className="workbench-bootstrap-error" role="alert">{bootstrapT("workbench.detachedPaneLoadFailed", "Cyrene pane failed to load.")}</main>;
 }
 
 var WORKBENCH_REQUIRED_SERVICES = [
@@ -389,7 +394,7 @@ if (window.CyrenePageLifecycle && window.CyrenePageLifecycle.isInvalidated()) {
     console.error("Cyrene UI services failed to load: " + missing.join(", "));
     workbenchReactRoot.render(
       <main className="workbench-bootstrap-error" role="alert">
-        Cyrene Workbench failed to load.
+        {bootstrapT("workbench.bootstrapLoadFailed", "Cyrene Workbench failed to load.")}
       </main>,
     );
   }

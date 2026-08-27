@@ -12,7 +12,7 @@ function RightContextPanel({ project, session, expandedStepId, tab, onTabChange,
   var activeStep = steps.find(function (step) { return step.id === expandedStepId; }) || null;
   var isInit = !!(session && session.kind === "init");
   var tabs = isInit ? [
-    { id: "context", label: wbT("task.side.context", "Context") },
+    { id: "context", label: wbT("init.progress.title", "Initialization progress") },
   ] : [
     { id: "context", label: wbT("task.side.context", "Context") },
     { id: "files", label: wbT("task.side.fileChanges", "File changes") },
@@ -47,7 +47,7 @@ function RightContextPanel({ project, session, expandedStepId, tab, onTabChange,
     );
   }
   var tabIcons = {
-    context: ICONS.target,
+    context: isInit ? ICONS.check : ICONS.target,
     files: ICONS.attach,
     logs: ICONS.cmdReflect,
     acceptance: ICONS.check,
@@ -62,7 +62,7 @@ function RightContextPanel({ project, session, expandedStepId, tab, onTabChange,
     return null;
   }
   return (
-    <aside className={"workbench-right-panel wb-floating-detail-shell wb-task-detail-shell" + (floating ? " wbc-side-floating is-floating" : "") + (className ? " " + className : "")} aria-label={wbT("task.side.detailPanel", "Task panel")}>
+    <aside className={"workbench-right-panel wb-floating-detail-shell wb-task-detail-shell" + (isInit ? " wb-task-detail-init" : "") + (floating ? " wbc-side-floating is-floating" : "") + (className ? " " + className : "")} aria-label={wbT("task.side.detailPanel", "Task panel")}>
       <div className="wbc-side-card wb-floating-detail-card wb-task-detail-card">
         {!floating && <WbColResizer trackGutter surfaceId="task-detail" />}
         <div className="wbc-side-card-head">
@@ -161,10 +161,8 @@ function ContextTab({ project, session, activeStep }) {
   var isInit = !!(session && session.kind === "init");
   if (isInit && workbenchServices.create().InitProgress) {
     return (
-      <div className="workbench-side-stack">
-        <SideSection title={wbT("init.progress.title", "Initialization progress")}>
-          {React.createElement(workbenchServices.create().InitProgress, { session: session })}
-        </SideSection>
+      <div className="workbench-side-stack wb-init-progress-stack">
+        {React.createElement(workbenchServices.create().InitProgress, { session: session })}
       </div>
     );
   }

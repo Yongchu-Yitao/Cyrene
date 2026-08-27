@@ -1,6 +1,6 @@
 import { workbenchServices } from "../shared/runtime/services.jsx"
 
-var { useEffect, useState } = React
+var { useEffect, useMemo, useRef, useState } = React
 
 function emptyPluginSnapshot() {
   return {
@@ -12,6 +12,8 @@ function emptyPluginSnapshot() {
     packs: [],
     plugins: [],
     standalonePlugins: [],
+    frontendViews: [],
+    projectTools: [],
     failures: [],
     attachedApplicationPacks: [],
     applicationRestartRequired: false,
@@ -31,6 +33,8 @@ function normalizePluginSnapshot(payload, pending) {
     packs: Array.isArray(payload.packs) ? payload.packs : [],
     plugins: Array.isArray(payload.plugins) ? payload.plugins : [],
     standalonePlugins: Array.isArray(payload.standalone_plugins) ? payload.standalone_plugins : [],
+    frontendViews: Array.isArray(payload.frontend_views) ? payload.frontend_views : [],
+    projectTools: Array.isArray(payload.project_tools) ? payload.project_tools : [],
     failures: Array.isArray(payload.failures) ? payload.failures : [],
     attachedApplicationPacks: Array.isArray(payload.attached_application_packs) ? payload.attached_application_packs : [],
     applicationRestartRequired: payload.application_restart_required === true,
@@ -38,6 +42,14 @@ function normalizePluginSnapshot(payload, pending) {
     error: "",
     request: pending || "",
   }
+}
+
+function dispatchPluginChange() {
+  try {
+    window.dispatchEvent(new CustomEvent("cyrene:plugins-changed", {
+      detail: { source: "plugin-registry" },
+    }))
+  } catch (error) {}
 }
 
 var PluginFrontendService = (function () {
@@ -54,11 +66,7 @@ var PluginFrontendService = (function () {
     listeners.slice().forEach(function (listener) {
       try { listener(state) } catch (error) {}
     })
-    try {
-      window.dispatchEvent(new CustomEvent("cyrene:plugins-changed", {
-        detail: { source: "plugin-registry" },
-      }))
-    } catch (error) {}
+    dispatchPluginChange()
   }
 
   function commit(next) {
@@ -123,8 +131,7 @@ var PluginFrontendService = (function () {
     })
   }
 
-  function subscribe(scope, listener) {
-    if (typeof scope === "function") listener = scope
+  function subscribe(listener) {
     if (typeof listener !== "function") return function () {}
     listeners.push(listener)
     listener(state)
@@ -144,35 +151,109 @@ var PluginFrontendService = (function () {
   }
 })()
 
+function pluginLocalizedField(item, field) {
+  item = item && typeof item === "object" ? item : {}
+  var locale = String(document.documentElement.lang || navigator.language || "en").replace(/_/g, "-").toLowerCase()
+  var language = locale.split("-", 1)[0]
+  var translations = item.i18n && typeof item.i18n === "object" ? item.i18n : {}
+  var value = translations[locale] || translations[language] || null
+  if (!value) {
+    Object.keys(translations).some(function (key) {
+      var normalized = String(key).replace(/_/g, "-").toLowerCase()
+      if (normalized !== locale && normalized !== language) return false
+      value = translations[key]
+      return true
+    })
+  }
+  return String(value && value[field] || item[field] || "")
+}
+
 function PluginView(props) {
   var payload = props.payload && typeof props.payload === "object" ? props.payload : {}
-  var pluginId = String(payload.pluginId || "")
-  var viewId = String(payload.viewId || "")
+  var packId = String(payload.packId || payload.pack_id || "")
+  var viewId = String(payload.viewId || payload.view_id || "")
+  var projectId = String(props.projectId || payload.projectId || payload.project_id || "")
+  var instanceId = String(payload.instanceId || payload.instance_id || "default")
+  var iframeRef = useRef(null)
   var [registry, setRegistry] = useState(function () { return PluginFrontendService.snapshot() })
 
+  useEffect(function () { return PluginFrontendService.subscribe(setRegistry) }, [])
+  var view = useMemo(function () {
+    return (registry.frontendViews || []).find(function (item) {
+      return String(item && item.pack_id || "") === packId
+        && String(item && item.id || "") === viewId
+    }) || null
+  }, [registry, packId, viewId])
+
   useEffect(function () {
-    return PluginFrontendService.subscribe(setRegistry)
-  }, [])
+    function post(message) {
+      var frame = iframeRef.current
+      if (frame && frame.contentWindow) frame.contentWindow.postMessage(message, "*")
+    }
+    function onMessage(event) {
+      var frame = iframeRef.current
+      if (!frame || event.source !== frame.contentWindow) return
+      if (event.origin !== window.location.origin && event.origin !== "null") return
+      var message = event.data && typeof event.data === "object" ? event.data : {}
+      if (message.source !== "cyrene-plugin" || message.type !== "call") return
+      var requestId = String(message.requestId || "")
+      workbenchServices.api().json(
+        "/api/plugins/packs/" + encodeURIComponent(packId) + "/call",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            method: String(message.method || ""),
+            args: message.args,
+            project_id: projectId,
+          }),
+          toast: false,
+        }
+      ).then(function (response) {
+        post({ source: "cyrene-host", type: "response", requestId: requestId, ok: true, result: response && response.result })
+      }).catch(function (error) {
+        post({ source: "cyrene-host", type: "response", requestId: requestId, ok: false, error: workbenchServices.api().errorText(error) })
+      })
+    }
+    window.addEventListener("message", onMessage)
+    return function () { window.removeEventListener("message", onMessage) }
+  }, [packId, projectId, instanceId])
 
   if (registry.loading && !registry.loaded) {
-    return <div className="wbc-plugin-view-state" role="status">正在读取插件注册表…</div>
+    return <div className="wbc-plugin-view-state" role="status">{pluginLocalizedField({ title: "Loading Plugin…", i18n: { zh: { title: "正在加载插件…" } } }, "title")}</div>
   }
-
-  var installed = (registry.plugins || []).find(function (item) {
-    return String(item && (item.id || item.name) || "") === pluginId
-  })
-  var message = installed
-    ? "新的插件协议不再提供嵌入式前端视图。"
-    : "这个已保存的插件视图对应的插件不在当前注册表中。"
-  return <div className="wbc-plugin-view-state" role="status">
-    <strong>{payload.title || viewId || pluginId || "插件"}</strong>
-    <span>{message}</span>
-    <button type="button" onClick={function () {
-      window.dispatchEvent(new CustomEvent("cyrene:open-settings", { detail: { tab: "plugin-registry" } }))
-    }}>查看插件注册表</button>
-  </div>
+  if (!view) {
+    return <div className="wbc-plugin-view-state" role="status">
+      <strong>{payload.title || viewId || packId || "Plugin"}</strong>
+      <span>{pluginLocalizedField({ title: "This Plugin view is disabled or unavailable.", i18n: { zh: { title: "该插件视图已禁用或不可用。" } } }, "title")}</span>
+    </div>
+  }
+  var entry = String(view.entry || "")
+  var src = "/api/plugins/packs/" + encodeURIComponent(packId) + "/assets/"
+    + entry.split("/").map(encodeURIComponent).join("/")
+  return <iframe
+    ref={iframeRef}
+    className="wbc-plugin-view-frame"
+    src={src}
+    title={pluginLocalizedField(view, "title") || viewId || packId}
+    sandbox="allow-scripts allow-forms allow-modals allow-downloads allow-popups"
+    onLoad={function () {
+      if (!iframeRef.current || !iframeRef.current.contentWindow) return
+      iframeRef.current.contentWindow.postMessage({
+        source: "cyrene-host",
+        type: "init",
+        context: {
+          packId: packId,
+          projectId: projectId,
+          viewId: viewId,
+          instanceId: instanceId,
+          state: payload.state == null ? null : payload.state,
+        },
+      }, "*")
+    }}
+  />
 }
 
 window.CyreneUI.plugins = window.CyreneUI.register("plugins", PluginFrontendService)
 
-export { PluginFrontendService, PluginView }
+export { PluginFrontendService, PluginView, pluginLocalizedField }

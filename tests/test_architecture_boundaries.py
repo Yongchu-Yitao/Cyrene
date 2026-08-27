@@ -20,38 +20,28 @@ PRIVATE_IMPORT_TOTAL_BUDGET = 148
 
 CYRENE_TOP_LEVEL_DIRECTORIES = {
     "agent_runtime",
-    "channels",
-    "extensions",
     "hooks",
-    "learning",
-    "media",
     "model_runtime",
     "observability",
-    "office",
     "runtime",
-    "terminal",
-    "voice",
     "workbench",
 }
 CYRENE_TOP_LEVEL_FILES = {
     "__init__.py",
     "__main__.py",
-    "browser.py",
     "cli.py",
     "cli_chat.py",
     "config.py",
     "local_cli.py",
+    "localization.py",
 }
 
 # Historical namespace-wide imports are migration debt. The set may shrink but
 # no new module may join it.
 IMPORT_STAR_ALLOWLIST = {
-    "src/route/agent/browser.py",
     "src/route/agent/sessions.py",
     "src/route/backup.py",
-    "src/route/learning.py",
     "src/route/notifications.py",
-    "src/route/search.py",
     "src/route/system/shell.py",
     "src/route/system/updates.py",
     "src/route/tasks.py",
@@ -69,7 +59,11 @@ JAVASCRIPT_SERVICE_REGISTRY_ALLOWLIST = {
     "src/webui/frontend/entry/bootstrap.jsx",
     "src/webui/frontend/platform/api.jsx",
     "src/webui/frontend/platform/data-store.jsx",
+    # Feature modules compose registered services for their own surfaces.
+    "src/webui/frontend/features/settings/custom-plugins.jsx",
+    "src/webui/frontend/features/settings/plugin-center-add.jsx",
     "src/webui/frontend/shared/i18n/translations.jsx",
+    "src/webui/frontend/workbench-i18n.jsx",
 }
 
 
@@ -275,23 +269,6 @@ def test_private_cross_package_imports_can_only_decrease() -> None:
     allowed = set(baseline["private_cross_package_imports"])
 
     assert _private_cross_package_imports() <= allowed
-
-
-@pytest.mark.parametrize(
-    "package",
-    ("cyrene.learning",),
-)
-def test_public_package_facades_are_lazy(package: str) -> None:
-    """Importing a facade must not initialize its implementation graph."""
-    code = f"import json, sys\nimport {package}\nprint(json.dumps(sorted(name for name in sys.modules if name == {package!r} or name.startswith({package!r} + '.'))))\n"
-
-    output = subprocess.check_output(
-        [sys.executable, "-c", code],
-        cwd=SRC_ROOT.parent,
-        text=True,
-    )
-
-    assert json.loads(output) == [package]
 
 
 def _source_modules() -> dict[str, tuple[Path, bool]]:

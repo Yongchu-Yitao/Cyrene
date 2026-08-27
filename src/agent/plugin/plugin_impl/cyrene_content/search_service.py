@@ -20,7 +20,15 @@ from urllib.request import getproxies
 
 import httpx
 
-from cyrene.config import DATA_DIR, INSTALL_RESOURCES_DIR, SEARCH_PROXY, SEARXNG_URL, TEMP_DIR
+from cyrene.config import DATA_DIR, INSTALL_RESOURCES_DIR, TEMP_DIR
+
+from .runtime_config import (
+    SEARCH_PROXY,
+    SEARXNG_AUTO_START,
+    SEARXNG_HOST,
+    SEARXNG_PORT,
+    SEARXNG_URL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -436,8 +444,6 @@ class WebSearchService:
         port: int | None = None,
         host: str | None = None,
     ) -> str:
-        from cyrene.config import SEARXNG_AUTO_START, SEARXNG_HOST, SEARXNG_PORT
-
         if not SEARXNG_AUTO_START:
             return ""
         return await start_searxng(
@@ -448,6 +454,21 @@ class WebSearchService:
     async def restart(self, port: int, host: str) -> str:
         await asyncio.to_thread(self.manager.stop)
         return await start_searxng(int(port), str(host))
+
+    async def settings_changed(
+        self,
+        _namespace: str,
+        changed: tuple[str, ...],
+    ) -> None:
+        proxy_keys = {
+            "external_agent_proxy_enabled",
+            "external_agent_proxy_url",
+            "external_agent_proxy_port",
+            "proxy_search_enabled",
+        }
+        if not proxy_keys.intersection(changed) or not self.manager.is_running:
+            return
+        await self.restart(int(SEARXNG_PORT), str(SEARXNG_HOST))
 
     def shutdown(self) -> None:
         stop_searxng()

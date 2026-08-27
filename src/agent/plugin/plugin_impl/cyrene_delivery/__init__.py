@@ -23,6 +23,8 @@ def _plugin(module: ModuleType) -> Plugin:
     function = module.TOOL_DEF["function"]
     name = str(function["name"])
     metadata: dict[str, Any] = dict(getattr(module, "TOOL_METADATA", {}))
+    if name == "send_telegram":
+        metadata["default_enabled"] = False
     if name in _MAIN_ONLY:
         metadata["main_only"] = True
     return Plugin(

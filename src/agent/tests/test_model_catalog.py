@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+from fastapi import FastAPI
+
+from agent.plugin import (
+    Plugin,
+    PluginApplicationHost,
+    PluginPack,
+    PluginRegistry,
+    set_active_plugin_application_host,
+)
 from agent.plugin import model_catalog
 
 
 def test_configured_candidates_honor_session_selection_and_endpoint_affinity(
     monkeypatch,
 ):
-    from cyrene.runtime import model_configuration, settings_store
+    from agent.plugin.plugin_impl.cyrene_model import configuration as model_configuration
+    from cyrene.runtime import settings_store
 
     primary = {
         "id": "primary",
@@ -52,6 +62,9 @@ def test_configured_candidates_honor_session_selection_and_endpoint_affinity(
         "get",
         lambda key, default=None: settings.get(key, default),
     )
+    # Candidate resolution is an application service in the new Plugin
+    # protocol; this unit test supplies that service explicitly.
+    monkeypatch.setattr(model_catalog, "_model_configuration_port", lambda: model_configuration)
 
     candidates = model_catalog.configured_model_candidates("chat-1")
 
@@ -78,3 +91,96 @@ def test_candidate_identity_never_exposes_credentials_or_paths():
     assert identity["baseUrl"] == "https://example.test"
     assert identity["endpoint"] == "https://example.test"
     assert "secret" not in str(identity)
+
+
+def _provider(name: str = "ProviderOne") -> Plugin:
+    return Plugin(
+        name=name,
+        description="provider",
+        input_schema={"type": "object", "additionalProperties": True},
+        handler=lambda _arguments, _context: {},
+        kind="model",
+        metadata={"provider": {"id": "provider_one", "name": "Provider one"}},
+    )
+
+
+def test_model_catalog_uses_active_registry_and_honors_provider_activation(tmp_path):
+    registry = PluginRegistry(include_core=False)
+    registry.register_pack(
+        PluginPack(
+            id="model_pack",
+            description="models",
+            plugins=(_provider(),),
+        ),
+        source="test",
+    )
+    host = PluginApplicationHost(
+        app=FastAPI(),
+        registry=registry,
+        bot=None,
+        db_path=str(tmp_path / "app.db"),
+        data_directory=tmp_path / "data",
+        plugin_directory=tmp_path / "plugins",
+    )
+    set_active_plugin_application_host(host)
+    try:
+        assert [item["id"] for item in model_catalog.model_plugin_catalog()] == [
+            "provider_one"
+        ]
+        registry.set_plugin_enabled("ProviderOne", False)
+        assert model_catalog.model_plugin_catalog() == []
+        registry.set_plugin_enabled("ProviderOne", True)
+        registry.set_pack_enabled("model_pack", False)
+        assert model_catalog.model_plugin_catalog() == []
+    finally:
+        set_active_plugin_application_host(None)
+
+
+def test_offline_model_registry_loads_persisted_activation_and_customization(
+    tmp_path,
+    monkeypatch,
+):
+    from cyrene.runtime import settings_store
+
+    root = tmp_path / "plugins"
+    pack = root / "cyrene_model"
+    pack.mkdir(parents=True)
+    (pack / "__init__.py").write_text(
+        """
+from agent.plugin import Plugin, PluginPack
+
+plugin = Plugin(
+    name="OfflineProvider",
+    description="offline",
+    input_schema={"type": "object", "additionalProperties": True},
+    handler=lambda arguments, context: {},
+    kind="model",
+    metadata={"provider": {"id": "offline", "name": "Offline"}},
+)
+plugin_pack = PluginPack(id="cyrene_model", description="models", plugins=(plugin,))
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(model_catalog, "seed_builtin_plugin_directory", lambda _root: None)
+    monkeypatch.setattr(settings_store, "get_enabled_plugins", lambda: {})
+    monkeypatch.setattr(
+        settings_store,
+        "get_enabled_plugin_packs",
+        lambda: {"cyrene_model": False},
+    )
+    monkeypatch.setattr(
+        settings_store,
+        "get",
+        lambda key, default=None: (
+            {"OfflineProvider": {"deleted": True}}
+            if key == "plugin_tool_customizations"
+            else default
+        ),
+    )
+    monkeypatch.setattr(model_catalog, "_CACHE_REGISTRY", None)
+
+    registry, failures = model_catalog.editable_model_registry(root)
+
+    assert failures == ()
+    assert registry.list_plugins() == ()
+    assert model_catalog.model_plugin_catalog(root) == []

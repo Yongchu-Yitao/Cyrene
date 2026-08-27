@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from cyrene.terminal.manager import (
+from agent.plugin.plugin_impl.cyrene_code.terminal.manager import (
     TerminalManager,
     TerminalSession,
     _WindowsPtyProcess,
@@ -21,7 +21,7 @@ from cyrene.terminal.manager import (
 def test_windows_conpty_keeps_hidden_console_for_daemon_lifetime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import cyrene.terminal.manager as manager_module
+    import agent.plugin.plugin_impl.cyrene_code.terminal.manager as manager_module
 
     calls: list[tuple[str, object]] = []
 
@@ -70,7 +70,7 @@ def test_windows_conpty_keeps_hidden_console_for_daemon_lifetime(
 def test_windows_conpty_accepts_attached_headless_console(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import cyrene.terminal.manager as manager_module
+    import agent.plugin.plugin_impl.cyrene_code.terminal.manager as manager_module
 
     calls: list[tuple[str, object]] = []
 
@@ -120,7 +120,7 @@ def test_windows_conpty_accepts_attached_headless_console(
 def test_windows_conpty_reports_original_allocation_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import cyrene.terminal.manager as manager_module
+    import agent.plugin.plugin_impl.cyrene_code.terminal.manager as manager_module
 
     class NativeCall:
         def __init__(self, result: object) -> None:
@@ -374,7 +374,7 @@ async def test_terminal_manager_keeps_a_resizable_replayable_pty(
         lambda project_id: {"id": project_id, "workspacePath": str(tmp_path)},
     )
     monkeypatch.setattr(
-        "cyrene.terminal.shell_runtime.interactive_argv",
+        "agent.plugin.plugin_impl.cyrene_code.terminal.shell_runtime.interactive_argv",
         lambda: ("sh", ["/bin/sh"]),
     )
     monkeypatch.setenv("NO_COLOR", "1")
@@ -852,7 +852,7 @@ async def test_agent_terminal_vt_screen_and_wake_are_durable_and_exactly_once(
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX PTY behavior")
 async def test_user_terminal_input_temporarily_has_priority(tmp_path: Path) -> None:
-    from cyrene.terminal.manager import TerminalInputBusyError
+    from agent.plugin.plugin_impl.cyrene_code.terminal.manager import TerminalInputBusyError
 
     manager = TerminalManager(
         output_limit=64 * 1024, user_input_priority_seconds=0.08

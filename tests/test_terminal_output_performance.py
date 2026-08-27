@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from cyrene.terminal.manager import (
+from agent.plugin.plugin_impl.cyrene_code.terminal.manager import (
     OUTPUT_FLUSH_THRESHOLD,
     PTY_READ_BUDGET,
     SCREEN_DRAIN_BUDGET,
@@ -165,7 +165,7 @@ async def test_persistence_backpressure_pauses_and_resumes_posix_reader(
     session.master_fd = 123
     monkeypatch.setattr(manager, "_queue_screen_data", lambda _session, _data: None)
     payload = b"p" * PTY_READ_BUDGET
-    monkeypatch.setattr("cyrene.terminal.manager.os.read", lambda _fd, _size: payload)
+    monkeypatch.setattr("agent.plugin.plugin_impl.cyrene_code.terminal.manager.os.read", lambda _fd, _size: payload)
     loop = asyncio.get_running_loop()
     removed: list[int] = []
     added: list[int] = []
@@ -244,7 +244,7 @@ def test_posix_reader_processes_at_most_one_budget_per_callback(
         reads.append(size)
         return b"x" * size
 
-    monkeypatch.setattr("cyrene.terminal.manager.os.read", fake_read)
+    monkeypatch.setattr("agent.plugin.plugin_impl.cyrene_code.terminal.manager.os.read", fake_read)
     monkeypatch.setattr(manager, "_append_output", lambda _session, data: appended.append(data))
 
     manager._read_posix_ready(session.id)
@@ -360,7 +360,7 @@ async def test_exit_forces_scrollback_metadata_and_screen_flush(
 async def test_screen_and_incremental_indexes_use_separate_background_workers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import cyrene.terminal.manager as manager_module
+    import agent.plugin.plugin_impl.cyrene_code.terminal.manager as manager_module
 
     manager = TerminalManager(state_dir=tmp_path / "state")
     session = _session(tmp_path, "term_background_queries")

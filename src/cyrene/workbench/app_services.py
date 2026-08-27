@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -16,10 +17,12 @@ from typing import Any
 from uuid import uuid4
 
 from cyrene.config import WORKSPACE_DIR, cyrene_dir
+from cyrene.localization import localized
 from cyrene.workbench import project_repository, project_runtime
 from cyrene.workbench.chat_repository import ChatRepository
 
 _BACKGROUND_SESSION_TASKS: set[asyncio.Task[Any]] = set()
+logger = logging.getLogger(__name__)
 
 
 def _track_background_session_task(task: asyncio.Task[Any]) -> None:
@@ -42,7 +45,10 @@ def _plugin_host_values() -> tuple[Any, str]:
         bot = bot if bot is not None else host.bot
         db_path = db_path or str(host.db_path or "")
     if not db_path:
-        raise RuntimeError("Cyrene Plugin application host is not configured")
+        raise RuntimeError(localized(
+            "The Cyrene Plugin application host is not configured.",
+            "尚未配置 Cyrene 插件应用宿主。",
+        ))
     return bot, db_path
 
 
@@ -51,7 +57,10 @@ def _active_workspace_dir() -> Path:
 
     execution = current_plugin_execution()
     if execution is None or execution.context.workspace is None:
-        raise RuntimeError("Cyrene project tools require an active Plugin workspace")
+        raise RuntimeError(localized(
+            "Cyrene project tools require an active Plugin workspace.",
+            "Cyrene 项目工具需要活动的插件工作区。",
+        ))
     return Path(execution.context.workspace).expanduser().resolve()
 
 
@@ -74,7 +83,10 @@ def _chat_application_port() -> Any:
     host = active_plugin_application_host()
     port = host.service("workbench_chat") if host is not None else None
     if port is None:
-        raise RuntimeError("Workbench Chat application service is not configured")
+        raise RuntimeError(localized(
+            "The Workbench Chat application service is not configured.",
+            "尚未配置工作台对话应用服务。",
+        ))
     return port
 
 
@@ -87,7 +99,16 @@ def _short_id(prefix: str) -> str:
 
 
 def _new_chat_record(project_id: str, title: str, model: str) -> dict[str, Any]:
-    from cyrene.runtime.settings_store import is_soul_active, is_workspace_active
+    from agent.plugin import active_plugin_service
+
+    composer = active_plugin_service("composer_context")
+    defaults = getattr(composer, "default_input_context", None)
+    if not callable(defaults):
+        raise RuntimeError(localized(
+            "The required composer_context Plugin is unavailable.",
+            "所需的 composer_context 插件不可用。",
+        ))
+    input_context = defaults()
 
     now = _utc_now_iso()
     normalized_title = str(title or "").strip()
@@ -95,7 +116,7 @@ def _new_chat_record(project_id: str, title: str, model: str) -> dict[str, Any]:
         "id": _short_id("wbchat"),
         "projectId": str(project_id or ""),
         "kind": "chat",
-        "title": normalized_title[:60] or "新对话",
+        "title": normalized_title[:60] or localized("New chat", "新对话"),
         "titleLocked": bool(normalized_title),
         "status": "idle",
         "model": str(model or ""),
@@ -104,8 +125,10 @@ def _new_chat_record(project_id: str, title: str, model: str) -> dict[str, Any]:
         "updatedAt": now,
         "messages": [],
         "completedTurnCount": 0,
-        "soulActive": bool(is_soul_active()),
-        "workspaceActive": bool(is_workspace_active()),
+        "soulActive": bool(input_context["soulActive"]),
+        "workspaceActive": bool(input_context["workspaceActive"]),
+        "remoteDeviceIds": list(input_context["remoteDeviceIds"]),
+        "contextActivations": dict(input_context["contextActivations"]),
     }
 
 
@@ -180,7 +203,7 @@ def read_project(project_id: str) -> dict[str, Any]:
         project_repository._read_workbench_store(), project_id
     )
     if not project:
-        raise LookupError("project not found")
+        raise LookupError(localized("Project not found.", "未找到项目。"))
     return deepcopy(project)
 
 
@@ -194,11 +217,16 @@ def create_project(name: str, *, description: str = "", workspace_path: str = ""
         target = root / target
     target = target.resolve(strict=False)
     if not target.is_relative_to(root):
-        raise ValueError("agent-created project workspaces must stay inside the active workspace")
+        raise ValueError(localized(
+            "Agent-created project workspaces must stay inside the active workspace.",
+            "智能体创建的项目工作区必须位于当前活动工作区内。",
+        ))
     target.mkdir(parents=True, exist_ok=True)
-    project_name = str(name or target.name or "New Project").strip()[:120]
+    project_name = str(name or target.name or localized(
+        "New project", "新项目"
+    )).strip()[:120]
     if not project_name:
-        raise ValueError("project name is required")
+        raise ValueError(localized("Project name is required.", "必须提供项目名称。"))
     project = {
         "id": project_id,
         "name": project_name,
@@ -212,7 +240,16 @@ def create_project(name: str, *, description: str = "", workspace_path: str = ""
         "status": "active",
         "model": project_runtime._get_model(),
         "accountTier": "Pro",
-        "context": {"summary": str(description or f"Workspace at {target}").strip(), "stack": [], "decisions": [], "knowledgeDocumentIds": []},
+        "context": {
+            "summary": str(description or localized(
+                "Workspace at {path}",
+                "工作区位于 {path}",
+                path=target,
+            )).strip(),
+            "stack": [],
+            "decisions": [],
+            "knowledgeDocumentIds": [],
+        },
         "createdAt": now,
         "updatedAt": now,
         "sessions": [],
@@ -231,11 +268,15 @@ def update_project(project_id: str, changes: dict[str, Any]) -> dict[str, Any]:
     payload = project_repository._read_workbench_store()
     project = project_repository._workbench_find_project(payload, project_id)
     if not project:
-        raise LookupError("project not found")
+        raise LookupError(localized("Project not found.", "未找到项目。"))
     allowed = {"name", "description", "icon", "color", "status", "model"}
     unknown = sorted(set(changes) - allowed)
     if unknown:
-        raise ValueError("unsupported project field(s): " + ", ".join(unknown))
+        raise ValueError(localized(
+            "The request contains unsupported project fields: {fields}",
+            "请求包含不支持的项目字段：{fields}",
+            fields=", ".join(unknown),
+        ))
     for key, value in changes.items():
         if key in {"name", "description"}:
             value = str(value or "").strip()
@@ -254,7 +295,7 @@ async def delete_project(project_id: str) -> dict[str, Any]:
     payload = project_repository._read_workbench_store()
     project = project_repository._workbench_find_project(payload, project_id)
     if not project:
-        raise LookupError("project not found")
+        raise LookupError(localized("Project not found.", "未找到项目。"))
     session_ids = [str(item.get("id") or "") for item in project.get("sessions", []) if item.get("id")]
     chat_repository = ChatRepository(db_path)
     chat_payload = chat_repository.read()
@@ -339,7 +380,7 @@ def list_chats(project_id: str = "") -> list[dict[str, Any]]:
 def read_chat(chat_id: str) -> dict[str, Any]:
     chat = _chat_repository().get(chat_id)
     if not chat:
-        raise LookupError("chat not found")
+        raise LookupError(localized("Conversation not found.", "未找到对话。"))
     return _public_chat_full(chat)
 
 
@@ -347,7 +388,7 @@ def create_chat(project_id: str, title: str = "") -> dict[str, Any]:
     if not project_repository._workbench_find_project(
         project_repository._read_workbench_store(), project_id
     ):
-        raise LookupError("project not found")
+        raise LookupError(localized("Project not found.", "未找到项目。"))
     repository = _chat_repository()
     payload = repository.read()
     chat = _new_chat_record(
@@ -363,7 +404,7 @@ def create_chat(project_id: str, title: str = "") -> dict[str, Any]:
 def rename_chat(chat_id: str, title: str) -> dict[str, Any]:
     normalized = str(title or "").strip()[:60]
     if not normalized:
-        raise ValueError("chat title is required")
+        raise ValueError(localized("Chat title is required.", "必须提供对话标题。"))
 
     def rename(chat: dict[str, Any]) -> None:
         chat["title"] = normalized
@@ -372,7 +413,7 @@ def rename_chat(chat_id: str, title: str) -> dict[str, Any]:
 
     chat = _chat_repository().mutate_one(chat_id, rename)
     if not chat:
-        raise LookupError("chat not found")
+        raise LookupError(localized("Conversation not found.", "未找到对话。"))
     return _public_chat_full(chat)
 
 
@@ -404,7 +445,10 @@ async def compact_chat(chat_id: str) -> dict[str, Any]:
         completed_turn_count=max(0, int(chat.get("completedTurnCount") or 0)),
     )
     if _chat_application_port().run_manager.get(chat_id) is not None:
-        raise ValueError("chat is currently running")
+        raise ValueError(localized(
+            "The conversation is currently running.",
+            "对话当前正在运行。",
+        ))
     return await ConversationRuntime(db_path).compact(
         compact_config,
         context_limit=project_runtime._ctx_limit_for_model(model) or 128_000,
@@ -416,7 +460,7 @@ async def delete_chat(chat_id: str) -> dict[str, Any]:
     payload = repository.read()
     chat = repository.find(payload, chat_id)
     if not chat:
-        raise LookupError("chat not found")
+        raise LookupError(localized("Conversation not found.", "未找到对话。"))
     removed = {chat_id, *[
         str(item.get("id") or "") for item in payload.get("chats", [])
         if str(item.get("kind") or "") == "side-agent" and str(item.get("parentChatId") or "") == chat_id
@@ -433,14 +477,17 @@ async def fork_chat(chat_id: str, message_id: str, content: str) -> dict[str, An
     payload = repository.read()
     source = repository.find(payload, chat_id)
     if not source:
-        raise LookupError("chat not found")
+        raise LookupError(localized("Conversation not found.", "未找到对话。"))
     messages = source.get("messages") if isinstance(source.get("messages"), list) else []
     index = next((i for i, item in enumerate(messages) if str(item.get("id") or "") == message_id), -1)
     if index < 0 or str(messages[index].get("role") or "") != "user":
-        raise ValueError("fork requires an existing user message")
+        raise ValueError(localized(
+            "Forking requires an existing user message.",
+            "分叉对话需要选择一条已有的用户消息。",
+        ))
     text = str(content or "").strip()
     if not text:
-        raise ValueError("fork content is required")
+        raise ValueError(localized("Fork content is required.", "必须提供分叉内容。"))
     forked = _new_chat_record(
         str(source.get("projectId") or ""),
         str(source.get("title") or ""),
@@ -485,7 +532,7 @@ def list_chat_groups(project_id: str) -> dict[str, Any]:
     if not project_repository._workbench_find_project(
         project_repository._read_workbench_store(), project_id
     ):
-        raise LookupError("project not found")
+        raise LookupError(localized("Project not found.", "未找到项目。"))
     from cyrene.workbench import chat_groups
     return chat_groups.get_project_groups(project_id)
 
@@ -511,37 +558,51 @@ async def manage_chat_group(
         str(item.get("id") or "") for item in list_chats(project_id)
     }
     if any(item not in valid_chat_ids for item in requested_ids):
-        raise ValueError("chat group contains an unknown chat")
+        raise ValueError(localized(
+            "The chat group contains an unknown conversation.",
+            "对话组中包含未知对话。",
+        ))
 
     if normalized_operation == "group":
         if len(requested_ids) < 2:
-            raise ValueError("group requires at least two chats")
+            raise ValueError(localized(
+                "A group requires at least two conversations.",
+                "对话组至少需要包含两个对话。",
+            ))
         for group in current:
             group["chatIds"] = [item for item in group.get("chatIds", []) if str(item) not in requested_ids]
         current = [group for group in current if len(group.get("chatIds", [])) >= 2]
         current.append({
             "id": target_group_id,
-            "title": str(title or "New chat group").strip()[:60] or "New chat group",
+            "title": str(title or localized(
+                "New chat group", "新对话组"
+            )).strip()[:60] or localized("New chat group", "新对话组"),
             "titleLocked": bool(str(title or "").strip()),
             "chatIds": requested_ids,
         })
     elif normalized_operation == "ungroup":
         if not target_group_id:
-            raise ValueError("group_id is required")
+            raise ValueError(localized("group_id is required.", "必须提供 group_id。"))
         if not any(str(group.get("id") or "") == target_group_id for group in current):
-            raise LookupError("chat group not found")
+            raise LookupError(localized("Chat group not found.", "未找到对话组。"))
         current = [group for group in current if str(group.get("id") or "") != target_group_id]
     elif normalized_operation == "rename_group":
         normalized_title = str(title or "").strip()[:60]
         if not target_group_id or not normalized_title:
-            raise ValueError("group_id and title are required")
+            raise ValueError(localized(
+                "group_id and title are required.",
+                "必须提供 group_id 和标题。",
+            ))
         target = next((group for group in current if str(group.get("id") or "") == target_group_id), None)
         if target is None:
-            raise LookupError("chat group not found")
+            raise LookupError(localized("Chat group not found.", "未找到对话组。"))
         target["title"] = normalized_title
         target["titleLocked"] = True
     else:
-        raise ValueError("unsupported chat group operation")
+        raise ValueError(localized(
+            "Unsupported chat group operation.",
+            "不支持此对话组操作。",
+        ))
 
     from cyrene.workbench import chat_groups
     return await chat_groups.replace_project_groups(
@@ -576,13 +637,22 @@ async def dispatch_session_message(
     origin_id = str(origin_session_id or "").strip()
     text = str(message or "").strip()
     if kind not in {"chat", "task"}:
-        raise ValueError("current composer is not a supported session")
+        raise ValueError(localized(
+            "The current composer is not a supported session.",
+            "当前输入区不属于受支持的会话。",
+        ))
     if not target_id or not text:
-        raise ValueError("target session and message are required")
+        raise ValueError(localized(
+            "Target session and message are required.",
+            "必须提供目标会话和消息。",
+        ))
     if len(text) > 20_000:
-        raise ValueError("session message is too long")
+        raise ValueError(localized("The session message is too long.", "会话消息过长。"))
     if target_id == origin_id:
-        raise ValueError("an agent cannot dispatch a second run into its own active session")
+        raise ValueError(localized(
+            "An agent cannot dispatch a second run into its own active session.",
+            "智能体不能向自身的活动会话再次分派运行。",
+        ))
     bot, db_path = _plugin_host_values()
     if kind == "chat":
         outcome = await _chat_application_port().dispatch_agent_message(
@@ -591,7 +661,10 @@ async def dispatch_session_message(
             origin_session_id=origin_id,
         )
         if outcome.get("status") not in {"started", "guided"}:
-            raise ValueError(f"target chat is {outcome.get('status') or 'unavailable'}")
+            raise ValueError(localized(
+                "The target conversation is unavailable.",
+                "目标对话不可用。",
+            ))
         return outcome
 
     from agent.workbench.task_runtime import TaskAgentRuntime
@@ -599,13 +672,19 @@ async def dispatch_session_message(
 
     coordinator = task_runs.coordinator_for(db_path)
     if task_runs.is_task_run_active(db_path, target_id):
-        raise ValueError("target task already has a running agent")
+        raise ValueError(localized(
+            "The target task already has a running agent.",
+            "目标任务已有智能体正在运行。",
+        ))
     payload = project_repository._read_workbench_store()
     project, session = project_repository._workbench_find_session(payload, target_id)
     if not project or not session:
-        raise LookupError("task session not found")
+        raise LookupError(localized("Task session not found.", "未找到任务会话。"))
     if session.get("pendingQuestion"):
-        raise ValueError("target task is waiting for a user or delegated answer")
+        raise ValueError(localized(
+            "The target task is waiting for a user or delegated answer.",
+            "目标任务正在等待用户或委派回复。",
+        ))
     run_id = project_runtime._short_id("run")
     request_id = (
         f"agent-session:{origin_id}:{target_id}:"
@@ -621,7 +700,10 @@ async def dispatch_session_message(
         metadata={"origin_session_id": origin_id},
     )
     if lease is None:
-        raise ValueError("target task already has a running agent")
+        raise ValueError(localized(
+            "The target task already has a running agent.",
+            "目标任务已有智能体正在运行。",
+        ))
     if not task_runs.begin_task_run(
         target_id,
         run_id,
@@ -636,13 +718,13 @@ async def dispatch_session_message(
         },
     ):
         coordinator.release(lease)
-        raise LookupError("task session not found")
+        raise LookupError(localized("Task session not found.", "未找到任务会话。"))
 
     payload = project_repository._read_workbench_store()
     project, session = project_repository._workbench_find_session(payload, target_id)
     if not project or not session:
         coordinator.release(lease)
-        raise LookupError("task session not found")
+        raise LookupError(localized("Task session not found.", "未找到任务会话。"))
     started_at = project_runtime._utc_now_iso()
     instruction_event = {
         "id": project_runtime._short_id("event"),
@@ -785,16 +867,28 @@ async def dispatch_session_message(
                 target_id,
                 run_id,
                 status="cancelled",
-                error="Task instruction was cancelled.",
+                error=localized(
+                    "The task instruction was cancelled.",
+                    "任务指令已取消。",
+                ),
                 termination_reason=str(lease.termination_reason or "user_interrupted"),
             )
             raise
         except Exception as exc:
+            logger.exception(
+                "Delegated task instruction failed [session=%s run=%s]",
+                target_id,
+                run_id,
+            )
+            safe_error = localized(
+                "The delegated task instruction failed.",
+                "委派的任务指令执行失败。",
+            )
             task_runs.finish_task_run_if_open(
                 target_id,
                 run_id,
                 status="failed",
-                error=str(exc),
+                error=safe_error,
             )
             fresh_payload = project_repository._read_workbench_store()
             fresh_project, fresh_session = project_repository._workbench_find_session(
@@ -808,7 +902,8 @@ async def dispatch_session_message(
                     "type": "AgentResponseErrorEvent",
                     "runId": run_id,
                     "createdAt": fresh_session["updatedAt"],
-                    "body": str(exc)[:500],
+                    "body": safe_error,
+                    "code": "delegated_task_run_failed",
                     "agentOriginated": True,
                 })
                 fresh_project["updatedAt"] = fresh_session["updatedAt"]
@@ -825,7 +920,10 @@ async def dispatch_session_message(
     if not coordinator.attach_task(lease, task):
         task.cancel()
         coordinator.release(lease)
-        raise ValueError("target task run could not be attached")
+        raise ValueError(localized(
+            "The target task run could not be started.",
+            "无法启动目标任务运行。",
+        ))
     _track_background_session_task(task)
     return {"status": "started", "session_id": target_id, "run_id": run_id}
 

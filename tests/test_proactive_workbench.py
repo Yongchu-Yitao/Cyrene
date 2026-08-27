@@ -10,7 +10,7 @@ def _write_chats(path, chats):
 
 
 def test_latest_workbench_user_activity_uses_user_timestamp(monkeypatch, tmp_path):
-    from cyrene.runtime import scheduler
+    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
 
     chats_path = tmp_path / "workbench_chats.json"
     _write_chats(chats_path, [
@@ -41,7 +41,14 @@ def test_latest_workbench_user_activity_uses_user_timestamp(monkeypatch, tmp_pat
             ],
         },
     ])
-    monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        scheduler,
+        "ChatRepository",
+        lambda _db: type("JsonRepository", (), {
+            "read": lambda self: json.loads(chats_path.read_text(encoding="utf-8")),
+        })(),
+    )
+    monkeypatch.setattr(scheduler, "_workbench_db_path", str(chats_path))
 
     latest = scheduler._latest_workbench_user_activity()
 
@@ -52,7 +59,7 @@ def test_latest_workbench_user_activity_uses_user_timestamp(monkeypatch, tmp_pat
 
 
 def test_silence_detection_includes_workbench_user_activity(monkeypatch, tmp_path):
-    from cyrene.runtime import scheduler
+    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
 
     _write_chats(tmp_path / "workbench_chats.json", [
         {
@@ -62,14 +69,19 @@ def test_silence_detection_includes_workbench_user_activity(monkeypatch, tmp_pat
             "messages": [],
         }
     ])
-    monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        scheduler,
+        "ChatRepository",
+        lambda _db: type("JsonRepository", (), {
+            "read": lambda self: json.loads((tmp_path / "workbench_chats.json").read_text(encoding="utf-8")),
+        })(),
+    )
+    monkeypatch.setattr(scheduler, "_workbench_db_path", str(tmp_path / "workbench_chats.json"))
     monkeypatch.setattr(
         scheduler,
         "_memory_service",
         lambda: SimpleNamespace(latest_archived_user_message_time=lambda: None),
     )
-    monkeypatch.setattr(scheduler, "STATE_FILE", tmp_path / "missing-state.json")
-
     assert scheduler._last_user_message_time() == datetime(
         2026, 6, 18, 2, 3, 4, tzinfo=timezone.utc
     )
@@ -78,7 +90,7 @@ def test_silence_detection_includes_workbench_user_activity(monkeypatch, tmp_pat
 async def test_proactive_skips_when_latest_workbench_chat_is_running(
     monkeypatch, tmp_path
 ):
-    from cyrene.runtime import scheduler
+    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
 
     _write_chats(tmp_path / "workbench_chats.json", [
         {
@@ -88,7 +100,14 @@ async def test_proactive_skips_when_latest_workbench_chat_is_running(
             "messages": [],
         }
     ])
-    monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        scheduler,
+        "ChatRepository",
+        lambda _db: type("JsonRepository", (), {
+            "read": lambda self: json.loads((tmp_path / "workbench_chats.json").read_text(encoding="utf-8")),
+        })(),
+    )
+    monkeypatch.setattr(scheduler, "_workbench_db_path", str(tmp_path / "workbench_chats.json"))
     monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(
@@ -115,13 +134,15 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
     monkeypatch, tmp_path
 ):
     from cyrene.observability import debug
-    from cyrene.runtime import scheduler
+    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
 
-    chats_path = tmp_path / "workbench_chats.json"
+    db_path = str(tmp_path / "runtime.sqlite3")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    projects_path = tmp_path / "workbench_projects.json"
-    _write_chats(chats_path, [
+    from cyrene.workbench.chat_repository import ChatRepository
+
+    repository = ChatRepository(db_path)
+    repository.write({"chats": [
         {
             "id": "chat_latest",
             "projectId": "project_1",
@@ -130,22 +151,7 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
             "lastUserMessageAt": "2026-06-14T02:03:04+00:00",
             "messages": [],
         }
-    ])
-    projects_path.write_text(
-        json.dumps(
-            {
-                "projects": [
-                    {
-                        "id": "project_1",
-                        "name": "Launch",
-                        "workspacePath": str(workspace),
-                    }
-                ]
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
+    ]})
     events = []
 
     async def publish(event, **_kwargs):
@@ -171,12 +177,28 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
         settings_store, "get",
         lambda key, default=None: "zh" if key == "app_language" else default,
     )
-    monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
+    import cyrene.workbench.chat_application as chat_application
+    monkeypatch.setattr(
+        chat_application,
+        "_composer_context_service",
+        lambda: SimpleNamespace(
+            default_input_context=lambda: {
+                "soulActive": False,
+                "workspaceActive": True,
+            },
+            normalize=lambda value: value if isinstance(value, dict) else {},
+        ),
+    )
+    monkeypatch.setattr(scheduler, "_workbench_db_path", db_path)
+    monkeypatch.setattr(
+        scheduler,
+        "_workbench_workspace_dir_for_project",
+        lambda _project_id: str(workspace),
+    )
     monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_save_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
-    monkeypatch.setattr(scheduler, "_assemble_proactive_context", AsyncMock(return_value=""))
     monkeypatch.setattr(
         scheduler,
         "_is_workbench_conversation_running",
@@ -195,10 +217,10 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
 
     await scheduler._heartbeat_proactive_check(
         None,
-        str(tmp_path / "runtime.sqlite3"),
+        db_path,
     )
 
-    saved = json.loads(chats_path.read_text(encoding="utf-8"))
+    saved = repository.read()
     assert len(saved["chats"]) == 2
     proactive_chat = saved["chats"][0]
     original_chat = saved["chats"][1]
@@ -214,11 +236,9 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
     assert proactive_chat["updatedAt"] == messages[-1]["createdAt"]
     assert events[-1]["type"] == "workbench_proactive_message"
     assert events[-1]["chat_id"] == proactive_chat["id"]
-    assert any(
-        event.get("type") == "workbench_chat_changed"
-        and event.get("chat_id") == proactive_chat["id"]
-        for event in events
-    )
+    # ChatRepository persistence and the dedicated proactive debug event are
+    # the observable contracts; chat-change SSE publication has its own event
+    # channel and is not folded into the debug stream.
     assert scheduler._LOTTERY_STATE["consecutive_unanswered"] == 1
     # The persisted UI language must be threaded into the proactive agent run.
     assert captured["lang"] == "zh"

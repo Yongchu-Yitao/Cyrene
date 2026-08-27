@@ -14,6 +14,7 @@ html[data-theme="dark"] .workbench-shell {
   /* #1a1a1a at 76% resolves to roughly the sampled #181818 over the default
      canvas while still transmitting enough backdrop for a glass material. */
   --wb-conversation-surface: color-mix(in srgb, #1a1a1a 76%, transparent);
+  --wb-composer-surface: color-mix(in srgb, #18191d 76%, transparent);
   --wb-row-hover-bg: color-mix(in srgb, var(--wb-accent) 8%, #18191e);
   --wb-active-bg: color-mix(in srgb, var(--wb-accent) 28%, #18191e);
   --wb-active-border: color-mix(in srgb, var(--wb-accent) 48%, transparent);
@@ -407,18 +408,6 @@ html[data-theme="light"] .wb-tool-list .mono {
   border-radius: 999px;
   background: color-mix(in srgb, var(--wb-muted) 24%, transparent);
   background-clip: padding-box;
-}
-
-/* MCP Provider settings use the surrounding settings pane as their one
-   scrolling surface. */
-.settings-overlay-content[data-settings-active-tab="mcp-providers"] {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-.settings-overlay-content[data-settings-active-tab="mcp-providers"]::-webkit-scrollbar {
-  display: none;
-  width: 0;
-  height: 0;
 }
 
 @keyframes settings-content-in {

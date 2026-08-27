@@ -11,13 +11,6 @@ from typing import Any
 
 from agent.plugin import active_plugin_service
 from cyrene.config import DATA_DIR, DB_PATH
-from cyrene.runtime.model_configuration import (
-    candidates_for_route,
-    get_model_configuration,
-    save_model_configuration,
-)
-from cyrene.runtime.setup import mark_setup_done, normalize_custom_soul_content
-from cyrene.runtime.model_probe_service import ModelProbeService
 
 logger = logging.getLogger(__name__)
 
@@ -27,18 +20,6 @@ def _memory_service():
     if service is None:
         raise RuntimeError("memory Plugin is not available")
     return service
-
-
-def get_default_soul_content() -> str:
-    return _memory_service().default_soul()
-
-
-def get_soul_path() -> Path:
-    return _memory_service().soul_path()
-
-
-def read_soul() -> str:
-    return _memory_service().read_soul()
 
 
 def _now_iso() -> str:
@@ -56,19 +37,12 @@ def _setup_flag_path() -> Path:
 def _normalize_state(raw: Any) -> dict[str, Any]:
     state = raw if isinstance(raw, dict) else {}
     llm = state.get("llm") if isinstance(state.get("llm"), dict) else {}
-    personality = state.get("personality") if isinstance(state.get("personality"), dict) else {}
     return {
         "version": 1,
         "completed_at": str(state.get("completed_at") or "").strip(),
         "llm": {
             "completed_at": str(llm.get("completed_at") or "").strip(),
             "source": str(llm.get("source") or "").strip(),
-        },
-        "personality": {
-            "completed_at": str(personality.get("completed_at") or "").strip(),
-            "source": str(personality.get("source") or "").strip(),
-            "mode": str(personality.get("mode") or "").strip(),
-            "label": str(personality.get("label") or "").strip(),
         },
     }
 
@@ -106,7 +80,8 @@ def _primary_model() -> dict[str, Any]:
     """Return the canonical primary-route model, including its secret."""
 
     try:
-        candidates = candidates_for_route("primary")
+        service = active_plugin_service("model_configuration")
+        candidates = service.candidates_for_route("primary") if service is not None else []
     except Exception:
         logger.warning("Failed to resolve the primary model route", exc_info=True)
         return {}
@@ -123,14 +98,43 @@ def _provider_id(candidate: dict[str, Any]) -> str:
     return str(preset or candidate.get("adapter") or candidate.get("provider") or "").strip()
 
 
-def _is_default_soul(content: str) -> bool:
-    return content.strip() == get_default_soul_content().strip()
+def _personality_status() -> dict[str, Any]:
+    """Return an optional onboarding step contributed by the Soul Plugin."""
 
-
-def _personality_inferred_configured(content: str) -> bool:
-    if _setup_flag_path().exists():
-        return True
-    return bool(content.strip()) and not _is_default_soul(content)
+    service = active_plugin_service("soul_onboarding")
+    status = getattr(service, "status", None)
+    if not callable(status):
+        return {
+            "available": False,
+            "configured": False,
+            "completedAt": "",
+            "mode": "",
+            "label": "",
+            "isDefaultSoul": False,
+            "path": "",
+            "currentContent": "",
+            "source": "",
+            "pristine": True,
+        }
+    try:
+        value = status()
+    except Exception:
+        logger.warning("Optional Soul onboarding status is unavailable", exc_info=True)
+        return {
+            "available": False,
+            "configured": False,
+            "completedAt": "",
+            "mode": "",
+            "label": "",
+            "isDefaultSoul": False,
+            "path": "",
+            "currentContent": "",
+            "source": "",
+            "pristine": True,
+        }
+    if not isinstance(value, dict):
+        raise RuntimeError("Soul onboarding contribution returned invalid status")
+    return {"available": True, **value}
 
 
 def _has_runtime_activity() -> bool:
@@ -170,72 +174,70 @@ def _has_existing_data() -> bool:
 
 
 def _is_absolute_fresh_start(
-    soul_content: str,
     *,
+    personality: dict[str, Any] | None = None,
     existing_data: bool | None = None,
 ) -> bool:
-    """A pristine first run: no onboarding markers or primary model, default/empty
-    SOUL.md, and no pre-existing user data of any kind."""
+    """A pristine first run with no model, activity, or configured Plugin step."""
+
+    personality = personality or _personality_status()
     return (
         not _onboarding_state_path().exists()
         and not _setup_flag_path().exists()
         and not _model_configured()
-        and (not soul_content.strip() or _is_default_soul(soul_content))
+        and (not personality["available"] or bool(personality.get("pristine", True)))
         and not (_has_existing_data() if existing_data is None else existing_data)
     )
 
 
-def _merge_inferred_state(state: dict[str, Any]) -> tuple[dict[str, Any], str]:
+def _merge_inferred_state(
+    state: dict[str, Any],
+    personality: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     merged = _normalize_state(state)
-    soul_content = read_soul()
-    dirty = False
-
     llm_configured = _model_configured()
-
-    personality_configured = bool(merged["personality"]["completed_at"]) or _personality_inferred_configured(soul_content)
-    if not merged["personality"]["completed_at"] and _personality_inferred_configured(soul_content):
-        merged["personality"]["completed_at"] = _now_iso()
-        merged["personality"]["source"] = "setup-flag" if _setup_flag_path().exists() else "soul"
-        merged["personality"]["mode"] = "custom" if soul_content.strip() and not _is_default_soul(soul_content) else "default"
-        dirty = True
-
-    if llm_configured and personality_configured and not merged["completed_at"]:
+    personality = personality or _personality_status()
+    personality_satisfied = not personality["available"] or bool(
+        personality.get("configured")
+    )
+    if llm_configured and personality_satisfied and not merged["completed_at"]:
         merged["completed_at"] = _now_iso()
-        dirty = True
-
-    if dirty:
         merged = save_onboarding_state(merged)
-    return merged, soul_content
+    return merged
 
 
 def get_onboarding_status() -> dict[str, Any]:
-    state, soul_content = _merge_inferred_state(load_onboarding_state())
+    personality = _personality_status()
+    state = _merge_inferred_state(load_onboarding_state(), personality)
     primary = _primary_model()
     llm_configured = bool(primary)
-    personality_configured = bool(state["personality"]["completed_at"]) or _personality_inferred_configured(soul_content)
-    both_configured = llm_configured and personality_configured
+    personality_available = bool(personality.get("available"))
+    personality_configured = bool(personality.get("configured"))
+    all_configured = llm_configured and (
+        not personality_available or personality_configured
+    )
 
     existing_data = _has_existing_data()
     fresh_start = _is_absolute_fresh_start(
-        soul_content,
+        personality=personality,
         existing_data=existing_data,
     )
     # The wizard is mid-flow only when a step was completed through the wizard
     # and setup isn't finished — e.g. the model step is saved but personality
     # selection is still pending.
-    wizard_in_progress = not both_configured and (
+    wizard_in_progress = not all_configured and (
         state["llm"].get("source") == "wizard"
-        or state["personality"].get("source") == "wizard"
+        or personality.get("source") == "wizard"
     )
     # Only take over with first-run onboarding for a genuine fresh start, or to
     # finish a wizard already in progress. An existing install — any prior data
     # or LLM config — is never forced back into onboarding even if its SOUL.md is
     # still the default; only a full data reset returns it to a fresh start.
-    needs_onboarding = not both_configured and (fresh_start or wizard_in_progress)
+    needs_onboarding = not all_configured and (fresh_start or wizard_in_progress)
     active_step = "done"
     if not llm_configured:
         active_step = "llm"
-    elif not personality_configured:
+    elif personality_available and not personality_configured:
         active_step = "personality"
 
     return {
@@ -253,28 +255,26 @@ def get_onboarding_status() -> dict[str, Any]:
             "reasoningEffort": str(primary.get("reasoning_effort") or ""),
             "completedAt": state["llm"].get("completed_at", ""),
         },
-        "personality": {
-            "configured": personality_configured,
-            "completedAt": state["personality"].get("completed_at", ""),
-            "mode": state["personality"].get("mode", ""),
-            "label": state["personality"].get("label", ""),
-            "isDefaultSoul": bool(soul_content.strip()) and _is_default_soul(soul_content),
-            "path": str(get_soul_path()),
-            "currentContent": soul_content,
-        },
+        "personality": personality,
     }
 
 
 async def test_llm_connection(api_key: str, base_url: str, model: str) -> str:
     """Public onboarding API for a non-persisting text connectivity probe."""
-    return await ModelProbeService().test_connection(api_key, base_url, model)
+    service = active_plugin_service("model_probe")
+    if service is None:
+        raise RuntimeError("model Plugin is not available")
+    return await service.test_connection(api_key, base_url, model)
 
 
 async def test_llm_vision_capability(
     api_key: str, base_url: str, model: str
 ) -> dict[str, Any]:
     """Public onboarding API for a non-blocking image capability probe."""
-    return await ModelProbeService().probe_vision(api_key, base_url, model)
+    service = active_plugin_service("model_probe")
+    if service is None:
+        raise RuntimeError("model Plugin is not available")
+    return await service.probe_vision(api_key, base_url, model)
 
 
 async def save_and_test_llm_setup(api_key: str, base_url: str, model: str) -> dict[str, Any]:
@@ -340,16 +340,17 @@ async def save_codex_oauth_setup(
     reasoning_effort: str = "",
 ) -> dict[str, Any]:
     """Persist a logged-in Codex model as the primary onboarding candidate."""
-    from cyrene.model_runtime.codex_provider import (
-        CODEX_BASE_URL,
-        get_codex_provider,
-    )
+    from agent.plugin import active_plugin_service
+
+    model_service = active_plugin_service("model_configuration")
+    if model_service is None:
+        raise RuntimeError("model Plugin is not available")
     clean_model = model.strip()
     clean_effort = reasoning_effort.strip().lower()
     if not clean_model:
         raise ValueError("Codex model is required")
 
-    provider = get_codex_provider()
+    provider = model_service.oauth_provider()
     account_result, available_items = await asyncio.gather(
         provider.account(),
         provider.models(),
@@ -397,7 +398,7 @@ async def save_codex_oauth_setup(
             "adapter": "codex_oauth",
             "enabled": True,
             "use_proxy": False,
-            "base_url": CODEX_BASE_URL,
+            "base_url": model_service.oauth_base_url(),
             "api_key": "",
             "options": {"provider_preset": "codex_oauth"},
         },
@@ -438,7 +439,10 @@ def _save_primary_model(
 ) -> None:
     """Upsert the onboarding model directly into the canonical model graph."""
 
-    configuration = get_model_configuration()
+    model_service = active_plugin_service("model_configuration")
+    if model_service is None:
+        raise RuntimeError("model Plugin is not available")
+    configuration = model_service.get_model_configuration()
     connections = [dict(item) for item in configuration.get("connections") or []]
     profiles = [dict(item) for item in configuration.get("profiles") or []]
 
@@ -471,49 +475,9 @@ def _save_primary_model(
     # Onboarding selects one definitive primary Provider. Cross-provider
     # fallback is not implicit in the new Plugin protocol.
     routes["primary"] = [profile_id]
-    save_model_configuration({
+    model_service.save_model_configuration({
         "version": configuration.get("version", 1),
         "connections": connections,
         "profiles": profiles,
         "routes": routes,
     })
-
-
-async def save_personality_setup(mode: str, name: str = "", content: str = "") -> dict[str, Any]:
-    clean_mode = mode.strip().lower()
-    if clean_mode == "default":
-        soul_content = get_default_soul_content()
-        label = "Default persona"
-    elif clean_mode == "custom":
-        soul_content = normalize_custom_soul_content(content)
-        label = "Custom SOUL.md"
-    elif clean_mode == "name":
-        clean_name = name.strip()
-        if not clean_name:
-            raise ValueError("Personality name is required")
-        from cyrene.runtime.setup import create_soul_profile_from_name
-
-        soul_content = await create_soul_profile_from_name(clean_name)
-        label = clean_name
-    else:
-        raise ValueError("Unsupported personality mode")
-
-    if clean_mode != "name":
-        _memory_service().write_soul(soul_content)
-
-    mark_setup_done()
-
-    state = load_onboarding_state()
-    state["personality"] = {
-        "completed_at": _now_iso(),
-        "source": "wizard",
-        "mode": clean_mode,
-        "label": label,
-    }
-    save_onboarding_state(state)
-
-    return {
-        "ok": True,
-        "soulContent": soul_content,
-        "onboarding": get_onboarding_status(),
-    }

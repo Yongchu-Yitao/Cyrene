@@ -15,6 +15,7 @@ from agent.workbench.task_runtime import (
     TaskAgentRuntimeError,
     persist_session_model_preference,
 )
+from cyrene.localization import app_language, localized, localized_plural
 from cyrene.runtime.attachments import build_public_attachment_payload
 
 
@@ -111,10 +112,14 @@ class TaskExecutionApplicationService:
         selected_key = requested_model or str(session.get("modelSelectionId") or "").strip()
         if not selected_key:
             return None
-        from cyrene.runtime.model_configuration import selectable_model_candidates
-        selected_candidate = next((candidate for candidate in selectable_model_candidates() if selected_key in {str(candidate.get("id") or "").strip(), str(candidate.get("model") or "").strip(), str(candidate.get("name") or "").strip()}), None)
+        from agent.plugin import active_plugin_service
+        service = active_plugin_service("model_configuration")
+        candidates = service.selectable_model_candidates() if service is not None else []
+        selected_candidate = next((candidate for candidate in candidates if selected_key in {str(candidate.get("id") or "").strip(), str(candidate.get("model") or "").strip(), str(candidate.get("name") or "").strip()}), None)
         if selected_candidate is None:
-            return TaskExecutionResponse({"error": "configured model not found"}, 400) if requested_model else None
+            return TaskExecutionResponse({"error": localized(
+                "Configured model not found.", "未找到已配置的模型。"
+            )}, 400) if requested_model else None
         requested_effort = str(body.get("reasoningEffort") or "").strip().lower()
         selected_effort = requested_effort or str(session.get("reasoningEffort") or selected_candidate.get("reasoning_effort") or "").strip().lower()
         selected_model_id = str(selected_candidate.get("id") or selected_key).strip()
@@ -258,7 +263,10 @@ class TaskExecutionApplicationService:
         if result.pending_question is not None:
             session["pendingQuestion"] = dict(result.pending_question)
             session["status"] = "waiting_for_user"
-            return result.text or "需要你确认后才能继续。", True
+            return result.text or localized(
+                "Your confirmation is required to continue.",
+                "需要你确认后才能继续。",
+            ), True
         session.pop("pendingQuestion", None)
         return result.text, False
 
@@ -276,16 +284,21 @@ class TaskExecutionApplicationService:
                      and str(item.get('id') or '') == step_id), None)
         if not step:
             return TaskExecutionResponse(
-                {'error': '步骤不存在。', 'code': 'step_not_found'}, 404
+                {'error': localized("Step not found.", "步骤不存在。"), 'code': 'step_not_found'}, 404
             ), step_id, run_meta, True, None
         try:
             requested_revision = int(body.get('planDefinitionRevision'))
         except (TypeError, ValueError):
-            return TaskExecutionResponse({'error': 'invalid planDefinitionRevision'}, 400), step_id, run_meta, True, step
+            return TaskExecutionResponse({'error': localized(
+                "Invalid plan definition revision.", "计划定义版本无效。"
+            )}, 400), step_id, run_meta, True, step
         current_revision = int(session.get('planDefinitionRevision') or 0)
         if requested_revision != current_revision:
             return TaskExecutionResponse(
-                {'error': '计划已发生变化，请重新确认后执行。', 'code': 'stale_plan_revision'}, 409
+                {'error': localized(
+                    "The plan changed. Confirm the latest plan before running it.",
+                    "计划已发生变化，请重新确认后执行。",
+                ), 'code': 'stale_plan_revision'}, 409
             ), step_id, run_meta, True, step
         try:
             approved_revision = int(session.get('approvedPlanDefinitionRevision'))
@@ -293,16 +306,26 @@ class TaskExecutionApplicationService:
             approved_revision = -1
         if approved_revision != current_revision:
             return TaskExecutionResponse(
-                {'error': '当前计划尚未获得执行确认。', 'code': 'plan_not_approved'}, 409
+                {'error': localized(
+                    "The current plan has not been approved for execution.",
+                    "当前计划尚未获得执行确认。",
+                ), 'code': 'plan_not_approved'}, 409
             ), step_id, run_meta, True, step
         ready, unmet_ids = self.dependencies.step_dependencies_satisfied(plan, step_id)
         if not ready:
             titles = {str(item.get('id') or ''): str(item.get('title') or '')
                       for item in plan if isinstance(item, dict)}
             return TaskExecutionResponse({
-                'error': '前置步骤尚未完成：' + '、'.join(
-                    titles.get(dependency_id, dependency_id) for dependency_id in unmet_ids
-                ), 'code': 'unmet_dependencies',
+                'error': localized(
+                    "Prerequisite steps are incomplete: {steps}",
+                    "前置步骤尚未完成：{steps}",
+                    steps=(
+                        ", ".join(titles.get(dependency_id, dependency_id) for dependency_id in unmet_ids)
+                        if app_language() == "en"
+                        else "、".join(titles.get(dependency_id, dependency_id) for dependency_id in unmet_ids)
+                    ),
+                ),
+                'code': 'unmet_dependencies',
             }, 409), step_id, run_meta, True, step
         return None, step_id, run_meta, True, step
 
@@ -332,7 +355,14 @@ class TaskExecutionApplicationService:
         step['completedAt'] = finished_at
         step['updatedAt'] = finished_at
         step['currentAction'] = (
-            f'已完成，本步调用工具 {len(tool_events)} 次。' if tool_events else '已完成该步骤。'
+            localized_plural(
+                "Completed after {count} tool call.",
+                "Completed after {count} tool calls.",
+                "已完成，本步调用工具 {count} 次。",
+                count=len(tool_events),
+            )
+            if tool_events
+            else localized("Step completed.", "已完成该步骤。")
         )
         step['toolCalls'] = [
             {'tool': event['tool'], 'argsPreview': event['argsPreview']} for event in tool_events
@@ -369,11 +399,15 @@ class TaskExecutionApplicationService:
         user_input = str(body.get('input') or body.get('message') or '').strip()
         attachments, mode, command, ui_instance_id, client_request_id = self._request_fields(body)
         if not user_input and (not attachments):
-            return TaskExecutionResponse({'error': 'input is required'}, status_code=400)
+            return TaskExecutionResponse({'error': localized(
+                "Input is required.", "请输入内容。"
+            )}, status_code=400)
         payload = self.dependencies.read_store()
         project, session = self.dependencies.find_session(payload, session_id)
         if not session or not project:
-            return TaskExecutionResponse({'error': 'session not found'}, status_code=404)
+            return TaskExecutionResponse({'error': localized(
+                "Session not found.", "未找到会话。"
+            )}, status_code=404)
         model_error = self.apply_task_model_preference(session_id, body, session)
         if model_error is not None:
             return model_error
@@ -455,9 +489,18 @@ class TaskExecutionApplicationService:
         self._update_create_run_status(
             session, step, is_step_run=is_step_run, step_id=step_id, run_meta=run_meta, agent_error=agent_error, awaiting_user=awaiting_user, file_changes=file_changes, tool_events=tool_call_events, started_at=run_started_at, finished_at=finished_at,
         )
-        events = [{'id': self.dependencies.short_id('event'), 'type': 'UserMessageEvent', 'runId': run_id, 'createdAt': run_started_at, 'body': user_input or '[附件]', 'attachments': public_attachments}, *activity_events, {'id': self.dependencies.short_id('event'), 'type': 'AgentErrorEvent' if agent_error else 'AgentResponseEvent', 'runId': run_id, 'createdAt': finished_at, 'body': agent_reply}, {'id': self.dependencies.short_id('event'), 'type': 'PlanUpdatedEvent', 'runId': run_id, 'createdAt': finished_at, 'stepCount': len(session.get('plan') or [])}]
+        language = app_language()
+        events = [{'id': self.dependencies.short_id('event'), 'type': 'UserMessageEvent', 'runId': run_id, 'createdAt': run_started_at, 'body': user_input or localized('[Attachment]', '[附件]', language=language), 'attachments': public_attachments}, *activity_events, {'id': self.dependencies.short_id('event'), 'type': 'AgentErrorEvent' if agent_error else 'AgentResponseEvent', 'runId': run_id, 'createdAt': finished_at, 'body': agent_reply}, {'id': self.dependencies.short_id('event'), 'type': 'PlanUpdatedEvent', 'runId': run_id, 'createdAt': finished_at, 'stepCount': len(session.get('plan') or [])}]
         if is_step_run and (not awaiting_user) and step:
-            events.append({'id': self.dependencies.short_id('event'), 'type': 'ExecutionFailed' if agent_error else 'ExecutionFinished', 'runId': run_id, 'stepId': step_id, 'createdAt': finished_at, 'body': f"步骤「{step.get('title') or step_id}」执行失败：{agent_error.message}" if agent_error else f"步骤「{step.get('title') or step_id}」执行完成。"})
+            step_title = step.get('title') or step_id
+            events.append({'id': self.dependencies.short_id('event'), 'type': 'ExecutionFailed' if agent_error else 'ExecutionFinished', 'runId': run_id, 'stepId': step_id, 'createdAt': finished_at, 'body': localized(
+                'Step "{title}" failed: {error}',
+                '步骤「{title}」执行失败：{error}',
+                language=language, title=step_title, error=agent_error.message,
+            ) if agent_error else localized(
+                'Step "{title}" completed.', '步骤「{title}」执行完成。',
+                language=language, title=step_title,
+            )})
         run = {'id': run_id, 'taskId': session_id, 'userInput': user_input, 'agentResponse': agent_reply, 'status': 'failed' if agent_error else 'awaiting_user' if awaiting_user else 'completed', 'startedAt': run_started_at, 'endedAt': finished_at, 'contextPackId': self.dependencies.short_id('ctx'), 'events': events, 'fileChanges': file_changes, 'toolCalls': [{'tool': e['tool'], 'argsPreview': e['argsPreview']} for e in tool_call_events], 'artifacts': [], 'attachments': public_attachments, 'mode': mode, 'error': agent_error.message if agent_error else None, 'usage': dict(agent_result.usage) if agent_error is None else {}, 'model': agent_result.model if agent_error is None else '', 'modelIdentity': dict(agent_result.model_identity) if agent_error is None else {}, 'generationDurationMs': agent_result.generation_duration_ms if agent_error is None else None, 'outputTokensPerSecond': agent_result.output_tokens_per_second if agent_error is None else None}
         self.task_runs.upsert_task_run(session, run)
         session.setdefault('events', []).extend(events)
@@ -467,7 +510,29 @@ class TaskExecutionApplicationService:
         payload['activeSessionId'] = session_id
         self.dependencies.write_store(payload)
         self.finalize_host_actions_after_reply(session_id, client_request_id)
-        self.dependencies.append_notification(title='任务执行失败' if agent_error else '任务回复完成', body=f"Agent 执行任务「{session.get('title') or '未命名任务'}」失败：{agent_error.message}" if agent_error else f"Agent 已更新任务「{session.get('title') or '未命名任务'}」。", tab='comment', project_ref=project.get('id'), source='task_reply', source_label='任务', link_label=str(session.get('title') or ''), meta={'sessionId': session_id, 'runId': run_id})
+        task_title = session.get('title') or localized(
+            'Untitled task', '未命名任务', language=language
+        )
+        self.dependencies.append_notification(
+            title=localized(
+                'Task execution failed' if agent_error else 'Task reply completed',
+                '任务执行失败' if agent_error else '任务回复完成',
+                language=language,
+            ),
+            body=localized(
+                'The Agent failed while running task "{title}": {error}',
+                'Agent 执行任务「{title}」失败：{error}',
+                language=language, title=task_title, error=agent_error.message,
+            ) if agent_error else localized(
+                'The Agent updated task "{title}".',
+                'Agent 已更新任务「{title}」。',
+                language=language, title=task_title,
+            ),
+            tab='comment', project_ref=project.get('id'), source='task_reply',
+            source_label=localized('Task', '任务', language=language),
+            link_label=str(session.get('title') or ''),
+            meta={'sessionId': session_id, 'runId': run_id}, language=language,
+        )
         if agent_error is not None:
             return self.agent_run_error_response(agent_error)
         return {'ok': True, 'project': project, 'session': session, 'run': run, **payload}
@@ -481,11 +546,15 @@ class TaskExecutionApplicationService:
         ui_instance_id = str(body.get('uiInstanceId') or '').strip()
         client_request_id = str(body.get('clientRequestId') or '').strip()
         if not message and (not attachments):
-            return TaskExecutionResponse({'error': 'message is required'}, status_code=400)
+            return TaskExecutionResponse({'error': localized(
+                "Message is required.", "请输入消息。"
+            )}, status_code=400)
         payload = self.dependencies.read_store()
         project, session = self.dependencies.find_session(payload, session_id)
         if not session or not project:
-            return TaskExecutionResponse({'error': 'session not found'}, status_code=404)
+            return TaskExecutionResponse({'error': localized(
+                "Session not found.", "未找到会话。"
+            )}, status_code=404)
         model_error = self.apply_task_model_preference(session_id, body, session)
         if model_error is not None:
             return model_error
@@ -530,7 +599,8 @@ class TaskExecutionApplicationService:
         )
         await self._register_attachments(session_id, normalized_attachments)
         file_changes = self.dependencies.collect_run_file_changes(chat_tool_events, git_status_before, git_status_after, workspace_files_before, workspace_files_after, workspace_root, f'{message}\n{agent_reply}', workspace_text_before=workspace_text_before, workspace_text_after=workspace_text_after)
-        chat_events = [{'id': self.dependencies.short_id('event'), 'type': 'UserMessageEvent', 'runId': chat_run_id, 'createdAt': chat_run_start_ts, 'body': message or '[附件]'}, *chat_tool_events, {'id': self.dependencies.short_id('event'), 'type': 'AgentResponseEvent', 'runId': chat_run_id, 'createdAt': now, 'body': agent_reply}]
+        language = app_language()
+        chat_events = [{'id': self.dependencies.short_id('event'), 'type': 'UserMessageEvent', 'runId': chat_run_id, 'createdAt': chat_run_start_ts, 'body': message or localized('[Attachment]', '[附件]', language=language)}, *chat_tool_events, {'id': self.dependencies.short_id('event'), 'type': 'AgentResponseEvent', 'runId': chat_run_id, 'createdAt': now, 'body': agent_reply}]
         run = {'id': chat_run_id, 'taskId': session_id, 'userInput': message, 'agentResponse': agent_reply, 'status': 'awaiting_user' if awaiting_user else 'completed', 'startedAt': chat_run_start_ts, 'endedAt': now, 'contextPackId': self.dependencies.short_id('ctx'), 'events': chat_events, 'fileChanges': file_changes, 'toolCalls': [{'tool': event.get('tool'), 'argsPreview': event.get('argsPreview', '')} for event in chat_tool_events if isinstance(event, dict) and event.get('type') == 'ToolCallEvent'], 'artifacts': [], 'attachments': [build_public_attachment_payload(item) for item in normalized_attachments], 'mode': mode, 'error': None, 'usage': dict(agent_result.usage), 'model': agent_result.model, 'modelIdentity': dict(agent_result.model_identity), 'generationDurationMs': agent_result.generation_duration_ms, 'outputTokensPerSecond': agent_result.output_tokens_per_second}
         self.task_runs.upsert_task_run(session, run)
         session.setdefault('events', []).extend(chat_events)
@@ -538,7 +608,21 @@ class TaskExecutionApplicationService:
         payload['activeSessionId'] = session_id
         self.dependencies.write_store(payload)
         self.finalize_host_actions_after_reply(session_id, client_request_id)
-        self.dependencies.append_notification(title='Agent 回复完成', body=f"Agent 在「{session.get('title') or '对话'}」中回复了你。", tab='mention', project_ref=project.get('id'), source='chat_reply', source_label='对话', link_label=str(session.get('title') or ''), meta={'sessionId': session_id})
+        chat_title = session.get('title') or localized(
+            'Conversation', '对话', language=language
+        )
+        self.dependencies.append_notification(
+            title=localized('Agent reply completed', 'Agent 回复完成', language=language),
+            body=localized(
+                'The Agent replied to you in "{title}".',
+                'Agent 在「{title}」中回复了你。',
+                language=language, title=chat_title,
+            ),
+            tab='mention', project_ref=project.get('id'), source='chat_reply',
+            source_label=localized('Conversation', '对话', language=language),
+            link_label=str(session.get('title') or ''),
+            meta={'sessionId': session_id}, language=language,
+        )
         return {'ok': True, 'project': project, 'session': session, 'run': run, **payload}
 
     async def _maybe_generate_title(
@@ -586,10 +670,15 @@ class TaskExecutionApplicationService:
             try:
                 requested_revision = int(requested_revision)
             except (TypeError, ValueError):
-                return TaskExecutionResponse({'error': 'invalid basePlanRevision'}, 400)
+                return TaskExecutionResponse({'error': localized(
+                    "Invalid base plan revision.", "基础计划版本无效。"
+                )}, 400)
             if requested_revision != base_revision:
                 return TaskExecutionResponse(
-                    {'error': '计划已发生变化，请基于最新计划重试。', 'code': 'stale_plan_revision'}, 409
+                    {'error': localized(
+                        "The plan changed. Retry using the latest plan.",
+                        "计划已发生变化，请基于最新计划重试。",
+                    ), 'code': 'stale_plan_revision'}, 409
                 )
         steps, acceptance, from_llm, operation = await self.agent_runtime.generate_plan(
             session, project, feedback=user_input if revising else ''
@@ -597,10 +686,15 @@ class TaskExecutionApplicationService:
         payload = self.dependencies.read_store()
         latest_project, latest = self.dependencies.find_session(payload, session_id)
         if not latest or not latest_project:
-            return TaskExecutionResponse({'error': 'session not found'}, 404)
+            return TaskExecutionResponse({'error': localized(
+                "Session not found.", "未找到会话。"
+            )}, 404)
         if int(latest.get('planRevision') or 0) != base_revision:
             return TaskExecutionResponse(
-                {'error': '计划已在生成期间发生变化，请基于最新计划重试。', 'code': 'stale_plan_revision'}, 409
+                {'error': localized(
+                    "The plan changed while it was being generated. Retry using the latest plan.",
+                    "计划已在生成期间发生变化，请基于最新计划重试。",
+                ), 'code': 'stale_plan_revision'}, 409
             )
         if not (revising and not from_llm):
             latest['plan'] = steps
@@ -616,24 +710,56 @@ class TaskExecutionApplicationService:
         latest['status'] = 'planning'
         if revising:
             latest['agentReply'] = (
-                '我判断这次要求需要整体替换计划，已生成全新步骤。'
+                localized(
+                    "This request needs a replacement plan, so I generated new steps.",
+                    "我判断这次要求需要整体替换计划，已生成全新步骤。",
+                )
                 if from_llm and operation == 'replace' else
-                '我已按你的说明修订执行计划，并保留了可对应步骤的执行状态。'
-                if from_llm else '计划调整服务暂时不可用，已保留原计划。你可以稍后再让我调整。'
+                localized(
+                    "I revised the execution plan and preserved the state of matching steps.",
+                    "我已按你的说明修订执行计划，并保留了可对应步骤的执行状态。",
+                )
+                if from_llm else localized(
+                    "Plan revision is temporarily unavailable. The original plan was preserved; try again later.",
+                    "计划调整服务暂时不可用，已保留原计划。你可以稍后再让我调整。",
+                )
             )
         else:
             latest['agentReply'] = (
-                '我已结合工作区里的实际内容拆解出执行计划。你可以编辑步骤、顺序和依赖后再执行。'
+                localized(
+                    "I created an execution plan from the workspace contents. You can edit its steps, order, and dependencies before running it.",
+                    "我已结合工作区里的实际内容拆解出执行计划。你可以编辑步骤、顺序和依赖后再执行。",
+                )
                 if from_llm else
-                '计划生成服务暂时不可用，我先给出一份基础计划，你可以编辑后逐步执行，或稍后让我重新拆解。'
+                localized(
+                    "Plan generation is temporarily unavailable. I created a basic plan that you can edit and run, or regenerate later.",
+                    "计划生成服务暂时不可用，我先给出一份基础计划，你可以编辑后逐步执行，或稍后让我重新拆解。",
+                )
+            )
+        plan_action = localized(
+            "Replaced" if operation == 'replace' else "Revised",
+            "整体替换" if operation == 'replace' else "修订",
+        )
+        step_count = len(steps)
+        plan_body = localized_plural(
+            "{action} the execution plan with {count} step." if revising else "Generated an execution plan with {count} step.",
+            "{action} the execution plan with {count} steps." if revising else "Generated an execution plan with {count} steps.",
+            "{action}执行计划，共 {count} 步。"
+            if revising else "生成执行计划，共 {count} 步。",
+            action=plan_action,
+            count=step_count,
+        )
+        if not from_llm:
+            plan_body += localized(
+                " (Generation failed; kept the original plan.)"
+                if revising else " (Fallback plan.)",
+                "（生成失败，保留原计划）" if revising else "（兜底计划）",
             )
         latest['events'] = list(latest.get('events') or []) + [{
             'id': self.dependencies.short_id('event'),
             'type': 'PlanRevised' if revising else 'PlanGenerated',
             'createdAt': now,
-            'body': (f"{('整体替换' if operation == 'replace' else '修订')}执行计划，共 {len(steps)} 步。"
-                     if revising else f'生成执行计划，共 {len(steps)} 步。')
-                    + ('' if from_llm else '（生成失败，保留原计划）' if revising else '（兜底计划）'),
+            'body': plan_body,
         }]
         latest['updatedAt'] = now
         latest_project['updatedAt'] = now
@@ -653,11 +779,15 @@ class TaskExecutionApplicationService:
         client_request_id = str(body.get('clientRequestId') or '').strip()
         requested_base_revision = body.get('basePlanRevision')
         if not user_input and (not attachments):
-            return TaskExecutionResponse({'error': 'input is required'}, status_code=400)
+            return TaskExecutionResponse({'error': localized(
+                "Input is required.", "请输入内容。"
+            )}, status_code=400)
         payload = self.dependencies.read_store()
         project, session = self.dependencies.find_session(payload, session_id)
         if not session or not project:
-            return TaskExecutionResponse({'error': 'session not found'}, status_code=404)
+            return TaskExecutionResponse({'error': localized(
+                "Session not found.", "未找到会话。"
+            )}, status_code=404)
         model_error = self.apply_task_model_preference(session_id, body, session)
         if model_error is not None:
             return model_error
@@ -732,7 +862,8 @@ class TaskExecutionApplicationService:
         activity_events = tool_call_events
         file_changes = self.dependencies.collect_run_file_changes(tool_call_events, git_status_before, git_status_after, workspace_files_before, workspace_files_after, workspace_root, f'{user_input}\n{agent_reply}', workspace_text_before=workspace_text_before, workspace_text_after=workspace_text_after)
         finished_at = self.dependencies.utc_now()
-        events = [{'id': self.dependencies.short_id('event'), 'type': 'UserMessageEvent', 'runId': run_id, 'createdAt': run_start_ts, 'body': user_input or '[附件]', 'attachments': public_attachments}, *activity_events, {'id': self.dependencies.short_id('event'), 'type': 'AgentResponseEvent', 'runId': run_id, 'createdAt': finished_at, 'body': agent_reply}]
+        language = app_language()
+        events = [{'id': self.dependencies.short_id('event'), 'type': 'UserMessageEvent', 'runId': run_id, 'createdAt': run_start_ts, 'body': user_input or localized('[Attachment]', '[附件]', language=language), 'attachments': public_attachments}, *activity_events, {'id': self.dependencies.short_id('event'), 'type': 'AgentResponseEvent', 'runId': run_id, 'createdAt': finished_at, 'body': agent_reply}]
         run = {'id': run_id, 'taskId': session_id, 'userInput': user_input, 'agentResponse': agent_reply, 'status': 'awaiting_user' if awaiting_user else 'completed', 'startedAt': run_start_ts, 'endedAt': finished_at, 'contextPackId': self.dependencies.short_id('ctx'), 'events': events, 'fileChanges': file_changes, 'toolCalls': [{'tool': e['tool'], 'argsPreview': e['argsPreview']} for e in tool_call_events], 'artifacts': [], 'attachments': public_attachments, 'mode': mode, 'error': None, 'usage': dict(agent_result.usage), 'model': agent_result.model, 'modelIdentity': dict(agent_result.model_identity), 'generationDurationMs': agent_result.generation_duration_ms, 'outputTokensPerSecond': agent_result.output_tokens_per_second}
         self.task_runs.upsert_task_run(session, run)
         session.setdefault('events', []).extend(events)
@@ -742,7 +873,30 @@ class TaskExecutionApplicationService:
         payload['activeSessionId'] = session_id
         self.dependencies.write_store(payload)
         self.finalize_host_actions_after_reply(session_id, client_request_id)
-        self.dependencies.append_notification(title='Agent 回复完成', body=f"Agent 在「{session.get('title') or '任务'}」中" + ('整理并交付了任务成果，待你验收。' if finalizing else '参考验收结果继续修改了当前任务。' if repairing_acceptance else '执行了你的指令。' if kind == 'direct' else '回复了你。'), tab='comment', project_ref=project.get('id'), source='task_reply', source_label='任务', link_label=str(session.get('title') or ''), meta={'sessionId': session_id, 'runId': run_id})
+        task_title = session.get('title') or localized('Task', '任务', language=language)
+        action = localized(
+            'organized and delivered the task results for your review.' if finalizing
+            else 'continued revising the task based on the review results.' if repairing_acceptance
+            else 'carried out your instruction.' if kind == 'direct'
+            else 'replied to you.',
+            '整理并交付了任务成果，待你验收。' if finalizing
+            else '参考验收结果继续修改了当前任务。' if repairing_acceptance
+            else '执行了你的指令。' if kind == 'direct'
+            else '回复了你。',
+            language=language,
+        )
+        self.dependencies.append_notification(
+            title=localized('Agent reply completed', 'Agent 回复完成', language=language),
+            body=localized(
+                'In "{title}", the Agent {action}',
+                'Agent 在「{title}」中{action}',
+                language=language, title=task_title, action=action,
+            ),
+            tab='comment', project_ref=project.get('id'), source='task_reply',
+            source_label=localized('Task', '任务', language=language),
+            link_label=str(session.get('title') or ''),
+            meta={'sessionId': session_id, 'runId': run_id}, language=language,
+        )
         return {'ok': True, 'replyKind': 'repair' if repairing_acceptance else kind, 'project': project, 'session': session, 'run': run, **payload}
 
     def _cancelled_answer_response(
@@ -756,18 +910,32 @@ class TaskExecutionApplicationService:
         session.pop('pendingQuestion', None)
         session.pop('pendingPlanStep', None)
         session['status'] = 'paused'
-        session['agentReply'] = '回答已提交，但继续执行已被你中断。可稍后继续。'
+        language = app_language()
+        session['agentReply'] = localized(
+            "Your answer was submitted, but you interrupted the continuation. You can resume later.",
+            "回答已提交，但继续执行已被你中断。可稍后继续。",
+            language=language,
+        )
         for step in session.get('plan') or []:
             if not isinstance(step, dict) or step.get('status') != 'running':
                 continue
             step.update(status='pending', startedAt=None,
-                        currentAction='已停止，可重新执行。', updatedAt=finished_at)
+                        currentAction=localized(
+                            "Stopped; ready to run again.", "已停止，可重新执行。",
+                            language=language,
+                        ), updatedAt=finished_at)
         run_id = self.task_runs.current_task_run_id() or self.dependencies.short_id('run')
         events = [
             {'id': self.dependencies.short_id('event'), 'type': 'UserMessageEvent',
-             'runId': run_id, 'createdAt': run_started_at, 'body': f'[确认] {answer_text}'},
+             'runId': run_id, 'createdAt': run_started_at, 'body': localized(
+                 '[Confirmed] {answer}', '[确认] {answer}',
+                 language=language, answer=answer_text,
+             )},
             {'id': self.dependencies.short_id('event'), 'type': 'Paused',
-             'runId': run_id, 'createdAt': finished_at, 'body': '用户中断了回答后的继续执行。'},
+             'runId': run_id, 'createdAt': finished_at, 'body': localized(
+                 "The user interrupted execution after answering.",
+                 "用户中断了回答后的继续执行。", language=language,
+             )},
         ]
         session.setdefault('events', []).extend(events)
         run = {'id': run_id, 'taskId': session_id, 'userInput': answer_text,
@@ -801,14 +969,30 @@ class TaskExecutionApplicationService:
             target['updatedAt'] = finished_at
             if permission_denied:
                 target.update(status='pending', startedAt=None,
-                              currentAction='权限请求被拒绝，可调整命令后重新执行。')
+                              currentAction=localized(
+                                  "Permission was denied. Adjust the command before running again.",
+                                  "权限请求被拒绝，可调整命令后重新执行。",
+                              ))
                 session['status'] = 'paused'
             else:
                 target['status'] = 'completed'
                 target['completedAt'] = finished_at
                 target['currentAction'] = (
-                    f"{'用户已确认；本步完成' if goal_loop_step else '已完成'}，调用工具 {len(tool_events)} 次。"
-                    if tool_events else '用户已确认，本步骤完成。' if goal_loop_step else '已完成该步骤。'
+                    localized_plural(
+                        "User confirmed; step completed with {count} tool call."
+                        if goal_loop_step else "Completed with {count} tool call.",
+                        "User confirmed; step completed with {count} tool calls."
+                        if goal_loop_step else "Completed with {count} tool calls.",
+                        "用户已确认；本步完成，调用工具 {count} 次。"
+                        if goal_loop_step else "已完成，调用工具 {count} 次。",
+                        count=len(tool_events),
+                    )
+                    if tool_events else localized(
+                        "User confirmed; step completed."
+                        if goal_loop_step else "Step completed.",
+                        "用户已确认，本步骤完成。"
+                        if goal_loop_step else "已完成该步骤。",
+                    )
                 )
                 target['toolCalls'] = [
                     {'tool': event['tool'], 'argsPreview': event['argsPreview']} for event in tool_events
@@ -841,14 +1025,20 @@ class TaskExecutionApplicationService:
         answer_text = str(body.get('answer') or body.get('selected_option') or '').strip()
         ui_instance_id = str(body.get('uiInstanceId') or '').strip()
         if not question_id or not answer_text:
-            return TaskExecutionResponse({'error': 'question_id and answer are required'}, status_code=400)
+            return TaskExecutionResponse({'error': localized(
+                "Question ID and answer are required.", "问题 ID 和回答不能为空。"
+            )}, status_code=400)
         payload = self.dependencies.read_store()
         project, session = self.dependencies.find_session(payload, session_id)
         if not session or not project:
-            return TaskExecutionResponse({'error': 'session not found'}, status_code=404)
+            return TaskExecutionResponse({'error': localized(
+                "Session not found.", "未找到会话。"
+            )}, status_code=404)
         pending = session.get('pendingQuestion') if isinstance(session.get('pendingQuestion'), dict) else None
         if not pending or str(pending.get('id') or '') != question_id:
-            return TaskExecutionResponse({'error': 'no matching pending question'}, status_code=409)
+            return TaskExecutionResponse({'error': localized(
+                "No matching pending question.", "没有匹配的待回答问题。"
+            )}, status_code=409)
         pending_plan_step = dict(session.get('pendingPlanStep')) if isinstance(session.get('pendingPlanStep'), dict) else None
         permission_kinds = {'scope_elevation', 'write_permission_request', 'read_elevation', 'subshell_elevation', 'delete_confirmation', 'task_permission_request', 'git_commit', 'destructive_confirmation', 'external_delivery_request', 'external_upload_confirmation'}
         pending_options = pending.get('options') if isinstance(pending.get('options'), list) else []
@@ -865,7 +1055,10 @@ class TaskExecutionApplicationService:
         agent_run_id = str(pending.get('roundId') or '').strip()
         if not agent_run_id:
             return TaskExecutionResponse(
-                {'error': 'pending Agent run id is missing', 'code': 'task_answer_run_missing'},
+                {'error': localized(
+                    "The pending Agent run ID is missing.",
+                    "待继续的 Agent 运行 ID 缺失。",
+                ), 'code': 'task_answer_run_missing'},
                 status_code=409,
             )
         try:
@@ -918,7 +1111,11 @@ class TaskExecutionApplicationService:
         activity_events = tool_call_events
         file_changes = self.dependencies.collect_run_file_changes(tool_call_events, git_status_before, git_status_after, workspace_files_before, workspace_files_after, workspace_root, f'{answer_text}\n{agent_reply}', workspace_text_before=workspace_text_before, workspace_text_after=workspace_text_after)
         finished_at = self.dependencies.utc_now()
-        events = [{'id': self.dependencies.short_id('event'), 'type': 'UserMessageEvent', 'runId': run_id, 'createdAt': now, 'body': f'[确认] {answer_text}'}, *activity_events, {'id': self.dependencies.short_id('event'), 'type': 'AgentResponseEvent', 'runId': run_id, 'createdAt': finished_at, 'body': agent_reply}]
+        language = app_language()
+        events = [{'id': self.dependencies.short_id('event'), 'type': 'UserMessageEvent', 'runId': run_id, 'createdAt': now, 'body': localized(
+            '[Confirmed] {answer}', '[确认] {answer}',
+            language=language, answer=answer_text,
+        )}, *activity_events, {'id': self.dependencies.short_id('event'), 'type': 'AgentResponseEvent', 'runId': run_id, 'createdAt': finished_at, 'body': agent_reply}]
         run = {'id': run_id, 'taskId': session_id, 'userInput': answer_text, 'agentResponse': agent_reply, 'status': 'awaiting_user' if awaiting_user else 'completed', 'startedAt': run_start_ts, 'endedAt': finished_at, 'contextPackId': self.dependencies.short_id('ctx'), 'events': events, 'fileChanges': file_changes, 'toolCalls': [{'tool': e['tool'], 'argsPreview': e['argsPreview']} for e in tool_call_events], 'artifacts': [], 'attachments': [], 'mode': 'auto', 'error': None, 'usage': dict(agent_result.usage), 'model': agent_result.model, 'modelIdentity': dict(agent_result.model_identity), 'generationDurationMs': agent_result.generation_duration_ms, 'outputTokensPerSecond': agent_result.output_tokens_per_second}
         self.task_runs.upsert_task_run(session, run)
         session.setdefault('events', []).extend(events)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.plugin import PluginContext
-from agent.plugin.native_runtime import run_context_value
+from agent.plugin.native_runtime import plugin_localized, run_context_value
 
 from .definitions import get_native_tool_def
 
@@ -20,7 +20,7 @@ async def _tool_send_notification(args: dict[str, Any], context: PluginContext) 
     text = str(args.get("text") or "").strip()
     channel = str(args.get("channel") or "auto").strip()
     if not text:
-        return "No notification text provided."
+        return plugin_localized(context, "No notification text was provided.", "未提供通知内容。")
 
     source = str(run_context_value(context, "conversation_source") or "")
 
@@ -30,7 +30,12 @@ async def _tool_send_notification(args: dict[str, Any], context: PluginContext) 
     # scheduled/background notifications through the scheduler.
     if source == "webui":
         if channel in ("telegram", "wechat"):
-            return f"{channel.capitalize()} notifications are not available from WebUI."
+            return plugin_localized(
+                context,
+                "{channel} notifications are not available from the Web UI.",
+                "Web UI 不支持发送 {channel} 通知。",
+                channel=channel.capitalize(),
+            )
         if channel == "auto":
             # Only try sse — desktop/webhook are local and OK too, but "auto"
             # from WebUI should not attempt Telegram/WeChat
@@ -42,9 +47,19 @@ async def _tool_send_notification(args: dict[str, Any], context: PluginContext) 
 
     if result.get("ok"):
         channels = list(result.get("channels", {}).keys())
-        return f"Notification sent via: {', '.join(channels)}"
+        return plugin_localized(
+            context,
+            "Notification sent via: {channels}",
+            "通知已通过以下渠道发送：{channels}",
+            channels=", ".join(channels),
+        )
     errors = [f"{k}: {v.get('error', '?')}" for k, v in result.get("channels", {}).items() if not v.get("ok")]
-    return f"Notification failed: {'; '.join(errors)}"
+    return plugin_localized(
+        context,
+        "Notification failed: {errors}",
+        "通知发送失败：{errors}",
+        errors="; ".join(errors),
+    )
 
 
 handler = _tool_send_notification

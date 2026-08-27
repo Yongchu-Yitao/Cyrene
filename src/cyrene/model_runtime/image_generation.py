@@ -14,7 +14,6 @@ from PIL import Image
 
 from agent.plugin.model_catalog import candidate_provider_id
 from cyrene.config import DATA_DIR
-from cyrene.runtime.model_configuration import candidates_for_route
 
 _MAX_IMAGE_BYTES = 30 * 1024 * 1024
 _OUTPUT_FORMATS = {"png", "jpeg", "webp"}
@@ -37,7 +36,10 @@ class GeneratedImage:
 
 
 def _primary_candidate() -> dict[str, Any]:
-    models = candidates_for_route("primary")
+    from agent.plugin import active_plugin_service
+
+    service = active_plugin_service("model_configuration")
+    models = service.candidates_for_route("primary") if service is not None else []
     if not models:
         raise ImageGenerationError(
             "No primary model is configured. Configure OpenAI OAuth first."

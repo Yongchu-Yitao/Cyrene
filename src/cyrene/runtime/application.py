@@ -22,28 +22,14 @@ class ApplicationLifecycle:
         self,
         *,
         events: bool = False,
-        learning: bool = False,
         include_temp: bool = False,
         clean_temp: bool = False,
     ) -> RuntimeContext:
         return await bootstrap.initialize_runtime(
             context=self.context,
             events=events,
-            learning=learning,
             include_temp=include_temp,
             clean_temp=clean_temp,
-        )
-
-    async def start_external_services(
-        self,
-        *,
-        search: bool = True,
-        mcp: bool = True,
-    ) -> RuntimeContext:
-        return await bootstrap.start_external_services(
-            context=self.context,
-            search=search,
-            mcp=mcp,
         )
 
     def create_task(
@@ -81,7 +67,6 @@ class ApplicationLifecycle:
 
             await shutdown_background_work()
             await context.cancel_background_tasks()
-            await bootstrap.stop_external_services_async(context=context)
             await context.close_managers()
             context.mark_closed()
 

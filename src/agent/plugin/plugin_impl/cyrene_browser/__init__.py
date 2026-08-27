@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import ModuleType
 from typing import Any
 
-from agent.plugin import Plugin, PluginPack
+from agent.plugin import Plugin, PluginApplicationContext, PluginPack
 
 from .lifecycle import setup_browser_lifecycle
 
@@ -26,9 +26,14 @@ from . import (
     browser_type,
     browser_type_ref,
     browser_upload_files,
-    browser_user_events,
     browser_wait,
 )
+
+
+def application_setup(context: PluginApplicationContext) -> None:
+    from .application import setup_application
+
+    setup_application(context)
 
 
 def _plugin(module: ModuleType) -> Plugin:
@@ -70,10 +75,10 @@ plugin_pack = PluginPack(
         browser_tab_select,
         browser_tab_close,
         browser_scroll,
-        browser_user_events,
         browser_request_takeover,
     )),
     setup=setup_browser_lifecycle,
+    application_setup=application_setup,
 )
 
-__all__ = ["plugin_pack"]
+__all__ = ["application_setup", "plugin_pack"]

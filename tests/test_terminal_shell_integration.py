@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
-from cyrene.terminal.manager import TerminalManager, TerminalSession, _now_iso
-from cyrene.terminal.history import IncrementalPlainTextParser, plain_terminal_text
-from cyrene.terminal.shell_integration import (
+from agent.plugin.plugin_impl.cyrene_code.terminal.manager import TerminalManager, TerminalSession, _now_iso
+from agent.plugin.plugin_impl.cyrene_code.terminal.history import IncrementalPlainTextParser, plain_terminal_text
+from agent.plugin.plugin_impl.cyrene_code.terminal.shell_integration import (
     OscMetadataParser,
     prepare_shell_integration,
     shell_kind,
@@ -277,7 +277,7 @@ async def test_new_terminal_inherits_active_shell_cwd(
         lambda project_id: {"id": project_id, "workspacePath": str(tmp_path)},
     )
     monkeypatch.setattr(
-        "cyrene.terminal.shell_runtime.interactive_argv",
+        "agent.plugin.plugin_impl.cyrene_code.terminal.shell_runtime.interactive_argv",
         lambda: ("sh", ["/bin/sh"]),
     )
     manager = TerminalManager(state_dir=tmp_path / "state")

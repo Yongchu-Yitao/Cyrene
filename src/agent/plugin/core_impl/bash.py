@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any
 
@@ -21,9 +22,20 @@ async def bash(arguments: dict[str, Any], context: PluginContext) -> dict[str, A
         if context.workspace is not None
         else Path.cwd()
     )
+    # Optional packs may extend the child PATH through a generic service port.
+    # The fixed Bash tool remains usable when that pack is absent or disabled.
+    extension_service = context.services.get("extensions")
+    environment_builder = getattr(extension_service, "process_environment", None)
+    environment = (
+        environment_builder()
+        if callable(environment_builder)
+        else dict(os.environ)
+    )
+
     process = await asyncio.create_subprocess_shell(
         command,
         cwd=str(workspace),
+        env=environment,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

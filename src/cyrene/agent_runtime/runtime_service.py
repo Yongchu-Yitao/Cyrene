@@ -65,12 +65,26 @@ from cyrene.agent_runtime.process_manager import (
     AcpProcessManager,
     get_process_manager,
 )
+from cyrene.localization import localized
 
 logger = logging.getLogger(__name__)
 
 _HISTORY_BRIDGE_MAX_CHARS = 32_000
 _ACP_INLINE_IMAGE_MAX_BYTES = 12 * 1024 * 1024
 _ACP_INLINE_IMAGE_MAX_ENCODED_CHARS = ((_ACP_INLINE_IMAGE_MAX_BYTES + 2) // 3) * 4
+
+
+def _external_agent_installation(installation_id: str) -> dict[str, Any] | None:
+    """Resolve one optional Agent installation through its Plugin service."""
+
+    from agent.plugin import active_plugin_service
+
+    service = active_plugin_service("extensions")
+    resolver = getattr(service, "get_agent_installation", None)
+    if not callable(resolver):
+        return None
+    value = resolver(str(installation_id or ""))
+    return value if isinstance(value, dict) else None
 
 
 def _fresh_session_prompt(chat: dict[str, Any], current_message: str) -> str:
@@ -246,7 +260,10 @@ class EnvModelBinder:
         if self._gateway_supplier is None:
             raise AgentRuntimeError(
                 "model_gateway_unavailable",
-                "Cyrene Model Gateway is not configured for this agent",
+                localized(
+                    "Cyrene Model Gateway is not configured for this agent",
+                    "尚未为此智能体配置 Cyrene 模型网关",
+                ),
                 detail={"mode": model_access.mode, "installationId": installation.get("installation_id")},
                 retryable=True,
             )
@@ -286,13 +303,19 @@ def _validate_auth_state(installation: dict[str, Any]) -> None:
     if auth_state == "expired":
         raise AgentRuntimeError(
             "auth_expired",
-            "agent credentials have expired; re-authenticate before continuing",
+            localized(
+                "Agent credentials have expired; re-authenticate before continuing.",
+                "智能体凭据已过期，请重新认证后继续。",
+            ),
             detail={"installationId": installation.get("installation_id")},
         )
     if auth_state == "failed":
         raise AgentRuntimeError(
             "auth_required",
-            "agent authentication failed; sign in again",
+            localized(
+                "Agent authentication failed; sign in again.",
+                "智能体认证失败，请重新登录。",
+            ),
             detail={"installationId": installation.get("installation_id")},
         )
 
@@ -538,9 +561,13 @@ class AcpStdioDriver:
         """Declarative descriptor from the installation record (no spawn)."""
         installation = installation if isinstance(installation, dict) else {}
         if str(installation.get("driver") or "") not in {"", ACP_STDIO_DRIVER}:
+            driver_name = installation.get("driver")
             raise AgentRuntimeError(
                 "protocol_mismatch",
-                f"driver {installation.get('driver')!r} is not {ACP_STDIO_DRIVER!r}",
+                localized(
+                    f"Driver {driver_name!r} is not {ACP_STDIO_DRIVER!r}.",
+                    f"驱动 {driver_name!r} 不是 {ACP_STDIO_DRIVER!r}。",
+                ),
             )
         enabled = installation.get("enabled") is not False
         install_state = str(installation.get("install_state") or "installed")
@@ -608,15 +635,14 @@ class AcpStdioDriver:
         record = settings.get("installation")
         if isinstance(record, dict) and record.get("installation_id"):
             return record
-        import importlib
-
-        record = importlib.import_module(
-            "cyrene.extensions.agent_runtime"
-        ).get_agent_installation(request.installation_id)
+        record = _external_agent_installation(request.installation_id)
         if not isinstance(record, dict):
             raise AgentRuntimeError(
                 "dependency_missing",
-                f"no installation record for {request.installation_id!r}",
+                localized(
+                    f"no installation record for {request.installation_id!r}",
+                    f"未找到 {request.installation_id!r} 的安装记录",
+                ),
                 detail={"installationId": request.installation_id},
             )
         return record
@@ -691,13 +717,19 @@ class AcpConnection:
         if self.transport.agent_capabilities.get("loadSession") is not True:
             raise AgentRuntimeError(
                 "session_not_loadable",
-                "ACP agent did not advertise session/load support",
+                localized(
+                    "ACP agent did not advertise session/load support",
+                    "ACP 智能体未声明支持 session/load",
+                ),
             )
         session_id = str(external_session_id or "").strip()
         if not session_id:
             raise AgentRuntimeError(
                 "session_not_loadable",
-                "no external session id to load",
+                localized(
+                    "no external session id to load",
+                    "没有可加载的外部会话 ID",
+                ),
             )
         result = await self.transport.request(
             ACP_METHOD_SESSION_LOAD,
@@ -710,10 +742,19 @@ class AcpConnection:
     async def set_config_option(self, config_id: str, value: object) -> list[dict[str, Any]]:
         await self._ensure_initialized()
         if not self.session_id:
-            raise AgentRuntimeError("capability_missing", "no ACP session open for configuration")
+            raise AgentRuntimeError(
+                "capability_missing",
+                localized(
+                    "no ACP session open for configuration",
+                    "没有可用于配置的已打开 ACP 会话",
+                ),
+            )
         config_id = str(config_id or "").strip()
         if not config_id:
-            raise AgentRuntimeError("capability_missing", "config option id is required")
+            raise AgentRuntimeError(
+                "capability_missing",
+                localized("config option id is required", "必须提供配置选项 ID"),
+            )
         params: dict[str, Any] = {
             "sessionId": self.session_id,
             "configId": config_id,
@@ -770,7 +811,10 @@ class AcpConnection:
         if not self.session_id:
             raise AgentRuntimeError(
                 "capability_missing",
-                "no ACP session open; create or load a session before prompting",
+                localized(
+                    "no ACP session open; create or load a session before prompting",
+                    "没有已打开的 ACP 会话，请先创建或加载会话再发送提示",
+                ),
             )
         text = str(request.get("text") or request.get("message") or "").strip()
         attachments = request.get("attachments")
@@ -808,14 +852,20 @@ class AcpConnection:
         if not self.session_id:
             raise AgentRuntimeError(
                 "capability_missing",
-                "no ACP session open for a permission response",
+                localized(
+                    "no ACP session open for a permission response",
+                    "没有可用于权限响应的已打开 ACP 会话",
+                ),
             )
         request_id = str(request_id or "").strip()
         option_id = str(option_id or "").strip()
         if not request_id or not option_id:
             raise AgentRuntimeError(
                 "request_expired",
-                "permission request id and option id are required",
+                localized(
+                    "permission request id and option id are required",
+                    "必须提供权限请求 ID 和选项 ID",
+                ),
             )
         rpc_request_id = self._pending_permission_request_ids.pop(request_id, None)
         if rpc_request_id is not None:
@@ -827,7 +877,10 @@ class AcpConnection:
         else:
             raise AgentRuntimeError(
                 "request_expired",
-                "permission request is no longer active",
+                localized(
+                    "permission request is no longer active",
+                    "权限请求已不再有效",
+                ),
             )
         return {
             "requestId": request_id,
@@ -840,11 +893,17 @@ class AcpConnection:
         if not self.session_id:
             raise AgentRuntimeError(
                 "capability_missing",
-                "no ACP session open for an elicitation response",
+                localized(
+                    "no ACP session open for an elicitation response",
+                    "没有可用于征询响应的已打开 ACP 会话",
+                ),
             )
         request_id = str(request_id or "").strip()
         if not request_id:
-            raise AgentRuntimeError("request_expired", "elicitation request id is required")
+            raise AgentRuntimeError(
+                "request_expired",
+                localized("elicitation request id is required", "必须提供征询请求 ID"),
+            )
         if isinstance(value, str):
             response: dict[str, Any] = {"type": "text", "text": value}
         elif isinstance(value, dict):
@@ -853,7 +912,13 @@ class AcpConnection:
             response = {"type": "text", "text": str(value)}
         rpc_request_id = self._pending_elicitation_request_ids.pop(request_id, None)
         if rpc_request_id is None:
-            raise AgentRuntimeError("request_expired", "elicitation request is no longer active")
+            raise AgentRuntimeError(
+                "request_expired",
+                localized(
+                    "elicitation request is no longer active",
+                    "征询请求已不再有效",
+                ),
+            )
         content = response.get("form") if response.get("type") == "form" else {"text": response.get("text", "")}
         result = {"action": "accept", "content": content}
         await self.transport.respond(rpc_request_id, result)
@@ -862,7 +927,10 @@ class AcpConnection:
     async def steer(self, request: dict[str, Any]) -> None:
         raise AgentRuntimeError(
             "capability_missing",
-            "ACP steering is not supported in phase 1",
+            localized(
+                "ACP steering is not supported in phase 1",
+                "第一阶段暂不支持 ACP 引导",
+            ),
         )
 
     async def cancel(self, run_id: str) -> None:
@@ -870,7 +938,10 @@ class AcpConnection:
         if not self.session_id:
             raise AgentRuntimeError(
                 "capability_missing",
-                "no ACP session open to cancel",
+                localized(
+                    "no ACP session open to cancel",
+                    "没有可取消的已打开 ACP 会话",
+                ),
             )
         for rpc_request_id in list(self._pending_permission_request_ids.values()):
             await self.transport.respond(rpc_request_id, {"outcome": {"outcome": "cancelled"}})
@@ -981,7 +1052,10 @@ class AcpConnection:
                 "runId": self.run_id,
                 "sessionId": self.session_id,
                 "actorId": "primary",
-                "payload": {"error": "ACP transport failed", "failureKind": kind},
+                "payload": {
+                    "error": localized("ACP transport failed.", "ACP 传输失败。"),
+                    "failureKind": kind,
+                },
                 "extensions": {"acp": {"crash": True}},
             }
         if not saw_terminal and not self.mapper.run_terminal:
@@ -1002,7 +1076,10 @@ class AcpConnection:
                     "sessionId": self.session_id,
                     "actorId": "primary",
                     "payload": {
-                        "error": "ACP session ended without a terminal event",
+                        "error": localized(
+                            "The ACP session ended without a terminal event.",
+                            "ACP 会话在没有终止事件的情况下结束。",
+                        ),
                         "failureKind": "agent_crashed",
                     },
                     "extensions": {"acp": {"crash": True}},
@@ -1090,17 +1167,19 @@ async def run_external_agent_turn(
     if binding.is_builtin or binding.installation_id == BUILTIN_INSTALLATION_ID:
         raise AgentRuntimeError(
             "capability_missing",
-            "external agent turn requires an external agent binding",
+            localized(
+                "external agent turn requires an external agent binding",
+                "外部智能体轮次需要绑定外部智能体",
+            ),
         )
-    import importlib
-
-    installation = importlib.import_module(
-        "cyrene.extensions.agent_runtime"
-    ).get_agent_installation(binding.installation_id)
+    installation = _external_agent_installation(binding.installation_id)
     if not isinstance(installation, dict):
         raise AgentRuntimeError(
             "dependency_missing",
-            f"no installation record for {binding.installation_id!r}",
+            localized(
+                f"no installation record for {binding.installation_id!r}",
+                f"未找到 {binding.installation_id!r} 的安装记录",
+            ),
             detail={"installationId": binding.installation_id},
         )
     driver = service.driver()
@@ -1308,7 +1387,14 @@ async def run_external_agent_turn(
     if status == "failed":
         raise AgentRuntimeError(
             str(terminal_payload.get("failureKind") or "agent_crashed"),
-            str(terminal_payload.get("message") or terminal_payload.get("error") or "external agent run failed"),
+            str(
+                terminal_payload.get("message")
+                or terminal_payload.get("error")
+                or localized(
+                    "The external agent run failed.",
+                    "外部智能体运行失败。",
+                )
+            ),
             detail=terminal_payload,
             retryable=True,
         )
@@ -1371,7 +1457,10 @@ async def respond_to_external_agent_request(
     if connection is None:
         raise AgentRuntimeError(
             "request_expired",
-            "the Agent request is no longer active",
+            localized(
+                "the Agent request is no longer active",
+                "智能体请求已不再有效",
+            ),
             detail={"chatId": str(chat_id or ""), "requestId": str(request_id or "")},
         )
     from cyrene.agent_runtime.model_gateway import touch_model_gateway_scope
@@ -1384,18 +1473,27 @@ async def respond_to_external_agent_request(
     if response_type == "option":
         option_id = str((response or {}).get("optionId") or "").strip()
         if not option_id:
-            raise AgentRuntimeError("request_expired", "optionId is required")
+            raise AgentRuntimeError(
+                "request_expired",
+                localized("optionId is required", "必须提供 optionId"),
+            )
         result = await connection.respond_permission(request_id, option_id)
     elif response_type == "text":
         result = await connection.respond_elicitation(request_id, str((response or {}).get("text") or ""))
     elif response_type == "form":
         form = (response or {}).get("form")
         if not isinstance(form, dict):
-            raise AgentRuntimeError("request_expired", "form response must be an object")
+            raise AgentRuntimeError(
+                "request_expired",
+                localized("form response must be an object", "表单响应必须是对象"),
+            )
         result = await connection.respond_elicitation(request_id, form)
     else:
         raise AgentRuntimeError(
             "request_expired",
-            "response.type must be option, text, or form",
+            localized(
+                "response.type must be option, text, or form",
+                "response.type 必须是 option、text 或 form",
+            ),
         )
     return {"ok": True, "requestId": str(request_id or ""), "result": result}

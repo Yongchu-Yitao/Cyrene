@@ -75,12 +75,12 @@ function wbcFormatTime(value) {
     var dayMs = 24 * 3600 * 1000;
     var startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     if (date >= startOfDay) {
-      return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      return workbenchServices.i18n().formatDate(date, { hour: "2-digit", minute: "2-digit" });
     }
     if (date >= new Date(startOfDay.getTime() - dayMs)) return wbcT("workbenchChat.time.yesterday", "Yesterday");
     var days = Math.floor((startOfDay.getTime() - date.getTime()) / dayMs) + 1;
     if (days <= 7) return wbcT("workbenchChat.time.daysAgo", "{n}d ago", { n: days });
-    return date.toLocaleDateString([], { month: "2-digit", day: "2-digit" });
+    return workbenchServices.i18n().formatDate(date, { month: "2-digit", day: "2-digit" });
   } catch (e) {
     return "";
   }

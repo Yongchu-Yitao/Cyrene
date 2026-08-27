@@ -122,7 +122,9 @@ def _run_terminal_smoke_test() -> None:
         raise RuntimeError("terminal smoke test is Windows-only")
 
     async def run() -> None:
-        from cyrene.terminal.client import TerminalDaemonClient
+        from agent.plugin.plugin_impl.cyrene_code.terminal.client import (
+            TerminalDaemonClient,
+        )
 
         state_dir = Path(tempfile.mkdtemp(prefix="cyrene-terminal-smoke-"))
         client = TerminalDaemonClient(state_dir=state_dir)
@@ -355,7 +357,9 @@ if __name__ == "__main__":
 
     if "--launch-terminal-daemon" in sys.argv:
         sys.argv.remove("--launch-terminal-daemon")
-        from cyrene.terminal.daemon import main as _run_terminal_daemon
+        from agent.plugin.plugin_impl.cyrene_code.terminal.daemon import (
+            main as _run_terminal_daemon,
+        )
         _run_terminal_daemon()
         raise SystemExit(0)
 

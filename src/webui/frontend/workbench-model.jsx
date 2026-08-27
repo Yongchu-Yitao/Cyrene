@@ -526,7 +526,7 @@ function wbIsPermissionQuestionKind(kind) {
       "/api/task-sessions/" + encodeURIComponent(sessionId) + "/workspace/exists?path=" + encodeURIComponent(path || "")
     )
       .then(function (r) { return r.json().catch(function () { return {}; }); })
-      .catch(function () { return { exists: false, path: path || "", error: "网络错误" }; });
+      .catch(function () { return { exists: false, path: path || "", error: wbModelT("common.networkError", "Network error") }; });
   }
 
   // Persist the active project (and optionally session) to the server store so
@@ -646,9 +646,9 @@ function wbIsPermissionQuestionKind(kind) {
       TaskCompleted: ["event.taskCompleted", "Task completed"],
       Reopened: ["event.reopened", "Reopened"],
       Cancelled: ["event.cancelled", "Task cancelled"],
-      ToolCallEvent: ["event.toolCall", "工具调用"],
-      LlmCallEvent: ["event.llmCall", "模型思考"],
-      SubagentStatusEvent: ["event.subagentStatus", "Subagent 状态"],
+      ToolCallEvent: ["event.toolCall", "Tool call"],
+      LlmCallEvent: ["event.llmCall", "Model reasoning"],
+      SubagentStatusEvent: ["event.subagentStatus", "Subagent status"],
     };
     var item = map[String(type || "")];
     return item ? wbModelT(item[0], item[1]) : String(type || wbModelT("event.generic", "Event"));
@@ -661,10 +661,11 @@ function wbIsPermissionQuestionKind(kind) {
       if (Number.isNaN(date.getTime())) return String(value).slice(0, 16);
       var now = new Date();
       var sameDay = date.toDateString() === now.toDateString();
+      var locale = workbenchServices.i18n().getLang() === "zh" ? "zh-CN" : "en-US";
       if (sameDay) {
-        return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        return date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
       }
-      return date.toLocaleDateString([], { month: "2-digit", day: "2-digit" });
+      return date.toLocaleDateString(locale, { month: "2-digit", day: "2-digit" });
     } catch (e) {
       return String(value).slice(0, 16);
     }
@@ -745,7 +746,14 @@ function wbIsPermissionQuestionKind(kind) {
   // Build a default execution plan. Mirrors the backend's base steps so a plan
   // generated client-side looks consistent with one the agent produced.
   function buildPlanSteps(goal, constraints) {
-    var titles = ["理解目标与约束", "读取项目上下文", "分析相关文件结构", "设计执行方案", "实施或生成变更", "验证结果并总结"];
+    var titles = [
+      wbModelT("task.defaultPlan.understand", "Understand the goal and constraints"),
+      wbModelT("task.defaultPlan.readContext", "Read the project context"),
+      wbModelT("task.defaultPlan.analyzeFiles", "Analyze the relevant file structure"),
+      wbModelT("task.defaultPlan.design", "Design the execution approach"),
+      wbModelT("task.defaultPlan.implement", "Implement or generate the changes"),
+      wbModelT("task.defaultPlan.verify", "Verify the results and summarize"),
+    ];
     return titles.map(function (title, index) {
       return {
         id: shortId("step"),
@@ -769,7 +777,12 @@ function wbIsPermissionQuestionKind(kind) {
       .map(function (item) { return String(item || "").trim(); })
       .filter(Boolean)
       .slice(0, 4);
-    if (!items.length) items = ["任务目标已明确", "执行计划已生成", "相关变更可追踪", "最终总结已生成"];
+    if (!items.length) items = [
+      wbModelT("task.defaultAcceptance.goal", "The task goal is clear"),
+      wbModelT("task.defaultAcceptance.plan", "An execution plan has been created"),
+      wbModelT("task.defaultAcceptance.changes", "Relevant changes are traceable"),
+      wbModelT("task.defaultAcceptance.summary", "A final summary has been provided"),
+    ];
     return items.map(function (text) {
       return { id: shortId("accept"), text: text, status: "pending" };
     });
@@ -779,12 +792,18 @@ function wbIsPermissionQuestionKind(kind) {
   function confirmSummary(session) {
     var plan = session && Array.isArray(session.plan) ? session.plan : [];
     var actions = plan.slice(0, 5).map(function (step) { return step.title; });
-    if (!actions.length) actions = ["执行当前任务"];
+    if (!actions.length) actions = [wbModelT("task.confirm.executeCurrent", "Execute the current task")];
     var constraints = session && Array.isArray(session.constraints) ? session.constraints : [];
+    var riskLevel = constraints.length ? "medium" : "low";
     return {
       actions: actions,
-      scope: ["当前任务执行区", "右侧上下文 / 运行日志", "验收标准与产物"],
-      risk: constraints.length ? "中" : "低",
+      scope: [
+        wbModelT("task.confirm.scope.execution", "Current task workspace"),
+        wbModelT("task.confirm.scope.context", "Right-side context and run log"),
+        wbModelT("task.confirm.scope.acceptance", "Acceptance criteria and artifacts"),
+      ],
+      riskLevel: riskLevel,
+      risk: riskLevel === "medium" ? wbModelT("task.risk.medium", "Medium") : wbModelT("task.risk.low", "Low"),
       files: [],
     };
   }

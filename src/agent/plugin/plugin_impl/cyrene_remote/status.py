@@ -100,7 +100,7 @@ async def handler(
         result = await request_remote_command(args, context)
         return json_result(result)
     except Exception as exc:
-        return json_result(remote_tool_error(exc))
+        return json_result(remote_tool_error(exc, context))
 
 
 async def _download_remote_file(

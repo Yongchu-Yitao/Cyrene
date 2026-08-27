@@ -53,14 +53,13 @@ def setup_browser_lifecycle(context: PluginSetupContext) -> None:
     """Finalize Electron tabs after either completion or cancellation."""
 
     session_id = _session_id(context)
+    service = context.services.get("browser")
 
     async def finish(event: HookEvent) -> None:
         run_id = _run_id(event)
-        if not run_id:
+        if not run_id or service is None:
             return
-        from cyrene.browser import finish_electron_browser_round
-
-        await finish_electron_browser_round(session_id, run_id)
+        await service.finish_round(session_id, run_id)
 
     _bind(
         context,

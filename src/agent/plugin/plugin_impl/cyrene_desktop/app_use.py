@@ -65,11 +65,11 @@ TOOL_METADATA = {
 
 async def _tool_app_use(
     args: dict[str, Any],
-    _context: PluginContext,
+    context: PluginContext,
 ) -> str:
     from ._app_use_backend import execute_app_use, format_app_use_result
 
-    return format_app_use_result(await execute_app_use(args))
+    return format_app_use_result(await execute_app_use(args, context), context)
 
 
 handler = _tool_app_use

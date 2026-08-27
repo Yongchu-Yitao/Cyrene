@@ -27,7 +27,15 @@ class PluginActivationState:
         self._lock = threading.RLock()
         self._plugins: dict[str, bool] = {}
         self._packs: dict[str, bool] = {}
+        self._revision = 0
         self.replace(plugins=plugins or {}, packs=packs or {})
+
+    @property
+    def revision(self) -> int:
+        """Monotonic process-local version used by live Agent sessions."""
+
+        with self._lock:
+            return self._revision
 
     @staticmethod
     def _normalize(values: Mapping[str, bool]) -> dict[str, bool]:
@@ -50,16 +58,19 @@ class PluginActivationState:
         next_plugins = self._normalize(plugins)
         next_packs = self._normalize(packs)
         with self._lock:
+            if self._plugins == next_plugins and self._packs == next_packs:
+                return
             self._plugins = next_plugins
             self._packs = next_packs
+            self._revision += 1
 
-    def plugin_enabled(self, name: str) -> bool:
+    def plugin_enabled(self, name: str, *, default: bool = True) -> bool:
         with self._lock:
-            return self._plugins.get(str(name), True)
+            return self._plugins.get(str(name), bool(default))
 
-    def pack_enabled(self, pack_id: str) -> bool:
+    def pack_enabled(self, pack_id: str, *, default: bool = True) -> bool:
         with self._lock:
-            return self._packs.get(str(pack_id), True)
+            return self._packs.get(str(pack_id), bool(default))
 
     def snapshot(self) -> PluginActivationSnapshot:
         with self._lock:

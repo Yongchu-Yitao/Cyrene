@@ -5,11 +5,11 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
 
 from cyrene.workbench import chat_groups
 from cyrene.workbench.chat_events import publish_chat_changed
 from cyrene.workbench.workspace_changes import delete_chat_change_sets
+from route.errors import localized_error_response
 from route.workbench.chat_routes.context import ChatRouteContext
 
 logger = logging.getLogger(__name__)
@@ -28,9 +28,11 @@ async def _cleanup_deleted_chat(
     except Exception:
         logger.exception("Failed to delete workspace change history for chat %s", removed_chat_id)
     try:
-        from cyrene.browser import close_electron_browser_session
+        from agent.plugin import active_plugin_service
 
-        await close_electron_browser_session(removed_chat_id)
+        browser_service = active_plugin_service("browser")
+        if browser_service is not None:
+            await browser_service.close_session(removed_chat_id)
     except Exception:
         logger.exception("Failed to close Electron browser for chat %s", removed_chat_id)
     if memory_service is not None:
@@ -59,7 +61,9 @@ def register_delete_routes(router: APIRouter, context: ChatRouteContext) -> dict
             None,
         )
         if removed_root is None:
-            return JSONResponse({"error": "chat not found"}, status_code=404)
+            return localized_error_response(
+                "Chat not found.", "未找到对话。", 404, "chat_not_found"
+            )
         removed_project_id = str(removed_root.get("projectId") or "")
         removed_chat_ids = {
             chat_id,
@@ -69,9 +73,11 @@ def register_delete_routes(router: APIRouter, context: ChatRouteContext) -> dict
             await terminate_chat_agents(removed_chat_ids)
         except Exception:
             logger.exception("Failed to terminate agents for deleted chat %s", chat_id)
-            return JSONResponse(
-                {"error": "chat agents could not be terminated"},
-                status_code=503,
+            return localized_error_response(
+                "The chat's agents could not be stopped. Please try again.",
+                "无法停止该对话的 Agent，请重试。",
+                503,
+                "chat_agents_termination_failed",
             )
         next_chats = [chat for chat in chats if str(chat.get("id") or "") not in removed_chat_ids]
         for chat in next_chats:
@@ -83,9 +89,11 @@ def register_delete_routes(router: APIRouter, context: ChatRouteContext) -> dict
             await chat_groups.remove_chat(chat_id, removed_project_id)
         except Exception:
             logger.exception("Failed to remove deleted chat %s from chat groups", chat_id)
-            return JSONResponse(
-                {"error": "chat group membership could not be revoked"},
-                status_code=503,
+            return localized_error_response(
+                "The chat could not be removed from its group. Please try again.",
+                "无法将该对话从群组中移除，请重试。",
+                503,
+                "chat_group_membership_revoke_failed",
             )
         payload["chats"] = next_chats
         await asyncio.to_thread(_write_chats_store, payload)

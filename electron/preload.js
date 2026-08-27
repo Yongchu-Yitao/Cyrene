@@ -27,6 +27,12 @@ contextBridge.exposeInMainWorld('cyrene', {
   },
   getDesktopSettings: () => ipcRenderer.invoke('desktop-settings:get'),
   updateDesktopSettings: (updates) => ipcRenderer.invoke('desktop-settings:update', updates),
+  onDesktopLanguageChanged: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, language) => callback(String(language || ''));
+    ipcRenderer.on('desktop-language:changed', listener);
+    return () => ipcRenderer.removeListener('desktop-language:changed', listener);
+  },
   agentCursor: {
     setRunning: (running) => ipcRenderer.invoke('agent-cursor:set-running', { running: running === true }),
     claim: (owner) => ipcRenderer.invoke('agent-cursor:claim-owner', { owner: String(owner || '') }),

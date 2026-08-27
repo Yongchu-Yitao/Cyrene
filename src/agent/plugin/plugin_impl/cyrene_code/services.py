@@ -7,8 +7,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from agent.plugin import PluginContext, PluginSetupContext
-from agent.plugin.native_runtime import run_context_value
+from agent.plugin import PluginApplicationContext, PluginContext, PluginSetupContext
+from agent.plugin.native_runtime import plugin_localized, run_context_value
 
 _TERMINAL_TITLE_PATTERNS = (
     re.compile(
@@ -123,9 +123,17 @@ def _scope(context: PluginContext) -> tuple[str, str, str]:
     session_id = str(run_context_value(context, "session_id") or "").strip()
     ui_instance_id = str(run_context_value(context, "ui_instance_id") or "").strip()
     if not session_id:
-        raise ValueError("Terminal tools require an active conversation session.")
+        raise ValueError(plugin_localized(
+            context,
+            "Terminal tools require an active conversation session.",
+            "终端工具需要处于活动的会话中。",
+        ))
     if not project_id:
-        raise ValueError("The current Plugin session is not attached to a project.")
+        raise ValueError(plugin_localized(
+            context,
+            "The current Plugin session is not attached to a project.",
+            "当前插件会话未关联项目。",
+        ))
     return project_id, session_id, ui_instance_id
 
 
@@ -148,7 +156,7 @@ class CyreneTerminalService:
 
     @staticmethod
     def _client() -> Any:
-        from cyrene.terminal.client import get_terminal_daemon_client
+        from .terminal.client import get_terminal_daemon_client
 
         return get_terminal_daemon_client()
 
@@ -165,7 +173,11 @@ class CyreneTerminalService:
             "main_agent",
             "execution_agent",
         }:
-            raise PermissionError("Only the main Agent can create terminals.")
+            raise PermissionError(plugin_localized(
+                context,
+                "Only the main Agent can create terminals.",
+                "只有主 Agent 可以创建终端。",
+            ))
         return await self._client().create_agent_terminal(
             project_id,
             owner_chat_id=session_id,
@@ -210,7 +222,11 @@ class CyreneTerminalService:
     async def remove(self, terminal_id: str) -> dict[str, Any]:
         return await self._client().remove(str(terminal_id or ""))
 
-    async def _current_terminal_id(self, ui_instance_id: str) -> str:
+    async def _current_terminal_id(
+        self,
+        ui_instance_id: str,
+        context: PluginContext | None = None,
+    ) -> str:
         result = await _surface_request(
             ui_instance_id,
             "terminal.current",
@@ -226,15 +242,23 @@ class CyreneTerminalService:
                 if isinstance(item, dict)
             ]
             labels = [
-                f"{str(item.get('title') or 'Terminal')} "
+                f"{str(item.get('title') or plugin_localized(context, 'Terminal', '终端'))} "
                 f"({str(item.get('terminalId') or '')})"
                 for item in candidates
             ]
-            detail = ", ".join(labels) if labels else "multiple visible terminals"
+            detail = ", ".join(labels) if labels else plugin_localized(
+                context,
+                "multiple visible terminals",
+                "多个可见终端",
+            )
             raise ValueError(
-                "Multiple terminal panes are currently visible: "
-                + detail
-                + ". Provide a terminal name or terminal_id."
+                plugin_localized(
+                    context,
+                    "Multiple terminal panes are currently visible: {detail}. "
+                    "Provide a terminal name or terminal_id.",
+                    "当前有多个可见终端窗格：{detail}。请提供终端名称或 terminal_id。",
+                    detail=detail,
+                )
             )
         return ""
 
@@ -249,9 +273,13 @@ class CyreneTerminalService:
         requested_id = str(terminal_id or "").strip()
         requested_name = str(name or "").strip().casefold()
         if not requested_id and not requested_name:
-            requested_id = await self._current_terminal_id(ui_instance_id)
+            requested_id = await self._current_terminal_id(ui_instance_id, context)
             if not requested_id:
-                raise ValueError("No terminal is currently open. Provide terminal_id or name.")
+                raise ValueError(plugin_localized(
+                    context,
+                    "No terminal is currently open. Provide terminal_id or name.",
+                    "当前没有打开的终端。请提供 terminal_id 或名称。",
+                ))
 
         listing = await self._client().list(project_id)
         terminals = [dict(item) for item in listing.get("terminals") or []]
@@ -266,9 +294,17 @@ class CyreneTerminalService:
             )
         ]
         if not matches:
-            raise ValueError("Terminal not found in the current project.")
+            raise ValueError(plugin_localized(
+                context,
+                "Terminal not found in the current project.",
+                "当前项目中未找到该终端。",
+            ))
         if requested_name and len(matches) > 1:
-            raise ValueError("Multiple terminals have that name; use terminal_id.")
+            raise ValueError(plugin_localized(
+                context,
+                "Multiple terminals have that name; use terminal_id.",
+                "有多个终端使用该名称；请改用 terminal_id。",
+            ))
         return matches[0]
 
     async def list_owned(
@@ -355,7 +391,11 @@ class CyreneTerminalService:
     ) -> dict[str, Any]:
         _project_id, _session_id, ui_instance_id = _scope(context)
         if not ui_instance_id:
-            raise RuntimeError("The current Plugin session has no attached UI surface.")
+            raise RuntimeError(plugin_localized(
+                context,
+                "The current Plugin session has no attached UI surface.",
+                "当前插件会话未关联界面。",
+            ))
         terminal = await self.resolve(context, terminal_id=terminal_id)
         result = await _surface_request(
             ui_instance_id,
@@ -364,14 +404,90 @@ class CyreneTerminalService:
             timeout=5.0,
         )
         if not result.get("ok"):
-            raise RuntimeError(str(result.get("error") or "Could not open the terminal."))
+            raise RuntimeError(plugin_localized(
+                context,
+                "Could not open the terminal.",
+                "无法打开终端。",
+            ))
         return terminal
+
+
+@runtime_checkable
+class RemoteShellService(Protocol):
+    """Process-level terminal port used by the encrypted remote gateway."""
+
+    async def create(
+        self,
+        project_id: str,
+        *,
+        cwd: str,
+        title: str,
+    ) -> dict[str, Any]: ...
+
+    async def screen(self, terminal_id: str) -> dict[str, Any]: ...
+
+    async def input(
+        self,
+        terminal_id: str,
+        data: str,
+        *,
+        actor: str,
+    ) -> dict[str, Any]: ...
+
+    async def interrupt(self, terminal_id: str) -> dict[str, Any]: ...
+
+    async def remove(self, terminal_id: str) -> dict[str, Any]: ...
+
+
+class CyreneRemoteShellService:
+    """Application-owned facade for project-scoped remote shell sessions."""
+
+    @staticmethod
+    def _client() -> Any:
+        from .terminal.client import get_terminal_daemon_client
+
+        return get_terminal_daemon_client()
+
+    async def create(
+        self,
+        project_id: str,
+        *,
+        cwd: str,
+        title: str,
+    ) -> dict[str, Any]:
+        return await self._client().create(project_id, cwd=cwd, title=title)
+
+    async def screen(self, terminal_id: str) -> dict[str, Any]:
+        return await self._client().screen(str(terminal_id or ""))
+
+    async def input(
+        self,
+        terminal_id: str,
+        data: str,
+        *,
+        actor: str,
+    ) -> dict[str, Any]:
+        return await self._client().input(
+            str(terminal_id or ""),
+            data,
+            actor=str(actor or "user"),
+        )
+
+    async def interrupt(self, terminal_id: str) -> dict[str, Any]:
+        return await self._client().interrupt(str(terminal_id or ""))
+
+    async def remove(self, terminal_id: str) -> dict[str, Any]:
+        return await self._client().remove(str(terminal_id or ""))
 
 
 def terminal_service(context: PluginContext) -> TerminalService:
     service = context.services.get("terminals")
     if not isinstance(service, TerminalService):
-        raise RuntimeError("The code Plugin pack requires the terminals service")
+        raise RuntimeError(plugin_localized(
+            context,
+            "The terminal service is unavailable.",
+            "终端服务不可用。",
+        ))
     return service
 
 
@@ -392,10 +508,69 @@ def setup(context: PluginSetupContext) -> None:
         )
 
 
+def setup_application(context: PluginApplicationContext) -> None:
+    """Publish code/terminal routes and services while the pack is active."""
+
+    from cyrene.config import WORKSPACE_DIR
+    from .code_format_service import CodeFormatService
+    from .project_files import ProjectFileService
+    from cyrene.workbench.project_repository import (
+        find_workbench_project_lightweight,
+        resolve_project_workspace_dir,
+        resolve_project_workspace_dir_async,
+    )
+    from .workspace_diff_service import WorkspaceDiffService
+    from .code_routes import register_code_routes
+    from .terminal_routes import register_terminal_routes
+    from .terminal_wake import get_shell_wake_service
+
+    workspace_root = Path(WORKSPACE_DIR).expanduser().resolve()
+
+    def resolve_active_path(path_value: str) -> Path:
+        candidate = Path(str(path_value or ".")).expanduser()
+        resolved = (
+            candidate if candidate.is_absolute() else workspace_root / candidate
+        ).resolve()
+        if resolved != workspace_root and workspace_root not in resolved.parents:
+            from cyrene.localization import localized
+
+            raise ValueError(localized(
+                "Path is outside the Cyrene workspace.",
+                "路径不在 Cyrene 工作区内。",
+            ))
+        return resolved
+
+    files = ProjectFileService(
+        find_project=find_workbench_project_lightweight,
+        resolve_workspace=resolve_project_workspace_dir,
+        resolve_workspace_async=resolve_project_workspace_dir_async,
+        resolve_active_path=resolve_active_path,
+        resolve_active_write_target=resolve_active_path,
+    )
+    register_terminal_routes(context.router)
+    register_code_routes(
+        context.router,
+        files,
+        WorkspaceDiffService(files, workspace_root),
+        CodeFormatService(context.data_directory / "format"),
+    )
+
+    context.provide("remote_shell", CyreneRemoteShellService())
+    wake_bridge = get_shell_wake_service()
+    context.provide("terminal_client", CyreneTerminalService._client())
+    context.provide("terminal_wake", wake_bridge)
+    context.on_startup(wake_bridge.start_daemon_bridge)
+    context.on_shutdown(wake_bridge.stop_daemon_bridge)
+    context.expose_frontend("code")
+
+
 __all__ = [
     "CyreneTerminalService",
+    "CyreneRemoteShellService",
+    "RemoteShellService",
     "TerminalService",
     "requested_terminal_title",
     "setup",
+    "setup_application",
     "terminal_service",
 ]

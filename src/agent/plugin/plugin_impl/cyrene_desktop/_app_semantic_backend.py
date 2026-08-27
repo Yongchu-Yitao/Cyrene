@@ -13,6 +13,7 @@ from typing import Any
 
 from cyrene.config import DATA_DIR
 from ._app_use_backend import electron_app_rpc, format_app_use_result
+from agent.plugin import PluginContext
 
 _AUDIT_PATH = Path(DATA_DIR) / "app_semantic_audit.jsonl"
 _IDEMPOTENCY_PATH = Path(DATA_DIR) / "app_semantic_idempotency.json"
@@ -482,8 +483,11 @@ async def execute_inspect(args: dict[str, Any]) -> dict[str, Any]:
     return public
 
 
-def format_result(result: dict[str, Any]) -> str:
-    return format_app_use_result(result)
+def format_result(
+    result: dict[str, Any],
+    context: PluginContext | None = None,
+) -> str:
+    return format_app_use_result(result, context)
 
 
 __all__ = ["execute_action", "execute_inspect", "execute_snapshot", "format_result"]

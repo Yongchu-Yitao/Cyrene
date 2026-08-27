@@ -239,6 +239,7 @@ def test_update_available_appends_workbench_notification_once(tmp_path, monkeypa
 
     notifications.configure_store(str(tmp_path / "workbench.sqlite3"))
     updater._notified_update_keys.clear()
+    monkeypatch.setattr(updater, "app_language", lambda: "zh")
 
     info = updater.UpdateInfo(
         available=True,
@@ -258,6 +259,7 @@ def test_update_available_appends_workbench_notification_once(tmp_path, monkeypa
     item = payload["items"][0]
     assert item["tab"] == "system"
     assert item["title"] == "Cyrene v2.0.0 可用"
+    assert item["language"] == "zh"
     assert "Cyrene-2.0.0-mac.dmg" in item["body"]
     assert item["meta"]["category"] == "app_update"
     assert item["meta"]["checksumAvailable"] is True

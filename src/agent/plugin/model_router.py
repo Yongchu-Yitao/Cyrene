@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Mapping, Sequence
-from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 from uuid import uuid4
@@ -22,28 +21,6 @@ from .plugin import Plugin, PluginContext
 
 MODEL_ROUTER_PLUGIN = "CyreneModelRouter"
 EXACT_MODEL_UNAVAILABLE = "Requested exact model identity is no longer configured"
-
-
-def project_model_messages(
-    messages: list[dict[str, Any]],
-    *,
-    phase: str,
-    system_extra: str,
-) -> list[dict[str, Any]]:
-    """Append turn-only Workbench context only to an Agent model request."""
-
-    projected = deepcopy(messages)
-    extra = str(system_extra or "").strip()
-    if phase != "agent" or not extra:
-        return projected
-    for message in projected:
-        if str(message.get("role") or "") != "system":
-            continue
-        content = str(message.get("content") or "").strip()
-        message["content"] = "\n\n".join(part for part in (content, extra) if part)
-        return projected
-    projected.insert(0, {"role": "system", "content": extra})
-    return projected
 
 
 def _normalize_tool_calls(raw_calls: Any) -> list[dict[str, Any]]:
@@ -242,10 +219,24 @@ async def _publish_llm_event(
 
         run_context = context.data.get("run_context")
         run_context = run_context if isinstance(run_context, Mapping) else {}
+        session_id = str(
+            context.data.get("session_id")
+            or run_context.get("session_id")
+            or context.tree_id
+            or ""
+        )
+        round_id = str(
+            context.data.get("run_id")
+            or run_context.get("round_id")
+            or run_context.get("run_id")
+            or ""
+        )
         event: dict[str, Any] = {
             "type": "llm_call",
             "caller": str(context.data.get("caller") or run_context.get("caller") or "main_agent"),
             "phase": str(context.data.get("model_call_kind") or "agent"),
+            "session_id": session_id,
+            "round_id": round_id,
             "model": str((response or {}).get("model") or candidate.get("model") or ""),
             "provider": candidate_provider_id(candidate),
             "provider_plugin": provider_plugin,
@@ -254,6 +245,9 @@ async def _publish_llm_event(
             "context_trace": summarize_context_trace(messages),
             "response": dict(response or {}),
             "usage": dict((response or {}).get("usage") or {}),
+            "usage_observation": dict(
+                (response or {}).get("usage_observation") or {}
+            ),
             "duration_ms": max(0, int(duration_ms)),
             "status": status,
         }
@@ -324,15 +318,13 @@ async def route_model_call(
         raise ValueError("tools must be an array")
 
     session_id = str(context.data.get("session_id") or context.tree_id or "")
-    phase = str(context.data.get("model_call_kind") or "agent")
     route = str(arguments.get("route") or context.data.get("model_route") or "primary").strip().lower()
     if route not in {"primary", "secondary", "vision"}:
         raise ValueError(f"Unsupported chat model route: {route}")
-    model_messages = project_model_messages(
-        [dict(message) for message in messages],
-        phase=phase,
-        system_extra=str(context.data.get("system_extra") or ""),
-    )
+    # SessionStart context providers own transcript enrichment.  The router
+    # must forward that durable projection unchanged so host context is neither
+    # duplicated nor lost when a run is restored.
+    model_messages = [dict(message) for message in messages]
     requested_identity = context.data.get("model_identity")
     if isinstance(requested_identity, Mapping):
         from .model_catalog import resolve_exact_model_candidate
@@ -512,6 +504,5 @@ __all__ = [
     "EXACT_MODEL_UNAVAILABLE",
     "MODEL_ROUTER_PLUGIN",
     "create_model_router_plugin",
-    "project_model_messages",
     "route_model_call",
 ]

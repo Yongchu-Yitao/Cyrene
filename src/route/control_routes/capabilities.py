@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from cyrene.localization import localized
 from route.control_schemas import ControlCapabilitiesResponse, ControlFeature
 
 
@@ -25,10 +26,38 @@ def register_capability_routes(router: APIRouter) -> None:
             durable_run_events=True,
             operations=list(CONTROL_OPERATIONS),
             features=[
-                ControlFeature(name="chat_runs", available=True, detail="Detached chat runs with cursor-addressable replay."),
-                ControlFeature(name="durable_run_events", available=True, detail="Run metadata and events survive process restarts for seven days."),
-                ControlFeature(name="remote_gateway", available=True, detail="Paired-device E2EE gateway with typed grants."),
-                ControlFeature(name="remote_desktop", available=False, detail="Optional WebRTC takeover is not implemented."),
+                ControlFeature(
+                    name="chat_runs",
+                    available=True,
+                    detail=localized(
+                        "Detached chat runs with cursor-addressable replay.",
+                        "支持游标定位回放的分离式对话运行。",
+                    ),
+                ),
+                ControlFeature(
+                    name="durable_run_events",
+                    available=True,
+                    detail=localized(
+                        "Run metadata and events survive process restarts for seven days.",
+                        "运行元数据与事件会跨进程重启保留七天。",
+                    ),
+                ),
+                ControlFeature(
+                    name="remote_gateway",
+                    available=True,
+                    detail=localized(
+                        "Paired-device E2EE gateway with typed grants.",
+                        "带类型化授权的配对设备端到端加密网关。",
+                    ),
+                ),
+                ControlFeature(
+                    name="remote_desktop",
+                    available=False,
+                    detail=localized(
+                        "Optional WebRTC takeover is not implemented.",
+                        "尚未实现可选的 WebRTC 接管。",
+                    ),
+                ),
             ],
         )
 

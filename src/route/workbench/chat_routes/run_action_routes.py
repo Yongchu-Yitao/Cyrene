@@ -8,8 +8,10 @@ from typing import Any, Awaitable, Callable
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from cyrene.localization import app_language, localized
 from cyrene.workbench.chat_events import publish_chat_changed
 from route import schemas as api_models
+from route.errors import localized_error_response
 from route.workbench.chat_routes.context import ChatRouteContext
 
 
@@ -22,18 +24,32 @@ async def _prepare_action_send(
     value = str(body.get("value") or "")
     message_id = str(body.get("messageId") or "").strip()
     if not action_id or not message_id:
-        return JSONResponse(
-            {"error": "actionId and messageId are required"},
-            status_code=400,
+        return localized_error_response(
+            "An action ID and message ID are required.",
+            "缺少操作 ID 或消息 ID。",
+            400,
+            "action_target_required",
         )
     if not re.fullmatch(r"[a-z0-9_]+", action_id) or len(action_id) > 32:
-        return JSONResponse({"error": "invalid action_id"}, status_code=400)
+        return localized_error_response(
+            "The action ID is invalid.",
+            "操作 ID 无效。",
+            400,
+            "invalid_action_id",
+        )
     if len(value) > 256:
-        return JSONResponse({"error": "value too long"}, status_code=400)
+        return localized_error_response(
+            "The action value is too long.",
+            "操作值过长。",
+            400,
+            "action_value_too_long",
+        )
     service = context.service
     chat = await asyncio.to_thread(service.repository.get, chat_id)
     if not chat:
-        return JSONResponse({"error": "chat not found"}, status_code=404)
+        return localized_error_response(
+            "Chat not found.", "未找到对话。", 404, "chat_not_found"
+        )
     base_chat = copy.deepcopy(chat)
     messages = chat.get("messages") if isinstance(chat.get("messages"), list) else []
     target = next(
@@ -41,20 +57,31 @@ async def _prepare_action_send(
         None,
     )
     if target is None:
-        return JSONResponse({"error": "message not found"}, status_code=404)
+        return localized_error_response(
+            "Message not found.", "未找到消息。", 404, "message_not_found"
+        )
     if str(target.get("role") or "") != "assistant":
-        return JSONResponse(
-            {"error": "actions target assistant messages"},
-            status_code=400,
+        return localized_error_response(
+            "Actions can only target assistant messages.",
+            "操作只能应用于助手消息。",
+            400,
+            "invalid_action_target",
         )
     content = str(target.get("content") or "")
     if not service.has_button_block(content, action_id):
-        return JSONResponse({"error": "action not found in message"}, status_code=404)
+        return localized_error_response(
+            "The action was not found in this message.",
+            "此消息中未找到该操作。",
+            404,
+            "action_not_found",
+        )
     updated_content, label = service.disable_button_block(content, action_id)
     if updated_content is None:
-        return JSONResponse(
-            {"error": "action already handled", "code": "action_duplicate"},
-            status_code=409,
+        return localized_error_response(
+            "This action has already been handled.",
+            "此操作已处理。",
+            409,
+            "action_duplicate",
         )
     target["content"] = updated_content
     chat["updatedAt"] = service.utc_now_iso()
@@ -67,7 +94,16 @@ async def _prepare_action_send(
     label_text = label or action_id
     if value:
         label_text = f"{label_text} ({action_id}: {value})"
-    return {"message": f"[按钮操作] {label_text}", "stream": False}
+    language = app_language()
+    return {
+        "message": localized(
+            "[Button action] {label}",
+            "[按钮操作] {label}",
+            language=language,
+            label=label_text,
+        ),
+        "stream": False,
+    }
 
 
 def register_run_action_routes(

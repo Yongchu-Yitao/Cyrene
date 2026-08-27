@@ -8,7 +8,7 @@ from agent.plugin import PluginContext
 from ._native import create_tool, service as memory_service
 from .definitions import get_native_tool_def
 from .archive import recall_conversations, recall_workspace_conversations
-from agent.plugin.native_runtime import json_result
+from agent.plugin.native_runtime import json_result, plugin_localized
 
 TOOL_NAME = "RecallConversation"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -66,7 +66,11 @@ async def _tool_recall_conversation(
         ],
     }
     if not payload["matches"]:
-        payload["note"] = "No archived conversation matches found for the given filters."
+        payload["note"] = plugin_localized(
+            context,
+            "No archived conversations match the requested filters.",
+            "没有匹配当前筛选条件的归档对话。",
+        )
     return json_result(payload)
 
 

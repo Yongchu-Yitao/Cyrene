@@ -69,7 +69,7 @@ def _client(monkeypatch, tmp_path):
 def test_settings_api_exposes_registry_packs_and_standalone_plugins(monkeypatch, tmp_path):
     client, _state = _client(monkeypatch, tmp_path)
 
-    response = client.get("/api/settings/plugins")
+    response = client.get("/api/plugins")
 
     assert response.status_code == 200
     payload = response.json()
@@ -98,7 +98,7 @@ def test_settings_api_updates_package_atomically(monkeypatch, tmp_path):
     client, state = _client(monkeypatch, tmp_path)
 
     response = client.put(
-        "/api/settings/plugins",
+        "/api/plugins/activation",
         json={"packs": {"cyrene_browser": True}},
     )
 
@@ -119,14 +119,14 @@ def test_settings_api_rejects_invalid_package_without_partial_save(
     client, state = _client(monkeypatch, tmp_path)
 
     unknown = client.put(
-        "/api/settings/plugins",
+        "/api/plugins/activation",
         json={
             "plugins": {"Read": False},
             "packs": {"not_a_package": True},
         },
     )
     non_boolean = client.put(
-        "/api/settings/plugins",
+        "/api/plugins/activation",
         json={"packs": {"cyrene_browser": "false"}},
     )
 

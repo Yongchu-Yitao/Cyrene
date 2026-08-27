@@ -144,7 +144,7 @@ def test_selected_text_is_materialized_as_pinned_markdown_file(tmp_path, monkeyp
 async def test_pinned_browser_screenshot_uses_owner_session_read_only(
     monkeypatch, tmp_path, real_pillow_modules
 ):
-    import cyrene.browser
+    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
     from agent.plugin.plugin_impl.cyrene_browser.browser_screenshot import _tool_browser_screenshot
     from cyrene.workbench import pinned_resources
     from PIL import Image
@@ -157,7 +157,7 @@ async def test_pinned_browser_screenshot_uses_owner_session_read_only(
         calls.append((url, kwargs))
         return {"ok": True, "path": str(screenshot_path), "title": "Owner page"}
 
-    monkeypatch.setattr(cyrene.browser, "screenshot", fake_screenshot)
+    monkeypatch.setattr(browser, "screenshot", fake_screenshot)
     monkeypatch.setattr(
         pinned_resources,
         "browser_snapshot_target",

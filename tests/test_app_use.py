@@ -1072,3 +1072,22 @@ def test_platform_provider_scripts_exist():
     # osascript and PowerShell cannot execute scripts from Electron's ASAR FS.
     assert "app-use-macos.jxa" not in package["build"]["files"]
     assert "app-use-windows.ps1" not in package["build"]["files"]
+
+
+def test_app_use_localizes_public_errors_and_hides_bridge_diagnostics():
+    from agent.plugin.plugin_impl.cyrene_desktop._app_use_backend import (
+        format_app_use_result,
+    )
+
+    rendered = format_app_use_result(
+        {
+            "status": "error",
+            "type": "desktop_host_error",
+            "message": "ConnectionError: secret transport detail",
+        },
+        PluginContext(data={"language": "zh"}),
+    )
+    payload = json.loads(rendered)
+
+    assert payload["message"] == "App Use 桌面桥接失败。"
+    assert "secret transport detail" not in rendered

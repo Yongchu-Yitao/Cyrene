@@ -93,6 +93,10 @@ jobs:
         working-directory: src/webui
         run: npm run build
 
+      - name: Run WebUI tests
+        working-directory: src/webui
+        run: npm test
+
       - name: Verify generated WebUI is current
         run: git diff --exit-code -- src/webui/static/app
 

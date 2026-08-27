@@ -593,7 +593,7 @@ function MediaDefaultsSection(p) {
 }
 
 function scheduleMediaSave(queue, delay) {
-  if (!queue.mounted) return;
+  if (!queue.mounted || !queue.available) return;
   if (queue.timer) clearTimeout(queue.timer);
   queue.timer = null;
   if (queue.inFlight || !queue.dirty || !queue.snapshot || queue.blockedVersion === queue.version) return;
@@ -619,7 +619,7 @@ function failMediaSave(queue, error, failedVersion) {
 }
 
 function persistMediaSave(queue, background) {
-  if ((!queue.mounted && !background) || !queue.dirty || !queue.snapshot || queue.blockedVersion === queue.version) return;
+  if (!queue.available || (!queue.mounted && !background) || !queue.dirty || !queue.snapshot || queue.blockedVersion === queue.version) return;
   if (queue.inFlight) {
     if (background && queue.version !== queue.activeVersion) queue.flushAfterFlight = true;
     return;
@@ -627,12 +627,15 @@ function persistMediaSave(queue, background) {
   var snapshot = queue.snapshot;
   var version = queue.version;
   queue.inFlight = true;
+  var controller = new AbortController();
+  queue.requestController = controller;
   queue.activeVersion = version;
   queue.flushAfterFlight = false;
   if (queue.mounted) queue.setSaving(true);
   settingsFetch("/api/settings/media", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
+    signal: controller.signal,
     body: JSON.stringify(mediaSavePayload(
       snapshot.settings,
       snapshot.draftKeys,
@@ -655,8 +658,9 @@ function persistMediaSave(queue, background) {
     else persistMediaSave(queue, true);
   }).catch(function (error) {
     queue.inFlight = false;
-    failMediaSave(queue, error, version);
+    if (!(error && error.name === "AbortError")) failMediaSave(queue, error, version);
   }).finally(function () {
+    if (queue.requestController === controller) queue.requestController = null;
     if (queue.mounted) {
       queue.setSaving(false);
       return;
@@ -746,7 +750,7 @@ function createMediaSettingsActions(store) {
   };
 }
 
-function useMediaConfiguration(t) {
+function useMediaConfiguration(t, available) {
   var [settings, setSettings] = useStateSt(function () { return normalizeMediaSettings({}); });
   var [draftKeys, setDraftKeys] = useStateSt({});
   var [clearKeys, setClearKeys] = useStateSt({});
@@ -766,6 +770,7 @@ function useMediaConfiguration(t) {
   var clearKeysRef = useRefSt(clearKeys);
   var modelCatalogsRef = useRefSt({});
   var modelRequestsRef = useRefSt({});
+  var requestControllersRef = useRefSt(new Set());
   var saveQueueRef = useRefSt(null);
   if (!saveQueueRef.current) saveQueueRef.current = {
     mounted: true,
@@ -780,16 +785,20 @@ function useMediaConfiguration(t) {
     snapshot: null,
   };
   var saveQueue = saveQueueRef.current;
+  saveQueue.available = available !== false;
 
   function loadProviderModels(id, force) {
+    if (!saveQueue.available) return Promise.resolve(null);
     if (MEDIA_PROVIDER_ORDER.indexOf(id) < 0) return Promise.resolve(null);
     if (modelRequestsRef.current[id]) return modelRequestsRef.current[id];
     if (!force && modelCatalogsRef.current[id]) return Promise.resolve(modelCatalogsRef.current[id]);
     setModelLoadStates(function (current) {
       return { ...current, [id]: { loading: true, failed: false } };
     });
+    var controller = new AbortController();
+    requestControllersRef.current.add(controller);
     var request = settingsFetch(
-      "/api/settings/media/providers/" + encodeURIComponent(id) + "/models"
+      "/api/settings/media/providers/" + encodeURIComponent(id) + "/models", { signal: controller.signal }
     ).then(readSettingsResponse).then(function (payload) {
       if (!saveQueue.mounted) return payload;
       modelCatalogsRef.current = { ...modelCatalogsRef.current, [id]: payload };
@@ -813,6 +822,7 @@ function useMediaConfiguration(t) {
       });
       return null;
     }).finally(function () {
+      requestControllersRef.current.delete(controller);
       delete modelRequestsRef.current[id];
     });
     modelRequestsRef.current[id] = request;
@@ -856,12 +866,15 @@ function useMediaConfiguration(t) {
   }
 
   function load() {
+    if (!saveQueue.available) return Promise.resolve(null);
     if (saveQueue.timer) clearTimeout(saveQueue.timer);
     saveQueue.timer = null;
     saveQueue.version += 1;
     setLoading(true);
     setLoadError("");
-    return settingsFetch("/api/settings/media").then(readSettingsResponse).then(function (payload) {
+    var controller = new AbortController();
+    requestControllersRef.current.add(controller);
+    return settingsFetch("/api/settings/media", { signal: controller.signal }).then(readSettingsResponse).then(function (payload) {
       if (!saveQueue.mounted) return;
       acceptSettings(payload);
       setLoadFailed(false);
@@ -869,7 +882,10 @@ function useMediaConfiguration(t) {
       if (!saveQueue.mounted) return;
       setLoadFailed(true);
       setLoadError(t("settings.mediaLoadFailed") + ": " + (loadError.message || ""));
-    }).finally(function () { if (saveQueue.mounted) setLoading(false); });
+    }).finally(function () {
+      requestControllersRef.current.delete(controller);
+      if (saveQueue.mounted) setLoading(false);
+    });
   }
 
   saveQueue.t = t;
@@ -880,15 +896,25 @@ function useMediaConfiguration(t) {
   saveQueue.acceptSaved = acceptSettings;
 
   useEffectSt(function () {
+    if (!available) {
+      if (saveQueue.timer) clearTimeout(saveQueue.timer);
+      saveQueue.timer = null;
+      saveQueue.mounted = false;
+      if (saveQueue.requestController) saveQueue.requestController.abort();
+      requestControllersRef.current.forEach(function (controller) { controller.abort(); });
+      requestControllersRef.current.clear();
+      setLoading(false);
+      return undefined;
+    }
     saveQueue.mounted = true;
     load();
     return function () {
       if (saveQueue.timer) clearTimeout(saveQueue.timer);
       saveQueue.timer = null;
       saveQueue.mounted = false;
-      if (saveQueue.dirty) persistMediaSave(saveQueue, true);
+      if (saveQueue.available && saveQueue.dirty) persistMediaSave(saveQueue, true);
     };
-  }, []);
+  }, [available]);
 
   var state = {
     t, settings, draftKeys, clearKeys, loading, saving, dirty, loadError, saveError, conflict, loadFailed,
@@ -940,7 +966,7 @@ function MediaSaveState(p) {
 
 function MediaPanel(p) {
   var t = p.t;
-  var media = useMediaConfiguration(t);
+  var media = useMediaConfiguration(t, p.available !== false);
 
   if (media.loading) {
     return React.createElement("div", { className: "settings-panel" },

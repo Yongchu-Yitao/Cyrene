@@ -1,0 +1,44 @@
+"""Editable, required Plugin pack for composer-attached context."""
+
+from agent.plugin import PluginApplicationContext, PluginPack
+
+from .context_mount import setup_composer_context
+
+
+def application_setup(context: PluginApplicationContext) -> None:
+    from .application import setup_application
+
+    setup_application(context)
+
+
+plugin_pack = PluginPack(
+    id="cyrene_composer_context",
+    description=(
+        "Validate and mount context explicitly selected in the message composer."
+    ),
+    plugins=(),
+    setup=setup_composer_context,
+    application_setup=application_setup,
+    metadata={
+        "required": True,
+        "i18n": {
+            "en": {
+                "name": "Composer context",
+                "description": (
+                    "Validate and mount workspaces, Soul, Skills, MCP servers, "
+                    "Plugin packs, and remote devices selected in the composer."
+                ),
+            },
+            "zh": {
+                "name": "输入框上下文",
+                "description": (
+                    "统一校验并挂载输入框中选择的工作区、灵魂、技能、MCP "
+                    "服务器、插件包和远程设备。"
+                ),
+            },
+        },
+    },
+)
+
+
+__all__ = ["application_setup", "plugin_pack", "setup_composer_context"]

@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
+from cyrene.localization import app_language, localized
 from cyrene.workbench.store import delete_document, read_document, write_document
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,12 @@ MAIN_AGENT_MEMORY_TRIGGER_PROMPT = (
     "work, a reusable success, an understood failure/recovery, or an explicit "
     "correction emerges, use toolbox to describe and invoke "
     "trigger_project_memory_learning after the evidence is complete."
+)
+
+_MAIN_AGENT_MEMORY_TRIGGER_PROMPT_ZH = (
+    "当出现可长期复用的项目知识、反复出现的用户习惯、已完成的项目工作、"
+    "可复用的成功经验、已理解的失败与恢复路径，或用户明确纠正的信息时，"
+    "请在证据完整后通过 toolbox 描述并调用 trigger_project_memory_learning。"
 )
 
 _SECRET_PATTERNS = (
@@ -267,19 +274,30 @@ def build_main_agent_suffix(
     snapshot: dict[str, Any] | None,
     *,
     include_trigger: bool = True,
+    language: str = "",
 ) -> str:
     """Return the short Workbench-only system suffix for an enabled chat."""
     if snapshot is None:
         return ""
+    resolved_language = app_language(language or snapshot.get("language"))
+    trigger_prompt = localized(
+        MAIN_AGENT_MEMORY_TRIGGER_PROMPT,
+        _MAIN_AGENT_MEMORY_TRIGGER_PROMPT_ZH,
+        language=resolved_language,
+    )
     prompt = normalize_prompt(snapshot.get("prompt"))
     if not prompt and include_trigger:
-        return MAIN_AGENT_MEMORY_TRIGGER_PROMPT
+        return trigger_prompt
     if not prompt:
         return ""
-    memory_block = "Project memory:\n" + prompt
+    memory_block = localized(
+        "Project memory:\n",
+        "项目记忆：\n",
+        language=resolved_language,
+    ) + prompt
     if not include_trigger:
         return memory_block
-    return MAIN_AGENT_MEMORY_TRIGGER_PROMPT + "\n\n" + memory_block
+    return trigger_prompt + "\n\n" + memory_block
 
 
 def _parse_iso(value: str) -> datetime | None:
@@ -330,6 +348,7 @@ def _new_revision(
     modified_by: str,
     source: str,
     change_summary: str,
+    change_summary_code: str = "",
     trigger: dict[str, Any] | None = None,
     model: dict[str, Any] | None = None,
     restored_from_modified_at: str = "",
@@ -344,6 +363,7 @@ def _new_revision(
         "prompt": prompt,
         "hash": prompt_hash(prompt),
         "changeSummary": str(change_summary or "").strip()[:500],
+        "changeSummaryCode": str(change_summary_code or "").strip()[:80],
         "trigger": dict(trigger or {}),
         "model": dict(model or {}),
     }
@@ -360,6 +380,7 @@ def _commit_prompt(
     modified_by: str,
     source: str,
     change_summary: str,
+    change_summary_code: str = "",
     trigger: dict[str, Any] | None = None,
     model: dict[str, Any] | None = None,
     restored_from_modified_at: str = "",
@@ -390,6 +411,7 @@ def _commit_prompt(
             modified_by=modified_by,
             source=source,
             change_summary=change_summary,
+            change_summary_code=change_summary_code,
             trigger=trigger,
             model=model,
             restored_from_modified_at=restored_from_modified_at,
@@ -417,7 +439,8 @@ def update_project_memory_prompt(
         base_modified_at=base_modified_at,
         modified_by="user",
         source="manual_edit",
-        change_summary="User edited the complete project-memory prompt.",
+        change_summary="",
+        change_summary_code="manual_edit",
     )
 
 
@@ -445,7 +468,8 @@ def restore_project_memory_prompt(
         base_modified_at=base_modified_at,
         modified_by="user",
         source="restore",
-        change_summary=f"Restored project memory from {modified_at}.",
+        change_summary="",
+        change_summary_code="restored",
         restored_from_modified_at=str(modified_at or ""),
         force_revision=True,
     )
@@ -522,12 +546,7 @@ def _context_hash(messages: list[dict[str, Any]]) -> str:
 
 def _preferred_project_memory_language() -> str:
     """Return the Workbench language used for project-memory prose."""
-    try:
-        from cyrene.runtime.settings_store import get as get_setting
-
-        return "en" if str(get_setting("app_language", "") or "").strip().lower() == "en" else "zh"
-    except Exception:
-        return "zh"
+    return app_language()
 
 
 def persist_tree_context_snapshot(
@@ -695,12 +714,12 @@ def _memory_agent_instruction(current_prompt: str, language: str) -> str:
     )
 
 
-def _memory_agent_retry_instruction(error: Exception) -> str:
-    return (
-        "Your previous project-memory response was structurally invalid: "
-        f"{error}. Retry now. You must call submit_project_memory exactly once "
-        "with both prompt and change_summary. Do not answer with ordinary text "
-        "and do not call the tool more than once."
+def _memory_agent_retry_instruction(error: Exception, language: str) -> str:
+    return localized(
+        "Your previous project-memory response was structurally invalid: {error}. Retry now. You must call submit_project_memory exactly once with both prompt and change_summary. Do not answer with ordinary text and do not call the tool more than once.",
+        "上一次项目记忆响应的结构无效：{error}。请立即重试。必须恰好调用一次 submit_project_memory，同时提供 prompt 和 change_summary；不要输出普通文本，也不要多次调用工具。",
+        language=language,
+        error=error,
     )
 
 
@@ -708,17 +727,26 @@ def _parse_memory_agent_response(
     response: Any,
     *,
     identity: dict[str, Any],
+    language: str,
 ) -> tuple[str, str, dict[str, Any]]:
     from cyrene.model_runtime.messages import parse_tool_arguments
 
     if not isinstance(response, dict):
-        raise _RetryableProjectMemoryOutput("Memory Agent returned no structured response")
+        raise _RetryableProjectMemoryOutput(localized(
+            "Memory Agent returned no structured response",
+            "记忆 Agent 未返回结构化响应",
+            language=language,
+        ))
     if str(response.get("finish_reason") or "").lower() in {
         "length",
         "max_tokens",
         "max_output_tokens",
     }:
-        raise _RetryableProjectMemoryOutput("Memory Agent output was truncated")
+        raise _RetryableProjectMemoryOutput(localized(
+            "Memory Agent output was truncated",
+            "记忆 Agent 的输出已被截断",
+            language=language,
+        ))
     tool_calls = response.get("tool_calls") or []
     submissions: list[dict[str, Any]] = []
     for call in tool_calls:
@@ -730,32 +758,70 @@ def _parse_memory_agent_response(
             submissions.append(source)
     if not submissions:
         raise _RetryableProjectMemoryOutput(
-            "Memory Agent submitted no project-memory result"
+            localized(
+                "Memory Agent submitted no project-memory result",
+                "记忆 Agent 未提交项目记忆结果",
+                language=language,
+            )
         )
     if len(submissions) > 1:
         raise _RetryableProjectMemoryOutput(
-            f"Memory Agent submitted {len(submissions)} project-memory results; expected exactly one"
+            localized(
+                "Memory Agent submitted {count} project-memory results; expected exactly one",
+                "记忆 Agent 提交了 {count} 个项目记忆结果，预期恰好一个",
+                language=language,
+                count=len(submissions),
+            )
         )
     try:
         parsed = parse_tool_arguments(submissions[0].get("arguments"))
     except ValueError as exc:
         raise _RetryableProjectMemoryOutput(
-            "Memory Agent submitted malformed project-memory arguments"
+            localized(
+                "Memory Agent submitted malformed project-memory arguments",
+                "记忆 Agent 提交的项目记忆参数格式无效",
+                language=language,
+            )
         ) from exc
     if "prompt" not in parsed:
-        raise _RetryableProjectMemoryOutput("Memory Agent submission is missing prompt")
+        raise _RetryableProjectMemoryOutput(localized(
+            "Memory Agent submission is missing prompt",
+            "记忆 Agent 的提交缺少 prompt",
+            language=language,
+        ))
     prompt = normalize_prompt(parsed.get("prompt"))
     if len(prompt) > _MAX_PROMPT_CHARS:
         raise _RetryableProjectMemoryOutput(
-            f"Memory Agent prompt exceeds {_MAX_PROMPT_CHARS} characters"
+            localized(
+                "Memory Agent prompt exceeds {limit} characters",
+                "记忆 Agent 的 prompt 超过 {limit} 个字符",
+                language=language,
+                limit=_MAX_PROMPT_CHARS,
+            )
         )
     if _contains_secret(prompt):
-        raise InvalidProjectMemoryOutput("Memory Agent output appears to contain a secret")
+        raise InvalidProjectMemoryOutput(localized(
+            "Memory Agent output appears to contain a secret",
+            "记忆 Agent 的输出似乎包含密钥或凭据",
+            language=language,
+        ))
     if _contains_prompt_injection(prompt):
-        raise InvalidProjectMemoryOutput("Memory Agent output appears to contain prompt injection")
-    summary = str(parsed.get("change_summary") or "Memory Agent updated project memory.").strip()[:500]
+        raise InvalidProjectMemoryOutput(localized(
+            "Memory Agent output appears to contain prompt injection",
+            "记忆 Agent 的输出似乎包含提示词注入",
+            language=language,
+        ))
+    summary = str(parsed.get("change_summary") or localized(
+        "Memory Agent updated project memory.",
+        "记忆 Agent 已更新项目记忆。",
+        language=language,
+    )).strip()[:500]
     if _contains_secret(summary):
-        raise InvalidProjectMemoryOutput("Memory Agent summary appears to contain a secret")
+        raise InvalidProjectMemoryOutput(localized(
+            "Memory Agent summary appears to contain a secret",
+            "记忆 Agent 的变更摘要似乎包含密钥或凭据",
+            language=language,
+        ))
     response_identity = response.get("model_identity")
     response_identity = dict(response_identity) if isinstance(response_identity, dict) else {}
     public_model = {
@@ -773,14 +839,22 @@ async def _learn_prompt(
     *,
     model_gateway: Any,
 ) -> tuple[str, str, dict[str, Any]]:
-    identity = dict(snapshot.get("model") or {})
-    if not identity:
-        raise ProjectMemoryModelUnavailable("the triggering main-Agent model is no longer configured")
-    if model_gateway is None or not callable(getattr(model_gateway, "complete", None)):
-        raise ProjectMemoryModelUnavailable("the memory Plugin model gateway is unavailable")
     language = str(snapshot.get("language") or "").strip().lower()
     if language not in {"en", "zh"}:
         language = _preferred_project_memory_language()
+    identity = dict(snapshot.get("model") or {})
+    if not identity:
+        raise ProjectMemoryModelUnavailable(localized(
+            "The triggering main-Agent model is no longer configured.",
+            "触发记忆学习的主 Agent 模型已不再配置。",
+            language=language,
+        ))
+    if model_gateway is None or not callable(getattr(model_gateway, "complete", None)):
+        raise ProjectMemoryModelUnavailable(localized(
+            "The memory Plugin model gateway is unavailable.",
+            "记忆插件的模型网关不可用。",
+            language=language,
+        ))
     messages = copy.deepcopy(snapshot.get("messages") or [])
     messages.append({
         "role": "user",
@@ -806,7 +880,11 @@ async def _learn_prompt(
         except RuntimeError as exc:
             if EXACT_MODEL_UNAVAILABLE in str(exc):
                 raise ProjectMemoryModelUnavailable(
-                    "the triggering main-Agent model is no longer configured"
+                    localized(
+                        "The triggering main-Agent model is no longer configured.",
+                        "触发记忆学习的主 Agent 模型已不再配置。",
+                        language=language,
+                    )
                 ) from exc
             raise
 
@@ -815,22 +893,29 @@ async def _learn_prompt(
         return _parse_memory_agent_response(
             response,
             identity=identity,
+            language=language,
         )
     except _RetryableProjectMemoryOutput as first_error:
         retry_messages = copy.deepcopy(messages)
         retry_messages.append({
             "role": "user",
-            "content": _memory_agent_retry_instruction(first_error),
+            "content": _memory_agent_retry_instruction(first_error, language),
         })
         response = await complete(retry_messages)
         try:
             return _parse_memory_agent_response(
                 response,
                 identity=identity,
+                language=language,
             )
         except _RetryableProjectMemoryOutput as retry_error:
             raise InvalidProjectMemoryOutput(
-                f"{retry_error} after 2 attempts"
+                localized(
+                    "{error} after 2 attempts",
+                    "尝试 2 次后仍失败：{error}",
+                    language=language,
+                    error=retry_error,
+                )
             ) from retry_error
 
 
@@ -872,6 +957,7 @@ async def _run_job(
 ) -> None:
     project_id = str(job.get("projectId") or "")
     job_id = str(job.get("id") or "")
+    language = str(snapshot.get("language") or "") or _preferred_project_memory_language()
     lock = _PROJECT_LOCKS.setdefault(project_id, asyncio.Lock())
     async with lock:
         running = _update_job(project_id, job_id, status="running", startedAt=_job_now())
@@ -916,7 +1002,11 @@ async def _run_job(
                         status=status,
                         completedAt=_job_now(),
                         durationMs=max(0, int((time.monotonic() - started) * 1000)),
-                        changeSummary=summary if changed else "No material memory change.",
+                        changeSummary=summary if changed else localized(
+                            "No material memory change.",
+                            "项目记忆无实质变化。",
+                            language=language,
+                        ),
                         model=model,
                         errorType="",
                         error="",
@@ -935,7 +1025,11 @@ async def _run_job(
                 completedAt=_job_now(),
                 durationMs=max(0, int((time.monotonic() - started) * 1000)),
                 errorType="internal_error",
-                error="Memory learning was cancelled because its conversation or project was deleted.",
+                error=localized(
+                    "Memory learning was cancelled because its conversation or project was deleted.",
+                    "由于所属对话或项目已删除，记忆学习已取消。",
+                    language=language,
+                ),
             )
             await _publish_job_event(cancelled)
             raise
@@ -970,6 +1064,7 @@ def schedule_learning(
     model_gateway: Any,
 ) -> dict[str, Any]:
     """Queue learning rooted exclusively at a persisted ContextTree node."""
+    language = app_language(snapshot.get("language") if isinstance(snapshot, dict) else "")
     if (
         not snapshot
         or snapshot.get("snapshotSource") != "context_tree_node"
@@ -980,7 +1075,11 @@ def schedule_learning(
         return {
             "status": "error",
             "type": "no_completed_context",
-            "message": "No ContextTree learning node is available for this conversation.",
+            "message": localized(
+                "No ContextTree learning node is available for this conversation.",
+                "当前对话没有可用的 ContextTree 学习节点。",
+                language=language,
+            ),
         }
     snapshot = copy.deepcopy(snapshot)
     snapshot["projectId"] = str(project_id or snapshot.get("projectId") or "")
@@ -999,7 +1098,11 @@ def schedule_learning(
             str(job.get("id") or ""),
             status="failed",
             errorType="internal_error",
-            error="No running event loop is available.",
+            error=localized(
+                "No running event loop is available.",
+                "当前没有可用的运行中事件循环。",
+                language=language,
+            ),
         )
         return {"status": "error", "type": "internal_error", "job": failed}
     _PENDING_TASKS.add(task)
@@ -1037,6 +1140,11 @@ def schedule_learning_from_completed_chat(
     language: str = "",
 ) -> dict[str, Any]:
     snapshot = get_tree_context_snapshot(chat_id)
+    requested_language = str(language or "").strip().lower()
+    resolved_language = app_language(
+        requested_language
+        or (snapshot.get("language") if isinstance(snapshot, dict) else "")
+    )
     if (
         not snapshot
         or snapshot.get("snapshotSource") != "context_tree_node"
@@ -1046,15 +1154,22 @@ def schedule_learning_from_completed_chat(
         return {
             "status": "error",
             "type": "no_completed_context",
-            "message": "No ContextTree learning node is available for this conversation.",
+            "message": localized(
+                "No ContextTree learning node is available for this conversation.",
+                "当前对话没有可用的 ContextTree 学习节点。",
+                language=resolved_language,
+            ),
         }
     if str(snapshot.get("projectId") or "") != str(project_id or ""):
         return {
             "status": "error",
             "type": "project_mismatch",
-            "message": "The completed context belongs to another project.",
+            "message": localized(
+                "The completed context belongs to another project.",
+                "已完成的上下文属于另一个项目。",
+                language=resolved_language,
+            ),
         }
-    requested_language = str(language or "").strip().lower()
     snapshot = copy.deepcopy(snapshot)
     snapshot["language"] = (
         requested_language
@@ -1074,6 +1189,16 @@ async def wait_for_pending_jobs() -> None:
     """Testing/shutdown helper: wait until the current job set settles."""
     while _PENDING_TASKS:
         await asyncio.gather(*list(_PENDING_TASKS), return_exceptions=True)
+
+
+async def cancel_pending_jobs() -> None:
+    """Cancel every learning job owned by the active memory Plugin generation."""
+
+    while _PENDING_TASKS:
+        pending = list(_PENDING_TASKS)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 class ProjectMemoryApplicationService:
@@ -1110,7 +1235,12 @@ class ProjectMemoryApplicationService:
         except Exception as exc:
             logger.exception("Failed to read project-memory prompt for %s", project_id)
             raise ProjectMemoryApplicationError(
-                "Memory prompt load failed", 500, "memory_prompt_load_failed"
+                localized(
+                    "Memory prompt load failed",
+                    "项目记忆提示词加载失败",
+                ),
+                500,
+                "memory_prompt_load_failed",
             ) from exc
 
     async def update(
@@ -1130,13 +1260,32 @@ class ProjectMemoryApplicationService:
             )
             return {**payload, "status": "saved" if changed else "unchanged"}
         except ProjectMemoryConflict as exc:
-            raise ProjectMemoryApplicationError(str(exc), 409, "optimistic_conflict") from exc
+            raise ProjectMemoryApplicationError(
+                localized(
+                    "Project memory changed after this version was opened. Reload and try again.",
+                    "打开当前版本后，项目记忆已发生变化。请重新加载后再试。",
+                ),
+                409,
+                "optimistic_conflict",
+            ) from exc
         except InvalidProjectMemoryOutput as exc:
-            raise ProjectMemoryApplicationError(str(exc), 400, "invalid_prompt") from exc
+            raise ProjectMemoryApplicationError(
+                localized(
+                    "The project-memory prompt is invalid.",
+                    "项目记忆提示词无效。",
+                ),
+                400,
+                "invalid_prompt",
+            ) from exc
         except Exception as exc:
             logger.exception("Failed to edit project-memory prompt for %s", project_id)
             raise ProjectMemoryApplicationError(
-                "Memory prompt update failed", 500, "memory_prompt_update_failed"
+                localized(
+                    "Memory prompt update failed",
+                    "项目记忆提示词更新失败",
+                ),
+                500,
+                "memory_prompt_update_failed",
             ) from exc
 
     async def restore(
@@ -1156,22 +1305,56 @@ class ProjectMemoryApplicationService:
             )
             return {**payload, "status": "saved" if changed else "unchanged"}
         except KeyError as exc:
-            raise ProjectMemoryApplicationError("memory version not found", 404) from exc
+            raise ProjectMemoryApplicationError(
+                localized(
+                    "Memory version not found",
+                    "未找到记忆版本",
+                ),
+                404,
+                "memory_version_not_found",
+            ) from exc
         except ProjectMemoryConflict as exc:
-            raise ProjectMemoryApplicationError(str(exc), 409, "optimistic_conflict") from exc
+            raise ProjectMemoryApplicationError(
+                localized(
+                    "Project memory changed after this version was opened. Reload and try again.",
+                    "打开当前版本后，项目记忆已发生变化。请重新加载后再试。",
+                ),
+                409,
+                "optimistic_conflict",
+            ) from exc
         except Exception as exc:
             logger.exception("Failed to restore project-memory prompt for %s", project_id)
             raise ProjectMemoryApplicationError(
-                "Memory prompt restore failed", 500, "memory_prompt_restore_failed"
+                localized(
+                    "Memory prompt restore failed",
+                    "项目记忆提示词恢复失败",
+                ),
+                500,
+                "memory_prompt_restore_failed",
             ) from exc
 
     async def learn_from_chat(self, chat_id: str, *, language: str = "") -> dict:
+        resolved_language = app_language(language)
         chat = await asyncio.to_thread(self.chats.get, chat_id)
         if chat is None:
-            raise ProjectMemoryApplicationError("chat not found", 404)
+            raise ProjectMemoryApplicationError(
+                localized(
+                    "Chat not found",
+                    "未找到对话",
+                    language=resolved_language,
+                ),
+                404,
+                "chat_not_found",
+            )
         if str(chat.get("kind") or "chat") != "chat":
             raise ProjectMemoryApplicationError(
-                "only root conversations can generate project memory", 400
+                localized(
+                    "Only root conversations can generate project memory",
+                    "只有根对话可以生成项目记忆",
+                    language=resolved_language,
+                ),
+                400,
+                "unsupported_chat_kind",
             )
         result = schedule_learning_from_completed_chat(
             str(chat.get("projectId") or ""),
@@ -1192,7 +1375,11 @@ class ProjectMemoryApplicationService:
     async def _require_project(self, project_id: str) -> None:
         project = await asyncio.to_thread(self.projects.find, project_id)
         if project is None:
-            raise ProjectMemoryApplicationError("project not found", 404)
+            raise ProjectMemoryApplicationError(
+                localized("Project not found", "未找到项目"),
+                404,
+                "project_not_found",
+            )
 
 
 __all__ = [
@@ -1222,4 +1409,5 @@ __all__ = [
     "schedule_learning_from_completed_chat",
     "update_project_memory_prompt",
     "wait_for_pending_jobs",
+    "cancel_pending_jobs",
 ]

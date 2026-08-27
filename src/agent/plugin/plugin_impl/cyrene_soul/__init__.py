@@ -1,8 +1,33 @@
 """SOUL.md context-mounting Plugin pack."""
 
-from agent.plugin import PluginPack
+from agent.plugin import PluginApplicationContext, PluginPack
 
 from .service import setup_soul
+from .onboarding import SoulOnboardingApplication
+from .store import SoulApplication
+
+
+def application_setup(context: PluginApplicationContext) -> None:
+    from cyrene.runtime.settings_service import (
+        PluginSettingsContribution,
+        SettingControlSpec,
+    )
+
+    application = SoulApplication()
+    onboarding = SoulOnboardingApplication(application)
+    from .routes import register_soul_routes
+
+    register_soul_routes(context.router, application, onboarding)
+    context.provide("soul", application)
+    context.provide("soul_onboarding", onboarding)
+    context.on_startup(application.startup)
+    context.provide(
+        "soul_settings",
+        PluginSettingsContribution(controls=(
+            SettingControlSpec("agents.soul", "agents", "current_ui", "cyrene.ui.inspect", "R2"),
+        )),
+    )
+    context.expose_frontend("soul")
 
 
 plugin_pack = PluginPack(
@@ -10,6 +35,7 @@ plugin_pack = PluginPack(
     description="Mount the enabled SOUL.md persona directly below the system prompt.",
     plugins=(),
     setup=setup_soul,
+    application_setup=application_setup,
     metadata={
         "i18n": {
             "en": {
@@ -24,4 +50,9 @@ plugin_pack = PluginPack(
     },
 )
 
-__all__ = ["plugin_pack"]
+__all__ = [
+    "SoulApplication",
+    "SoulOnboardingApplication",
+    "application_setup",
+    "plugin_pack",
+]

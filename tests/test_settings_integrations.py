@@ -20,7 +20,9 @@ from route.registry import register_routes
 
 
 def test_zotero_local_api_rejects_non_loopback_urls():
-    from cyrene.runtime.integration_settings import normalize_zotero
+    from agent.plugin.plugin_impl.cyrene_knowledge.zotero_settings import (
+        normalize_zotero,
+    )
 
     with pytest.raises(ValueError, match="localhost:23119"):
         normalize_zotero({"base_url": "https://example.com/api"})
@@ -77,7 +79,7 @@ def test_settings_ui_moves_zotero_to_integrations_and_keeps_embedding_in_models(
     styles = workbench_style_source()
     translations = workbench_i18n_source()
 
-    assert 'settingsFetch("/api/settings/integrations")' in source
+    assert 'settingsFetch("/api/settings/integrations", { signal:' in source
     assert 'settingsFetch("/api/settings/integrations/test"' in source
     assert 'requestJson("/api/settings/model-config")' in model_source
     assert 'function configPayload(config)' in model_source
@@ -94,7 +96,7 @@ def test_settings_ui_moves_zotero_to_integrations_and_keeps_embedding_in_models(
         root / "src/webui/frontend/features/settings/general.jsx"
     ).read_text(encoding="utf-8")
     assert 'settings.zoteroIntegration' in general_panel
-    assert 'p.integrationsOnly && React.cloneElement(SectionBlock(t("settings.zoteroIntegration")' in general_panel
+    assert 'p.integrationsOnly && hasKnowledge && React.cloneElement(SectionBlock' in general_panel
     assert 'tab === "integrations" && React.createElement(GeneralPanel, { integrationsOnly: true' in source
     assert 'settings.embeddingIntegration' not in general_panel
     assert 'settings.localModels' in model_source
@@ -103,7 +105,7 @@ def test_settings_ui_moves_zotero_to_integrations_and_keeps_embedding_in_models(
     for kind in ("embedding", "ocr", "asr", "tts"):
         assert f".wb-local-model-icon.is-{kind}" in styles
     assert "var(--wb-local-model-icon-color)" in styles
-    assert 'title: "嵌入模型", titleKey: "settings.embeddingRouteTitle"' in model_source
+    assert 'title: "Embedding model", titleKey: "settings.embeddingRouteTitle"' in model_source
     assert 'capability: "embedding"' in model_source
     assert translations.count('"settings.zoteroIntegration"') == 2
     assert translations.count('"settings.zoteroImportAction"') == 2
@@ -123,9 +125,12 @@ def test_profile_is_a_settings_item_without_a_collapsed_settings_icon_stack():
 
     assert '{ id: "profile", labelKey: "rail.profile", icon: "user" }' in settings
     assert 'ids: ["profile", "general", "search", "appearance", "shortcuts"]' in settings
-    assert 'ids: ["model-usage", "models", "media", "agents", "voice", "plugins"]' in settings
-    icon_names = re.findall(r'\{ id: "[^"]+", labelKey: "[^"]+", icon: "([^"]+)" \}', settings)
-    assert len(icon_names) == 20
+    assert 'ids: ["model-usage", "models", "media", "agents", "voice"]' in settings
+    assert '{ id: "plugins", labelKey: "settings.pluginsTab", icon: "tools" }' not in settings
+    assert 'tab === "plugins"' not in settings
+    assert 'mode === "plugins"' not in settings
+    icon_names = re.findall(r'\{ id: "[^"]+", labelKey: "[^"]+", icon: "([^"]+)"[^}]*\}', settings)
+    assert len(icon_names) == 18
     assert len(set(icon_names)) == len(icon_names)
     assert 'className: "settings-overlay-tab-glyph"' in settings
     build_source = (root / "src/webui/build-jsx.mjs").read_text(encoding="utf-8")
@@ -146,7 +151,7 @@ def test_profile_is_a_settings_item_without_a_collapsed_settings_icon_stack():
     assert '"profile.basicInfo": "个人信息"' in translations
     for label in (
         "通用设置", "界面外观", "键盘快捷键", "模型配置", "智能代理",
-        "语音交互", "插件", "消息渠道", "远程连接", "插件与集成", "插件注册表",
+        "语音交互", "消息渠道", "远程连接", "插件与集成", "插件中心",
         "服务集成", "预算管理", "用量统计", "数据管理", "关于 Cyrene",
     ):
         assert f'": "{label}"' in translations
@@ -269,7 +274,12 @@ def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
     assert '--wb-chart-request: #f4bd50' in styles
     assert '--wb-chart-cost: #e77bd5' in styles
     assert '--wb-chart-grid: rgba(194, 195, 202, 0.16)' in styles
+    assert ".settings-overlay .settings-panel.wb-usage-settings" in styles
+    assert "width: min(100%, 1120px)" in styles
+    model_grid_rule = styles.split(".wb-budget-model-grid {", 1)[1].split("}", 1)[0]
+    assert "repeat(auto-fit, minmax(min(100%, 19rem), 1fr))" in model_grid_rule
     provider_grid_rule = styles.split(".wb-provider-usage-grid {", 1)[1].split("}", 1)[0]
+    assert "repeat(auto-fit, minmax(min(100%, 15rem), 1fr))" in provider_grid_rule
     assert "align-items: start" in provider_grid_rule
     assert "align-items: stretch" not in provider_grid_rule
     assert ".wb-provider-usage-column" not in styles

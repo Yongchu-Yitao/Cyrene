@@ -90,6 +90,21 @@ def test_header_uses_compact_agent_title():
     assert "输入任务；/help 查看命令" not in output
 
 
+def test_header_connection_status_follows_renderer_language():
+    from rich.console import Console
+    from cyrene.cli_chat import RichRenderer
+
+    stream = io.StringIO()
+    renderer = RichRenderer(color=False, lang="en")
+    renderer.console = Console(file=stream, no_color=True, highlight=False)
+
+    renderer.header("chat_1", "default")
+
+    output = stream.getvalue()
+    assert "● Connected" in output
+    assert "已连接" not in output
+
+
 def test_brand_logo_is_a_clear_single_line_gradient_mark():
     from cyrene.cli_chat import RichRenderer
 
@@ -246,10 +261,10 @@ async def test_config_plugins_uses_canonical_plugin_settings_api(monkeypatch):
     await app._config_plugins()
 
     assert calls == [
-        ("get", "/api/settings/plugins"),
+        ("get", "/api/plugins"),
         (
             "update",
-            "/api/settings/plugins",
+            "/api/plugins/activation",
             {"packs": {"cyrene_skills": False}},
             "PUT",
         ),
@@ -289,7 +304,7 @@ def test_ctrl_c_exit_hint_is_rendered_below_input_rule():
     assert toolbar[0][1].startswith("─")
     assert toolbar[1] == (
         "class:bottom-toolbar",
-        "\nModel: deepseek-v4-flash[1m] | Ctx: 0 | feature/cli"
+        "\n模型: deepseek-v4-flash[1m] | 上下文: 0 | feature/cli"
         "\n权限模式: 默认",
     )
     assert toolbar[2] == ("class:exit-hint", "\n再次按 Ctrl+C 退出")
@@ -474,6 +489,70 @@ async def test_rich_renderer_displays_phase1_content_in_terminal(monkeypatch):
     assert "思考了" not in output
 
 
+@pytest.mark.asyncio
+async def test_rich_renderer_localizes_status_reasoning_plan_and_errors_to_english(
+    monkeypatch,
+):
+    from rich.console import Console
+    from cyrene.cli_chat import RichRenderer
+
+    stream = io.StringIO()
+    renderer = RichRenderer(color=False, lang="en")
+    renderer.console = Console(
+        file=stream,
+        no_color=True,
+        highlight=False,
+        width=120,
+    )
+    monkeypatch.setattr(renderer, "_start_status", lambda: None)
+    now = {"value": 100.0}
+    monkeypatch.setattr("cyrene.cli_chat.time.monotonic", lambda: now["value"])
+    renderer._turn_started_at = 100.0
+    renderer._reasoning_started_at = 100.0
+
+    await renderer.handle({"type": "reasoning_start"})
+    now["value"] = 102.0
+    await renderer.handle({"type": "reasoning_done", "response": "Checked inputs."})
+    await renderer.handle({"type": "tool_call_started", "tool": "Read"})
+    assert renderer._activity == "Running Read"
+    await renderer.handle({"type": "tool_call_finished", "tool": "Read"})
+    assert renderer._activity == "Thinking"
+    await renderer.handle({
+        "type": "plan",
+        "plan": {"steps": [{"status": "pending"}]},
+    })
+    await renderer.handle({
+        "type": "plan_progress",
+        "step": 1,
+        "status": "updated",
+    })
+    await renderer.handle({"type": "awaiting_user"})
+    await renderer.handle({"type": "run_interrupted"})
+    await renderer.handle({"type": "error"})
+    await renderer.handle({"type": "run_finalizing"})
+    assert renderer._activity == "Finishing"
+    now["value"] = 105.0
+    await renderer.end_turn(_success=True)
+
+    output = stream.getvalue()
+    assert "Thought for 2s (Ctrl+O to view)" in output
+    assert "Read" in output and "Running" in output
+    assert "Execution plan" in output
+    assert "1. Step" in output
+    assert "Plan step 1" in output and "updated" in output
+    assert "Your confirmation is required" in output
+    assert "Run interrupted" in output
+    assert "Request failed" in output and "Unknown error" in output
+    assert "Completed in 5s" in output
+    assert "思考" not in output
+    assert "计划" not in output
+    assert "请求失败" not in output
+
+    overlay = renderer.reasoning_overlay_text()
+    assert "Reasoning details" in overlay
+    assert "Ctrl+O / Esc to return" in overlay
+
+
 def test_reasoning_details_use_temporary_erasable_overlay():
     from cyrene.cli_chat import InteractiveChat
 
@@ -565,8 +644,33 @@ def test_cli_parser_exposes_interactive_chat_options():
 
     assert args.command == "chat"
     assert args.mode == "plan"
+    assert args.lang is None
     assert args.no_color is True
     assert args.text == "inspect this repository"
+
+    explicit = build_parser().parse_args(["chat", "--lang", "en"])
+    assert explicit.lang == "en"
+
+
+@pytest.mark.asyncio
+async def test_chat_language_inherits_app_language_unless_explicit():
+    from cyrene.cli_chat import _resolve_chat_language
+
+    class Transport:
+        def __init__(self):
+            self.calls = []
+
+        async def get_setting(self, path):
+            self.calls.append(path)
+            return {"app_language": "en"}
+
+    inherited_transport = Transport()
+    assert await _resolve_chat_language(None, inherited_transport) == "en"
+    assert inherited_transport.calls == ["/api/settings/config"]
+
+    explicit_transport = Transport()
+    assert await _resolve_chat_language("zh", explicit_transport) == "zh"
+    assert explicit_transport.calls == []
 
 
 def test_cli_parser_exposes_run_resume():
@@ -879,7 +983,7 @@ async def test_context_matches_workbench_grouped_composition_and_indents_message
 
     output = stream.getvalue()
     assert "对话上下文" in output
-    assert "224 tokens" in output
+    assert "224 Token" in output
     assert "系统前缀" in output
     assert "基础指令" in output and "6.3k" in output
     assert "临时注入" in output
@@ -887,6 +991,71 @@ async def test_context_matches_workbench_grouped_composition_and_indents_message
     assert "  ■ 用户" in output
     assert "  ■ 助手" in output
     assert "deepseek-v4-flash · 224 / 1,000,000" in output
+
+
+@pytest.mark.asyncio
+async def test_context_labels_follow_english_cli_language():
+    from rich.console import Console
+    from cyrene.cli_chat import ChatOptions, InteractiveChat, RichRenderer
+
+    class Transport:
+        chat_id = "chat_1"
+
+        async def context(self):
+            return {
+                "model": "test-model",
+                "ctxUsed": 12,
+                "ctxLimit": 100,
+                "ratio": 0.12,
+                "messageCount": 1,
+            }
+
+        async def context_blocks(self):
+            return {
+                "messageTokens": 12,
+                "layers": [
+                    {
+                        "id": "system_prefix",
+                        "totalTokens": 8,
+                        "blocks": [{
+                            "id": "main.system.base",
+                            "type": "system",
+                            "tokens_est": 8,
+                        }],
+                    },
+                    {
+                        "id": "messages",
+                        "totalTokens": 12,
+                        "blocks": [{
+                            "id": "segment.user",
+                            "type": "user",
+                            "tokens_est": 12,
+                        }],
+                    },
+                ],
+            }
+
+    stream = io.StringIO()
+    renderer = RichRenderer(color=False, lang="en")
+    renderer.console = Console(
+        file=stream,
+        no_color=True,
+        highlight=False,
+        width=100,
+    )
+    app = InteractiveChat(Transport(), renderer, ChatOptions(lang="en"))
+
+    await app._show_context()
+
+    output = stream.getvalue()
+    assert "Conversation context" in output
+    assert "System prefix" in output
+    assert "Base instructions" in output
+    assert "Conversation messages" in output
+    assert "  ■ User" in output
+    assert "1 message" in output
+    assert "对话上下文" not in output
+    assert "系统前缀" not in output
 
 
 @pytest.mark.asyncio

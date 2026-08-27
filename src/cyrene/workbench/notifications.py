@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from cyrene.localization import app_language
 from cyrene.workbench import project_repository, project_runtime
 from cyrene.workbench.store import read_document, write_document
 
@@ -102,6 +103,7 @@ def append_notification(
     link_label: str = "",
     meta: dict[str, Any] | None = None,
     created_at: str | None = None,
+    language: str | None = None,
 ) -> dict[str, Any]:
     title = str(title or "").strip()
     if not title:
@@ -123,6 +125,7 @@ def append_notification(
         "sourceLabel": str(source_label or "").strip()[:80],
         "linkLabel": str(link_label or "").strip()[:80],
         "createdAt": str(created_at or _utc_now_iso()),
+        "language": app_language(language),
         "read": False,
         "meta": meta if isinstance(meta, dict) else {},
     }

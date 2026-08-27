@@ -21,7 +21,7 @@ from typing import Any, Callable
 import httpx
 
 from cyrene.config import CACHE_DIR
-from cyrene.model_runtime import opencv_runtime
+from . import opencv_runtime
 
 
 MODEL_ROOT = Path(CACHE_DIR) / "knowledge_models"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 from agent.plugin import PluginContext
+from agent.plugin.native_runtime import plugin_localized
 
 TOOL_NAME = "browser_click_text"
 TOOL_DEF = {
@@ -23,30 +24,54 @@ TOOL_DEF = {
 }
 
 
-async def _tool_browser_click_text(args: dict[str, Any], _context: PluginContext) -> str:
-    from cyrene.browser import click_text
+async def _tool_browser_click_text(args: dict[str, Any], context: PluginContext) -> str:
+    from .runtime import click_text
 
     text = str(args.get("text") or "").strip()
     exact = bool(args.get("exact", False))
     if not text:
-        return "Click failed: no text provided."
+        return plugin_localized(
+            context,
+            "Click failed: no text was provided.",
+            "点击失败：未提供文本。",
+        )
     result = await click_text(text, exact=exact)
     if result.get("ok"):
         from .browser_output import page_observation_lines
 
-        parts = [f"Clicked text {text!r}.", f"URL: {result.get('url', '—')}", f"Title: {result.get('title', '—')}" ]
+        parts = [
+            plugin_localized(context, "Clicked text {text!r}.", "已点击文本 {text!r}。", text=text),
+            plugin_localized(context, "URL: {url}", "网址：{url}", url=result.get("url", "—")),
+            plugin_localized(context, "Title: {title}", "标题：{title}", title=result.get("title", "—")),
+        ]
         if result.get("opened_new_tab"):
             parts.append(
-                f"Opened new active tab: {result.get('active_tab_id') or result.get('tabId') or '—'} "
-                f"(source tab: {result.get('source_tab_id', '—')}, source URL: {result.get('source_url', '—')})"
+                plugin_localized(
+                    context,
+                    "Opened new active tab: {tab} (source tab: {source_tab}, source URL: {source_url})",
+                    "已打开新的活动标签页：{tab}（来源标签页：{source_tab}，来源网址：{source_url}）",
+                    tab=result.get("active_tab_id") or result.get("tabId") or "—",
+                    source_tab=result.get("source_tab_id", "—"),
+                    source_url=result.get("source_url", "—"),
+                )
             )
-        parts.extend(page_observation_lines(result))
+        parts.extend(page_observation_lines(result, context))
         return "\n".join(parts)
-    from .browser_output import file_chooser_instruction
-    chooser = file_chooser_instruction(result)
+    from .browser_output import browser_error_text, file_chooser_instruction
+    chooser = file_chooser_instruction(result, context)
     if chooser:
         return chooser
-    return f"Click failed: {result.get('error', 'unknown error')}"
+    return plugin_localized(
+        context,
+        "Click failed: {error}",
+        "点击失败：{error}",
+        error=browser_error_text(
+            result,
+            context,
+            "The browser element could not be clicked.",
+            "无法点击浏览器元素。",
+        ),
+    )
 
 
 handler = _tool_browser_click_text

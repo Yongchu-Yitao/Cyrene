@@ -6,8 +6,6 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
-_runtime_started = False
-
 _CLIENT_COMMANDS = frozenset(
     {
         "chat",
@@ -50,13 +48,11 @@ async def _prepare_runtime() -> None:
         DB_PATH,
         INBOX_DIR,
     )
-    from cyrene.runtime.bootstrap import initialize_runtime, start_external_services
+    from cyrene.runtime.bootstrap import initialize_runtime
 
-    await initialize_runtime(learning=True)
+    await initialize_runtime()
     logger.info("Database initialized at %s", DB_PATH)
     logger.info("Inbox ready at %s", INBOX_DIR)
-    await start_external_services()
-
     # 人格设置检测（Telegram 模式跳过交互，提示用户先运行 CLI）
     from cyrene.runtime.setup import init_setup_flag, is_setup_done
     init_setup_flag()
@@ -65,18 +61,43 @@ async def _prepare_runtime() -> None:
         logger.warning("  python -m cyrene.runtime.host")
 
 
-def _run_bot() -> None:
-    from cyrene.channels.telegram import setup_bot
-    from cyrene.config import ASSISTANT_NAME
+def _run_plugin_launcher(name: str) -> None:
+    """Run a named launcher contributed by one enabled editable Plugin pack."""
 
-    app = setup_bot()
-    logger.info("%s is starting...", ASSISTANT_NAME)
-    app.run_polling()
+    from agent.plugin import PluginRegistry, default_plugin_impl_directory
+    from agent.plugin.native_tools import seed_builtin_plugin_directory
+    from cyrene.runtime import settings_store
+
+    plugin_directory = default_plugin_impl_directory()
+    seed_builtin_plugin_directory(plugin_directory)
+    registry = PluginRegistry(include_core=False)
+    failures = registry.load_directory(plugin_directory)
+    registry.configure_activation(
+        plugins=settings_store.get_enabled_plugins(),
+        packs=settings_store.get_enabled_plugin_packs(),
+    )
+    candidates = []
+    for pack in registry.list_packs():
+        if not registry.pack_enabled(pack.id):
+            continue
+        launchers = pack.metadata.get("runtime_launchers", {})
+        if isinstance(launchers, dict) and callable(launchers.get(name)):
+            candidates.append((pack.id, launchers[name]))
+    if failures:
+        logger.warning(
+            "Some Plugin launchers failed to load: %s",
+            "; ".join(f"{item.path}: {item.error}" for item in failures),
+        )
+    if len(candidates) != 1:
+        owners = ", ".join(pack_id for pack_id, _ in candidates) or "none"
+        raise RuntimeError(
+            f"Expected one enabled Plugin launcher for {name!r}; found {owners}."
+        )
+    candidates[0][1]()
 
 
 def main() -> None:
     import sys
-    global _runtime_started
     if sys.argv[1:2] and sys.argv[1] in _CLIENT_COMMANDS:
         from cyrene.cli import main as client_main
 
@@ -96,16 +117,13 @@ def main() -> None:
 
     ensure_user_path()
     if "--gui" in sys.argv or "--electron-mode" in sys.argv:
-        _runtime_started = True
         from cyrene.runtime.host import main as _local_main
         _local_main()
         return
     if "--telegram" in sys.argv:
-        _runtime_started = True
         asyncio.run(_prepare_runtime())
-        _run_bot()
+        _run_plugin_launcher("telegram")
         return
-    _runtime_started = True
     from cyrene.runtime.host import run_web_mode
     run_web_mode(ui_mode="workbench")
 
@@ -117,8 +135,3 @@ if __name__ == "__main__":
         logger.info("Shutting down...")
     except Exception:
         logger.exception("Fatal error")
-    finally:
-        if _runtime_started:
-            from cyrene.runtime.bootstrap import stop_external_services
-
-            stop_external_services()

@@ -65,6 +65,58 @@ async def test_token_usage_stats_respects_exact_since_boundary(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_plugin_usage_batch_updates_profile_and_budget_sources(tmp_path):
+    db_path = str(tmp_path / "plugin-usage.db")
+    await cy_db.init_db(db_path)
+    timestamp = "2026-08-28T12:00:00+00:00"
+    usage = {
+        "prompt_tokens": 40,
+        "completion_tokens": 15,
+        "total_tokens": 55,
+        "prompt_cache_hit_tokens": 9,
+        "prompt_cache_miss_tokens": 31,
+    }
+
+    await cy_db.record_usage_stats_batch(
+        db_path,
+        runtime_events=[(timestamp, usage)],
+        model_events=[(timestamp, "plugin-model", usage)],
+        token_events=[{
+            "created_at": timestamp,
+            "model": "plugin-model",
+            "round_id": "run-1",
+            "session_id": "chat-1",
+            "caller": "main_agent",
+            "prompt_tokens": 40,
+            "completion_tokens": 15,
+            "total_tokens": 55,
+            "cache_hit_tokens": 9,
+            "cache_miss_tokens": 31,
+            "duration_ms": 800,
+        }],
+    )
+
+    daily = await cy_db.get_daily_stats_range(
+        db_path,
+        "2026-08-28",
+        "2026-08-28",
+    )
+    budget = await cy_db.get_token_usage_stats(
+        db_path,
+        since=datetime(2026, 8, 28, tzinfo=timezone.utc),
+    )
+
+    assert daily[0]["llm_requests"] == 1
+    assert daily[0]["prompt_tokens"] == 40
+    assert daily[0]["completion_tokens"] == 15
+    assert daily[0]["total_tokens"] == 55
+    assert budget["total"]["requests"] == 1
+    assert budget["total"]["prompt_tokens"] == 40
+    assert budget["total"]["completion_tokens"] == 15
+    assert budget["total"]["total_tokens"] == 55
+
+
+@pytest.mark.asyncio
 async def test_tool_stats_merges_profile_display_aliases_before_limit(tmp_path):
     db_path = str(tmp_path / "stats.db")
     await cy_db.init_db(db_path)
@@ -100,17 +152,24 @@ async def test_tool_stats_merges_profile_display_aliases_before_limit(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_task_time_totals_merges_task_logs_and_goal_runs(tmp_path):
+async def test_task_time_totals_merges_task_logs_and_goal_runs(tmp_path, monkeypatch):
+    import agent.plugin
+    from agent.plugin.plugin_impl.cyrene_schedule.service import ScheduleRuntimeService
+
     db_path = str(tmp_path / "tasks.db")
     await cy_db.init_db(db_path)
+    schedules = ScheduleRuntimeService(db_path)
+    monkeypatch.setattr(
+        agent.plugin,
+        "active_plugin_service",
+        lambda name: schedules if name == "schedules" else None,
+    )
 
     # Empty DB → zeroed totals.
     empty = await cy_db.get_task_time_totals(db_path)
     assert empty == {"total_ms": 0, "longest_ms": 0, "runs": 0}
 
-    from cyrene.runtime.persistence.scheduler import SchedulerRepository
-
-    repository = SchedulerRepository(db_path)
+    repository = schedules.repository
     await repository.log_run("t1", 1000, "ok")
     await repository.log_run("t2", 3000, "ok")
 

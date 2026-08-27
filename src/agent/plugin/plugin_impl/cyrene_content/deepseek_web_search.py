@@ -16,10 +16,6 @@ from urllib.parse import urlparse
 import httpx
 
 from agent.plugin.model_catalog import candidate_provider_id, model_plugin_catalog
-from cyrene.runtime.model_configuration import (
-    candidate_for_profile,
-    get_model_configuration,
-)
 from .search_service import get_effective_search_proxy
 
 logger = logging.getLogger(__name__)
@@ -95,12 +91,17 @@ def _configured_deepseek_models() -> list[dict[str, Any]]:
     }
     if "deepseek" not in available:
         return []
-    configuration = get_model_configuration()
+    from agent.plugin import active_plugin_service
+
+    service = active_plugin_service("model_configuration")
+    if service is None:
+        return []
+    configuration = service.get_model_configuration()
     result: list[dict[str, Any]] = []
     for profile in configuration.get("profiles") or []:
         if not isinstance(profile, dict):
             continue
-        candidate = candidate_for_profile(
+        candidate = service.candidate_for_profile(
             str(profile.get("id") or ""),
             configuration,
         )

@@ -8,7 +8,6 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_initialize_runtime_owns_shared_host_setup(monkeypatch, tmp_path):
-    from cyrene.learning import orchestrator as learning_orchestrator
     from cyrene.observability import debug
     from cyrene.runtime import bootstrap
 
@@ -31,16 +30,13 @@ async def test_initialize_runtime_owns_shared_host_setup(monkeypatch, tmp_path):
     ensure_inbox = Mock()
     clean_temp = Mock()
     enable_events = Mock()
-    init_learning = AsyncMock()
     monkeypatch.setattr(bootstrap, "init_db", init_db)
     monkeypatch.setattr(bootstrap, "ensure_inbox", ensure_inbox)
     monkeypatch.setattr(bootstrap, "cleanup_temporary_artifacts", clean_temp)
     monkeypatch.setattr(debug, "enable_event_bus", enable_events)
-    monkeypatch.setattr(learning_orchestrator, "init", init_learning)
 
     await bootstrap.initialize_runtime(
         events=True,
-        learning=True,
         include_temp=True,
         clean_temp=True,
     )
@@ -50,37 +46,6 @@ async def test_initialize_runtime_owns_shared_host_setup(monkeypatch, tmp_path):
     ensure_inbox.assert_called_once_with("cyrene")
     clean_temp.assert_called_once_with(temp)
     enable_events.assert_called_once_with()
-    init_learning.assert_awaited_once_with(data, workspace)
-
-
-@pytest.mark.asyncio
-async def test_external_services_share_one_startup_policy(monkeypatch):
-    import agent.plugin
-    from cyrene.runtime import bootstrap
-
-    class SearchService:
-        startup = AsyncMock(return_value="http://127.0.0.1:8888")
-
-    class MCPService:
-        startup = AsyncMock()
-
-    search_service = SearchService()
-    mcp_service = MCPService()
-    monkeypatch.setattr(bootstrap, "SEARXNG_AUTO_START", True)
-    monkeypatch.setattr(
-        agent.plugin,
-        "active_plugin_service",
-        lambda name: search_service if name == "web_search" else None,
-    )
-    monkeypatch.setattr(bootstrap, "_native_mcp_service", lambda: mcp_service)
-
-    await bootstrap.start_external_services()
-
-    search_service.startup.assert_awaited_once_with(
-        bootstrap.SEARXNG_PORT,
-        bootstrap.SEARXNG_HOST,
-    )
-    mcp_service.startup.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio
@@ -150,9 +115,6 @@ async def test_application_lifecycle_owns_tasks_managers_and_idempotent_shutdown
     async def shutdown_background_work() -> None:
         events.append("background")
 
-    async def stop_external_services_async(**_kwargs) -> None:
-        events.append("external")
-
     def close_manager() -> None:
         events.append("manager")
 
@@ -161,19 +123,13 @@ async def test_application_lifecycle_owns_tasks_managers_and_idempotent_shutdown
         "shutdown_background_work",
         shutdown_background_work,
     )
-    monkeypatch.setattr(
-        bootstrap,
-        "stop_external_services_async",
-        stop_external_services_async,
-    )
-
     application.create_task(pending(), label="test pending task")
     application.register_manager("scheduler", object(), close=close_manager)
     await asyncio.sleep(0)
     await application.shutdown()
     await application.shutdown()
 
-    assert events == ["background", "task", "external", "manager"]
+    assert events == ["background", "task", "manager"]
     assert context.closed is True
     assert context.accepting_work is False
     assert context.background_tasks == set()

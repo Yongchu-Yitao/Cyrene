@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
 
 from cyrene.workbench.task_services import TaskMutationError, TaskSessionNotFoundError
 from route import schemas as api_models
+from route.errors import error_response, localized_error_response
 from route.workbench.task_session_routes.context import TaskSessionRouteContext
 from route.workbench.task_session_routes.responses import service_response
 
@@ -28,7 +28,12 @@ def register_planning_routes(router: APIRouter, context: TaskSessionRouteContext
         try:
             return await context.planning.generate_acceptance(session_id)
         except TaskSessionNotFoundError:
-            return JSONResponse({"error": "session not found"}, status_code=404)
+            return localized_error_response(
+                "Task session not found.",
+                "未找到任务会话。",
+                404,
+                "task_session_not_found",
+            )
 
     @router.post("/api/task-sessions/{session_id}/reflect")
     async def api_workbench_reflect(session_id: str, body_model: api_models.ReflectionBody):
@@ -37,9 +42,20 @@ def register_planning_routes(router: APIRouter, context: TaskSessionRouteContext
         try:
             return await context.planning.reflect(session_id, focus=str(body.get("focus") or "").strip(), goal_gap=str(body.get("goalGap") or "").strip())
         except TaskSessionNotFoundError:
-            return JSONResponse({"error": "session not found"}, status_code=404)
+            return localized_error_response(
+                "Task session not found.",
+                "未找到任务会话。",
+                404,
+                "task_session_not_found",
+            )
         except TaskMutationError as exc:
-            return JSONResponse({"error": exc.message}, status_code=exc.status_code)
+            details = {"category": exc.category} if exc.category else {}
+            return error_response(
+                exc.message,
+                exc.status_code,
+                exc.code or "task_reflection_failed",
+                **details,
+            )
 
     @router.post("/api/task-sessions/{session_id}/verify")
     async def api_workbench_verify(session_id: str, _body: api_models.EmptyBody | None = None):
@@ -47,14 +63,20 @@ def register_planning_routes(router: APIRouter, context: TaskSessionRouteContext
         try:
             return await context.planning.verify(session_id)
         except TaskSessionNotFoundError:
-            return JSONResponse({"error": "session not found"}, status_code=404)
+            return localized_error_response(
+                "Task session not found.",
+                "未找到任务会话。",
+                404,
+                "task_session_not_found",
+            )
         except TaskMutationError as exc:
-            payload = {"error": exc.message}
-            if exc.code:
-                payload["code"] = exc.code
-            if exc.category:
-                payload["category"] = exc.category
-            return JSONResponse(payload, status_code=exc.status_code)
+            details = {"category": exc.category} if exc.category else {}
+            return error_response(
+                exc.message,
+                exc.status_code,
+                exc.code or "task_verification_failed",
+                **details,
+            )
 
     @router.post("/api/task-sessions/{session_id}/reflect-and-fork")
     async def api_workbench_reflect_and_fork(session_id: str, _body: api_models.EmptyBody | None = None):

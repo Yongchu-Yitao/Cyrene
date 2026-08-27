@@ -44,9 +44,9 @@ _EDITABLE_FIELDS = {
 
 
 def _default_data_root() -> Path:
-    from cyrene.runtime.paths import USER_DATA_DIR
+    from cyrene.runtime.paths import DATA_DIR
 
-    return Path(USER_DATA_DIR).expanduser().resolve() / "plugin_data" / "cyrene_knowledge"
+    return Path(DATA_DIR).expanduser().resolve() / "plugin_data" / "cyrene_knowledge"
 
 
 def creator_label(creators: Sequence[Mapping[str, Any]]) -> str:
@@ -143,12 +143,13 @@ class KnowledgeService:
         zotero_settings: Callable[[], Mapping[str, Any]] | None = None,
         legacy_store_directory: str | Path | None = None,
         project_state_provider: Callable[[], Mapping[str, Any]] | None = None,
+        initialize_store: bool = True,
     ) -> None:
         base = Path(data_directory).expanduser().resolve() if data_directory else _default_data_root()
-        self.store = KnowledgeStore(base)
+        self.store = KnowledgeStore(base, initialize=initialize_store)
         self._workspace_resolver = workspace_resolver or _default_workspace_resolver
         if zotero_settings is None:
-            from cyrene.runtime.integration_settings import get_zotero_settings
+            from .zotero_settings import get_zotero_settings
 
             zotero_settings = get_zotero_settings
         self._zotero_settings = zotero_settings
@@ -888,9 +889,53 @@ class KnowledgeService:
         project["context"] = project_context
         return archived
 
+    def storage_paths(self) -> dict[str, tuple[Path, ...]]:
+        """Expose Plugin-owned data to the generic Settings storage scanner."""
+
+        from .local_models import MODEL_ROOT
+        from .ocr import OCR_CACHE
+        from .opencv_runtime import OPENCV_ROOT
+
+        legacy_databases = (
+            tuple(sorted(self._legacy_store_directory.glob("kb_*.db*")))
+            if self._legacy_store_directory is not None
+            else ()
+        )
+        return {
+            "knowledge": (self.store.root, OCR_CACHE, *legacy_databases),
+            "local_models": (MODEL_ROOT,),
+            "opencv_runtime": (OPENCV_ROOT,),
+        }
+
+    def backup_sources(self) -> dict[str, tuple[tuple[Path, str], ...]]:
+        """Describe the durable post-migration knowledge store for backups."""
+
+        legacy_databases = (
+            tuple(
+                (path, f"store/{path.name}")
+                for path in sorted(self._legacy_store_directory.glob("kb_*.db"))
+            )
+            if self._legacy_store_directory is not None
+            else ()
+        )
+        return {
+            "files": legacy_databases,
+            "directories": (
+                (
+                    self.store.root,
+                    "data/plugin_data/cyrene_knowledge",
+                ),
+            ),
+        }
+
     async def startup(self) -> None:
         await asyncio.to_thread(self.store.initialize)
-        if self._legacy_store_directory is not None:
+        legacy_root = self._legacy_store_directory
+        if (
+            legacy_root is not None
+            and legacy_root.is_dir()
+            and any(legacy_root.glob("kb_*.db"))
+        ):
             provider = self._project_state_provider
             if provider is None:
                 from cyrene.workbench.context import read_project_state
@@ -903,10 +948,13 @@ class KnowledgeService:
                 await asyncio.to_thread(
                     migrate_legacy_knowledge,
                     self.store,
-                    self._legacy_store_directory,
+                    legacy_root,
                     project_state if isinstance(project_state, Mapping) else {},
                 )
             except Exception:
+                # A damaged legacy database must not make the new Plugin store
+                # or the rest of the application unavailable. The source is
+                # left untouched so a later release or manual repair can retry.
                 logger.exception("Legacy knowledge migration failed")
 
     def local_model_status(self) -> dict[str, Any]:
@@ -981,6 +1029,24 @@ class KnowledgeService:
         self._reembed.clear()
         await asyncio.to_thread(self.store.reset)
 
+    async def prepare_data_reset(self) -> dict[str, bool]:
+        """Clear Plugin-owned cache roots outside the main data directory."""
+
+        import shutil
+
+        from .ocr import OCR_CACHE
+        from . import opencv_runtime
+
+        await self.shutdown()
+        await self.delete_all_local_models()
+        await opencv_runtime.delete_all()
+        await asyncio.to_thread(shutil.rmtree, OCR_CACHE, True)
+        return {
+            "knowledge_cache": True,
+            "local_models": True,
+            "opencv_runtime": True,
+        }
+
 
 def create_knowledge_service(
     data_directory: str | Path | None = None,
@@ -989,6 +1055,7 @@ def create_knowledge_service(
     zotero_settings: Callable[[], Mapping[str, Any]] | None = None,
     legacy_store_directory: str | Path | None = None,
     project_state_provider: Callable[[], Mapping[str, Any]] | None = None,
+    initialize_store: bool = True,
 ) -> KnowledgeService:
     return KnowledgeService(
         data_directory,
@@ -996,6 +1063,7 @@ def create_knowledge_service(
         zotero_settings=zotero_settings,
         legacy_store_directory=legacy_store_directory,
         project_state_provider=project_state_provider,
+        initialize_store=initialize_store,
     )
 
 

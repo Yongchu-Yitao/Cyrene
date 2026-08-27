@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from cyrene.localization import app_language
 from cyrene.runtime.io import atomic_write_json, read_json_safe
 
 logger = logging.getLogger(__name__)
@@ -141,7 +142,10 @@ def _steward_prompt(
     conversation_text: str,
     soul_content: str,
     entity_hint: str,
+    *,
+    language: str = "",
 ) -> str:
+    target_language = "English" if app_language(language) == "en" else "Simplified Chinese"
     return f"""You are Cyrene's memory steward and entity extractor.
 
 Update SOUL.md from the recent conversations. Every modification MUST use one
@@ -156,6 +160,8 @@ PATTERN:USER, RELATIONSHIP:USER, or SELF:BELIEFS. Record only durable facts
 about what the user's projects are doing, important habits, explicit
 requirements, and personal information. Do not store implementation details,
 file names, code changes, or step-by-step procedures.
+Write all natural-language content you add in {target_language}; preserve code,
+identifiers, paths, commands, model names, and proper nouns exactly.
 
 Also extract real entities mentioned by the user using this exact format:
 ENTITY project_id="project_abc" type="task" title="Buy groceries" confidence="0.85" content="User plans to buy groceries"
@@ -190,6 +196,7 @@ async def _run_model(
         conversation_text,
         soul_content,
         await _existing_entity_hint(entity_service),
+        language=app_language(),
     )
     if model_gateway is None or not callable(getattr(model_gateway, "complete", None)):
         raise RuntimeError("Memory model gateway is unavailable")
@@ -256,6 +263,7 @@ async def run_steward_if_needed(
     now: float | None = None,
     model_runner: Any = None,
     entity_service: Any = None,
+    soul_application: Any = None,
 ) -> bool:
     """Run one due stewardship pass and persist its Plugin-owned cursor."""
 
@@ -281,23 +289,32 @@ async def run_steward_if_needed(
         from agent.plugin import active_plugin_service
 
         entity_service = active_plugin_service("entities")
+    soul_content = (
+        str(soul_application.read() or "")
+        if soul_application is not None
+        else ""
+    )
     if model_runner is None:
         result = await _run_model(
             conversation_text,
-            application.read_soul(),
+            soul_content,
             entity_service,
             model_gateway=getattr(application, "model_gateway", None),
         )
     else:
         result = await model_runner(
             conversation_text,
-            application.read_soul(),
+            soul_content,
             entity_service,
         )
     result = str(result or "").strip()
     commands = normalize_soul_commands(result)
-    if commands and not (commands.upper() == "SKIP"):
-        changes = application.apply_soul_update(commands)
+    if (
+        soul_application is not None
+        and commands
+        and commands.upper() != "SKIP"
+    ):
+        changes = soul_application.apply_update(commands)
         logger.info("Steward applied %d SOUL change(s)", len(changes))
     await _apply_entities(result, entity_service)
     atomic_write_json(state_path, {"last_run": current})

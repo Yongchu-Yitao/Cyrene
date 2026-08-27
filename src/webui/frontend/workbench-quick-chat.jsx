@@ -146,6 +146,9 @@ function quickChatConfirmUserMessage(prev, confirmation) {
 }
 
 function QuickChatApp() {
+  // Subscribe this standalone renderer to the shared i18n version so a language
+  // change in the main window re-renders the hidden/reused Quick Chat window.
+  workbenchServices.i18n().use();
   var chatService = workbenchServices.chat(); var model = chatService.Model;
   // Shared singleton run-manager: owns the send stream and folds live SSE
   // tool-call / phase / subagent progress into the runtime, exactly like the

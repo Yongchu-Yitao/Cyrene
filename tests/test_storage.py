@@ -83,8 +83,7 @@ def test_scan_splits_store_families_and_plugin_roots(
         storage,
         "STORAGE_CATEGORIES",
         [
-            ("database", (store,), storage._name_excludes("kb_*.db*")),
-            ("knowledge", (store,), storage._name_matches("kb_*.db*")),
+            ("database", (store,), None),
             ("memory", (), None),
             ("conversations", (), None),
         ],
@@ -92,6 +91,7 @@ def test_scan_splits_store_families_and_plugin_roots(
 
     result = storage.scan_storage(
         plugin_storage={
+            "knowledge": (store / "kb_default.db", store / "kb_default.db-wal"),
             "memory": (memory,),
             "conversations": (conversations,),
         }
@@ -107,6 +107,75 @@ def test_scan_splits_store_families_and_plugin_roots(
     assert by_key["conversations"]["bytes"] == 12
     assert by_key["conversations"]["files"] == 1
     assert result["total"] == 160
+
+
+def test_scan_includes_plugin_defined_storage_categories(
+    isolated_categories: Path,
+) -> None:
+    maps = isolated_categories / "plugin-data" / "maps.sqlite3"
+    _write(maps, 42)
+
+    result = storage.scan_storage(plugin_storage={"maps": (maps.parent,)})
+
+    assert _by_key(result)["maps"] == {
+        "key": "maps",
+        "bytes": 42,
+        "files": 1,
+    }
+
+
+def test_browser_profile_is_contributed_by_browser_application(
+    tmp_path: Path,
+) -> None:
+    from agent.plugin.plugin_impl.cyrene_browser.application import (
+        BrowserApplicationService,
+    )
+
+    service = BrowserApplicationService(tmp_path)
+
+    assert service.storage_paths() == {
+        "browser": (tmp_path.resolve() / "browser_profile",),
+    }
+    assert all(key != "browser" for key, _paths, _filter in storage.STORAGE_CATEGORIES)
+
+
+def test_knowledge_application_contributes_legacy_database_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.plugin.plugin_impl.cyrene_knowledge import (
+        local_models,
+        ocr,
+        opencv_runtime,
+    )
+    from agent.plugin.plugin_impl.cyrene_knowledge.service import (
+        create_knowledge_service,
+    )
+
+    legacy_store = tmp_path / "store"
+    legacy_database = legacy_store / "kb_default.db"
+    legacy_wal = legacy_store / "kb_default.db-wal"
+    _write(legacy_database, 10)
+    _write(legacy_wal, 5)
+    monkeypatch.setattr(ocr, "OCR_CACHE", tmp_path / "cache" / "knowledge_ocr")
+    monkeypatch.setattr(local_models, "MODEL_ROOT", tmp_path / "cache" / "knowledge_models")
+    monkeypatch.setattr(opencv_runtime, "OPENCV_ROOT", tmp_path / "cache" / "opencv_runtime")
+    service = create_knowledge_service(
+        tmp_path / "plugin-data" / "cyrene_knowledge",
+        legacy_store_directory=legacy_store,
+        zotero_settings=lambda: {},
+        initialize_store=False,
+    )
+
+    assert service.storage_paths()["knowledge"] == (
+        service.store.root,
+        ocr.OCR_CACHE,
+        legacy_database,
+        legacy_wal,
+    )
+    assert service.storage_paths()["local_models"] == (local_models.MODEL_ROOT,)
+    assert service.storage_paths()["opencv_runtime"] == (opencv_runtime.OPENCV_ROOT,)
+    assert all(key not in {"knowledge", "opencv_runtime"} for key, _paths, _filter in storage.STORAGE_CATEGORIES)
 
 
 def test_scan_truncates_at_entry_budget(isolated_categories: Path, monkeypatch: pytest.MonkeyPatch) -> None:

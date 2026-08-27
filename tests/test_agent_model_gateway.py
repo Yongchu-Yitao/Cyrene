@@ -174,7 +174,7 @@ async def test_gateway_calls_exact_scoped_candidate_with_chat_affinity(monkeypat
 
 
 def test_responses_protocol_maps_messages_tool_results_and_calls():
-    from route.agent_model_gateway import (
+    from agent.plugin.plugin_impl.cyrene_extensions.agent_model_gateway_routes import (
         _responses_input_to_messages,
         _responses_output,
         _responses_tools,
@@ -221,7 +221,7 @@ def test_responses_protocol_maps_messages_tool_results_and_calls():
 def test_responses_stream_emits_complete_text_and_tool_lifecycles():
     import json
 
-    from route.agent_model_gateway import (
+    from agent.plugin.plugin_impl.cyrene_extensions.agent_model_gateway_routes import (
         _responses_output,
         _responses_stream_events,
     )

@@ -326,6 +326,52 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
   height: 0;
 }
 
+/* Initialization uses the task inspector as a compact progress navigator.
+   A single heading avoids the old Context -> Initialization progress nesting. */
+.wb-task-detail-init .wbc-side-card-head {
+  flex-basis: 54px;
+  min-height: 54px;
+  padding: 0 8px 0 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 64%, transparent);
+}
+
+.wb-task-detail-init .wbc-side-card-head strong {
+  color: var(--wb-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.wb-task-detail-init .wb-task-side-hide-btn {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  border-radius: 10px;
+}
+
+.wb-task-detail-init .wb-task-side-hide-btn:hover,
+.wb-task-detail-init .wb-task-side-hide-btn:focus-visible {
+  background: color-mix(in srgb, var(--wb-accent) 8%, transparent);
+  color: var(--wb-text);
+}
+
+.wb-task-detail-init .wbc-side-accordion-trigger {
+  min-height: 48px;
+  padding-inline: 18px 42px;
+}
+
+.wb-task-detail-init .wbc-side-accordion-label {
+  color: var(--wb-text);
+  font-size: 12.5px;
+  font-weight: 620;
+}
+
+.wb-task-detail-init .wbc-side-body {
+  max-height: min(680px, calc(100vh - 210px));
+  padding: 6px 12px 12px;
+}
+
+.wb-task-detail-init .wb-init-progress-stack { gap: 0; }
+
 .wbc-changes-tab {
   width: 100%;
   min-height: 0;
@@ -1951,6 +1997,10 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
   border-top: 0;
 }
 
+.wbc-context-detail .wbc-ctx-layer-detail:last-child {
+  padding-bottom: 0;
+}
+
 .wbc-context-detail .wbc-ctx-layer-row {
   min-height: 38px;
   padding: 8px 0;
@@ -2176,6 +2226,7 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
 
 .wbc-context-sections > .workbench-side-section:first-child {
   padding-top: 0;
+  padding-bottom: 0;
 }
 
 .wbc-context-sections > .workbench-side-section:last-child {

@@ -323,14 +323,13 @@ def cosine(left: Sequence[float], right: Sequence[float]) -> float:
 class KnowledgeStore:
     """One new database shared by all workspaces and owned by the Plugin."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, initialize: bool = True) -> None:
         self.root = Path(root).expanduser().resolve()
         self.db_path = self.root / "knowledge.sqlite3"
         self.files_root = self.root / "files"
         self._lock = threading.RLock()
-        self.root.mkdir(parents=True, exist_ok=True)
-        self.files_root.mkdir(parents=True, exist_ok=True)
-        self.initialize()
+        if initialize:
+            self.initialize()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path, timeout=30)

@@ -16,8 +16,8 @@ TOOL_DEF = {"type": "function", "function": {
 }}
 TOOL_METADATA = {"read_only": True, "resource_keys": ("desktop:app-semantic",), "requires_order": True}
 
-async def handler(args: dict[str, Any], _context: PluginContext) -> str:
+async def handler(args: dict[str, Any], context: PluginContext) -> str:
     from ._app_semantic_backend import execute_inspect, format_result
-    return format_result(await execute_inspect(dict(args or {})))
+    return format_result(await execute_inspect(dict(args or {})), context)
 
 __all__ = ["TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler"]

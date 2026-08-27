@@ -11,7 +11,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from cyrene import config as cyrene_config
 from cyrene.runtime import database as db
 from cyrene.workbench.presentation_runtime import _search_matches, _search_snippet, _search_workbench_items
 from route.registry import register_routes
@@ -49,9 +48,7 @@ def temp_db():
         import asyncio
 
         asyncio.run(db.init_db(db_path))
-        cyrene_config.set_knowledge_db_path_override(db_path)
         yield db_path
-        cyrene_config.set_knowledge_db_path_override(None)
 
 
 @pytest.mark.asyncio

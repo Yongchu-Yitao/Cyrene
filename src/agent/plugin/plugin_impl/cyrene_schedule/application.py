@@ -3,16 +3,30 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
-from agent.plugin import PluginApplicationContext
+from agent.plugin import PluginApplicationContext, active_plugin_service
+from cyrene.localization import app_language, localized
+
+from .service import ScheduleRuntimeService
+
+
+class _ActiveEntityService:
+    """Consult the entity pack at call time so its activation is respected."""
+
+    async def list(self, **kwargs: Any) -> list[dict[str, Any]]:
+        service = active_plugin_service("entities")
+        if service is None:
+            return []
+        return await service.list(**kwargs)
 
 
 def setup_application(context: PluginApplicationContext) -> None:
     from cyrene.workbench.context import configure_store, read_projects
     from cyrene.workbench.notifications import append_notification
-    from cyrene.workbench.schedule_repository import WorkspaceProjectResolver
-    from cyrene.workbench.schedule_service import ScheduleApplicationService
-    from route.workbench.schedule import register_workbench_schedule_routes
+    from .routes import register_workbench_schedule_routes
+    from .workbench_repository import WorkspaceProjectResolver
+    from .workbench_service import ScheduleApplicationService
 
     configure_store(context.db_path)
 
@@ -30,6 +44,13 @@ def setup_application(context: PluginApplicationContext) -> None:
             None,
         )
 
+    schedule_runtime = ScheduleRuntimeService(
+        context.db_path,
+        bot=context.bot,
+        plugin_directory=context.plugin_directory,
+    )
+    if context.registry is None:
+        raise RuntimeError("cyrene_schedule requires the active Plugin registry")
     application = ScheduleApplicationService(
         context.db_path,
         WorkspaceProjectResolver(
@@ -37,9 +58,9 @@ def setup_application(context: PluginApplicationContext) -> None:
             read_projects=read_projects,
         ),
         append_notification,
-        entities=context.services.get("entities"),
-        bot=context.bot,
-        plugin_directory=context.plugin_directory,
+        entities=_ActiveEntityService(),
+        registry=context.registry,
+        runtime_service=schedule_runtime,
     )
     register_workbench_schedule_routes(
         context.router,
@@ -47,20 +68,26 @@ def setup_application(context: PluginApplicationContext) -> None:
     )
     context.provide("schedules", application.gateway.service)
     context.provide("schedule_application", application)
+    context.on_startup(schedule_runtime.ensure_ready)
 
     async def search(query: str, limit: int):
+        language = app_language()
         needle = " ".join(str(query or "").casefold().split())
         projects = [item for item in read_projects() if isinstance(item, dict)]
         scopes = [
             (
                 str(project.get("id") or ""),
-                str(project.get("name") or "Workspace"),
+                str(project.get("name") or localized(
+                    "Workspace", "工作区", language=language
+                )),
                 application.workspace_resolver.resolve(
                     str(project.get("id") or project.get("dataKey") or "default")
                 ),
             )
             for project in projects
-        ] or [("", "Workspace", "default")]
+        ] or [("", localized(
+            "Workspace", "工作区", language=language
+        ), "default")]
         task_groups, entity_groups = await asyncio.gather(
             asyncio.gather(
                 *(
@@ -93,7 +120,9 @@ def setup_application(context: PluginApplicationContext) -> None:
                     {
                         "id": str(task.get("id") or ""),
                         "type": "schedule",
-                        "title": prompt or "Scheduled task",
+                        "title": prompt or localized(
+                            "Scheduled task", "定时任务", language=language
+                        ),
                         "snippet": prompt[:160],
                         "projectId": project_id,
                         "projectName": project_name,
@@ -120,7 +149,9 @@ def setup_application(context: PluginApplicationContext) -> None:
                     {
                         "id": str(entity.get("id") or ""),
                         "type": "schedule",
-                        "title": title or "Event",
+                        "title": title or localized(
+                            "Event", "日程事件", language=language
+                        ),
                         "snippet": (content or title)[:160],
                         "projectId": project_id,
                         "projectName": project_name,

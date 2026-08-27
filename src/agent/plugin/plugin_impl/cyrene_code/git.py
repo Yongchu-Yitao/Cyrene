@@ -2,9 +2,16 @@
 
 import asyncio
 import json
+import logging
 
 from agent.plugin import PluginContext
-from agent.plugin.native_runtime import resolve_workspace_path, workspace_root
+from agent.plugin.native_runtime import (
+    plugin_localized,
+    resolve_workspace_path,
+    workspace_root,
+)
+
+logger = logging.getLogger(__name__)
 
 
 async def _run_git(
@@ -28,16 +35,37 @@ async def _run_git(
         }
         if result["returncode"]:
             result["error"] = (
-                str(result["stderr"] or result["stdout"] or "git command failed")
+                str(
+                    result["stderr"]
+                    or result["stdout"]
+                    or plugin_localized(
+                        context,
+                        "The Git command failed.",
+                        "Git 命令执行失败。",
+                    )
+                )
                 .strip()
             )
         return result
     except asyncio.TimeoutError:
-        return {"error": "git command timed out"}
+        return {"error": plugin_localized(
+            context,
+            "The Git command timed out.",
+            "Git 命令执行超时。",
+        )}
     except FileNotFoundError:
-        return {"error": "git not available"}
-    except Exception as e:
-        return {"error": str(e)}
+        return {"error": plugin_localized(
+            context,
+            "Git is not installed or is unavailable.",
+            "Git 未安装或当前不可用。",
+        )}
+    except Exception:
+        logger.warning("Git command execution failed", exc_info=True)
+        return {"error": plugin_localized(
+            context,
+            "The Git command could not be completed.",
+            "无法完成 Git 命令。",
+        )}
 
 
 def _parse_status(porcelain: str) -> list[dict]:
@@ -99,7 +127,14 @@ async def _tool_git_diff(args: dict, context: PluginContext) -> str:
     path = args.get("path", "")
     if path:
         cmd.append("--")
-        resolved = resolve_workspace_path(str(path), context)
+        try:
+            resolved = resolve_workspace_path(str(path), context)
+        except (RuntimeError, ValueError):
+            return json.dumps({"error": plugin_localized(
+                context,
+                "The requested path is outside the active workspace.",
+                "请求的路径不在当前工作区内。",
+            )}, ensure_ascii=False)
         cmd.append(str(resolved.relative_to(workspace_root(context))))
     result = await _run_git(cmd, context, timeout=60.0)
     if result.get("error"):
@@ -113,7 +148,20 @@ async def _tool_git_diff(args: dict, context: PluginContext) -> str:
 
 
 async def _tool_git_log(args: dict, context: PluginContext) -> str:
-    count = int(args.get("count", 10))
+    try:
+        count = int(args.get("count", 10))
+    except (TypeError, ValueError):
+        return json.dumps({"error": plugin_localized(
+            context,
+            "count must be an integer.",
+            "count 必须是整数。",
+        )}, ensure_ascii=False)
+    if count < 1:
+        return json.dumps({"error": plugin_localized(
+            context,
+            "count must be greater than zero.",
+            "count 必须大于零。",
+        )}, ensure_ascii=False)
     result = await _run_git(["log", "--oneline", f"-n{count}"], context)
     if result.get("error"):
         return json.dumps({"error": result["error"]}, ensure_ascii=False)
@@ -127,24 +175,40 @@ async def _tool_git_log(args: dict, context: PluginContext) -> str:
 
 async def _tool_git_commit(args: dict, context: PluginContext) -> str:
     """Stage and commit changes after the central PreToolUse review."""
-    message = str(args.get("message", ""))
+    message = str(args.get("message", "")).strip()
     files = args.get("files", [])
 
     if not message:
-        return json.dumps({"error": "Commit message is required"}, ensure_ascii=False)
+        return json.dumps({"error": plugin_localized(
+            context,
+            "Commit message is required.",
+            "必须提供提交信息。",
+        )}, ensure_ascii=False)
 
     # Stage files first (if specific files given, add only those)
     if files:
-        root = workspace_root(context)
-        pathspecs = [
-            str(resolve_workspace_path(str(path), context).relative_to(root))
-            for path in files
-        ]
+        try:
+            root = workspace_root(context)
+            pathspecs = [
+                str(resolve_workspace_path(str(path), context).relative_to(root))
+                for path in files
+            ]
+        except (RuntimeError, ValueError):
+            return json.dumps({"error": plugin_localized(
+                context,
+                "One or more requested files are outside the active workspace.",
+                "一个或多个请求的文件不在当前工作区内。",
+            )}, ensure_ascii=False)
         add_result = await _run_git(["add", "--", *pathspecs], context)
     else:
         add_result = await _run_git(["add", "-A"], context)
     if add_result.get("error"):
-        return json.dumps({"error": "Failed to stage files: " + add_result["error"]}, ensure_ascii=False)
+        return json.dumps({"error": plugin_localized(
+            context,
+            "Failed to stage files: {error}",
+            "暂存文件失败：{error}",
+            error=add_result["error"],
+        )}, ensure_ascii=False)
 
     cmd = ["commit", "-m", message]
     result = await _run_git(cmd, context)

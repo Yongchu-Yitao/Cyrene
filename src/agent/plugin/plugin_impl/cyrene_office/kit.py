@@ -7,11 +7,12 @@ import json
 from typing import Any, Awaitable, Callable
 
 from agent.plugin import PluginContext
-from cyrene.office.slide_layout import SEMANTIC_LAYOUTS
+from .slide_layout import SEMANTIC_LAYOUTS
 from ._shared import (
     CONTEXT_PROPERTIES,
     MUTATION_PROPERTIES,
     OPERATION_SCHEMA,
+    PowerPointRequestError,
     SLIDE_PROPERTIES,
     STYLE_SCHEMA,
     execute_powerpoint_request,
@@ -24,6 +25,9 @@ from ._shared import (
     normalize_powerpoint_arguments,
     office_tool_metadata,
     tool_def,
+    _office_message,
+    _office_localized,
+    _localize_office_details,
 )
 from agent.plugin.execution import publish_plugin_progress as publish_tool_progress
 
@@ -228,9 +232,15 @@ def _edit_properties(op: str) -> dict[str, Any]:
 async def _read_handler(
     method: str,
     args: dict[str, Any],
-    _context: PluginContext,
+    context: PluginContext | None,
 ) -> str:
-    return await execute_powerpoint_request(args, method, method, timeout=60)
+    return await execute_powerpoint_request(
+        args,
+        method,
+        method,
+        timeout=60,
+        context=context,
+    )
 
 
 async def _edit_handler(
@@ -238,7 +248,16 @@ async def _edit_handler(
     args: dict[str, Any],
     context: PluginContext,
 ) -> str:
-    request = normalize_powerpoint_arguments(args)
+    try:
+        request = normalize_powerpoint_arguments(args)
+    except PowerPointRequestError as exc:
+        return json.dumps({
+            "status": "error",
+            "operation": op,
+            "error_code": exc.code,
+            "message": _office_message(context, exc.code),
+            "details": _localize_office_details(exc.details, context),
+        }, ensure_ascii=False)
     operation = {key: value for key, value in request.items() if key not in {*CONTEXT_PROPERTIES, *SLIDE_PROPERTIES, *MUTATION_PROPERTIES}}
     operation["op"] = op
     request["operations"] = [operation]
@@ -251,7 +270,7 @@ async def _method_handler(
     context: PluginContext,
 ) -> str:
     if method == "ppt.create_slides":
-        return await _create_slides_handler(args)
+        return await _create_slides_handler(args, context)
     if method == "ppt.render_slide":
         return await render_slide_handler(args, context)
     if method == "ppt.edit_chart":
@@ -271,16 +290,31 @@ async def _method_handler(
             request["progressiveGranularity"] = request.get("progressiveGranularity") or "stage"
     if method in {"ppt.relayout_slide", "ppt.replace_slide"}:
         request["replaceExisting"] = True
-    return await execute_powerpoint_request(request, method, method, timeout=300)
+    return await execute_powerpoint_request(
+        request,
+        method,
+        method,
+        timeout=300,
+        context=context,
+    )
 
 
-def _decode_tool_result(raw: str) -> dict[str, Any]:
+def _decode_tool_result(
+    raw: str,
+    context: PluginContext | None,
+) -> dict[str, Any]:
     try:
         payload = json.loads(raw)
     except (TypeError, json.JSONDecodeError):
-        return {"status": "error", "error_code": "invalid_tool_result", "message": str(raw)}
+        return {
+            "status": "error",
+            "error_code": "invalid_tool_result",
+            "message": _office_message(context, "invalid_tool_result"),
+        }
     return payload if isinstance(payload, dict) else {
-        "status": "error", "error_code": "invalid_tool_result", "message": str(raw),
+        "status": "error",
+        "error_code": "invalid_tool_result",
+        "message": _office_message(context, "invalid_tool_result"),
     }
 
 
@@ -298,6 +332,7 @@ async def _rollback_created_slides(
     *,
     fallback_revision: Any,
     idempotency_key: str,
+    context: PluginContext | None,
 ) -> dict[str, Any]:
     """Delete pages created by a failed plural create, newest first."""
     targets = [str(item.get("slideId") or "") for item in reversed(completed)]
@@ -308,9 +343,13 @@ async def _rollback_created_slides(
     context_args = _rollback_context(args)
     revision = fallback_revision
     context_raw = await execute_powerpoint_request(
-        context_args, "ppt.get_context", "ppt.get_context", timeout=60,
+        context_args,
+        "ppt.get_context",
+        "ppt.get_context",
+        timeout=60,
+        context=context,
     )
-    context_payload = _decode_tool_result(context_raw)
+    context_payload = _decode_tool_result(context_raw, context)
     if context_payload.get("status") != "error":
         revision = context_payload.get("revision", revision)
 
@@ -324,14 +363,22 @@ async def _rollback_created_slides(
             "idempotencyKey": f"{idempotency_key}:rollback:{index}",
         }
         raw = await execute_powerpoint_request(
-            request, "ppt.delete_slide", "ppt.delete_slide", timeout=90,
+            request,
+            "ppt.delete_slide",
+            "ppt.delete_slide",
+            timeout=90,
+            context=context,
         )
-        payload = _decode_tool_result(raw)
+        payload = _decode_tool_result(raw, context)
         if payload.get("status") == "error":
             errors.append({
                 "slideId": slide_id,
                 "error_code": payload.get("error_code") or "rollback_failed",
-                "message": payload.get("message") or "PowerPoint rollback failed.",
+                "message": payload.get("message") or _office_localized(
+                    context,
+                    "PowerPoint rollback failed.",
+                    "PowerPoint 回滚失败。",
+                ),
             })
             continue
         deleted.append(slide_id)
@@ -348,21 +395,40 @@ async def _rollback_created_slides(
     }
 
 
-async def _create_slides_handler(args: dict[str, Any]) -> str:
-    args = normalize_powerpoint_arguments(args)
+async def _create_slides_handler(
+    args: dict[str, Any],
+    context: PluginContext | None = None,
+) -> str:
+    try:
+        args = normalize_powerpoint_arguments(args)
+    except PowerPointRequestError as exc:
+        return json.dumps({
+            "status": "error",
+            "operation": "ppt.create_slides",
+            "error_code": exc.code,
+            "message": _office_message(context, exc.code),
+            "details": _localize_office_details(exc.details, context),
+        }, ensure_ascii=False)
     specs = args.get("slideSpecs")
     if not isinstance(specs, list) or not specs:
         return json.dumps({
             "status": "error",
             "operation": "ppt.create_slides",
             "error_code": "slide_specs_required",
-            "message": "slideSpecs must contain at least one SlideSpec.",
-            "details": {"field": "slideSpecs", "suggestion": "Provide one focused SlideSpec per requested page."},
+            "message": _office_message(context, "slide_specs_required"),
+            "details": {
+                "field": "slideSpecs",
+                "suggestion": _office_localized(
+                    context,
+                    "Provide one focused SlideSpec per requested slide.",
+                    "请为每张幻灯片提供一个聚焦的 SlideSpec。",
+                ),
+            },
         }, ensure_ascii=False)
     if len(specs) > 100:
         return json.dumps({
             "status": "error", "operation": "ppt.create_slides", "error_code": "too_many_slides",
-            "message": "A single request cannot create more than 100 slides.",
+            "message": _office_message(context, "too_many_slides"),
         }, ensure_ascii=False)
     revision = args.get("expectedRevision")
     key = str(args.get("idempotencyKey") or "")
@@ -370,11 +436,25 @@ async def _create_slides_handler(args: dict[str, Any]) -> str:
     commit_mode = "atomic" if file_mode else "progressive"
     if file_mode:
         args["commitMode"] = "atomic"
-        return await execute_powerpoint_request(args, "ppt.create_slides", "ppt.create_slides", timeout=300)
+        return await execute_powerpoint_request(
+            args,
+            "ppt.create_slides",
+            "ppt.create_slides",
+            timeout=300,
+            context=context,
+        )
     completed: list[dict[str, Any]] = []
     warnings: list[Any] = []
     mode = str(args.get("mode") or "")
-    await publish_tool_progress(current=0, total=len(specs), label="Preparing PowerPoint slides")
+    await publish_tool_progress(
+        current=0,
+        total=len(specs),
+        label=_office_localized(
+            context,
+            "Preparing PowerPoint slides",
+            "正在准备 PowerPoint 幻灯片",
+        ),
+    )
     for index, spec in enumerate(specs):
         request = {key_name: value for key_name, value in args.items() if key_name != "slideSpecs"}
         template_slide_id = str(spec.get("templateSlideId") or "") if isinstance(spec, dict) else ""
@@ -388,8 +468,14 @@ async def _create_slides_handler(args: dict[str, Any]) -> str:
         method = "ppt.create_from_template" if template_slide_id else "ppt.create_slide"
         if template_slide_id:
             request["templateSlideId"] = template_slide_id
-        raw = await execute_powerpoint_request(request, method, method, timeout=300)
-        payload = _decode_tool_result(raw)
+        raw = await execute_powerpoint_request(
+            request,
+            method,
+            method,
+            timeout=300,
+            context=context,
+        )
+        payload = _decode_tool_result(raw, context)
         if payload.get("status") == "error":
             payload["operation"] = "ppt.create_slides"
             original_details = payload.get("details")
@@ -400,6 +486,7 @@ async def _create_slides_handler(args: dict[str, Any]) -> str:
                 completed,
                 fallback_revision=revision,
                 idempotency_key=key,
+                context=context,
             )
             details.update({
                 "slideIndex": index,
@@ -423,7 +510,17 @@ async def _create_slides_handler(args: dict[str, Any]) -> str:
             "stages": payload.get("stages") or [],
         })
         warnings.extend(payload.get("warnings") or [])
-        await publish_tool_progress(current=index + 1, total=len(specs), label=f"PowerPoint slide {index + 1}/{len(specs)}")
+        await publish_tool_progress(
+            current=index + 1,
+            total=len(specs),
+            label=_office_localized(
+                context,
+                "PowerPoint slide {current}/{total}",
+                "PowerPoint 幻灯片 {current}/{total}",
+                current=index + 1,
+                total=len(specs),
+            ),
+        )
     return json.dumps({
         "status": "warning" if warnings else "applied",
         "operation": "ppt.create_slides",

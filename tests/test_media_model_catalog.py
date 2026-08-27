@@ -24,7 +24,7 @@ def _by_id(response: dict) -> dict[str, dict]:
 
 @pytest.mark.asyncio
 async def test_catalog_only_provider_keeps_recommendations_and_unknown_configured_model():
-    from cyrene.media.model_catalog import provider_model_catalog
+    from agent.plugin.plugin_impl.cyrene_media.model_catalog import provider_model_catalog
 
     response = await provider_model_catalog(
         "seedance",
@@ -59,7 +59,7 @@ async def test_catalog_only_provider_keeps_recommendations_and_unknown_configure
 async def test_openai_discovery_is_paginated_filtered_and_never_reflects_key(
     monkeypatch,
 ):
-    import cyrene.media.model_catalog as catalog
+    import agent.plugin.plugin_impl.cyrene_media.model_catalog as catalog
 
     secret = "sk-private-model-discovery-123456"
     requests: list[httpx.Request] = []
@@ -114,7 +114,7 @@ async def test_openai_discovery_is_paginated_filtered_and_never_reflects_key(
 async def test_minimax_discovery_normalizes_versioned_base_and_filters_models(
     monkeypatch,
 ):
-    import cyrene.media.model_catalog as catalog
+    import agent.plugin.plugin_impl.cyrene_media.model_catalog as catalog
 
     seen: list[httpx.Request] = []
 
@@ -160,7 +160,7 @@ async def test_minimax_discovery_normalizes_versioned_base_and_filters_models(
 
 @pytest.mark.asyncio
 async def test_google_discovery_uses_key_header_and_page_tokens(monkeypatch):
-    import cyrene.media.model_catalog as catalog
+    import agent.plugin.plugin_impl.cyrene_media.model_catalog as catalog
 
     secret = "google-private-key"
     seen: list[httpx.Request] = []
@@ -219,7 +219,7 @@ async def test_google_discovery_uses_key_header_and_page_tokens(monkeypatch):
 async def test_missing_key_and_discovery_failure_both_keep_safe_static_catalog(
     monkeypatch,
 ):
-    import cyrene.media.model_catalog as catalog
+    import agent.plugin.plugin_impl.cyrene_media.model_catalog as catalog
 
     missing = await catalog.provider_model_catalog(
         "openai",
@@ -247,10 +247,16 @@ async def test_missing_key_and_discovery_failure_both_keep_safe_static_catalog(
 def test_model_catalog_route_degrades_to_200_and_rejects_unknown_provider(
     monkeypatch,
 ):
-    import cyrene.media.model_catalog as catalog
-    import route.settings.media as media_routes
+    import agent.plugin.plugin_impl.cyrene_media.model_catalog as catalog
+    from cyrene.runtime import settings_store
+    from agent.plugin.plugin_impl.cyrene_media import settings_routes as media_routes
 
     secret = "route-private-key"
+    monkeypatch.setattr(
+        settings_store,
+        "get",
+        lambda key, default=None: "en" if key == "app_language" else default,
+    )
 
     async def fail_discovery(_provider, _settings):
         raise httpx.ConnectError(f"private upstream failure: {secret}")
@@ -274,4 +280,5 @@ def test_model_catalog_route_degrades_to_200_and_rejects_unknown_provider(
     assert failed.json()["status"] == "failed"
     assert secret not in failed.text
     assert unknown.status_code == 404
-    assert unknown.json() == {"error": "unknown media provider"}
+    assert unknown.json()["error"] == "unknown media provider"
+    assert unknown.json()["code"] == "media_provider_unknown"

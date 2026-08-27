@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -26,6 +28,16 @@ from .customization import (
 from .plugin import Plugin, PluginPack
 
 logger = logging.getLogger(__name__)
+
+_SOURCE_AVAILABILITY_LOCK = threading.RLock()
+_USER_SOURCE_STATES: dict[str, tuple[int, bool]] = {}
+
+_I18N_FILE_NAME = "i18n.json"
+_I18N_LOCALES = ("en", "zh")
+_IDENTITY_BOUNDARY = re.compile(
+    r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"
+)
+_IDENTITY_SEPARATOR = re.compile(r"[._-]+")
 
 
 class PluginRegistryError(RuntimeError):
@@ -58,6 +70,38 @@ class _LoadedContribution:
     module_name: str
     kind: Literal["pack", "plugin"]
     identity: str
+
+
+def _set_user_source_available(source: str, available: bool) -> int | None:
+    """Publish reload health so stale session/background registries fail closed."""
+
+    normalized = str(source or "").strip()
+    if not normalized or normalized == "core" or normalized.startswith("mcp:"):
+        return None
+    with _SOURCE_AVAILABILITY_LOCK:
+        previous = _USER_SOURCE_STATES.get(normalized)
+        if previous is None:
+            revision = 0
+        elif previous[1] == available:
+            revision = previous[0]
+        else:
+            revision = previous[0] + 1
+        _USER_SOURCE_STATES[normalized] = (revision, available)
+        return revision
+
+
+def _user_source_available(source: str, loaded_revision: int | None = None) -> bool:
+    normalized = str(source or "").strip()
+    if not normalized or normalized == "core" or normalized.startswith("mcp:"):
+        return True
+    with _SOURCE_AVAILABILITY_LOCK:
+        state = _USER_SOURCE_STATES.get(normalized)
+    if state is None:
+        return True
+    revision, available = state
+    return available and (
+        loaded_revision is None or loaded_revision == revision
+    )
 
 
 def default_plugin_impl_directory() -> Path:
@@ -94,6 +138,22 @@ def _contains_python_source(directory: Path) -> bool:
         return True
 
 
+def _humanize_identity(identity: str) -> str:
+    """Turn a stable Plugin identifier into a readable fallback label."""
+
+    separated = _IDENTITY_SEPARATOR.sub(" ", str(identity or "").strip())
+    separated = _IDENTITY_BOUNDARY.sub(" ", separated)
+    words = [word for word in separated.split() if word]
+    if not words:
+        return "Plugin"
+    return " ".join(
+        word.upper()
+        if len(word) <= 3 and word.isupper()
+        else word[:1].upper() + word[1:]
+        for word in words
+    )
+
+
 class PluginRegistry:
     """Keep a short lock around snapshots; Plugin code never runs under it."""
 
@@ -106,6 +166,8 @@ class PluginRegistry:
     ) -> None:
         self._lock = threading.RLock()
         self._reload_lock = threading.RLock()
+        self._revision = 0
+        self._directory_revision = 0
         self._activation = (
             activation
             or active_plugin_activation_state()
@@ -120,7 +182,9 @@ class PluginRegistry:
         self._plugins: dict[str, RegisteredPlugin] = {}
         self._pack_sources: dict[str, str] = {}
         self._user_contributions: dict[Path, _LoadedContribution] = {}
+        self._user_source_revisions: dict[str, int] = {}
         self._user_directories: set[Path] = set()
+        self._i18n_catalogs: dict[Path, dict[str, Any]] = {}
         if include_core:
             from .core_impl import create_core_plugin_pack
 
@@ -140,6 +204,37 @@ class PluginRegistry:
         """Return the live activation state shared by sibling registries."""
 
         return self._activation
+
+    @property
+    def revision(self) -> int:
+        """Monotonic version of registrations owned by this registry."""
+
+        with self._lock:
+            return self._revision
+
+    @property
+    def directory_revision(self) -> int:
+        """Monotonic version of editable-directory load attempts."""
+
+        with self._lock:
+            return self._directory_revision
+
+    @property
+    def sync_token(self) -> tuple[int, int, int, int]:
+        """Return every version a live Agent session must reconcile."""
+
+        with self._lock:
+            revision = self._revision
+            directory_revision = self._directory_revision
+        return (
+            revision,
+            directory_revision,
+            self._activation.revision,
+            self._customizations.revision,
+        )
+
+    def _bump_revision_locked(self) -> None:
+        self._revision += 1
 
     def configure_activation(
         self,
@@ -161,22 +256,192 @@ class PluginRegistry:
     ) -> None:
         self._customizations.replace(values)
 
+    @staticmethod
+    def _validated_i18n_catalog(value: Any) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            raise ValueError("Plugin i18n catalog must be a JSON object")
+        if value.get("version", 1) != 1:
+            raise ValueError("Unsupported Plugin i18n catalog version")
+        normalized: dict[str, Any] = {"version": 1, "packs": {}, "plugins": {}}
+        for section in ("packs", "plugins"):
+            raw_section = value.get(section, {})
+            if not isinstance(raw_section, Mapping):
+                raise ValueError(f"Plugin i18n {section} must be an object")
+            for raw_identity, raw_translations in raw_section.items():
+                identity = str(raw_identity or "").strip()
+                if not identity or not isinstance(raw_translations, Mapping):
+                    raise ValueError(
+                        f"Plugin i18n {section} entries must map ids to objects"
+                    )
+                translations: dict[str, dict[str, str]] = {}
+                for locale, raw_fields in raw_translations.items():
+                    locale_name = str(locale or "").strip()
+                    if not locale_name or not isinstance(raw_fields, Mapping):
+                        raise ValueError(
+                            f"Plugin i18n entry {section}.{identity} has invalid locale data"
+                        )
+                    fields: dict[str, str] = {}
+                    for field in ("name", "description"):
+                        if field not in raw_fields:
+                            continue
+                        field_value = raw_fields[field]
+                        if not isinstance(field_value, str):
+                            raise ValueError(
+                                f"Plugin i18n {section}.{identity}.{locale_name}.{field} "
+                                "must be a string"
+                            )
+                        if field_value.strip():
+                            fields[field] = field_value.strip()
+                    translations[locale_name] = fields
+                normalized[section][identity] = translations
+        return normalized
+
+    def _catalog_i18n(self, section: str, identity: str) -> dict[str, Any]:
+        merged: dict[str, dict[str, str]] = {}
+        with self._lock:
+            catalogs = tuple(
+                self._i18n_catalogs[root]
+                for root in sorted(self._i18n_catalogs, key=str)
+            )
+        for catalog in catalogs:
+            translations = catalog.get(section, {}).get(identity, {})
+            if not isinstance(translations, Mapping):
+                continue
+            for locale, fields in translations.items():
+                if isinstance(fields, Mapping):
+                    merged.setdefault(str(locale), {}).update(
+                        {
+                            str(field): str(value)
+                            for field, value in fields.items()
+                            if str(value or "").strip()
+                        }
+                    )
+        return merged
+
+    def _complete_i18n(
+        self,
+        *,
+        section: str,
+        identity: str,
+        authored: Any,
+    ) -> dict[str, dict[str, str]]:
+        authored_translations = (
+            {
+                str(locale): dict(fields)
+                for locale, fields in authored.items()
+                if isinstance(fields, Mapping)
+            }
+            if isinstance(authored, Mapping)
+            else {}
+        )
+        catalog = self._catalog_i18n(section, identity)
+        readable_name = _humanize_identity(identity)
+        completed = {
+            locale: dict(fields)
+            for locale, fields in authored_translations.items()
+        }
+        for locale in _I18N_LOCALES:
+            fields = {
+                "name": readable_name,
+            }
+            catalog_fields = catalog.get(locale)
+            if locale == "zh" and not isinstance(catalog_fields, Mapping):
+                catalog_fields = catalog.get("zh-CN")
+            if isinstance(catalog_fields, Mapping):
+                fields.update(
+                    {
+                        field: str(value).strip()
+                        for field, value in catalog_fields.items()
+                        if field in {"name", "description"}
+                        and str(value or "").strip()
+                    }
+                )
+            authored_fields = authored_translations.get(locale)
+            if locale == "zh" and not isinstance(authored_fields, Mapping):
+                authored_fields = authored_translations.get("zh-CN")
+            if isinstance(authored_fields, Mapping):
+                fields.update(
+                    {
+                        field: str(value).strip()
+                        for field, value in authored_fields.items()
+                        if field in {"name", "description"}
+                        and str(value or "").strip()
+                    }
+                )
+            completed[locale] = fields
+        return completed
+
+    def _localized_plugin(self, plugin: Plugin) -> Plugin:
+        metadata = dict(plugin.metadata)
+        metadata["i18n"] = self._complete_i18n(
+            section="plugins",
+            identity=plugin.name,
+            authored=metadata.get("i18n"),
+        )
+        return dataclass_replace(plugin, metadata=metadata)
+
+    def _localized_pack(self, pack: PluginPack) -> PluginPack:
+        metadata = dict(pack.metadata)
+        metadata["i18n"] = self._complete_i18n(
+            section="packs",
+            identity=pack.id,
+            authored=metadata.get("i18n"),
+        )
+        return dataclass_replace(
+            pack,
+            plugins=tuple(self._localized_plugin(plugin) for plugin in pack.plugins),
+            metadata=metadata,
+        )
+
+    def _reload_i18n_catalog(self, root: Path) -> PluginLoadFailure | None:
+        path = root / _I18N_FILE_NAME
+        previous = self._i18n_catalogs.get(root)
+        try:
+            if path.is_file():
+                catalog = self._validated_i18n_catalog(
+                    json.loads(path.read_text(encoding="utf-8"))
+                )
+            else:
+                catalog = {"version": 1, "packs": {}, "plugins": {}}
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            return PluginLoadFailure(path, str(exc))
+        with self._lock:
+            self._i18n_catalogs[root] = catalog
+        try:
+            if self._pack_sources.get("core") == "core":
+                from .core_impl import create_core_plugin_pack
+
+                self.register_pack(
+                    create_core_plugin_pack(self),
+                    source="core",
+                    replace=True,
+                )
+        except Exception as exc:
+            with self._lock:
+                if previous is None:
+                    self._i18n_catalogs.pop(root, None)
+                else:
+                    self._i18n_catalogs[root] = previous
+            return PluginLoadFailure(path, str(exc))
+        return None
+
     def _customized_plugin(self, plugin: Plugin, source: str) -> Plugin | None:
         metadata = dict(plugin.metadata)
         canonical = str(metadata.get("canonical_name") or plugin.name)
         metadata.setdefault("canonical_name", canonical)
         metadata.setdefault("source_name", plugin.name)
         metadata.setdefault("source_description", plugin.description)
-        if source == "core" or plugin.kind != "tool":
+        if source == "core":
             if source == "core" and plugin.kind == "tool":
                 metadata["agent_exposure"] = "direct"
             return dataclass_replace(plugin, metadata=metadata)
         override = self._customizations.get(canonical)
         if override.get("deleted") is True:
             return None
-        if "agent_exposure" in override:
+        if plugin.kind == "tool" and "agent_exposure" in override:
             metadata["agent_exposure"] = override["agent_exposure"]
             metadata["model_visible"] = override["agent_exposure"] != "hidden"
+        metadata["customized_description"] = "description" in override
         return dataclass_replace(
             plugin,
             name=str(override.get("name") or plugin.name),
@@ -209,6 +474,7 @@ class PluginRegistry:
         normalized_source = str(source).strip()
         if not normalized_source:
             raise ValueError("Plugin pack source cannot be empty")
+        pack = self._localized_pack(pack)
         customized_plugins = tuple(
             customized
             for plugin in pack.plugins
@@ -263,6 +529,7 @@ class PluginRegistry:
                     pack_id=pack.id,
                     source=normalized_source,
                 )
+            self._bump_revision_locked()
         log_operation(
             logger,
             "plugin.registry",
@@ -310,6 +577,7 @@ class PluginRegistry:
         normalized_source = str(source).strip()
         if not normalized_source:
             raise ValueError("Plugin source cannot be empty")
+        plugin = self._localized_plugin(plugin)
         customized = self._customized_plugin(plugin, normalized_source)
         if customized is None:
             return
@@ -338,6 +606,7 @@ class PluginRegistry:
                 pack_id=None,
                 source=normalized_source,
             )
+            self._bump_revision_locked()
         log_operation(
             logger,
             "plugin.registry",
@@ -377,6 +646,7 @@ class PluginRegistry:
                 return False
             for plugin in pack.plugins:
                 self._plugins.pop(plugin.name, None)
+            self._bump_revision_locked()
         log_operation(
             logger,
             "plugin.registry",
@@ -420,6 +690,7 @@ class PluginRegistry:
                     f"Core Plugin cannot be unregistered: {normalized_name}"
                 )
             self._plugins.pop(normalized_name, None)
+            self._bump_revision_locked()
         log_operation(
             logger,
             "plugin.registry",
@@ -444,6 +715,7 @@ class PluginRegistry:
             if pack is not None:
                 for plugin in pack.plugins:
                     self._plugins.pop(plugin.name, None)
+                self._bump_revision_locked()
             return
         registered = self._plugins.get(contribution.identity)
         if not (
@@ -463,6 +735,34 @@ class PluginRegistry:
             )
         if registered is not None:
             self._plugins.pop(registered.plugin.name, None)
+            self._bump_revision_locked()
+
+    def _retire_loaded_entry(
+        self,
+        entry: Path,
+        *,
+        reason: str,
+    ) -> _LoadedContribution | None:
+        source = str(entry)
+        with self._lock:
+            contribution = self._user_contributions.pop(entry, None)
+            if contribution is not None:
+                self._remove_loaded_locked(contribution, source)
+        if contribution is None:
+            return None
+        self._unload_module_tree(contribution.module_name)
+        _set_user_source_available(source, False)
+        log_operation(
+            logger,
+            "plugin.registry",
+            "remove_contribution",
+            phase="completed",
+            path=entry,
+            kind=contribution.kind,
+            identity=contribution.identity,
+            reason=reason,
+        )
+        return contribution
 
     def _install_loaded_contribution(
         self,
@@ -512,7 +812,7 @@ class PluginRegistry:
 
     @staticmethod
     def _plugin_locked(registered: RegisteredPlugin) -> bool:
-        return registered.source == "core" or registered.plugin.kind == "model"
+        return registered.source == "core"
 
     def _registered_value(self, name: str) -> RegisteredPlugin:
         with self._lock:
@@ -533,12 +833,20 @@ class PluginRegistry:
     def _registered_enabled(self, registered: RegisteredPlugin) -> bool:
         if self._plugin_locked(registered):
             return True
-        if (
-            registered.pack_id is not None
-            and not self._activation.pack_enabled(registered.pack_id)
+        if not _user_source_available(
+            registered.source,
+            self._user_source_revisions.get(registered.source),
         ):
             return False
-        return self._activation.plugin_enabled(registered.plugin.canonical_name)
+        if (
+            registered.pack_id is not None
+            and not self.pack_configured_enabled(registered.pack_id)
+        ):
+            return False
+        return self._activation.plugin_enabled(
+            registered.plugin.canonical_name,
+            default=bool(registered.plugin.metadata.get("default_enabled", True)),
+        )
 
     def plugin_locked(self, name: str) -> bool:
         return self._plugin_locked(self._registered_value(name))
@@ -550,23 +858,47 @@ class PluginRegistry:
             source = self._pack_sources.get(normalized_id)
         if pack is None:
             raise PluginNotFoundError(f"Plugin pack is not registered: {pack_id}")
-        return source == "core" or any(plugin.kind == "model" for plugin in pack.plugins)
+        return (
+            source == "core"
+            or bool(pack.metadata.get("required"))
+        )
 
     def plugin_configured_enabled(self, name: str) -> bool:
         registered = self._registered_value(name)
         if self._plugin_locked(registered):
             return True
-        return self._activation.plugin_enabled(registered.plugin.canonical_name)
+        return self._activation.plugin_enabled(
+            registered.plugin.canonical_name,
+            default=bool(registered.plugin.metadata.get("default_enabled", True)),
+        )
 
     def pack_configured_enabled(self, pack_id: str) -> bool:
         if self.pack_locked(pack_id):
             return True
-        return self._activation.pack_enabled(str(pack_id))
+        with self._lock:
+            pack = self._packs[str(pack_id)]
+        return self._activation.pack_enabled(
+            str(pack_id),
+            default=bool(pack.metadata.get("default_enabled", True)),
+        )
 
     def pack_enabled(self, pack_id: str) -> bool:
         """Return the effective pack switch, including locked core packs."""
 
-        return self.pack_configured_enabled(pack_id)
+        normalized_id = str(pack_id)
+        with self._lock:
+            source = self._pack_sources.get(normalized_id)
+        if source is None:
+            raise PluginNotFoundError(
+                f"Plugin pack is not registered: {pack_id}"
+            )
+        return (
+            _user_source_available(
+                source,
+                self._user_source_revisions.get(source),
+            )
+            and self.pack_configured_enabled(normalized_id)
+        )
 
     def plugin_enabled(self, name: str) -> bool:
         """Return effective activation after pack and Plugin switches."""
@@ -661,6 +993,7 @@ class PluginRegistry:
             "plugin.registry",
             "resolve",
             phase="completed",
+            level=logging.DEBUG,
             plugin=registered.plugin.name,
             plugin_kind=registered.plugin.kind,
             pack_id=registered.pack_id,
@@ -678,7 +1011,7 @@ class PluginRegistry:
                 "plugin.registry",
                 "registered",
                 phase="failed",
-                level=logging.WARNING,
+                level=logging.DEBUG,
                 plugin=name,
                 error="not_registered",
             )
@@ -688,6 +1021,7 @@ class PluginRegistry:
             "plugin.registry",
             "registered",
             phase="completed",
+            level=logging.DEBUG,
             plugin=result.plugin.name,
             plugin_kind=result.plugin.kind,
             pack_id=result.pack_id,
@@ -703,6 +1037,7 @@ class PluginRegistry:
             "plugin.registry",
             "list_plugins",
             phase="completed",
+            level=logging.DEBUG,
             count=len(result),
             plugins=[item.plugin.name for item in result],
         )
@@ -716,6 +1051,7 @@ class PluginRegistry:
             "plugin.registry",
             "list_packs",
             phase="completed",
+            level=logging.DEBUG,
             count=len(result),
             packs=[pack.id for pack in result],
         )
@@ -750,8 +1086,17 @@ class PluginRegistry:
             raise PluginRegistryError(
                 f"Plugin customization is locked: {canonical_name}"
             )
-        if registered.plugin.kind != "tool":
-            raise PluginRegistryError(f"Plugin is not a tool: {canonical_name}")
+        if registered.plugin.kind not in {"tool", "model"}:
+            raise PluginRegistryError(
+                f"Plugin cannot be customized: {canonical_name}"
+            )
+        if (
+            registered.plugin.kind != "tool"
+            and "agent_exposure" in values
+        ):
+            raise PluginRegistryError(
+                f"Only tool Plugins have agent exposure: {canonical_name}"
+            )
         current = self._customizations.get(canonical_name)
         current.update(dict(values))
         previous = self._customizations.get(canonical_name)
@@ -769,6 +1114,7 @@ class PluginRegistry:
                             if plugin.canonical_name != canonical_name
                         ),
                     )
+                self._bump_revision_locked()
             return None
         metadata = dict(registered.plugin.metadata)
         source_name = str(metadata.get("source_name") or canonical_name)
@@ -812,6 +1158,7 @@ class PluginRegistry:
                         for plugin in pack.plugins
                     ),
                 )
+            self._bump_revision_locked()
         return next_registered
 
     def refresh_customizations(self) -> None:
@@ -868,7 +1215,7 @@ class PluginRegistry:
                 "plugin.registry",
                 "pack_source",
                 phase="failed",
-                level=logging.WARNING,
+                level=logging.DEBUG,
                 pack_id=pack_id,
                 error="not_registered",
             )
@@ -878,6 +1225,7 @@ class PluginRegistry:
             "plugin.registry",
             "pack_source",
             phase="completed",
+            level=logging.DEBUG,
             pack_id=pack_id,
             source=source,
         )
@@ -1003,6 +1351,11 @@ class PluginRegistry:
         )
         with self._lock:
             self._user_directories.add(root)
+            self._directory_revision += 1
+        failures: list[PluginLoadFailure] = []
+        catalog_failure = self._reload_i18n_catalog(root)
+        if catalog_failure is not None:
+            failures.append(catalog_failure)
         if not root.exists():
             log_operation(
                 logger,
@@ -1012,14 +1365,24 @@ class PluginRegistry:
                 directory=root,
                 replace=replace,
                 loaded=0,
-                failures=0,
+                failures=len(failures),
                 missing=True,
                 duration_ms=round((time.perf_counter() - started) * 1_000, 3),
             )
-            return ()
-        failures: list[PluginLoadFailure] = []
+            return tuple(failures)
         loaded: list[dict[str, str]] = []
-        for entry in sorted(root.iterdir(), key=lambda item: item.name):
+        try:
+            entries = sorted(root.iterdir(), key=lambda item: item.name)
+        except OSError as exc:
+            with self._lock:
+                tracked = tuple(
+                    path for path in self._user_contributions if path.parent == root
+                )
+            for entry in tracked:
+                self._retire_loaded_entry(entry, reason="directory_unreadable")
+            failures.append(PluginLoadFailure(root, str(exc)))
+            return tuple(failures)
+        for entry in entries:
             if entry.name.startswith((".", "_")) or not (
                 entry.is_dir() or (entry.is_file() and entry.suffix == ".py")
             ):
@@ -1062,6 +1425,12 @@ class PluginRegistry:
             except Exception as exc:
                 if module_name:
                     self._unload_module_tree(module_name)
+                if replace:
+                    self._retire_loaded_entry(
+                        entry,
+                        reason="source_load_failed",
+                    )
+                _set_user_source_available(str(entry), False)
                 failures.append(PluginLoadFailure(entry, str(exc)))
                 log_operation(
                     logger,
@@ -1074,6 +1443,10 @@ class PluginRegistry:
                     error=exc,
                 )
             else:
+                revision = _set_user_source_available(str(entry), True)
+                if revision is not None:
+                    with self._lock:
+                        self._user_source_revisions[str(entry)] = revision
                 with self._lock:
                     previous = self._user_contributions.get(entry)
                     self._user_contributions[entry] = _LoadedContribution(
@@ -1130,32 +1503,23 @@ class PluginRegistry:
             tracked = {
                 path for path in self._user_contributions if path.parent == root
             }
-        present = (
-            {
-                path
-                for path in root.iterdir()
-                if not path.name.startswith((".", "_"))
-                and (path.is_dir() or (path.is_file() and path.suffix == ".py"))
-            }
-            if root.exists()
-            else set()
-        )
-        for entry in sorted(tracked - present, key=lambda path: path.name):
-            source = str(entry)
-            with self._lock:
-                contribution = self._user_contributions.pop(entry)
-                self._remove_loaded_locked(contribution, source)
-            self._unload_module_tree(contribution.module_name)
-            log_operation(
-                logger,
-                "plugin.registry",
-                "remove_contribution",
-                phase="completed",
-                path=entry,
-                kind=contribution.kind,
-                identity=contribution.identity,
-                reason="source_deleted",
+        try:
+            present = (
+                {
+                    path
+                    for path in root.iterdir()
+                    if not path.name.startswith((".", "_"))
+                    and (path.is_dir() or (path.is_file() and path.suffix == ".py"))
+                }
+                if root.exists()
+                else set()
             )
+        except OSError as exc:
+            for entry in tracked:
+                self._retire_loaded_entry(entry, reason="directory_unreadable")
+            return (PluginLoadFailure(root, str(exc)),)
+        for entry in sorted(tracked - present, key=lambda path: path.name):
+            self._retire_loaded_entry(entry, reason="source_deleted")
         return self._load_directory(root, replace=True)
 
     def refresh(self) -> tuple[PluginLoadFailure, ...]:

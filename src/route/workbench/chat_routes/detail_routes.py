@@ -7,13 +7,30 @@ import time
 from typing import Any
 
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
 
 from cyrene.workbench.chat_events import publish_chat_changed
 from route import schemas as api_models
+from route.errors import localized_error_response
 from route.workbench.chat_routes.context import ChatRouteContext
 
 logger = logging.getLogger(__name__)
+
+
+def _composer_context_service():
+    from agent.plugin import active_plugin_service
+
+    service = active_plugin_service("composer_context")
+    if service is None:
+        raise RuntimeError(
+            "Required Plugin application service is unavailable: composer_context"
+        )
+    return service
+
+
+def _extensions_service():
+    from agent.plugin import active_plugin_service
+
+    return active_plugin_service("extensions")
 
 
 def _merge_context_activity_messages(
@@ -72,12 +89,16 @@ def _register_get_route(router: APIRouter, context: ChatRouteContext):
                 await asyncio.to_thread(_write_chats_store, full_payload)
         chat = await asyncio.to_thread(_get_workbench_chat, chat_id)
         if not chat:
-            return JSONResponse({"error": "chat not found"}, status_code=404)
+            return localized_error_response(
+                "Chat not found.", "未找到对话。", 404, "chat_not_found"
+            )
         if "generatedFiles" not in chat:
             await asyncio.to_thread(_sync_chat_generated_files, chat_id)
             chat = await asyncio.to_thread(_get_workbench_chat, chat_id)
             if not chat:
-                return JSONResponse({"error": "chat not found"}, status_code=404)
+                return localized_error_response(
+                    "Chat not found.", "未找到对话。", 404, "chat_not_found"
+                )
 
         async def prewarm_opened_workspace() -> None:
             try:
@@ -121,9 +142,11 @@ def _register_get_route(router: APIRouter, context: ChatRouteContext):
 
 async def _apply_agent_binding(chat: dict[str, Any], body: dict[str, Any], default_model: str):
     if chat.get("messages"):
-        return JSONResponse(
-            {"error": "Agent binding can only change on an empty chat", "code": "agent_binding_locked"},
-            status_code=409,
+        return localized_error_response(
+            "The Agent binding can only be changed in an empty chat.",
+            "只能在空对话中更改 Agent 绑定。",
+            409,
+            "agent_binding_locked",
         )
     requested = body.get("agent") if isinstance(body.get("agent"), dict) else {}
     installation_id = str(requested.get("installationId") or "").strip()
@@ -136,13 +159,29 @@ async def _apply_agent_binding(chat: dict[str, Any], body: dict[str, Any], defau
             default_model=default_model,
         )
     else:
-        from cyrene.extensions import agent_runtime as extension_agents
-
-        installation = await asyncio.to_thread(extension_agents.get_agent_installation, installation_id)
+        extensions = _extensions_service()
+        resolver = getattr(extensions, "get_agent_installation", None)
+        installation = (
+            await asyncio.to_thread(resolver, installation_id)
+            if callable(resolver)
+            else None
+        )
         if installation is None:
-            return JSONResponse({"error": "Agent installation not found", "code": "dependency_missing"}, status_code=404)
+            return localized_error_response(
+                "Agent installation not found.",
+                "未找到 Agent 安装。",
+                404,
+                "dependency_missing",
+                failureKind="dependency_missing",
+            )
         if not bool(installation.get("enabled", True)):
-            return JSONResponse({"error": "Agent installation is disabled", "code": "agent_disabled"}, status_code=409)
+            return localized_error_response(
+                "The Agent installation is disabled.",
+                "该 Agent 安装已停用。",
+                409,
+                "agent_disabled",
+                failureKind="agent_disabled",
+            )
         fields = normalize_agent_fields(
             {
                 "installationId": installation.get("installation_id", ""),
@@ -157,9 +196,7 @@ async def _apply_agent_binding(chat: dict[str, Any], body: dict[str, Any], defau
         )
     chat.update(fields)
     if not installation_id or installation_id == BUILTIN_INSTALLATION_ID:
-        from cyrene.workbench.composer_context import normalize_context_activations
-
-        chat["contextActivations"] = normalize_context_activations(
+        chat["contextActivations"] = _composer_context_service().normalize(
             chat.get("contextActivations")
         )
     else:
@@ -174,23 +211,43 @@ def _apply_agent_config_values(chat: dict[str, Any], values: Any):
     from cyrene.agent_runtime.builtin import normalize_agent_binding
 
     if normalize_agent_binding(chat.get("agent")).is_builtin:
-        return JSONResponse({"error": "Built-in chats do not use Agent config options"}, status_code=400)
+        return localized_error_response(
+            "Built-in chats do not use Agent configuration options.",
+            "内置 Agent 对话不使用 Agent 配置选项。",
+            400,
+            "agent_config_not_supported",
+        )
     if not isinstance(values, dict):
-        return JSONResponse({"error": "agentConfigValues must be an object"}, status_code=400)
+        return localized_error_response(
+            "agentConfigValues must be an object.",
+            "agentConfigValues 必须是对象。",
+            400,
+            "invalid_agent_config_values",
+        )
     allowed = {str(option.get("id") or ""): option for option in chat.get("agentConfigOptions") or [] if isinstance(option, dict) and option.get("id")}
     normalized_values: dict[str, Any] = {}
     for config_id, value in values.items():
         config_id = str(config_id or "")[:200]
         option = allowed.get(config_id)
         if option is None:
-            return JSONResponse({"error": "Agent config option not found"}, status_code=400)
+            return localized_error_response(
+                "Agent configuration option not found.",
+                "未找到 Agent 配置选项。",
+                400,
+                "agent_config_option_not_found",
+            )
         if option.get("type") == "boolean":
             normalized_values[config_id] = bool(value)
         else:
             valid_values = {str(item.get("value") or "") for item in option.get("options") or [] if isinstance(item, dict)}
             value = str(value or "")[:500]
             if value not in valid_values:
-                return JSONResponse({"error": "Agent config option value is invalid"}, status_code=400)
+                return localized_error_response(
+                    "The Agent configuration value is invalid.",
+                    "Agent 配置值无效。",
+                    400,
+                    "invalid_agent_config_value",
+                )
             normalized_values[config_id] = value
     chat.setdefault("agentConfigValues", {}).update(normalized_values)
     for config_id, value in normalized_values.items():
@@ -210,10 +267,12 @@ def _apply_agent_config_values(chat: dict[str, Any], values: Any):
 def _apply_model_selection(chat: dict[str, Any], selected_key: str) -> None:
     if not selected_key:
         return
-    from cyrene.runtime.model_configuration import selectable_model_candidates
+    from agent.plugin import active_plugin_service
 
+    service = active_plugin_service("model_configuration")
+    candidates = service.selectable_model_candidates() if service is not None else []
     selected = next(
-        (item for item in selectable_model_candidates() if selected_key in {str(item.get("id") or ""), str(item.get("model") or ""), str(item.get("name") or "")}),
+        (item for item in candidates if selected_key in {str(item.get("id") or ""), str(item.get("model") or ""), str(item.get("name") or "")}),
         None,
     )
     chat["modelSelectionId"] = selected_key
@@ -233,9 +292,21 @@ def _register_update_route(router: APIRouter, context: ChatRouteContext):
     @router.patch("/api/workbench/chats/{chat_id}")
     async def api_workbench_update_chat(chat_id: str, body_model: api_models.ChatUpdateBody):
         body = api_models.body_dict(body_model)
+        input_context_changed = any(
+            key in body
+            for key in (
+                "soulActive",
+                "workspaceActive",
+                "workspaceOverride",
+                "remoteDeviceIds",
+                "contextActivations",
+            )
+        )
         chat = await asyncio.to_thread(_get_workbench_chat, chat_id)
         if not chat:
-            return JSONResponse({"error": "chat not found"}, status_code=404)
+            return localized_error_response(
+                "Chat not found.", "未找到对话。", 404, "chat_not_found"
+            )
         base_chat = copy.deepcopy(chat)
         R = _routes()
         if "title" in body:
@@ -265,30 +336,90 @@ def _register_update_route(router: APIRouter, context: ChatRouteContext):
         if "workspaceOverride" in body:
             try:
                 override = _normalize_workspace_override(body.get("workspaceOverride"))
-            except ValueError as exc:
-                return JSONResponse({"error": str(exc)}, status_code=400)
+            except ValueError:
+                logger.warning(
+                    "Invalid workspace override for chat %s",
+                    chat_id,
+                    exc_info=True,
+                )
+                return localized_error_response(
+                    "The workspace override is invalid.",
+                    "工作区覆盖路径无效。",
+                    400,
+                    "invalid_workspace_override",
+                )
             if override:
                 chat["workspaceOverride"] = override
             else:
                 chat.pop("workspaceOverride", None)
         if "contextActivations" in body:
-            from cyrene.workbench.composer_context import validate_context_activations
-
-            try:
-                chat["contextActivations"] = validate_context_activations(
-                    body.get("contextActivations")
-                )
-            except ValueError as exc:
-                return JSONResponse({"error": str(exc)}, status_code=400)
+            chat["contextActivations"] = _composer_context_service().normalize(
+                body.get("contextActivations")
+            )
+        if "remoteDeviceIds" in body:
+            chat["remoteDeviceIds"] = list(body.get("remoteDeviceIds") or ())
         from cyrene.agent_runtime.builtin import normalize_agent_binding
 
         if (
             not normalize_agent_binding(chat.get("agent")).is_builtin
             and any((chat.get("contextActivations") or {}).values())
         ):
-            return JSONResponse(
-                {"error": "Composer context capabilities require the built-in Cyrene Agent"},
-                status_code=400,
+            return localized_error_response(
+                "Composer context capabilities require the built-in Cyrene Agent.",
+                "编辑器上下文能力需要使用 Cyrene 内置 Agent。",
+                400,
+                "builtin_agent_required",
+            )
+        if input_context_changed:
+            project = await asyncio.to_thread(
+                R.find_project_lightweight,
+                str(chat.get("projectId") or ""),
+            )
+            if not project:
+                return localized_error_response(
+                    "Project not found.", "未找到项目。", 404, "project_not_found"
+                )
+            try:
+                workspace_dir = service.resolve_chat_workspace_dir(
+                    chat,
+                    project,
+                    R.resolve_workspace_dir,
+                )
+                resolved_input = service.resolve_composer_input_context(
+                    chat,
+                    workspace_dir,
+                    strict=True,
+                )
+            except (ValueError, RuntimeError) as exc:
+                logger.warning(
+                    "Composer input context update failed for chat %s: %s",
+                    chat_id,
+                    exc,
+                )
+                invalid = isinstance(exc, ValueError)
+                return localized_error_response(
+                    (
+                        "The context configuration is invalid."
+                        if invalid
+                        else "The selected input context is unavailable."
+                    ),
+                    "上下文配置无效。" if invalid else "所选输入框上下文当前不可用。",
+                    400 if invalid else 503,
+                    (
+                        "invalid_context_configuration"
+                        if invalid
+                        else "composer_context_unavailable"
+                    ),
+                )
+            chat["soulActive"] = bool(resolved_input["soulActive"])
+            chat["workspaceActive"] = bool(
+                resolved_input["workspaceActive"]
+            )
+            chat["remoteDeviceIds"] = list(
+                resolved_input["remoteDeviceIds"]
+            )
+            chat["contextActivations"] = dict(
+                resolved_input["contextActivations"]
             )
         chat["updatedAt"] = _utc_now_iso()
         await asyncio.to_thread(_write_chat_store, chat, base_chat=base_chat)
