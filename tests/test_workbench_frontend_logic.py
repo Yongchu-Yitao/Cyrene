@@ -6648,18 +6648,22 @@ def test_plugin_registry_frontend_uses_only_the_new_status_and_activation_apis()
     plugin_settings = frontend_module_source("features/settings/custom-plugins.jsx")
     plugin_service = frontend_module_source("platform/plugins.jsx")
 
-    assert '{ id: "custom-plugins", labelKey: "settings.customPlugins", icon: "package" }' in overlay
-    assert 'tab === "custom-plugins" && React.createElement(CustomPluginsPanel' in overlay
+    assert '{ id: "plugin-registry", labelKey: "settings.pluginRegistry", icon: "package" }' in overlay
+    assert 'tab === "plugin-registry" && React.createElement(PluginRegistryPanel' in overlay
     assert 'api.json("/api/plugins", { toast: false })' in plugin_service
     assert 'api.json("/api/plugins/reload", {' in plugin_service
+    assert '"/api/plugins/tools/"' in plugin_service
+    assert 'method: remove ? "DELETE" : "PATCH"' in plugin_service
     assert "standalone_plugins" in plugin_service
     assert "attached_application_packs" in plugin_service
     assert "application_restart_required" in plugin_service
     assert "EventSource" not in plugin_service
     assert "/contributions" not in plugin_service
     assert '"/call"' not in plugin_service
-    assert 'settingsFetch("/api/settings/tools", {' in plugin_settings
-    assert 'kind === "package" ? { packages: {} } : { tools: {} }' in plugin_settings
+    assert 'settingsFetch("/api/settings/plugins", {' in plugin_settings
+    assert 'agent_exposure: direct ? "discoverable" : "direct"' in plugin_settings
+    assert 'settings.pluginToolAgentDescription' in plugin_settings
+    assert 'settings.pluginToolDelete' in plugin_settings
     assert 'item.locked === true' in plugin_settings
     assert 'kind === "model"' in plugin_settings
     assert 'item.source === "core"' in plugin_settings

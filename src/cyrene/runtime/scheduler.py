@@ -415,12 +415,11 @@ def _silence_hours() -> float | None:
 
 
 async def _assemble_proactive_context(db_path: str = "") -> str:
-    """Gather memory, conversation, and personality context for a proactive
+    """Gather memory and conversation context for a proactive
     message so the agent can reference real events.
 
-    Returns a Markdown string assembled from three sources:
+    Returns a Markdown string assembled from two sources:
 
-    * SOUL.md — RELATIONSHIP:USER and PATTERN:USER sections.
     * Short-term memory — recent facts, preferences, emotional patterns.
     * Today's conversation archive — what the user just talked about.
 
@@ -428,39 +427,9 @@ async def _assemble_proactive_context(db_path: str = "") -> str:
     """
     parts: list[str] = []
 
-    # 1. SOUL.md shallow memory — relationship + observed patterns
-    try:
-        memory_service = _memory_service()
-        soul = (
-            memory_service.read_shallow_memory()
-            if memory_service is not None
-            else ""
-        )
-        if soul:
-            relevant_lines: list[str] = []
-            capture = False
-            for line in soul.splitlines():
-                if line.startswith("## RELATIONSHIP:USER") or line.startswith(
-                    "## PATTERN:USER",
-                ):
-                    capture = True
-                    relevant_lines.append(line)
-                elif line.startswith("## ") and capture:
-                    capture = False
-                elif capture:
-                    relevant_lines.append(line)
-            if relevant_lines:
-                parts.append(
-                    "## Your relationship with the user\n"
-                    + "\n".join(relevant_lines),
-                )
-    except Exception:
-        logger.debug(
-            "Could not read SOUL.md for proactive context",
-            exc_info=True,
-        )
-
-    # 2. Short-term memory — compressed facts / preferences / emotions
+    # SOUL.md is mounted once by the cyrene_soul SessionStart Hook. Keeping it
+    # out of this user-message payload prevents duplicate persona instructions.
+    # 1. Short-term memory — compressed facts / preferences / emotions
     try:
         memory_service = _memory_service()
         st = (
@@ -479,7 +448,7 @@ async def _assemble_proactive_context(db_path: str = "") -> str:
             exc_info=True,
         )
 
-    # 3. Today's conversation — what the user just talked about
+    # 2. Today's conversation — what the user just talked about
     try:
         memory_service = _memory_service()
         conversations = (

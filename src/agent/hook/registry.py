@@ -956,15 +956,17 @@ class HookSet:
             node_id=self.root_id,
             is_root=True,
         )
-        contexts: list[str] = []
-        for result in await self.dispatch(event):
+        contexts: list[tuple[int, int, str]] = []
+        for index, result in enumerate(await self.dispatch(event)):
             if isinstance(result, Mapping):
                 value = str(result.get("context") or "").strip()
+                position = str(result.get("context_position") or "").strip()
             else:
                 value = str(result or "").strip()
+                position = ""
             if value:
-                contexts.append(value)
-        return "\n\n".join(contexts)
+                contexts.append((0 if position == "top" else 1, index, value))
+        return "\n\n".join(value for _priority, _index, value in sorted(contexts))
 
     async def session_end(
         self,

@@ -259,7 +259,7 @@ function CapabilitiesPanel(p) {
           var packEnabled = pack.configured_enabled !== false;
           var packName = t("toolName." + pack.id, pack.name || pack.id);
           var statusParts = [
-            pack.description || pack.id,
+            t("pluginPackDesc." + pack.id, pack.description || pack.id),
             pack.source ? t("settings.pluginSource", { source: pack.source }, "Source: {source}") : "",
             t("settings.pluginEnabledCount", {
               enabled: Number(pack.enabled_count || 0),
@@ -290,10 +290,11 @@ function CapabilitiesPanel(p) {
       t("settings.pluginStandaloneHint", "Plugins registered directly, outside a Plugin pack."),
       React.createElement("div", { className: "wb-plugin-activation-list" },
         (Array.isArray(standalonePlugins) ? standalonePlugins : []).map(function (plugin) {
-          var pluginId = String(plugin.name || plugin.id || "");
+          var pluginId = String(plugin.id || plugin.name || "");
+          var pluginName = t("toolName." + pluginId, plugin.name || pluginId);
           var pluginEnabled = plugin.configured_enabled !== false;
           var labels = [
-            plugin.description || pluginId,
+            t("toolDesc." + pluginId, t("settings.pluginToolDescriptionFallback", { name: pluginName }, plugin.description || pluginId)),
             plugin.kind ? String(plugin.kind) : "",
             plugin.source ? t("settings.pluginSource", { source: plugin.source }, "Source: {source}") : "",
             plugin.kind === "model" ? t("settings.pluginModel", "Model") : "",
@@ -302,7 +303,7 @@ function CapabilitiesPanel(p) {
             plugin.locked === true ? t("settings.pluginLocked", "Locked") : "",
           ].filter(Boolean);
           return FieldRow(
-            t("toolName." + pluginId, pluginId),
+            pluginName,
             labels.join(" · "),
             Toggle(
               pluginEnabled,

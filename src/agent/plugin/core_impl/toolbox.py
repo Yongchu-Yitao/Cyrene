@@ -79,6 +79,7 @@ class _ToolboxHandler:
             registered.plugin.kind != "tool"
             or not registered.plugin.model_visible
             or registered.source == "core"
+            or registered.plugin.agent_exposure != "discoverable"
             or not self._registry.plugin_accessible(name, agent_id=agent_id)
         ):
             raise ValueError(f"Plugin is not available through toolbox: {name}")
@@ -105,6 +106,7 @@ class _ToolboxHandler:
             if any(
                 plugin.kind == "tool"
                 and plugin.model_visible
+                and plugin.agent_exposure == "discoverable"
                 and self._registry.plugin_accessible(
                     plugin.name,
                     agent_id=agent_id,
@@ -119,6 +121,7 @@ class _ToolboxHandler:
             if (
                 plugin.kind != "tool"
                 or not plugin.model_visible
+                or plugin.agent_exposure != "discoverable"
                 or registered.pack_id is not None
                 or registered.source == "core"
                 or not self._registry.plugin_accessible(
@@ -139,6 +142,7 @@ class _ToolboxHandler:
                 for plugin in pack.plugins
                 if plugin.kind == "tool"
                 and plugin.model_visible
+                and plugin.agent_exposure == "discoverable"
                 and self._registry.plugin_accessible(
                     plugin.name,
                     agent_id=agent_id,
@@ -207,6 +211,7 @@ class _ToolboxHandler:
         context: PluginContext,
     ) -> dict[str, Any]:
         failures = self._registry.refresh()
+        self._registry.refresh_customizations()
         refresh_errors = self._failure_values(failures)
         operation = str(arguments.get("operation") or "")
         agent_id = self._agent_id(context)

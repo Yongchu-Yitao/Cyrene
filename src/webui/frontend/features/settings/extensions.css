@@ -362,6 +362,83 @@
 .wb-registry-member-copy strong { overflow-wrap: anywhere; color: var(--wb-text); font-size: 11.5px; }
 .wb-registry-member-copy code { overflow-wrap: anywhere; color: var(--wb-faint); font-size: 10px; }
 
+.wb-tool-menu-wrap { position: relative; flex: 0 0 auto; }
+.wb-tool-menu-trigger {
+  width: 44px;
+  height: 44px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+.wb-tool-menu-trigger:hover,
+.wb-tool-menu-trigger:focus-visible { border-color: var(--wb-line); background: var(--wb-hover); color: var(--wb-text); outline: none; }
+.wb-tool-menu-trigger:disabled { opacity: .45; cursor: default; }
+.wb-tool-menu {
+  position: absolute;
+  z-index: 28;
+  top: calc(100% + 4px);
+  right: 0;
+  width: min(260px, calc(100vw - 32px));
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--wb-line);
+  border-radius: 11px;
+  background: var(--wb-panel, #18191d);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, .38);
+}
+.wb-tool-menu button {
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+  cursor: pointer;
+}
+.wb-tool-menu button:hover:not(:disabled),
+.wb-tool-menu button:focus-visible { background: var(--wb-hover); outline: none; }
+.wb-tool-menu button.danger { color: var(--wb-red); }
+.wb-tool-menu button:disabled { color: var(--wb-faint); cursor: not-allowed; }
+.wb-tool-menu small { padding: 6px 10px 4px; color: var(--wb-faint); line-height: 1.45; }
+.wb-tool-menu-separator { height: 1px; margin: 3px 4px; background: var(--wb-line); }
+
+.wb-tool-dialog-backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, .58);
+}
+.wb-tool-dialog {
+  width: min(520px, 100%);
+  max-height: min(720px, calc(100vh - 40px));
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid var(--wb-line);
+  border-radius: 14px;
+  background: var(--wb-panel, #18191d);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .5);
+}
+.wb-tool-dialog form,
+.wb-tool-dialog label { display: grid; gap: 8px; }
+.wb-tool-dialog form { gap: 16px; }
+.wb-tool-dialog h3 { margin: 0 0 12px; color: var(--wb-text); font-size: 16px; }
+.wb-tool-dialog p { margin: 0 0 18px; color: var(--wb-muted); line-height: 1.55; }
+.wb-tool-dialog label > span { color: var(--wb-muted); font-size: 11px; }
+.wb-tool-dialog textarea { min-height: 120px; resize: vertical; }
+.wb-tool-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.wb-tool-dialog-error { color: var(--wb-red); font-size: 11px; }
+.wb-btn.danger { border-color: color-mix(in srgb, var(--wb-red) 45%, var(--wb-line)); color: var(--wb-red); }
+
 .wb-registry-failures > ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .wb-registry-failures li { display: grid; gap: 6px; padding: 11px 12px; border: 1px solid color-mix(in srgb, var(--wb-red) 30%, var(--wb-line)); border-radius: 9px; background: color-mix(in srgb, var(--wb-red) 6%, transparent); }
 .wb-registry-failure-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -382,6 +459,7 @@
   .wb-plugin-inline-error { margin-left: 14px; }
   .wb-registry-pack-members { padding-left: 14px; }
   .wb-registry-member { align-items: flex-start; flex-direction: column; }
+  .wb-registry-member > .wb-extension-title-row { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

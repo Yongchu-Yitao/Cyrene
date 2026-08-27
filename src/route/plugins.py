@@ -16,6 +16,7 @@ from agent.plugin import (
     PluginRegistryError,
     RegisteredPlugin,
 )
+from agent.plugin.registry import PluginNotFoundError
 
 
 def _source_values(source: str) -> tuple[str, str | None]:
@@ -34,8 +35,9 @@ def _plugin_value(
     source, source_path = _source_values(registered.source)
     enabled = registry.plugin_enabled(plugin.name)
     return {
-        "id": plugin.name,
+        "id": plugin.canonical_name,
         "name": plugin.name,
+        "canonical_name": plugin.canonical_name,
         "description": plugin.description,
         "kind": plugin.kind,
         "pack_id": registered.pack_id,
@@ -44,6 +46,13 @@ def _plugin_value(
         "effective_enabled": enabled,
         "locked": registry.plugin_locked(plugin.name),
         "model_visible": plugin.model_visible,
+        "agent_exposure": (
+            "direct" if source == "core" and plugin.kind == "tool"
+            else plugin.agent_exposure
+        ),
+        "customized": bool(registry.customizations.get(plugin.canonical_name)),
+        "customized_name": "name" in registry.customizations.get(plugin.canonical_name),
+        "i18n": dict(plugin.metadata.get("i18n", {})),
         "main_only": plugin.main_only,
         "source": source,
         "source_path": source_path,
@@ -66,9 +75,12 @@ def _pack_value(
         "id": pack.id,
         "name": pack.id,
         "description": pack.description,
+        "i18n": dict(pack.metadata.get("i18n", {})),
         "configured_enabled": configured_enabled,
-        "effective_enabled": any(
-            plugin["effective_enabled"] for plugin in plugins
+        "effective_enabled": (
+            any(plugin["effective_enabled"] for plugin in plugins)
+            if plugins
+            else configured_enabled
         ),
         "locked": registry.pack_locked(pack.id),
         "plugin_count": len(plugins),
@@ -232,6 +244,50 @@ def register_plugin_routes(
             # changes take effect after the process restarts.
             "application_restart_required": True,
         }
+
+    @router.patch("/api/plugins/tools/{canonical_name}")
+    async def api_update_plugin_tool(
+        canonical_name: str,
+        body: dict[str, Any],
+    ):
+        allowed = {"name", "description", "agent_exposure"}
+        unknown = sorted(set(body) - allowed)
+        if unknown:
+            return JSONResponse(
+                {"error": f"Unknown tool setting: {', '.join(unknown)}"},
+                status_code=400,
+            )
+        try:
+            registered = host.registry.customize_tool(canonical_name, body)
+            if registered is None:
+                raise RuntimeError("Tool was unexpectedly deleted")
+            from cyrene.runtime import settings_store
+
+            settings_store.set_(
+                "plugin_tool_customizations",
+                host.registry.customizations.snapshot(),
+            )
+        except PluginNotFoundError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        except (PluginRegistryError, TypeError, ValueError, RuntimeError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return plugin_registry_status(host)
+
+    @router.delete("/api/plugins/tools/{canonical_name}")
+    async def api_delete_plugin_tool(canonical_name: str):
+        try:
+            host.registry.customize_tool(canonical_name, {"deleted": True})
+            from cyrene.runtime import settings_store
+
+            settings_store.set_(
+                "plugin_tool_customizations",
+                host.registry.customizations.snapshot(),
+            )
+        except PluginNotFoundError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        except (PluginRegistryError, TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return plugin_registry_status(host)
 
 
 __all__ = ["plugin_registry_status", "register_plugin_routes"]

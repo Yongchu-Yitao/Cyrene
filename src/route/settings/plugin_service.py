@@ -33,8 +33,9 @@ def _plugin_value(
     plugin = registered.plugin
     source, source_path = _source_values(registered.source)
     return {
-        "id": plugin.name,
+        "id": plugin.canonical_name,
         "name": plugin.name,
+        "canonical_name": plugin.canonical_name,
         "description": plugin.description,
         "kind": plugin.kind,
         "pack_id": registered.pack_id,
@@ -51,7 +52,7 @@ def _plugin_value(
 
 def _pack_value(registry: PluginRegistry, pack: PluginPack) -> dict[str, Any]:
     source, source_path = _source_values(registry.pack_source(pack.id))
-    plugin_names = [plugin.name for plugin in pack.plugins]
+    plugin_names = [plugin.canonical_name for plugin in pack.plugins]
     enabled_count = sum(
         registry.plugin_enabled(name) for name in plugin_names
     )
@@ -61,7 +62,10 @@ def _pack_value(registry: PluginRegistry, pack: PluginPack) -> dict[str, Any]:
         "description": pack.description,
         "plugins": plugin_names,
         "configured_enabled": registry.pack_configured_enabled(pack.id),
-        "effective_enabled": enabled_count > 0,
+        "effective_enabled": (
+            enabled_count > 0 if plugin_names
+            else registry.pack_configured_enabled(pack.id)
+        ),
         "enabled_count": enabled_count,
         "plugin_count": len(plugin_names),
         "tool_count": sum(plugin.kind == "tool" for plugin in pack.plugins),
@@ -132,7 +136,7 @@ def _activation_update_error(
         )
 
     registered_plugins = {
-        item.plugin.name for item in registry.list_plugins()
+        item.plugin.canonical_name for item in registry.list_plugins()
     }
     registered_packs = {pack.id for pack in registry.list_packs()}
     unknown_plugins = sorted(set(map(str, plugins or {})) - registered_plugins)

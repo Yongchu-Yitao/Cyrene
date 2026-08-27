@@ -110,6 +110,19 @@ var PluginFrontendService = (function () {
     return reloadPromise
   }
 
+  function mutateTool(canonicalId, payload, remove) {
+    var api = workbenchServices.api()
+    var path = "/api/plugins/tools/" + encodeURIComponent(String(canonicalId || ""))
+    return api.json(path, {
+      method: remove ? "DELETE" : "PATCH",
+      headers: remove ? undefined : { "Content-Type": "application/json" },
+      body: remove ? undefined : JSON.stringify(payload || {}),
+      toast: false,
+    }).then(function (response) {
+      return commit(normalizePluginSnapshot(response, remove ? "delete-tool" : "update-tool"))
+    })
+  }
+
   function subscribe(scope, listener) {
     if (typeof scope === "function") listener = scope
     if (typeof listener !== "function") return function () {}
@@ -124,6 +137,8 @@ var PluginFrontendService = (function () {
   return {
     refresh: refresh,
     reload: reload,
+    updateTool: function (canonicalId, payload) { return mutateTool(canonicalId, payload, false) },
+    deleteTool: function (canonicalId) { return mutateTool(canonicalId, null, true) },
     snapshot: snapshot,
     subscribe: subscribe,
   }

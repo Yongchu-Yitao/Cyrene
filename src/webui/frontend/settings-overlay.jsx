@@ -573,9 +573,9 @@ function SettingsPage({
   }
 
   function saveStandalonePlugin(pluginName, nextEnabled) {
-    var plugin = standalonePlugins.find(function (item) { return String(item.name || item.id || "") === String(pluginName || ""); });
+    var plugin = standalonePlugins.find(function (item) { return String(item.id || item.name || "") === String(pluginName || ""); });
     if (!plugin || plugin.locked === true) return;
-    persistPluginActivation("plugin", pluginName, nextEnabled);
+    persistPluginActivation("plugin", plugin.id || pluginName, nextEnabled);
   }
 
   function publishVoiceStatus(next) {

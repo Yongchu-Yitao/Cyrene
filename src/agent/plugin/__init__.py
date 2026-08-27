@@ -3,6 +3,7 @@
 from .batch_catcher import PluginBatchCatcher
 from .batch_runner import PluginBatchRunner
 from .activation import PluginActivationSnapshot, PluginActivationState
+from .customization import PluginCustomizationState
 from .application import (
     PluginApplicationHost,
     active_plugin_application_host,
@@ -57,6 +58,7 @@ __all__ = [
     "PluginBatchRunner",
     "PluginCall",
     "PluginCallResult",
+    "PluginCustomizationState",
     "PluginContext",
     "PluginHandler",
     "PluginLifecycleHandler",

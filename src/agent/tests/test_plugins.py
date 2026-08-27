@@ -18,6 +18,7 @@ from agent.plugin import (
     PluginPack,
     PluginRegistry,
     PluginRuntime,
+    PluginCustomizationState,
 )
 from agent.plugin.core_impl import PermissionReviewPlugin
 
@@ -31,6 +32,66 @@ def _model_plugin_pack() -> Path:
 
 def run(coroutine):
     return asyncio.run(coroutine)
+
+
+def test_tool_customization_keeps_stable_identity_and_controls_discovery():
+    async def scenario():
+        registry = PluginRegistry(
+            customizations=PluginCustomizationState(),
+        )
+        registry.register_pack(
+            PluginPack(
+                id="weather",
+                description="Weather tools",
+                plugins=(Plugin(
+                    name="WeatherNow",
+                    description="Read weather",
+                    input_schema={"type": "object", "properties": {}},
+                    handler=lambda _arguments, _context: "sunny",
+                    metadata={
+                        "i18n": {
+                            "zh": {"name": "当前天气", "description": "读取天气"}
+                        }
+                    },
+                ),),
+                metadata={"i18n": {"zh": {"name": "天气", "description": "天气工具"}}},
+            ),
+            source="user-test",
+        )
+        runtime = PluginRuntime(registry)
+        listing = await runtime.call("toolbox", {"operation": "list"})
+        assert listing.value["packs"] == ["weather"]
+
+        updated = registry.customize_tool(
+            "WeatherNow",
+            {
+                "name": "LocalWeather",
+                "description": "Use the local station",
+                "agent_exposure": "direct",
+            },
+        )
+        assert updated is not None
+        assert updated.plugin.canonical_name == "WeatherNow"
+        assert updated.plugin.localized("zh") == ("当前天气", "读取天气")
+        assert {
+            item["function"]["name"]
+            for item in registry.direct_tool_definitions()
+        } >= {"Bash", "Read", "Write", "toolbox", "LocalWeather"}
+        listing = await runtime.call("toolbox", {"operation": "list"})
+        assert "weather" not in listing.value["packs"]
+        called = await runtime.call("LocalWeather", {})
+        assert called.success is True and called.value == "sunny"
+
+        registry.set_plugin_enabled("WeatherNow", False)
+        assert registry.plugin_enabled("LocalWeather") is False
+        registry.set_plugin_enabled("WeatherNow", True)
+        assert registry.customize_tool("WeatherNow", {"deleted": True}) is None
+        assert all(
+            item.plugin.canonical_name != "WeatherNow"
+            for item in registry.list_plugins()
+        )
+
+    run(scenario())
 
 
 def test_registry_includes_core_and_loads_user_tool_pack(tmp_path):

@@ -11,6 +11,10 @@ from typing import Any
 from fastapi import APIRouter, FastAPI
 
 from .activation import PluginActivationState, set_active_plugin_activation_state
+from .customization import (
+    PluginCustomizationState,
+    set_active_plugin_customization_state,
+)
 from .model_gateway import PluginModelGateway, ensure_model_router
 from .native_tools import BuiltinPluginSeedResult, seed_builtin_plugin_directory
 from .plugin import PluginApplicationContext, PluginLifecycleHandler, PluginSearchHandler
@@ -66,11 +70,18 @@ class PluginApplicationHost:
     ) -> "PluginApplicationHost":
         root = Path(plugin_directory or default_plugin_impl_directory()).expanduser().resolve()
         seed_builtin_plugin_directory(root)
-        registry = PluginRegistry(activation=PluginActivationState())
-        ensure_model_router(registry)
-        failures = registry.load_directory(root)
         from cyrene.runtime import settings_store
 
+        customization_state = PluginCustomizationState(
+            settings_store.get("plugin_tool_customizations", {}) or {}
+        )
+        set_active_plugin_customization_state(customization_state)
+        registry = PluginRegistry(
+            activation=PluginActivationState(),
+            customizations=customization_state,
+        )
+        ensure_model_router(registry)
+        failures = registry.load_directory(root)
         registry.configure_activation(
             plugins=settings_store.get_enabled_plugins(),
             packs=settings_store.get_enabled_plugin_packs(),
@@ -115,7 +126,10 @@ class PluginApplicationHost:
             raise RuntimeError("Plugin application host is already attached")
         self._attached = True
         for pack in self.registry.list_packs():
-            if pack.application_setup is None:
+            if (
+                pack.application_setup is None
+                or not self.registry.pack_enabled(pack.id)
+            ):
                 continue
             child_router = APIRouter()
             inherited_services = dict(self.services)
@@ -198,6 +212,9 @@ def set_active_plugin_application_host(
     with _ACTIVE_LOCK:
         _ACTIVE_HOST = host
         set_active_plugin_activation_state(host.registry.activation if host is not None else None)
+        set_active_plugin_customization_state(
+            host.registry.customizations if host is not None else None
+        )
 
 
 def active_plugin_application_host() -> PluginApplicationHost | None:

@@ -191,11 +191,15 @@ def test_post_tool_and_lifecycle_compatibility_hooks(tmp_path):
 
         hooks.register(SESSION_START, lambda _event: {"context": "first"})
         hooks.register(SESSION_START, lambda _event: "second")
+        hooks.register(
+            SESSION_START,
+            lambda _event: {"context": "soul", "context_position": "top"},
+        )
         hooks.register(POST_TOOL_USE, lambda event: events.append(event))
         hooks.register(SESSION_END, lambda event: events.append(event))
         hooks.register(STOP, lambda event: events.append(event))
 
-        assert await hooks.session_start() == "first\n\nsecond"
+        assert await hooks.session_start() == "soul\n\nfirst\n\nsecond"
         await hooks.post_tool_use(
             "Read",
             {"path": "file"},

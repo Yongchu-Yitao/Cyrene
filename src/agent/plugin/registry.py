@@ -8,16 +8,20 @@ import os
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from pathlib import Path
 from types import ModuleType
-from typing import Literal
+from typing import Any, Literal, Mapping
 from uuid import uuid4
 
 from ..observability import log_operation
 from .activation import (
     PluginActivationState,
     active_plugin_activation_state,
+)
+from .customization import (
+    PluginCustomizationState,
+    active_plugin_customization_state,
 )
 from .plugin import Plugin, PluginPack
 
@@ -98,6 +102,7 @@ class PluginRegistry:
         *,
         include_core: bool = True,
         activation: PluginActivationState | None = None,
+        customizations: PluginCustomizationState | None = None,
     ) -> None:
         self._lock = threading.RLock()
         self._reload_lock = threading.RLock()
@@ -105,6 +110,11 @@ class PluginRegistry:
             activation
             or active_plugin_activation_state()
             or PluginActivationState()
+        )
+        self._customizations = (
+            customizations
+            or active_plugin_customization_state()
+            or PluginCustomizationState()
         )
         self._packs: dict[str, PluginPack] = {}
         self._plugins: dict[str, RegisteredPlugin] = {}
@@ -141,6 +151,43 @@ class PluginRegistry:
 
         self._activation.replace(plugins=plugins, packs=packs)
 
+    @property
+    def customizations(self) -> PluginCustomizationState:
+        return self._customizations
+
+    def configure_customizations(
+        self,
+        values: Mapping[str, Mapping[str, Any]],
+    ) -> None:
+        self._customizations.replace(values)
+
+    def _customized_plugin(self, plugin: Plugin, source: str) -> Plugin | None:
+        metadata = dict(plugin.metadata)
+        canonical = str(metadata.get("canonical_name") or plugin.name)
+        metadata.setdefault("canonical_name", canonical)
+        metadata.setdefault("source_name", plugin.name)
+        metadata.setdefault("source_description", plugin.description)
+        if source == "core" or plugin.kind != "tool":
+            if source == "core" and plugin.kind == "tool":
+                metadata["agent_exposure"] = "direct"
+            return dataclass_replace(plugin, metadata=metadata)
+        override = self._customizations.get(canonical)
+        if override.get("deleted") is True:
+            return None
+        if "agent_exposure" in override:
+            metadata["agent_exposure"] = override["agent_exposure"]
+            metadata["model_visible"] = override["agent_exposure"] != "hidden"
+        return dataclass_replace(
+            plugin,
+            name=str(override.get("name") or plugin.name),
+            description=(
+                str(override["description"])
+                if "description" in override
+                else plugin.description
+            ),
+            metadata=metadata,
+        )
+
     def register_pack(
         self,
         pack: PluginPack,
@@ -162,6 +209,13 @@ class PluginRegistry:
         normalized_source = str(source).strip()
         if not normalized_source:
             raise ValueError("Plugin pack source cannot be empty")
+        customized_plugins = tuple(
+            customized
+            for plugin in pack.plugins
+            if (customized := self._customized_plugin(plugin, normalized_source))
+            is not None
+        )
+        pack = dataclass_replace(pack, plugins=customized_plugins)
         with self._lock:
             existing_pack = self._packs.get(pack.id)
             existing_source = self._pack_sources.get(pack.id)
@@ -256,6 +310,10 @@ class PluginRegistry:
         normalized_source = str(source).strip()
         if not normalized_source:
             raise ValueError("Plugin source cannot be empty")
+        customized = self._customized_plugin(plugin, normalized_source)
+        if customized is None:
+            return
+        plugin = customized
         with self._lock:
             existing = self._plugins.get(plugin.name)
             if existing is not None:
@@ -388,12 +446,23 @@ class PluginRegistry:
                     self._plugins.pop(plugin.name, None)
             return
         registered = self._plugins.get(contribution.identity)
-        if (
+        if not (
             registered is not None
             and registered.pack_id is None
             and registered.source == source
         ):
-            self._plugins.pop(contribution.identity, None)
+            registered = next(
+                (
+                    item
+                    for item in self._plugins.values()
+                    if item.pack_id is None
+                    and item.source == source
+                    and item.plugin.canonical_name == contribution.identity
+                ),
+                None,
+            )
+        if registered is not None:
+            self._plugins.pop(registered.plugin.name, None)
 
     def _install_loaded_contribution(
         self,
@@ -448,6 +517,15 @@ class PluginRegistry:
     def _registered_value(self, name: str) -> RegisteredPlugin:
         with self._lock:
             registered = self._plugins.get(str(name))
+            if registered is None:
+                registered = next(
+                    (
+                        item
+                        for item in self._plugins.values()
+                        if item.plugin.canonical_name == str(name)
+                    ),
+                    None,
+                )
         if registered is None:
             raise PluginNotFoundError(f"Plugin is not registered: {name}")
         return registered
@@ -460,7 +538,7 @@ class PluginRegistry:
             and not self._activation.pack_enabled(registered.pack_id)
         ):
             return False
-        return self._activation.plugin_enabled(registered.plugin.name)
+        return self._activation.plugin_enabled(registered.plugin.canonical_name)
 
     def plugin_locked(self, name: str) -> bool:
         return self._plugin_locked(self._registered_value(name))
@@ -478,12 +556,17 @@ class PluginRegistry:
         registered = self._registered_value(name)
         if self._plugin_locked(registered):
             return True
-        return self._activation.plugin_enabled(registered.plugin.name)
+        return self._activation.plugin_enabled(registered.plugin.canonical_name)
 
     def pack_configured_enabled(self, pack_id: str) -> bool:
         if self.pack_locked(pack_id):
             return True
         return self._activation.pack_enabled(str(pack_id))
+
+    def pack_enabled(self, pack_id: str) -> bool:
+        """Return the effective pack switch, including locked core packs."""
+
+        return self.pack_configured_enabled(pack_id)
 
     def plugin_enabled(self, name: str) -> bool:
         """Return effective activation after pack and Plugin switches."""
@@ -517,7 +600,7 @@ class PluginRegistry:
                 f"Plugin activation is locked: {registered.plugin.name}"
             )
         snapshot = self._activation.snapshot()
-        snapshot.plugins[registered.plugin.name] = enabled
+        snapshot.plugins[registered.plugin.canonical_name] = enabled
         self._activation.replace(plugins=snapshot.plugins, packs=snapshot.packs)
 
     def set_pack_enabled(self, pack_id: str, enabled: bool) -> None:
@@ -638,6 +721,144 @@ class PluginRegistry:
         )
         return result
 
+    def registered_by_canonical(self, canonical_name: str) -> RegisteredPlugin:
+        normalized = str(canonical_name)
+        with self._lock:
+            result = next(
+                (
+                    item
+                    for item in self._plugins.values()
+                    if item.plugin.canonical_name == normalized
+                ),
+                None,
+            )
+        if result is None:
+            raise PluginNotFoundError(
+                f"Plugin is not registered: {canonical_name}"
+            )
+        return result
+
+    def customize_tool(
+        self,
+        canonical_name: str,
+        values: Mapping[str, Any],
+    ) -> RegisteredPlugin | None:
+        """Apply a persisted tool override immediately to this registry."""
+
+        registered = self.registered_by_canonical(canonical_name)
+        if self._plugin_locked(registered):
+            raise PluginRegistryError(
+                f"Plugin customization is locked: {canonical_name}"
+            )
+        if registered.plugin.kind != "tool":
+            raise PluginRegistryError(f"Plugin is not a tool: {canonical_name}")
+        current = self._customizations.get(canonical_name)
+        current.update(dict(values))
+        previous = self._customizations.get(canonical_name)
+        self._customizations.set(canonical_name, current)
+        if current.get("deleted") is True:
+            with self._lock:
+                self._plugins.pop(registered.plugin.name, None)
+                if registered.pack_id is not None:
+                    pack = self._packs[registered.pack_id]
+                    self._packs[registered.pack_id] = dataclass_replace(
+                        pack,
+                        plugins=tuple(
+                            plugin
+                            for plugin in pack.plugins
+                            if plugin.canonical_name != canonical_name
+                        ),
+                    )
+            return None
+        metadata = dict(registered.plugin.metadata)
+        source_name = str(metadata.get("source_name") or canonical_name)
+        source_description = str(
+            metadata.get("source_description") or registered.plugin.description
+        )
+        source_plugin = dataclass_replace(
+            registered.plugin,
+            name=source_name,
+            description=source_description,
+            metadata=metadata,
+        )
+        try:
+            customized = self._customized_plugin(source_plugin, registered.source)
+            assert customized is not None
+        except Exception:
+            self._customizations.set(canonical_name, previous)
+            raise
+        with self._lock:
+            collision = self._plugins.get(customized.name)
+            if collision is not None and collision is not registered:
+                self._customizations.set(canonical_name, previous)
+                raise PluginRegistryError(
+                    f"Plugin name already exists: {customized.name}"
+                )
+            self._plugins.pop(registered.plugin.name, None)
+            next_registered = RegisteredPlugin(
+                plugin=customized,
+                pack_id=registered.pack_id,
+                source=registered.source,
+            )
+            self._plugins[customized.name] = next_registered
+            if registered.pack_id is not None:
+                pack = self._packs[registered.pack_id]
+                self._packs[registered.pack_id] = dataclass_replace(
+                    pack,
+                    plugins=tuple(
+                        customized
+                        if plugin.canonical_name == canonical_name
+                        else plugin
+                        for plugin in pack.plugins
+                    ),
+                )
+        return next_registered
+
+    def refresh_customizations(self) -> None:
+        """Project the shared customization state onto already-loaded tools."""
+
+        with self._lock:
+            packs = dict(self._packs)
+            rebuilt: dict[str, RegisteredPlugin] = {}
+            rebuilt_pack_plugins: dict[str, list[Plugin]] = {
+                pack_id: [] for pack_id in packs
+            }
+            for registered in self._plugins.values():
+                plugin = registered.plugin
+                if registered.source != "core" and plugin.kind == "tool":
+                    metadata = dict(plugin.metadata)
+                    plugin = dataclass_replace(
+                        plugin,
+                        name=str(metadata.get("source_name") or plugin.canonical_name),
+                        description=str(
+                            metadata.get("source_description") or plugin.description
+                        ),
+                        metadata=metadata,
+                    )
+                    plugin = self._customized_plugin(plugin, registered.source)
+                    if plugin is None:
+                        continue
+                if plugin.name in rebuilt:
+                    raise PluginRegistryError(
+                        f"Plugin name already exists: {plugin.name}"
+                    )
+                next_registered = RegisteredPlugin(
+                    plugin=plugin,
+                    pack_id=registered.pack_id,
+                    source=registered.source,
+                )
+                rebuilt[plugin.name] = next_registered
+                if registered.pack_id is not None:
+                    rebuilt_pack_plugins[registered.pack_id].append(plugin)
+            self._plugins = rebuilt
+            self._packs = {
+                pack_id: dataclass_replace(
+                    pack,
+                    plugins=tuple(rebuilt_pack_plugins[pack_id]),
+                )
+                for pack_id, pack in packs.items()
+            }
+
     def pack_source(self, pack_id: str) -> str:
         with self._lock:
             source = self._pack_sources.get(str(pack_id))
@@ -671,13 +892,19 @@ class PluginRegistry:
             and self.plugin_accessible(item.plugin.name, agent_id=agent_id)
         )
 
-    def direct_tool_definitions(self) -> tuple[dict, ...]:
-        """Return the fixed core protocol exposed directly to the model."""
+    def direct_tool_definitions(self, *, agent_id: str = "main") -> tuple[dict, ...]:
+        """Return core and user-selected tools exposed directly to the model."""
 
         return tuple(
             item.plugin.tool_definition()
             for item in self.list_plugins()
-            if item.plugin.kind == "tool" and item.source == "core"
+            if item.plugin.kind == "tool"
+            and item.plugin.model_visible
+            and (
+                item.source == "core"
+                or item.plugin.agent_exposure == "direct"
+            )
+            and self.plugin_accessible(item.plugin.name, agent_id=agent_id)
         )
 
     @staticmethod

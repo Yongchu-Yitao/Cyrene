@@ -17,8 +17,37 @@ function effectiveEnabled(item) {
   return !!item && item.effective_enabled === true
 }
 
-function itemLabel(item) {
-  return String(item && (item.name || item.id) || "Plugin")
+function currentLanguage() {
+  try { return window.CyreneUI.require("i18n").getLang() || "en" } catch (error) { return "en" }
+}
+
+function authoredTranslation(item, field) {
+  var translations = item && item.i18n && typeof item.i18n === "object" ? item.i18n : {}
+  var localized = translations[currentLanguage()] || translations[currentLanguage().split("-")[0]] || {}
+  return String(localized && localized[field] || "")
+}
+
+function itemLabel(item, t) {
+  if (!item) return "Plugin"
+  if (item.customized_name === true) return String(item.name || item.id || "Plugin")
+  var fallback = authoredTranslation(item, "name") || String(item.name || item.id || "Plugin")
+  if (!t) return fallback
+  return t("toolName." + String(item.id || item.name || ""), fallback)
+}
+
+function packLabel(item, t) {
+  var fallback = authoredTranslation(item, "name") || String(item && (item.name || item.id) || "Plugin")
+  return t ? t("toolName." + String(item && item.id || ""), fallback) : fallback
+}
+
+function itemDescription(item, t, pack) {
+  var id = String(item && (item.id || item.name) || "")
+  var authored = authoredTranslation(item, "description")
+  if (pack) return t("pluginPackDesc." + id, authored || item.description || id)
+  if (currentLanguage() === "zh" && !authored) {
+    return t("toolDesc." + id, t("settings.pluginToolDescriptionFallback", { name: itemLabel(item, t) }, "Agent 可使用的 {name} 工具。"))
+  }
+  return t("toolDesc." + id, authored || item.description || id)
 }
 
 function searchable(item) {
@@ -45,7 +74,7 @@ function RegistryMember(props) {
   var t = props.t
   return React.createElement("div", { className: "wb-registry-member" },
     React.createElement("div", { className: "wb-registry-member-copy" },
-      React.createElement("strong", null, itemLabel(item)),
+      React.createElement("strong", null, itemLabel(item, t)),
       React.createElement("code", { title: item.source_path || "" }, String(item.name || item.id || "")),
     ),
     React.createElement("div", { className: "wb-extension-title-row" },
@@ -56,7 +85,124 @@ function RegistryMember(props) {
         React.createElement("span", { className: "wb-extension-status-dot" }),
         effectiveEnabled(item) ? t("settings.pluginEnabled", "Enabled") : t("settings.pluginDisabled", "Disabled"),
       ),
+      item.kind === "tool" && React.createElement(ToolActions, {
+        item: item,
+        t: t,
+        onUpdate: props.onUpdate,
+        onDelete: props.onDelete,
+      }),
     ),
+  )
+}
+
+function MoreIcon() {
+  return React.createElement("svg", { viewBox: "0 0 24 24", width: 18, height: 18, "aria-hidden": "true" },
+    React.createElement("circle", { cx: 5, cy: 12, r: 1.7, fill: "currentColor" }),
+    React.createElement("circle", { cx: 12, cy: 12, r: 1.7, fill: "currentColor" }),
+    React.createElement("circle", { cx: 19, cy: 12, r: 1.7, fill: "currentColor" })
+  )
+}
+
+function ToolActions(props) {
+  var item = props.item || {}
+  var t = props.t
+  var [open, setOpen] = useStateSt(false)
+  var [dialog, setDialog] = useStateSt("")
+  var [name, setName] = useStateSt(String(item.name || item.id || ""))
+  var [description, setDescription] = useStateSt(String(item.description || ""))
+  var [error, setError] = useStateSt("")
+  var [busy, setBusy] = useStateSt(false)
+  var locked = item.locked === true
+  var direct = item.agent_exposure === "direct"
+
+  function beginEdit() {
+    setName(String(item.name || item.id || ""))
+    setDescription(String(item.description || ""))
+    setError("")
+    setOpen(false)
+    setDialog("edit")
+  }
+
+  function saveEdit(event) {
+    event.preventDefault()
+    var cleanName = name.trim()
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(cleanName)) {
+      setError(t("settings.pluginToolNameInvalid", "Use 1–128 letters, numbers, dots, underscores, or hyphens."))
+      return
+    }
+    setBusy(true)
+    setError("")
+    Promise.resolve(props.onUpdate(item, { name: cleanName, description: description.trim() })).then(function () {
+      setDialog("")
+    }).catch(function (reason) {
+      setError(reason && reason.message || String(reason))
+    }).finally(function () { setBusy(false) })
+  }
+
+  function changeExposure() {
+    setOpen(false)
+    setBusy(true)
+    Promise.resolve(props.onUpdate(item, { agent_exposure: direct ? "discoverable" : "direct" }))
+      .catch(function (reason) { setError(reason && reason.message || String(reason)) })
+      .finally(function () { setBusy(false) })
+  }
+
+  function removeTool() {
+    setBusy(true)
+    setError("")
+    Promise.resolve(props.onDelete(item)).then(function () {
+      setDialog("")
+    }).catch(function (reason) {
+      setError(reason && reason.message || String(reason))
+    }).finally(function () { setBusy(false) })
+  }
+
+  return React.createElement("div", { className: "wb-tool-menu-wrap" },
+    React.createElement("button", {
+      type: "button",
+      className: "wb-tool-menu-trigger",
+      onClick: function () { setOpen(!open) },
+      "aria-label": t("settings.pluginToolMenu", { name: itemLabel(item, t) }, "Tool menu for {name}"),
+      "aria-expanded": open ? "true" : "false",
+      disabled: busy,
+    }, React.createElement(MoreIcon)),
+    open && React.createElement("div", { className: "wb-tool-menu", role: "menu" },
+      React.createElement("button", { type: "button", role: "menuitem", disabled: locked, onClick: beginEdit }, t("settings.pluginToolEdit", "Edit")),
+      React.createElement("button", { type: "button", role: "menuitem", disabled: locked, onClick: changeExposure }, direct
+        ? t("settings.pluginToolDiscoverable", "Let Agent find and use")
+        : t("settings.pluginToolDirect", "Make directly visible to Agent")),
+      React.createElement("div", { className: "wb-tool-menu-separator" }),
+      React.createElement("button", { type: "button", role: "menuitem", className: "danger", disabled: locked, onClick: function () { setOpen(false); setDialog("delete"); setError("") } }, t("settings.pluginToolDelete", "Delete")),
+      locked && React.createElement("small", null, t("settings.pluginToolLockedHint", "Core and model tools are managed by the framework."))
+    ),
+    dialog && React.createElement("div", { className: "wb-tool-dialog-backdrop", onMouseDown: function (event) { if (event.target === event.currentTarget && !busy) setDialog("") } },
+      React.createElement("section", { className: "wb-tool-dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "wb-tool-dialog-title" },
+        dialog === "edit" ? React.createElement("form", { onSubmit: saveEdit },
+          React.createElement("h3", { id: "wb-tool-dialog-title" }, t("settings.pluginToolEditTitle", "Edit Agent tool")),
+          React.createElement("label", null,
+            React.createElement("span", null, t("settings.pluginToolAgentName", "Name shown to Agent")),
+            React.createElement("input", { className: "wb-input", value: name, autoFocus: true, onChange: function (event) { setName(event.target.value) }, disabled: busy })
+          ),
+          React.createElement("label", null,
+            React.createElement("span", null, t("settings.pluginToolAgentDescription", "Description shown to Agent")),
+            React.createElement("textarea", { className: "wb-input", rows: 5, value: description, onChange: function (event) { setDescription(event.target.value) }, disabled: busy })
+          ),
+          error && React.createElement("div", { className: "wb-tool-dialog-error", role: "alert" }, error),
+          React.createElement("div", { className: "wb-tool-dialog-actions" },
+            React.createElement("button", { type: "button", className: "wb-btn", disabled: busy, onClick: function () { setDialog("") } }, t("common.cancel", "Cancel")),
+            React.createElement("button", { type: "submit", className: "wb-btn primary", disabled: busy }, busy ? t("settings.saving", "Saving…") : t("settings.save", "Save"))
+          )
+        ) : React.createElement(React.Fragment, null,
+          React.createElement("h3", { id: "wb-tool-dialog-title" }, t("settings.pluginToolDeleteTitle", "Delete tool?")),
+          React.createElement("p", null, t("settings.pluginToolDeleteHint", { name: itemLabel(item, t) }, "{name} will be removed from the Plugin registry.")),
+          error && React.createElement("div", { className: "wb-tool-dialog-error", role: "alert" }, error),
+          React.createElement("div", { className: "wb-tool-dialog-actions" },
+            React.createElement("button", { type: "button", className: "wb-btn", disabled: busy, onClick: function () { setDialog("") } }, t("common.cancel", "Cancel")),
+            React.createElement("button", { type: "button", className: "wb-btn danger", disabled: busy, onClick: removeTool }, busy ? t("settings.deleting", "Deleting…") : t("settings.pluginToolDelete", "Delete"))
+          )
+        )
+      )
+    )
   )
 }
 
@@ -100,7 +246,7 @@ function PluginRegistryPanel(props) {
 
   function updateEnabled(kind, item, nextEnabled) {
     if (!item || item.locked === true || busy) return
-    var id = String(kind === "pack" ? item.id : item.name || item.id || "")
+    var id = String(item.id || item.name || "")
     if (!id) return
     var payload = kind === "pack" ? { packs: {} } : { plugins: {} }
     payload[kind === "pack" ? "packs" : "plugins"][id] = nextEnabled
@@ -118,6 +264,26 @@ function PluginRegistryPanel(props) {
       tell(error && error.message || String(error), "error")
     }).finally(function () {
       setBusy("")
+    })
+  }
+
+  function updateTool(item, values) {
+    setNotice("")
+    return pluginService.updateTool(item.id || item.canonical_name || item.name, values).then(function () {
+      tell(t("settings.saved", "Saved"), "success")
+    }).catch(function (error) {
+      tell(error && error.message || String(error), "error")
+      throw error
+    })
+  }
+
+  function deleteTool(item) {
+    setNotice("")
+    return pluginService.deleteTool(item.id || item.canonical_name || item.name).then(function () {
+      tell(t("settings.pluginToolDeleted", "Tool deleted"), "success")
+    }).catch(function (error) {
+      tell(error && error.message || String(error), "error")
+      throw error
     })
   }
 
@@ -168,7 +334,7 @@ function PluginRegistryPanel(props) {
     attachedPacks.length > 0 && React.createElement("div", { className: "wb-registry-attached-packs" },
       React.createElement("strong", null, t("settings.pluginApplicationPacks", "Application Host packs")),
       attachedPacks.map(function (item, index) {
-        var label = typeof item === "string" ? item : itemLabel(item)
+        var label = typeof item === "string" ? item : itemLabel(item, t)
         return React.createElement("span", { key: label + ":" + index, className: "wb-extension-type" }, label)
       }),
     ),
@@ -200,14 +366,14 @@ function PluginRegistryPanel(props) {
         return React.createElement("article", { key: packId, className: "wb-extension-card wb-registry-pack-card" },
           React.createElement("div", { className: "wb-extension-card-main" },
             React.createElement("span", { className: "wb-extension-glyph extension-agent", "aria-hidden": "true" },
-              React.createElement("span", { className: "wb-extension-glyph-text" }, itemLabel(pack).slice(0, 1).toUpperCase())
+              React.createElement("span", { className: "wb-extension-glyph-text" }, packLabel(pack, t).slice(0, 1).toUpperCase())
             ),
             React.createElement("div", { className: "wb-extension-copy" },
               React.createElement("div", { className: "wb-extension-title-row" },
-                React.createElement("strong", null, itemLabel(pack)),
+                React.createElement("strong", null, packLabel(pack, t)),
                 React.createElement(RegistryBadges, { item: pack, t: t }),
               ),
-              React.createElement("span", { className: "wb-extension-description" }, pack.description || packId),
+              React.createElement("span", { className: "wb-extension-description" }, itemDescription(pack, t, true)),
               React.createElement("div", { className: "wb-extension-meta" },
                 React.createElement("span", { className: "wb-extension-status " + (effectiveEnabled(pack) ? "managed" : "disabled") },
                   React.createElement("span", { className: "wb-extension-status-dot" }),
@@ -220,11 +386,11 @@ function PluginRegistryPanel(props) {
             React.createElement("div", { className: "wb-extension-actions" },
               Toggle(configuredEnabled(pack), function () {
                 updateEnabled("pack", pack, !configuredEnabled(pack))
-              }, packBusy || pack.locked === true, itemLabel(pack))
+              }, packBusy || pack.locked === true, packLabel(pack, t))
             ),
           ),
           members.length > 0 && React.createElement("div", { className: "wb-registry-pack-members" }, members.map(function (item) {
-            return React.createElement(RegistryMember, { key: item.name || item.id, item: item, t: t })
+            return React.createElement(RegistryMember, { key: item.id || item.name, item: item, t: t, onUpdate: updateTool, onDelete: deleteTool })
           })),
         )
       }))
@@ -241,14 +407,14 @@ function PluginRegistryPanel(props) {
         return React.createElement("article", { key: id, className: "wb-extension-card" },
           React.createElement("div", { className: "wb-extension-card-main" },
             React.createElement("span", { className: "wb-extension-glyph", "aria-hidden": "true" },
-              React.createElement("span", { className: "wb-extension-glyph-text" }, itemLabel(item).slice(0, 1).toUpperCase())
+              React.createElement("span", { className: "wb-extension-glyph-text" }, itemLabel(item, t).slice(0, 1).toUpperCase())
             ),
             React.createElement("div", { className: "wb-extension-copy" },
               React.createElement("div", { className: "wb-extension-title-row" },
-                React.createElement("strong", null, itemLabel(item)),
+                React.createElement("strong", null, itemLabel(item, t)),
                 React.createElement(RegistryBadges, { item: item, t: t }),
               ),
-              React.createElement("span", { className: "wb-extension-description" }, item.description || item.desc || id),
+              React.createElement("span", { className: "wb-extension-description" }, itemDescription(item, t, false)),
               React.createElement("div", { className: "wb-extension-meta" },
                 React.createElement("span", { className: "wb-extension-status " + (effectiveEnabled(item) ? "managed" : "disabled") },
                   React.createElement("span", { className: "wb-extension-status-dot" }),
@@ -260,7 +426,8 @@ function PluginRegistryPanel(props) {
             React.createElement("div", { className: "wb-extension-actions" },
               Toggle(configuredEnabled(item), function () {
                 updateEnabled("plugin", item, !configuredEnabled(item))
-              }, itemBusy || item.locked === true, itemLabel(item))
+              }, itemBusy || item.locked === true, itemLabel(item, t)),
+              item.kind === "tool" && React.createElement(ToolActions, { item: item, t: t, onUpdate: updateTool, onDelete: deleteTool })
             ),
           ),
         )

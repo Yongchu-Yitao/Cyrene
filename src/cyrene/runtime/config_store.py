@@ -108,6 +108,7 @@ _DEFAULT_SETTINGS: dict = {
     # subsequently saved empty graph must remain empty.
     "enabled_plugins": _DEFAULT_ENABLED_PLUGINS,
     "enabled_plugin_packs": {},
+    "plugin_tool_customizations": {},
     "workspace_history": [],
     "workspace_active": True,
     "soul_active": True,

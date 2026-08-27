@@ -189,6 +189,20 @@ class Plugin:
         main_only = metadata.get("main_only", False)
         if not isinstance(main_only, bool):
             raise TypeError("Plugin metadata.main_only must be a boolean")
+        exposure = metadata.get("agent_exposure")
+        if exposure is not None and exposure not in {
+            "direct",
+            "discoverable",
+            "hidden",
+        }:
+            raise ValueError(
+                "Plugin metadata.agent_exposure must be direct, discoverable, or hidden"
+            )
+        translations = metadata.get("i18n", {})
+        if not isinstance(translations, Mapping) or any(
+            not isinstance(value, Mapping) for value in translations.values()
+        ):
+            raise TypeError("Plugin metadata.i18n must map locales to objects")
         if schema.get("type", "object") != "object":
             raise ValueError("Plugin input_schema must describe an object")
         check_input_schema(schema)
@@ -210,6 +224,31 @@ class Plugin:
         """Whether only the main Agent may discover or execute this Plugin."""
 
         return bool(self.metadata.get("main_only", False))
+
+    @property
+    def canonical_name(self) -> str:
+        """Stable identity retained when the user edits the model-facing name."""
+
+        return str(self.metadata.get("canonical_name") or self.name)
+
+    @property
+    def agent_exposure(self) -> str:
+        """How the Agent receives this tool: direct, discoverable, or hidden."""
+
+        if not self.model_visible:
+            return "hidden"
+        return str(self.metadata.get("agent_exposure") or "discoverable")
+
+    def localized(self, locale: str) -> tuple[str, str]:
+        """Return localized authored metadata with source text as fallback."""
+
+        translations = self.metadata.get("i18n", {})
+        value = translations.get(str(locale)) if isinstance(translations, Mapping) else None
+        value = value if isinstance(value, Mapping) else {}
+        return (
+            str(value.get("name") or self.name),
+            str(value.get("description") or self.description),
+        )
 
     def tool_definition(self) -> dict[str, Any]:
         """Return a fresh function definition suitable for a model call."""
@@ -240,6 +279,7 @@ class PluginPack:
         repr=False,
         compare=False,
     )
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         pack_id = str(self.id).strip()
@@ -253,9 +293,26 @@ class PluginPack:
             raise TypeError("Plugin pack setup must be callable or None")
         if self.application_setup is not None and not callable(self.application_setup):
             raise TypeError("Plugin pack application_setup must be callable or None")
+        if not isinstance(self.metadata, Mapping):
+            raise TypeError("Plugin pack metadata must be a mapping")
+        translations = self.metadata.get("i18n", {})
+        if not isinstance(translations, Mapping) or any(
+            not isinstance(value, Mapping) for value in translations.values()
+        ):
+            raise TypeError("Plugin pack metadata.i18n must map locales to objects")
         object.__setattr__(self, "id", pack_id)
         object.__setattr__(self, "description", str(self.description).strip())
         object.__setattr__(self, "plugins", plugins)
+        object.__setattr__(self, "metadata", deepcopy(dict(self.metadata)))
+
+    def localized(self, locale: str) -> tuple[str, str]:
+        translations = self.metadata.get("i18n", {})
+        value = translations.get(str(locale)) if isinstance(translations, Mapping) else None
+        value = value if isinstance(value, Mapping) else {}
+        return (
+            str(value.get("name") or self.id),
+            str(value.get("description") or self.description),
+        )
 
 
 def merge_plugin_pack_metadata(

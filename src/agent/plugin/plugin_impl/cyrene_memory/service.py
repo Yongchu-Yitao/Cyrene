@@ -121,15 +121,6 @@ class MemoryService:
 
         parts: list[str] = []
         run_data = self.run_data
-        if _bool(self.data, run_data, "soul_enabled", True):
-            try:
-                from .soul import read_shallow_memory
-
-                soul = read_shallow_memory().strip()
-                if soul:
-                    parts.append("## Persona memory\n" + soul)
-            except Exception:
-                logger.exception("Failed to render SOUL memory")
         try:
             from .short_term import get_context
 

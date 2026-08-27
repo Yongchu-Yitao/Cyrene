@@ -150,7 +150,7 @@ class AgentSession:
                 ),
             )
         self._initial_plugin_load_failures = failures
-        self._model_tools = self.registry.direct_tool_definitions()
+        self._model_tools = self.registry.direct_tool_definitions(agent_id=self.agent_id)
         model = self.registry.resolve(model_plugin)
         if model.kind != "model":
             raise ValueError(f"Plugin is not a model component: {model_plugin}")
@@ -426,7 +426,7 @@ class AgentSession:
             parent_agent_id=self.parent_agent_id,
         )
         for pack in self.registry.list_packs():
-            if pack.setup is None:
+            if pack.setup is None or not self.registry.pack_enabled(pack.id):
                 continue
             try:
                 pack.setup(context)
@@ -1694,6 +1694,8 @@ class AgentSession:
             return 0
 
     def _model_tool_tokens(self) -> int:
+        self.registry.refresh_customizations()
+        self._model_tools = self.registry.direct_tool_definitions(agent_id=self.agent_id)
         if not self._model_tools:
             return 0
         return message_token_estimate(
@@ -2084,6 +2086,8 @@ class AgentSession:
                 f"Calling {self.model_plugin} ({count}/{self._max_model_calls})",
             )
         self._emit_state_snapshot(model_state)
+        self.registry.refresh_customizations()
+        self._model_tools = self.registry.direct_tool_definitions(agent_id=self.agent_id)
         arguments = {
             "messages": self._messages(trigger.id),
             "tools": deepcopy(list(self._model_tools)),
