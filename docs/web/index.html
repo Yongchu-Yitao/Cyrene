@@ -101,7 +101,7 @@
     </nav>
 
     <div class="sidebar-footer">
-      <div class="sidebar-version">v0.8.0-beta3</div>
+      <div class="sidebar-version">v0.9.0-beta1</div>
     </div>
     </div>
   </aside>
@@ -140,7 +140,7 @@
         <p>推理循环和让 Cyrene 不像无状态聊天机器人的核心机制。</p>
 
         <ul>
-          <li><strong>双阶段代理循环</strong>——普通交互的两个阶段接收当前设置下完全相同的工具 wire bundle；阶段 1 只允许 use_tools / ask_user / quit，阶段 2 再通过已启用模块渐进发现具体能力。详见<a href="#" onclick="navigateTo('architecture')">架构</a>。</li>
+          <li><strong>插件原生 Agent Runtime</strong>——同一个连续、可恢复的 Run 使用上下文插件、直接可见工具和 <code>toolbox.list → describe → invoke</code> 完成工作。详见<a href="#" onclick="navigateTo('architecture')">架构</a>。</li>
           <li><strong>SOUL.md 人格系统</strong>——Cyrene 维护一个可以自行重写的人格文档。它学习你的偏好、语气和项目，随着时间推移自行编辑 SOUL.md，人格不会在每次会话时重置。</li>
           <li><strong>深度研究（Deep Research）</strong>——多轮研究管道：规划子问题 → 搜索和阅读 → 导出结构化 PDF 报告。</li>
           <li><strong>深度反思（Deep Reflection）</strong>——面对复杂或模糊请求时，在内部多轮重构问题后再回答，以少量延迟换取更精准的回复。</li>
@@ -242,7 +242,7 @@
         <h2>Core Features</h2>
         <h3>Agent Core</h3>
         <ul>
-          <li><strong>Two-phase agent loop</strong> — both ordinary phases receive the same tool wire bundle for the current package settings; Phase 1 permits only use_tools / ask_user / quit, while Phase 2 progressively discovers concrete capabilities through enabled packages. See <a href="#" onclick="navigateTo('architecture')">Architecture</a>.</li>
+          <li><strong>Plugin-native Agent runtime</strong> — one continuous, recoverable run uses context plugins, directly visible tools, and <code>toolbox.list → describe → invoke</code> discovery. See <a href="#" onclick="navigateTo('architecture')">Architecture</a>.</li>
           <li><strong>SOUL.md personality</strong> — a self-rewriting personality document maintained by a steward agent. Learns your preferences and evolves across sessions instead of resetting.</li>
           <li><strong>Deep Research</strong> — multi-round pipeline: sub-question planning, parallel search, source reading, and structured PDF report export.</li>
           <li><strong>Deep Reflection</strong> — reframes ambiguous or complex requests over several internal rounds before responding, trading latency for accuracy.</li>
@@ -1213,44 +1213,23 @@ cyrene stop</code></pre></div>
 <div lang="zh">
 <div class="page-header">
         <h1>系统架构</h1>
-        <p class="page-subtitle">双阶段代理循环、项目结构、安全模型。理解 Cyrene 的核心设计。</p>
+        <p class="page-subtitle">插件原生 Agent Runtime、项目结构与安全模型。理解 Cyrene 的核心设计。</p>
       </div>
 
-      <section data-topic="two-phase-loop">
-        <h2>双阶段决策循环</h2>
-        <p>这是 Cyrene 最核心的设计决策。普通 Agent 如果把每个具体工具 schema 都直接传给模型，工具数量和动态连接变化会放大 token 成本并破坏提示缓存。</p>
-        <p>Cyrene 将交互分为两个阶段，同时让两阶段共享同一固定 wire schema：</p>
-
+      <section data-topic="plugin-runtime">
+        <h2>插件原生 Agent Runtime</h2>
+        <p>Cyrene 使用一套连续、可恢复的 Agent Run，不再把一次交互拆成路由和执行两套阶段。模型回复、工具调用、向用户提问、取消、恢复、上下文压缩和最终投递都属于同一个 Run。</p>
         <div class="flow-diagram">
           <div class="flow-node flow-start">用户消息</div>
           <div class="flow-arrow">↓</div>
-          <div class="flow-node flow-phase">阶段 1（直接工具 + 已启用工具包；策略仅允许 use_tools / ask_user / quit）</div>
-          <div class="flow-branch">
-            <div class="flow-branch-item">
-              <div class="flow-node flow-end">纯聊天 → 直接回复</div>
-              <div class="flow-label">1 次 LLM 调用（quit / ask_user）</div>
-            </div>
-            <div class="flow-branch-item">
-              <div class="flow-node flow-phase">需要工具 → 阶段 2</div>
-            </div>
-          </div>
+          <div class="flow-node flow-phase">上下文插件构建 Context Tree</div>
           <div class="flow-arrow">↓</div>
-          <div class="flow-node flow-phase">阶段 2（同一固定定义 + 渐进工具包 + 多轮）</div>
+          <div class="flow-node flow-phase">连续 Agent Run：回复、工具、Subagent、恢复</div>
           <div class="flow-arrow">↓</div>
-          <div class="flow-node flow-end">回复用户</div>
+          <div class="flow-node flow-end">持久化并投递最终结果</div>
         </div>
-
-        <h3>阶段 1（快速通道）</h3>
-        <p>每次用户交互都从阶段 1 开始。此阶段 LLM 可以在 <code>use_tools</code>、<code>ask_user</code> 和 <code>quit</code> 三个工具中选择：</p>
-        <ul>
-          <li>如果用户只是在聊天或问简单问题，代理选择 <code>quit</code> 直接回复——<strong>仅一次 LLM 调用</strong></li>
-          <li>如果用户请求涉及工具操作，代理选择 <code>use_tools</code> 进入阶段 2</li>
-          <li>如果代理需要向用户提问（如确认意图），选择 <code>ask_user</code>——也是一种纯聊天交互</li>
-        </ul>
-        <p>普通 Phase 1 与 Phase 2 都传递当前工具包设置下同一套、按确定顺序生成的 wire 工具定义。Phase 1 的运行时策略只允许上述三个控制工具。切换工具包会生成新的 prompt/cache 前缀；设置不变时，后续调用继续复用同一前缀。</p>
-
-        <h3>阶段 2（渐进工具包）</h3>
-        <p>此阶段继续使用与 Phase 1 相同的 wire 工具。核心文件、Shell、Web 和 AnalyzeAttachment 直接暴露，其余具体能力通过已启用的稳定模块执行 discover → describe → invoke：</p>
+        <h3>插件贡献</h3>
+        <p>除 Bash、Read、Write 和 Toolbox 等必要 Kernel Tool 外，工具、工具包、独立工具、上下文、后台任务、页面与设置都由插件贡献。工具包和独立工具统一通过 <code>toolbox.list → describe → invoke</code> 发现，用户也可以把选定工具设为 Agent 直接可见。</p>
         <div class="flow-tools" style="justify-content:flex-start; max-width:100%;">
           <span class="tool-tag">文件读写</span>
           <span class="tool-tag">Bash Shell</span>
@@ -1266,8 +1245,8 @@ cyrene stop</code></pre></div>
           <span class="tool-tag">技能管理</span>
           <span class="tool-tag">共享终端</span>
         </div>
-        <p>设置 → 能力按完整工具包提供开关，不再提供单工具开关。关闭工具包后，其网关 schema、包级说明和专用 prompt 信息都不会传给模型，运行时也会拒绝历史消息中的过期调用。AnalyzeAttachment 等直接工具不受工具包开关影响。</p>
-        <p>代理在多轮之间保持状态，直到调用 <code>quit</code> 结束交互。</p>
+        <h3>上下文与 Subagent</h3>
+        <p>输入框上下文插件负责 Workspace、MCP、Skills 等会话选择；SOUL 插件启用时把人格挂载在 System Prompt 下方。Context Tree 的稳定 Block 可以复用缓存，长对话继续使用统一压缩机制。Subagent 继承 Main Agent 的初始 Tree，并附加 Main Agent 的任务指令，再通过 Inbox 协作。</p>
       </section>
 
       <section data-topic="self-control">
@@ -1313,37 +1292,22 @@ cyrene stop</code></pre></div>
 <div lang="en">
 <div class="page-header">
         <h1>Architecture</h1>
-        <p class="page-subtitle">Two-phase agent loop, project structure, security model.</p>
+        <p class="page-subtitle">Plugin-native Agent runtime, project structure, and security model.</p>
       </div>
-      <section data-topic="two-phase-loop">
-        <h2>Two-Phase Decision Loop</h2>
-        <p>This is Cyrene's central design decision. Passing every concrete tool schema directly to the model would increase token cost and disrupt prompt caching as tools and dynamic connections change.</p>
-        <p>Cyrene divides an interaction into two phases while giving both phases the same fixed wire schema:</p>
+      <section data-topic="plugin-runtime">
+        <h2>Plugin-Native Agent Runtime</h2>
+        <p>Cyrene uses one continuous, recoverable Agent run instead of separate routing and execution phases. Model output, tool calls, user questions, cancellation, recovery, context compaction, and final delivery all belong to the same run.</p>
         <div class="flow-diagram">
           <div class="flow-node flow-start">User message</div>
           <div class="flow-arrow">↓</div>
-          <div class="flow-node flow-phase">Phase 1 (direct tools + enabled packages; policy allows only use_tools / ask_user / quit)</div>
-          <div class="flow-branch">
-            <div class="flow-branch-item"><div class="flow-node flow-end">Chat → direct response</div><div class="flow-label">One LLM call (quit / ask_user)</div></div>
-            <div class="flow-branch-item"><div class="flow-node flow-phase">Tools needed → Phase 2</div></div>
-          </div>
+          <div class="flow-node flow-phase">Context plugins build the context tree</div>
           <div class="flow-arrow">↓</div>
-          <div class="flow-node flow-phase">Phase 2 (same fixed definitions + progressive packages + multiple rounds)</div>
+          <div class="flow-node flow-phase">Continuous Agent run: replies, tools, subagents, recovery</div>
           <div class="flow-arrow">↓</div>
-          <div class="flow-node flow-end">Reply to user</div>
+          <div class="flow-node flow-end">Persist and deliver the final result</div>
         </div>
-
-        <h3>Phase 1 (fast path)</h3>
-        <p>Every interaction starts in Phase 1. The LLM chooses among <code>use_tools</code>, <code>ask_user</code>, and <code>quit</code>:</p>
-        <ul>
-          <li>For chat or a simple question, it calls <code>quit</code> and replies with <strong>one LLM call</strong></li>
-          <li>For a request that needs tools, it calls <code>use_tools</code> and enters Phase 2</li>
-          <li>When clarification is needed, it calls <code>ask_user</code>, another chat-only interaction</li>
-        </ul>
-        <p>Ordinary Phase 1 and Phase 2 calls receive the same deterministically ordered wire definitions for the active package settings. Phase 1 runtime policy permits only the three control tools above. Changing package settings creates a new prompt/cache prefix; unchanged settings keep reusing the same prefix.</p>
-
-        <h3>Phase 2 (progressive packages)</h3>
-        <p>Phase 2 keeps the same wire tools. Core file, shell, web, and AnalyzeAttachment tools are direct; other concrete capabilities use enabled, stable gateways in a discover → describe → invoke flow:</p>
+        <h3>Plugin contributions</h3>
+        <p>Except for the required Bash, Read, Write, and Toolbox kernel tools, plugins contribute tools, toolboxes, standalone tools, context, background work, pages, and Settings. Toolboxes and standalone tools share <code>toolbox.list → describe → invoke</code> discovery, and selected tools can be made directly visible to the Agent.</p>
         <div class="flow-tools" style="justify-content:flex-start; max-width:100%;">
           <span class="tool-tag">File operations</span>
           <span class="tool-tag">Bash shell</span>
@@ -1359,8 +1323,8 @@ cyrene stop</code></pre></div>
           <span class="tool-tag">Skill management</span>
           <span class="tool-tag">Shared terminals</span>
         </div>
-        <p>Settings toggle complete capability packages rather than individual tools. Disabling a package removes its gateway schema, package description, and prompt material; runtime policy also rejects stale calls from earlier messages. Direct tools such as AnalyzeAttachment are unaffected.</p>
-        <p>The agent maintains state across rounds until it calls <code>quit</code>.</p>
+        <h3>Context and subagents</h3>
+        <p>The composer-context plugin owns per-chat workspace, MCP, Skills, and capability selections. When enabled, the SOUL plugin mounts personality immediately below the system prompt. Stable context-tree blocks preserve prompt-cache reuse, and long conversations keep the unified compaction behavior. A subagent inherits the main Agent's initial tree plus its assignment and then collaborates through the inbox.</p>
       </section>
       <section data-topic="self-control">
         <h2>Cyrene Self-Control</h2>
@@ -2665,7 +2629,7 @@ cyrene stop</code></pre></div>
       </section>
       <section>
         <h2>Telegram Bot</h2>
-        <p>Set <code>TELEGRAM_BOT_TOKEN</code> and <code>OWNER_ID</code> in the Web UI or encrypted config store, then run <code>python -m cyrene</code>. The Telegram bot supports the same two-phase loop, sub-agents, and tools as the Web UI.</p>
+        <p>Set <code>TELEGRAM_BOT_TOKEN</code> and <code>OWNER_ID</code> in the Web UI or encrypted config store, then run <code>python -m cyrene</code>. The Telegram bot uses the same plugin-native Agent runtime, context plugins, sub-agents, and tool discovery flow as the Web UI.</p>
       </section>
       <section>
         <h2>WeChat Bot</h2>

@@ -313,14 +313,13 @@ filesystem        stdio        connected      3        npx -y @modelcontextproto
 marp-deck         stdio        connected      4        python mcp_server.py
 ```
 
-MCP capabilities become discoverable through `integration_tools` without a
-restart; their individual schemas are not appended to the fixed wire bundle.
-The Capabilities settings page controls all 12 packages with one switch per
-package. Turning a package off omits its gateway schema and package-specific
-prompt instructions from both Phase 1 and Phase 2, and runtime validation still
-blocks stale calls. The two phases keep identical tool arrays for the current
-setting; toggling a package intentionally starts a new cache prefix. Direct
-tools such as `AnalyzeAttachment` remain available.
+MCP capabilities become discoverable through the enabled MCP plugin without a
+restart. The composer context menu controls which servers are mounted for the
+current conversation, while Plugin Center controls plugin availability. The
+Agent discovers enabled toolboxes and standalone tools through
+`toolbox.list → describe → invoke`; tools marked as directly visible are also
+included in the model's immediate tool list. Disabling a plugin removes its
+tools and context contributions, and runtime validation rejects stale calls.
 
 ---
 
@@ -388,7 +387,8 @@ Then run:
 uv run python -m cyrene --telegram
 ```
 
-The Telegram bot supports the same two-phase loop, subagents, and tools as the Web UI.
+The Telegram bot uses the same plugin-native Agent runtime, context plugins,
+subagents, and tool discovery flow as the Web UI.
 
 ---
 

@@ -2,34 +2,43 @@
 
 [English](architecture.md) · [简体中文](architecture.zh-CN.md)
 
-## 两阶段 Agent Loop
+## 插件原生 Agent Runtime
 
-Cyrene 使用两阶段决策循环：保持模型面对的 Wire Schema 稳定，同时只在需要
-时启用具体能力。
+Cyrene 现在使用由插件组装的一套连续 Agent Runtime，不再先经过路由阶段、再
+进入另一套执行阶段。用户消息进入同一个可持久恢复的 Run，并在其中连续完成
+模型输出、工具调用、向用户提问、取消、恢复、上下文压缩和最终结果投递。
 
 ```text
 用户消息
     │
     ▼
-Phase 1（Policy 只允许 use_tools / ask_user / quit）
-    ├── 纯对话 → 直接返回（一次 LLM 调用）
-    └── 需要 Tool → Phase 2
-            │
-            ▼
-    Phase 2（同一份固定 Wire Tool 定义）
-    │   ├── Direct：文件、Bash、WebSearch/WebFetch、附件分析
-    │   ├── code/browser/desktop/memory/knowledge/task
-    │   ├── entity/map/subagent/delivery/skill/cyrene/integration
-    │   ├── 每个 Package：discover → describe → invoke
-    │   └── quit → 结束交互
+由已启用的上下文插件构建 Context Tree
+    │
     ▼
-返回响应
+连续 Agent Run
+    ├── 回复或向用户提问
+    ├── 调用直接可见工具
+    ├── toolbox.list → describe → invoke
+    ├── 创建 Subagent 或通过 Inbox 协作
+    └── 完成、取消或恢复
+    │
+    ▼
+持久化并发布最终结果
 ```
 
-普通 Main Agent 的两个阶段在相同设置下获得字节稳定、顺序确定、完全相同的
-Wire Bundle。Capabilities 页面按完整 Package 开关能力；关闭 Package 会同时
-从 Schema、专属 Prompt 和 Runtime Permission 中移除。Direct Tool 不受这些
-开关影响。Deep Research 的篇幅选择 Handshake 使用独立轻量 Tool Set。
+只有维持 Runtime 运转所需的 Kernel Tool 固定在核心中。其余工具、工具包、
+Context Mount、后台任务、应用服务、Route、界面贡献、Channel、Schedule、
+Proactive、Knowledge 和 SOUL.md 都由插件提供。工具包和独立工具统一通过
+`toolbox.list → describe → invoke` 发现；用户也可以把选定工具设为 Agent 直接
+可见。Runtime 按当前插件 Schema 校验参数，并接受字段顺序不同但条目和内容完整
+对应的对象参数。
+
+启用的上下文插件把 Block 发布到可追踪的 Context Tree；稳定 Block 保持稳定
+Identity 以复用 Prompt Cache，标准 Compactor 在不改变持久历史的前提下控制长
+对话长度。Composer Context 插件负责输入框中的 Workspace、MCP、Skills 等上下文
+选择；SOUL 插件启用时把人格 Block 挂载在 System Prompt 正下方。Subagent 创建时
+继承 Main Agent 的初始 Tree，并额外获得 Main Agent 的任务指令，之后通过持久
+Inbox 协作。
 
 ## Runtime 启动与迁移
 

@@ -247,10 +247,11 @@ cyrene mcp add my-api sse http://localhost:3000/mcp
 cyrene mcp list
 ```
 
-MCP Capability 通过 `integration_tools` 动态发现，单个 Schema 不会全部加入
-固定 Wire Bundle。Capabilities 页面按完整 Package 开关。关闭 Package 会从
-Phase 1/2 Schema、专属 Prompt 和 Runtime Permission 中移除。Direct Tool
-（例如 `AnalyzeAttachment`）保持可用。
+MCP Capability 通过启用的 MCP 插件动态发现，无需重启。输入框的 Context 菜单
+决定当前对话挂载哪些 Server，Plugin Center 决定插件是否可用。Agent 通过
+`toolbox.list → describe → invoke` 发现已启用的工具包和独立工具；设为直接可见的
+工具也会出现在即时 Tool 列表中。关闭插件会移除其工具和上下文贡献，Runtime 仍会
+拒绝历史消息中的过期调用。
 
 ## Knowledge 与 Library
 
@@ -301,7 +302,8 @@ OWNER_ID=your_telegram_user_id
 uv run python -m cyrene --telegram
 ```
 
-Telegram 使用相同的两阶段 Agent Loop、Subagent 和 Tool。
+Telegram 与 Web UI 使用相同的插件原生 Agent Runtime、上下文插件、Subagent
+和工具发现流程。
 
 ## WeChat
 

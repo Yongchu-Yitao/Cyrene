@@ -2,6 +2,267 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta1] - 2026-08-28
+
+`0.9.0-beta1` brings together every user-visible feature and interface change since `0.7.13`. This release completes Cyrene's plugin transformation: Agents, context, tools, Knowledge, schedules, proactive work, channels, and Workbench extensions now come from one plugin framework, while PowerPoint, media generation, model services, search, browser automation, terminals, memory, remote collaboration, and desktop capabilities remain available and continue to improve. This section contains only changes users can use or see, without internal implementation details.
+
+### The new plugin framework and Plugin Center
+
+- Cyrene now has one extension experience for toolboxes, standalone tools, context capabilities, background work, application pages, Settings, channels, schedules, proactive work, and Knowledge.
+- Except for the required Bash, Read, Write, and Toolbox kernel tools, every built-in tool is supplied as an editable plugin. Installed builds automatically prepare these implementations under the user data `plugin_impl/` directory.
+- Plugin Center lists plugin packs and standalone tools together and labels kernel, editable built-in, and user-directory sources. Search, counts, enabled state, and errors update live.
+- Every tool has a menu for editing its display name and Agent-facing description, choosing direct visibility or on-demand discovery, and deleting tools that are allowed to be removed.
+- Tool names, descriptions, categories, states, menus, confirmations, and errors are available in Chinese and English, and plugin-contributed pages and Settings follow the active language.
+- Toolboxes and standalone tools use one catalog flow: the Agent can list everything, inspect a specific tool, and invoke it without a fuzzy-search entry point.
+- Visibility is configurable per tool, so frequent tools can be immediately callable while large or infrequent capabilities remain discoverable on demand.
+- Disabling or removing a plugin stops its tools, context, background work, and pages together. Re-enabling restores saved settings without leaving hidden capabilities active.
+- Plugins can contribute project pages, additional models, and slash commands. Pages retain split panes, fullscreen, detached windows, and restoration.
+- User changes to tool names, descriptions, and visibility persist across app restarts and plugin reloads.
+
+### Continuous Agent runs, context, and subagents
+
+- The Agent now uses one continuous run for replies, tool work, user questions, live guidance, retries, cancellation, recovery, and final delivery instead of handing work between separate stages.
+- Chat can reply directly, while tool work continues until there is an explicit result. Plans, attempts, and tool activity remain visible without being mistaken for the final answer.
+- When the Agent waits for information, it resumes at the original point without redoing completed work. Cancellation, failure, recovery, and interruption all leave a clear final state.
+- Context is now an inspectable tree. Personality, project, workspace, memory, tool guidance, run state, and other capabilities are mounted by their owning plugins.
+- Composer choices for Personality, default workspace, selecting a directory, MCP servers, Skills, and other capabilities are owned by a dedicated composer-context plugin and directly control the context built for that chat.
+- Choices persist per chat and project. Switching chat, Agent, or project cannot leak another scope's selections, and removed or disabled capabilities are cleaned up.
+- `SOUL.md` is its own plugin. When enabled, personality appears immediately below the system instructions; when disabled, it is not injected. Editing, long-term memory, and first-run setup remain available.
+- Long conversations retain the existing compaction experience, reducing history sent to the model while preserving the complete transcript, final artifacts, and continuation state.
+- A subagent starts with the same initial context tree as the main Agent plus its assignment, then keeps independent context.
+- Main Agents and subagents continue to communicate through the Inbox. Waiting, wake-up, recovery, and completion preserve already-read boundaries to reduce duplicates and omissions.
+- Permission review, sensitive-data filtering, argument validation, and final-answer checks still apply to main Agents and subagents.
+- Unchanged context remains reusable, while model or plugin changes update only affected parts for more stable long tasks and follow-ups.
+
+### Workbench Chat and run information
+
+- Workbench Chat is fully connected to the new Agent runtime, with sending, streaming, tool traces, user questions, recovery, and cancellation driven by one run state.
+- Conversation Overview shows status, Agent, model, session ID, message count, creation time, input/output/total tokens, context usage, and compaction threshold.
+- Context shows the active composition, Agent Inbox events, and toolboxes used during the run, with clear empty states.
+- The action row under each running message again shows current-step tokens and now adds token output speed alongside duration, read-aloud, copy, and regenerate.
+- Tokens and output speed update while streaming and remain visible after completion, reconnection, or reopening history.
+- Active reasoning and tool traces add a one-way shimmer and respect Reduce Motion.
+- Duplicate intermediate messages, repeated questions, blank recovered messages, and completed replies stuck as responding have been corrected.
+- Terminal recovery, SSH reconnection, and background terminal events no longer steal composer focus.
+- Stopping generation promptly restores edit, retry, resend, and navigation.
+- Workbench, Quick Chat, browser, and desktop surfaces use the same run and message data.
+
+### Knowledge, schedules, and proactive-work migration
+
+- Knowledge and Literature are fully plugin-delivered while retaining import, attachments, extraction, OCR, vectorization, hybrid retrieval, collections, tags, notes, annotations, citations, and Zotero.
+- Upgrading automatically migrates existing Knowledge content and attachments into plugin storage. Installed builds run the same migration, reruns avoid duplicates, and source data remains recoverable.
+- Existing project entries, uncategorized state, favorites, recent reads, tags, attachments, and index relationships remain visible and project-isolated.
+- Chat attachments, generated files, and completed task artifacts continue into the same project Knowledge service for Knowledge, global search, and Agent retrieval.
+- Scheduling is plugin-owned while preserving create, edit, pause, resume, cancel, run history, project assignment, notifications, and existing schedules.
+- The proactive Agent is plugin-owned and continues running in the background with selected project context, delivering results to Workbench and enabled channels.
+- Disabling Schedule or proactive work stops background execution; re-enabling resumes durable state without a second legacy scheduler.
+- Telegram and WeChat use the same plugin-native Agent, tools, context, and delivery flow, with configuration and status in Workbench.
+- Knowledge, Schedule, Proactive, Memory, and Channels pages, search, and Settings stay aligned with plugin enablement.
+
+### Tools, browser, code, and desktop control
+
+- Glob, Grep, Edit, and similar filesystem capabilities are standalone catalog tools and do not need a toolbox to be listed, described, and invoked.
+- Browser, code analysis, Git, terminals, files, search, attachment analysis, memory, Knowledge, entities, maps, tasks, delivery, Skills, MCP, and Cyrene self-control are plugin-delivered with existing entry points and permissions.
+- The Agent can still create, read, and edit files; run shell and Git operations; analyze code; operate shared terminals; control the browser; and use desktop applications.
+- Tool arguments are checked against the active plugin declaration, while different object-field ordering is accepted when all items and values map correctly.
+- Browser live view retains clicking, typing, scrolling, uploading, tabs, screenshots, and login takeover.
+- Cyrene self-control still acts only on visible, authorized elements, with existing permission requirements for Settings, sending, and higher-risk actions.
+- MCP servers, Skills, custom plugins, and user tools remain in Settings and composer selections and leave active Agent capabilities immediately when disabled.
+- Tool errors, activity traces, permission cards, and result attachments use consistent localized names.
+
+### Image, video, and music generation
+
+- Added an independent media-generation tool package for creating and editing images and generating videos or music directly from a conversation. Jobs continue in the background without occupying the chat, so users can keep working or navigate elsewhere.
+- When a media job finishes, Cyrene wakes the originating conversation and adds the result directly as an image, video, or audio attachment. Repeated notifications do not create duplicate attachments, and a busy conversation waits for a safe delivery opportunity.
+- Media jobs support parallel execution, retries, progress checks, timeouts, and file-size limits. After an app interruption or restart, Cyrene can resume checking jobs already submitted to a provider instead of submitting and charging for them again.
+- Added OpenAI GPT Image generation and editing, including reference images, masks, and common output formats, together with a GPT Image model catalog and recommended choices.
+- Added Seedream image generation with reference images and Seedance text-to-video, image-to-video, and provider-supported reference-video workflows.
+- Added MiniMax video and music generation, including both downloadable results and directly returned audio data, with asynchronous result retrieval.
+- Added Google Gemini image generation, Gemini Omni generation from image or video references, and Veo video generation. Reference combinations, duration, resolution, and output counts are checked against model capabilities before submission.
+- Added support for compatible ComfyUI MCP workflows, including prompt, reference media, mask, aspect ratio, resolution, duration, and custom parameter injection. Advanced ComfyUI settings stay hidden from the normal Settings experience to avoid unnecessary configuration complexity.
+- Generation requests can reference images or videos from the current conversation while preserving reference order and purpose. Unsupported media types, combinations, and cross-conversation attachments are rejected with a clear explanation before submission.
+- Images, videos, and audio can all be displayed directly as chat messages. Images keep the existing preview experience, videos play inline, audio uses native playback controls, and every result remains available as a normal downloadable attachment.
+
+### Media Settings and model selection
+
+- Added a dedicated Media Generation page in Settings with a clear photo-and-video icon, centralizing service connections, preferred image/video/music services, and background job limits.
+- The page uses a user-oriented “connect services → generate in the background → receive attachments” explanation and hides implementation terms related to queues, polling, and internal wakeups.
+- OpenAI, Seedream, Seedance, MiniMax, and Google use consistent expandable connection cards that show supported media types, connection state, and whether each service is enabled.
+- Model fields are now dropdowns that can discover models available to the current account while also offering common choices, recommendation labels, and manual refresh. A safe common catalog remains available when live discovery is unavailable.
+- A saved model that no longer appears in the current catalog remains available as the current configuration instead of being overwritten. Users can also choose Custom Model and enter a newly released provider model name.
+- Updating an API key or service address automatically refreshes available models. Saved keys are represented only by their saved state and are never shown again.
+- Service switches, preferred services, models, connection details, and advanced job controls all save automatically. The page no longer has a Save button and clearly shows saving, saved, conflict, and retry states.
+- Fixed duplicate separators in expanded service cards, descriptions collapsing into vertical text, and narrow-window overflow. Fields and touch targets now remain clear on desktop and mobile widths.
+
+### Model services and network connections
+
+- Model Settings now includes presets for MiniMax, DeepSeek, Kimi, GLM, OpenCode Go, Gemini, OpenRouter, AMD GPU Cloud, Codex OAuth, and Local ONNX, with more recognizable icons for the newly added services.
+- Model lists are fetched dynamically from providers whenever possible instead of relying on fixed built-in names. OpenRouter uses catalog metadata to present more accurate choices.
+- OpenCode Go automatically selects the appropriate Chat, Responses, or Anthropic Messages connection style for the chosen model, reducing manual protocol decisions.
+- Thinking models from Kimi, GLM, DeepSeek, and MiniMax keep context more reliably across multi-step tool work, while aggregating services that do not support private model fields no longer receive incompatible requests.
+- Official DeepSeek models continue to enable web search automatically with the newer model-service configuration, without requiring users to recreate existing connections.
+- Each model connection now has its own proxy switch, allowing selected services to use the proxy without affecting other model connections.
+- Settings now provides one Network Proxy area for a local or remote HTTP proxy, with separate scopes for external Agents, Cyrene search, the in-app browser, and extension downloads.
+- Turning off the proxy master switch pauses every scope and per-model proxy choice. Local Cyrene services and loopback traffic always remain direct so a proxy cannot disrupt internal app communication.
+- Authentication, quota, and provider errors now produce clearer privacy-safe messages. Cyrene no longer hides a real account or configuration problem by silently switching across incompatible provider families.
+- Removed the obsolete Economy mode configuration so the same task is not affected by a hidden behavior tier.
+
+### Composer, context capabilities, and slash commands
+
+- The built-in Cyrene Agent composer now offers per-chat Context Capabilities for MCP servers, skills, tool packages, and Custom Tools. Disabled or unavailable entries are clearly identified.
+- Context selections stay within the current conversation and project. Switching Agents or projects does not carry unrelated choices into another chat, and stale capabilities are pruned automatically.
+- Typing `/` opens a searchable, keyboard-accessible command menu containing built-in commands, skill commands, and commands contributed by project plugins, with optional arguments entered directly after the command.
+- A selected command can be sent without ordinary message text. Skill and plugin commands can activate the context they require at send time while continuing to follow normal permission reviews.
+- Project plugins can now contribute slash commands using a fixed instruction or dynamically prepare one from the current conversation. Name conflicts with built-in commands receive stable, recognizable names automatically.
+- The composer adds a Reference Media group so image and video attachments can be explicitly used for media generation, with the same add, preview, and remove experience as other attachments.
+
+### Terminals, managed SSH, and sustained output
+
+- Added managed SSH terminal sessions with a selectable remote directory and tmux session. One authentication flow connects, installs the needed shell integration, and attaches to a recoverable remote session.
+- Remote terminals report the correct remote working directory, title, connection state, and exit reason. Temporary transport loss can reconnect, while an intentional exit or tmux detach does not trigger an unwanted reconnection.
+- The Agent waits until a remote connection is genuinely ready before sending its first command, preventing input from landing in an authentication prompt, startup script, or incomplete environment.
+- Bash, Zsh, Fish, PowerShell, and CMD integration is more reliable, with command boundaries, working directory, title, and run state preserved through child shells and tmux.
+- Large plain-text streams, colored build logs, and continuously repainting terminal interfaces are handled more smoothly. One noisy terminal is less likely to slow another interactive terminal or the overall Workbench, and Windows continues draining buffered ConPTY output after a command exits so the end of a log is not lost.
+- Long terminal history uses continuous searchable segments that preserve order and recovery when retention limits are crossed, multiple viewers are attached, background storage is slow, or the app restarts.
+- When the Agent reads a terminal, it can use detected commands and their matching output instead of repeatedly scanning unrelated parts of a very large scrollback.
+- When a split terminal is already open beside the conversation, the Agent can identify its visible name, position, and connection state. References such as “the current terminal,” “the left terminal,” or “the right terminal” can resolve directly to the matching session, including an SSH terminal that is not bound to the current chat.
+- Installed and portable Electron builds now settle terminal processes more completely during quit, restart, terminal deletion, and session recovery, reducing orphaned processes, stale state, and incorrect recovery on the next launch.
+- Windows terminals now recover from temporary background read interruptions instead of treating a live CMD or PowerShell session as exited. Consecutive background terminal creation no longer stops because of invalid system-console state, large pastes and command bursts are delivered completely, slower Windows ARM devices receive enough recovery time during background restarts, and genuine creation failures report their actual cause.
+
+### PowerPoint creation improvements
+
+- PowerPoint slide creation accepts richer semantic descriptions. The Agent can provide titles, body text, bullets, sections, columns, images, and themes while Cyrene generates stable layouts instead of requiring coordinates for every element.
+- Live creation now previews work in stages such as background and layout, text, media, and decoration. This is faster while preserving a visible construction process, and an element-by-element mode remains available when explicitly desired.
+- Editing switches the foreground PowerPoint slide only when needed, and related changes are applied in a safe grouped order, reducing frequent slide jumps and visible flicker.
+- Semantic layout preserves specified images and chooses a media-compatible layout instead of silently dropping them in a text-oriented design. Slide, shape, and edit references stay stable across consecutive operations.
+- Direct creation, template composition, live mode, and file mode share the same slide description. File editing remains atomic rather than pretending to be a live construction process.
+- PowerPoint failures now expose the actual user-facing reason instead of returning only a generic generation error.
+
+### Search, chat streams, and desktop experience
+
+- Web search adds quick preview and full-content modes. Preview prioritizes a small number of the most relevant pages, while full mode retrieves more content only when needed, preventing one slow page from blocking the entire task.
+- After the first useful page arrives, remaining search candidates receive a bounded time to finish. Proxy, search-service, and page-fetch failures move to later candidates sooner while retaining an understandable explanation.
+- Chat text, tool calls, and completion states connect more reliably. After a reply has been saved, a late terminal cleanup event or status update cannot revoke it or contaminate the next turn.
+- Historical reasoning and tool activity continue to appear as activity cards after reloading a conversation, through control clients, and in split chats, side Agents, and quick views. Empty messages without text, attachments, or meaningful activity are hidden instead of appearing as blank or footer-only assistant messages.
+- User-input prompts are deduplicated between live events and page hydration. Stop, reconnect, and background completion are owned by one task state, reducing repeated questions, duplicate completion, and stuck replies.
+- Stopping a reply during a network reconnect gap now restores the conversation to an interactive state immediately, so retry, edit, and send actions are no longer disabled by a stale generating state.
+- Notifications, message attachments, and background media results remain consistent across several windows and rapid navigation. Slow background storage no longer blocks visible replies or live terminal output.
+- HTML previews can now run single-file apps and small games that depend on browser local or session storage while remaining sandboxed. Preview data stays within that preview and cannot access Cyrene's own stored data.
+- Removed the old Welcome/Get Started page and its automatic startup entry. Cyrene now opens directly into the unified Workbench, while required first-use model and personality setup remains in the supported onboarding flow.
+- Completing first-use setup now creates and opens the first conversation immediately, so users can begin typing instead of landing on an empty page without an active chat.
+- Settings further unifies cards, fields, dropdowns, status labels, autosave feedback, keyboard focus, and narrow-window layouts so model, proxy, and media configuration behave consistently.
+
+### Live PowerPoint creation and file editing
+
+- Added live PowerPoint control that can inspect the open presentation, slides, selection, text, shapes, theme, masters, and layouts, allowing the Agent to understand and continue editing the real deck.
+- Text, shapes, lines, images, tables, and charts can be created and edited, with control over position, size, styling, stacking, and grouping. Generated native tables and charts remain editable in PowerPoint.
+- Slides can be created, duplicated, moved, replaced, and deleted, while existing templates, layouts, and content from other decks can be reused to preserve the presentation's design.
+- PowerPoint automatically switches to the slide currently being edited so every change is visible in the foreground. A slide that was originally in the background can still be targeted precisely and is brought forward when its edit begins.
+- Live creation now appears strictly page by page and component by component. The background, title, body, media, and other elements arrive in order, and multi-slide work visibly progresses one slide at a time.
+- PowerPoint changes run exclusively in sequence, preventing simultaneous operations from overwriting one another or leaving a slide mixed, reordered, or incomplete.
+- Component-level changes made by Cyrene are no longer mistaken for external edits. Genuine outside changes are still detected so the Agent cannot continue writing against stale content.
+- If a task fails partway through, its completed changes are automatically rolled back, including components placed on the current slide and slides created earlier in the same task, restoring the pre-task state wherever possible.
+- New rendering and layout checks identify content outside the slide, accidental overlaps, text overflow, and contrast problems, and allow focused corrections based on the actual before-and-after appearance.
+- Supported Cyrene edits can be undone to return quickly to the previous state during live collaboration.
+- When PowerPoint is not connected, `.pptx` files can still be edited directly, including notes, masters, layouts, cross-presentation imports, native charts, and native tables, with undoable edits retained.
+- Settings now includes PowerPoint service integration and add-in installation. The task pane shows connection and reconnection status, the current slide, revision state, and capability guidance, with Chinese and English interfaces and upgrade notices for outdated add-ins.
+- When several presentations are open, the Agent requires an explicit live session selection before editing. An outdated add-in can still provide status and upgrade guidance, but unsafe writes are blocked.
+
+### Models, Codex, and search services
+
+- The model-service list now restores the Cyrene-managed local connection automatically. The existing local Qwen3 Embedding capability is integrated into the unified connection and Knowledge settings flow without requiring a separate address or credential.
+- Codex and local model connections can both be removed by the user and then added again from the available services instead of remaining permanently fixed in the model list.
+- The Codex sign-in page can download the required Codex CLI runtime automatically and shows progress, timeout, retry, and redownload states, reducing manual first-time setup.
+- Codex connections provide clearer recovery paths for expired sign-in, exhausted quota, unavailable models, and missing runtime files, together with more complete model and reasoning-effort choices.
+- Model retries and fallbacks remain visible in one durable conversation status, including the current attempt, next target, and final result, instead of being overwritten by later states.
+- Retries and fallbacks follow the saved model order with consistent timing. Explicit refusals and unrecoverable conditions stop promptly and show their actual cause.
+- The Agent initially loads only the tools relevant to the current need, expanding the full operation surface after a capability is selected. This makes the first response lighter and faster while retaining all existing tool capabilities.
+- Added a Search Services Settings page with a master web-search switch and independent enabling, ordering, and configuration for SearXNG, DeepSeek, Tavily, and Brave.
+- Search settings save automatically, conceal credentials by default, and support explicit credential removal. If another window changes the same settings, the page offers to reload instead of silently overwriting them.
+- When the preferred search provider is unavailable, empty, or unusable, subsequent providers are tried in the user's order, with a clear distinction between no results and every provider failing.
+
+### Agent, chat, and messaging experience
+
+- Agent capabilities are supplied on demand, so large tool packages load only when needed and uninstalled capabilities do not distract from the current task.
+- Model switching, retries, and fallbacks remain in the timeline as durable run states and are still visible after reconnecting or reopening the conversation.
+- Background runs, remote edits, and chat changes from other windows update list summaries in real time without reloading the active transcript.
+- Reconnection resumes from the correct timeline position, preventing text, status updates, and tool results that were already received from appearing twice.
+- Conversation cards can be pinned with stable ordering, while board cards use a more compact and consistent layout for status and action menus.
+- Tool failures appear as concise error cards instead of large code-styled blocks that interrupt reading.
+- Failed project-memory writes show the attempted operation and an actionable cause instead of a vague failure message.
+- Global chat, mentions, and background-message delivery preserve their correct order and conversation ownership during rapid consecutive activity.
+- Voice-reply run state no longer refreshes on every text fragment, making playback and streamed output steadier.
+- Added a background skill-learning switch so users decide whether reusable working methods may be organized automatically in the background.
+- Image messages automatically use the configured vision model when the primary model cannot accept images. Missing attachments now stop with a clear result, and chat exports with Chinese or other Unicode filenames download correctly.
+- Interrupting a run waits for the active conversation to finish cleanup before updating its visible state. Answering an Agent question and then navigating no longer duplicates the same user answer.
+
+### Terminals, project tools, and desktop interaction
+
+- New terminals inherit the current terminal's working directory, so work can continue inside a subfolder without repeating path changes.
+- Bash, Zsh, Fish, PowerShell, and CMD more accurately distinguish commands, prompts, and output and record exit status and elapsed time.
+- Terminals add prompt-to-prompt navigation, searchable persistent command history, and more accurate final output that remains available after reconnection.
+- Long-running terminal sessions with heavy output are smoother and more reliable during live display, history restoration, and reconnection.
+- Project tools remember the last open view and terminal list, restoring the previous workspace when the project is reopened.
+- Popovers, context menus, and status markers use more consistent layering, colors, and click behavior across chats, boards, terminals, and project tools.
+- The Agent's desktop cursor now uses a rounded triangular design with smoother movement, clicks, and fade-out, while remaining correctly positioned when browser zoom changes.
+- Browser and user-action events can contribute to behavior learning within the user's permissions, preserving existing privacy and authorization boundaries.
+- Under heavy load, desktop streaming prioritizes the newest frame instead of accumulating stale frames that leave the visible interaction far behind.
+
+### Knowledge, memory, skill learning, and schedules
+
+- Knowledge bases can extract body text from Word `.docx` files, and changed documents are reliably marked for reindexing so stale content is not returned.
+- Embedding-coverage status and re-embedding flows are clearer and more reliable when changing models or filling missing vector data.
+- Large knowledge listings, file scans, and Zotero updates are more efficient and avoid repeatedly processing unchanged entries.
+- Creating, editing, deleting, reviewing history, and resolving conflicts in project memory is more reliable, and a stale page cannot silently overwrite newer content.
+- Skill learning can organize reusable tool sequences from completed tasks, with a separate user-controlled switch for automatic background scanning.
+- Schedule creation, editing, deletion, notifications, run history, and project ownership are more reliable, including when multiple projects run in parallel.
+- Project deletion and archiving use clearer boundaries for chats, memory, schedules, terminals, and plugin data, reducing both leftovers and unintended cleanup.
+- Knowledge, files, and memory remain strictly isolated by project: an empty workspace or unknown project is never treated as the default project and cannot accidentally create, read, or write another project's data.
+
+### Performance improvements
+
+- Initial Agent context no longer carries every large tool guide in advance, and later turns reuse unchanged context more effectively, reducing unnecessary waiting and input overhead.
+- Conversation lists, summaries, the active transcript, and run state use more precise partial updates. Opening one chat no longer loads every sibling transcript in full.
+- Workspace state is prepared when a chat opens and reused by the first Agent turn. Later file scans process only content that was actually created, edited, moved, or deleted.
+- Chat streams, tool results, global messages, and background events fan out reliably to several windows. A lagging window requests a precise resync instead of allowing an event queue to grow without limit.
+- Live terminal output, screen parsing, and history persistence use bounded incremental work, keeping the interface responsive under heavy output without losing searchable durable history.
+- Large knowledge listings and counts, file-change detection, Zotero copies, and re-embedding avoid repeated reads and calculations for unchanged content.
+- Remote file synchronization, uploads, and update downloads confirm integrity during transfer instead of rescanning an entire large file after completion.
+- Search moves quickly to later candidates when one engine or provider times out, disconnects, or returns empty content, preventing a single failed source from delaying the whole search.
+- Data requests in Settings, Knowledge, Schedule, and project details cancel obsolete loads and prioritize the latest event, reducing stalls and visible state jumps during rapid navigation.
+- Desktop streaming, the Agent cursor, and browser interaction prioritize the newest state under load, reducing frame backlog, fixed waits, and unnecessary redraws.
+- Added a unified performance baseline covering Agents, chats, search, terminals, knowledge, schedules, file processing, and concurrent work to catch meaningful regressions in future releases.
+
+### Refactoring, compatibility, and reliability
+
+- Workbench is reorganized around chat, task, terminal, Settings, Knowledge, Memory, Schedule, and desktop-shell modules, giving navigation, split panes, status, and errors more consistent behavior across pages.
+- Chat, project, task, schedule, knowledge, memory, and workspace-change responsibilities are more clearly separated so one feature's loading or failure is less likely to disrupt the entire workspace.
+- Existing entry points and workflows for chats, tasks, splits, search, voice, PDFs, terminals, and Settings are preserved, so the refactor does not require users to relearn the application.
+- Legacy databases, knowledge indexes, model configurations, shortcuts, chat exports, and project state continue to migrate and load after upgrading instead of being lost when internal structures change.
+- Model connections, candidate order, credentials, capability checks, and upgraded legacy settings now follow one set of rules, reducing mismatches between what Settings shows and what runs.
+- Extensions, skills, Custom Tools, and project plugins now use more consistent installation, enablement, reload, permission review, and removal lifecycles. Disabling one also stops its related background watchers and resources.
+- Live updates for chat messages, run state, tool results, and background notifications use one consistent shape, reducing duplicates and omissions during navigation, reconnection, and multi-window use.
+- Refactored desktop actions still operate only on visible, authorized interface elements and wait for cursor and interface animations to finish before continuing.
+- WebUI source, built-in application pages, and desktop release packages remain synchronized so installed builds match the features and interface used during development.
+- Interrupting, deleting, reconnecting, closing projects, and quitting now settle background runs, terminals, plugins, subscriptions, and temporary resources more reliably, reducing stale state on the next launch.
+
+### Settings, data, updates, and the overall interface
+
+- Settings is reorganized into more focused modules with consistent hierarchy and spacing for cards, headings, descriptions, switches, and error states.
+- Service integrations, PowerPoint, the local embedding model, the Codex runtime, search services, and custom plugins now have fuller setup, status, and recovery surfaces.
+- More lists and detail views update from live events and cancel older loads superseded by newer requests, reducing flicker, redundant refreshes, and stale-data overwrites.
+- Backup and restore now use native system file pickers, with improved density, path presentation, and action feedback.
+- App updates show verifiable download progress and check downloaded-file integrity before installation, with clearer failure states.
+- Windows releases now include complete workspace file-change watching so conversation change records update correctly in installed Windows builds.
+- Chats, tasks, Settings, knowledge, memory, schedules, and project tools use more consistent navigation, shortcuts, split panes, dragging, detached windows, selection states, and empty states.
+
+### Version and release surfaces
+
+- The README, built-in documentation site, application UI, web assets, channel identity, and desktop packages now present `0.9.0-beta1` consistently.
+- macOS, Windows x64, Windows ARM64, and Linux continue to receive prerelease packages with the same feature set, plugin catalog, and Workbench interface.
+
+
+
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 

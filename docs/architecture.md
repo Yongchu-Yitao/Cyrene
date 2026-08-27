@@ -2,44 +2,48 @@
 
 [English](architecture.md) · [简体中文](architecture.zh-CN.md)
 
-## Two-Phase Agent Loop
+## Plugin-Native Agent Runtime
 
-Cyrene uses a two-phase decision loop that keeps the model-facing wire schema
-stable while enabling concrete capabilities only when needed.
+Cyrene now uses one continuous Agent runtime assembled from plugins. There is
+no routing phase followed by a separate execution phase: a user message enters
+one durable run, and that run continues through model output, tool calls,
+questions, cancellation, recovery, context compaction, and final delivery.
 
-```
-User Message
+```text
+User message
     │
     ▼
-Phase 1 (runtime policy allows use_tools / ask_user / quit)
-    ├── Pure chat → return directly (1 LLM call)
-    └── Needs tools → Phase 2
-            │
-            ▼
-    Phase 2 (same fixed wire tool definitions)
-    │   ├── Direct: filesystem, Bash, WebSearch/WebFetch, AnalyzeAttachment
-    │   ├── code_tools / browser_tools / desktop_tools
-    │   ├── memory_tools / knowledge_tools / task_tools
-    │   ├── cyrene_entity Plugin / map_tools / subagent_tools
-    │   ├── delivery_tools / skill_tools / cyrene_tools / integration_tools
-    │   ├── Each module: discover → describe → invoke
-    │   └── quit → end interaction
+Build the context tree from enabled context plugins
     │
     ▼
-Response returned to user
+Continuous Agent run
+    ├── reply or ask the user
+    ├── use a directly visible tool
+    ├── toolbox.list → describe → invoke
+    ├── spawn or communicate with subagents
+    └── finish, cancel, or recover
+    │
+    ▼
+Persist and publish the final result
 ```
 
-The ordinary main-agent Phase 1 and Phase 2 calls receive the same
-deterministically ordered wire bundle for the current package settings: all
-direct tools plus the enabled package gateways. The Capabilities page switches
-complete packages on or off. A disabled package is omitted from both the
-model-facing tool schema and package-specific system-prompt instructions; its
-capabilities also remain blocked by runtime validation. Changing a package
-setting intentionally creates a new prompt-cache prefix, while subsequent calls
-reuse that prefix until settings change again. Direct tools, including
-`AnalyzeAttachment`, are not controlled by package switches.
-Deep Research keeps a dedicated lightweight length-preference handshake and is
-intentionally outside this cache invariant.
+Only the kernel tools required to operate the runtime are fixed. Everything
+else—including tools, toolboxes, context mounts, background jobs, application
+services, routes, UI contributions, channels, schedules, proactive work,
+knowledge, and SOUL.md—is supplied by a plugin. Toolboxes and standalone tools
+share the same `toolbox.list → describe → invoke` discovery path; selected
+tools can also be made directly visible to the model. Runtime validation checks
+arguments against the active plugin schema while accepting semantically
+equivalent object-field ordering.
+
+Enabled context plugins publish blocks into a traceable context tree. Stable
+blocks keep stable identities for prompt-cache reuse, while the standard
+compactor bounds long conversations without changing their durable history.
+The composer-context plugin owns the chat input selections for workspaces, MCP
+servers, skills, and other context capabilities. The SOUL plugin mounts the
+enabled personality block immediately below the system prompt. Subagents start
+with the same initial tree as the main Agent plus the main Agent's assignment,
+then coordinate through the durable inbox.
 
 ## Runtime Startup and Migration
 
