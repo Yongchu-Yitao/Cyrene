@@ -224,8 +224,7 @@ class ModelAccessBody(APIBody):
 class ComposerContextActivationsBody(APIBody):
     mcpServers: list[str] = Field(default_factory=list, max_length=50)
     skills: list[str] = Field(default_factory=list, max_length=50)
-    toolPackages: list[str] = Field(default_factory=list, max_length=50)
-    customTools: list[str] = Field(default_factory=list, max_length=50)
+    pluginPacks: list[str] = Field(default_factory=list, max_length=50)
 
 
 class ChatCreateBody(APIBody):
@@ -324,36 +323,6 @@ class ChatForkBody(APIBody):
     content: str | None = Field(default=None, max_length=200_000)
 
 
-class MemoryCreateBody(APIBody):
-    content: str = Field(min_length=1, max_length=200_000)
-    category: Literal["preference", "project", "habit", "fact", "conversation"] = "fact"
-    source: Literal["conversation", "knowledge", "manual", "agent", "other"] = "manual"
-    confidence: Literal["", "high", "medium", "low"] = ""
-    tags: list[Any] | str | None = None
-
-
-class MemoryUpdateBody(APIBody):
-    content: str | None = Field(default=None, min_length=1, max_length=200_000)
-    category: Literal[
-        "preference", "project", "habit", "fact", "conversation",
-        "task_report", "reflection",
-    ] | None = None
-    source: Literal["conversation", "knowledge", "manual", "agent", "other"] | None = None
-    confidence: Literal["", "high", "medium", "low"] | None = None
-    tags: list[Any] | str | None = None
-    stale: bool | None = None
-
-
-class ProjectMemoryPromptUpdateBody(APIBody):
-    prompt: str = Field(default="", max_length=16_000)
-    baseModifiedAt: str = Field(default="", max_length=100)
-
-
-class ProjectMemoryPromptRestoreBody(APIBody):
-    modifiedAt: str = Field(min_length=1, max_length=100)
-    baseModifiedAt: str = Field(default="", max_length=100)
-
-
 class ProjectTextFileUpdateBody(APIBody):
     content: str = Field(max_length=2_000_000)
     expectedVersion: str = Field(default="", max_length=128)
@@ -365,9 +334,6 @@ class ScheduleCreateBody(APIBody):
     schedule_type: Literal["once", "cron", "interval"]
     schedule_value: str = Field(min_length=1, max_length=500)
     schedule_timezone: str | None = Field(default=None, min_length=1, max_length=100)
-    next_run: str | None = Field(default=None, max_length=200)
-    chat_id: int = -1
-    origin_session_id: str = Field(default="", max_length=160)
     action_type: Literal["message", "agent_task"] = "agent_task"
 
 
@@ -376,7 +342,6 @@ class ScheduleUpdateBody(APIBody):
     schedule_type: Literal["once", "cron", "interval"] | None = None
     schedule_value: str | None = Field(default=None, min_length=1, max_length=500)
     schedule_timezone: str | None = Field(default=None, min_length=1, max_length=100)
-    next_run: str | None = Field(default=None, max_length=200)
     status: Literal["active", "paused"] | None = None
     action_type: Literal["message", "agent_task"] | None = None
 

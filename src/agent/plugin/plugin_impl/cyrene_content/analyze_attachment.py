@@ -4,30 +4,18 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import (
-    json_result,
-    request_read_elevation,
-    resolve_tool_path,
-    analyze_attachment,
-)
+from agent.plugin.native_runtime import json_result, resolve_tool_path
+from cyrene.runtime.attachments import analyze_attachment
 
 TOOL_NAME = 'AnalyzeAttachment'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
-async def _tool_analyze_attachment(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    try:
-        path = resolve_tool_path(str(args["path"]))
-    except ValueError:
-        elev = await request_read_elevation(
-            tool_name="AnalyzeAttachment",
-            path_hint=str(args.get("path", "")),
-            reason="Agent 想要分析此文件内容。",
-        )
-        if elev is not None:
-            return elev
-        path = resolve_tool_path(str(args["path"]))
+async def _tool_analyze_attachment(args: dict[str, Any], _context: PluginContext) -> str:
+    path = resolve_tool_path(str(args["path"]))
     prompt = str(args.get("prompt", "") or "")
     force_refresh = bool(args.get("force_refresh", False))
     try:

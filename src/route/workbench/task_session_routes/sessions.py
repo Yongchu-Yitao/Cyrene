@@ -77,8 +77,7 @@ def register_session_mutation_routes(router: APIRouter, context: TaskSessionRout
         try:
             return await context.tasks.delete(
                 session_id, db_path=context.db_path, task_runs=context.task_runs,
-                goal_loops=goal_loop, interrupt=deps.interrupt_active_run,
-                clear=deps.clear_session_id, is_running=deps.is_session_running,
+                goal_loops=goal_loop, agent_runtime=context.agent_runtime,
                 store_lock=deps.store_lock,
             )
         except TaskSessionNotFoundError:

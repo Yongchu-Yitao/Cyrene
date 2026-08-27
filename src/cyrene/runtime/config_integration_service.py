@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from cyrene.knowledge import local_models
+from agent.plugin import active_plugin_service
 from cyrene.model_runtime import opencv_runtime
 from cyrene.runtime import config_store, integration_settings
 from cyrene.runtime.host_bridge import HostBridgeError, call_host
@@ -23,6 +23,13 @@ from cyrene.runtime.storage import scan_storage
 
 logger = logging.getLogger(__name__)
 SettingsChangedPublisher = Callable[[str, int | None, list[str]], Awaitable[None]]
+
+
+def _knowledge_service() -> Any:
+    service = active_plugin_service("knowledge")
+    if service is None:
+        raise ConfigIntegrationError("knowledge Plugin is not available", 503)
+    return service
 
 
 class ConfigQueryPort(Protocol):
@@ -164,7 +171,7 @@ class ConfigIntegrationApplicationService:
         return integration_settings.public_settings()
 
     def local_model_status(self) -> dict[str, Any]:
-        return local_models.status()
+        return _knowledge_service().local_model_status()
 
     def download_ocr_runtime(self) -> dict[str, Any]:
         try:
@@ -174,20 +181,20 @@ class ConfigIntegrationApplicationService:
 
     def download_local_model(self, model_id: str) -> dict[str, Any]:
         try:
-            return {"ok": True, **local_models.start_download(model_id)}
+            return {"ok": True, **_knowledge_service().start_local_model_download(model_id)}
         except ValueError as exc:
             raise ConfigIntegrationError(str(exc), 404) from exc
 
     async def delete_local_model(self, model_id: str) -> dict[str, Any]:
         try:
-            return {"ok": True, **(await local_models.delete_model(model_id))}
+            return {"ok": True, **(await _knowledge_service().delete_local_model(model_id))}
         except ValueError as exc:
             raise ConfigIntegrationError(str(exc), 404) from exc
 
     def update_integration(self, body: dict[str, Any]) -> dict[str, Any]:
-        if not ({"zotero", "embedding"} & set(body)):
+        if "zotero" not in body:
             raise ConfigIntegrationError(
-                "zotero or embedding settings are required",
+                "zotero settings are required",
                 400,
             )
         try:
@@ -202,8 +209,6 @@ class ConfigIntegrationApplicationService:
             config = integration_settings.merged_test_config(service, draft)
             if service == "zotero":
                 return await integration_settings.test_zotero(config)
-            if service == "embedding":
-                return await integration_settings.test_embedding(config)
             raise ValueError("unknown integration service")
         except (TypeError, ValueError) as exc:
             raise ConfigIntegrationError(str(exc), 400) from exc
@@ -220,16 +225,5 @@ class ConfigIntegrationApplicationService:
             ) from exc
         except Exception as exc:
             logger.info("Integration connectivity test failed", exc_info=True)
-            if self._is_local_embedding(service, draft):
-                detail = str(exc).strip() or "unknown local inference error"
-                message = f"local embedding test failed: {detail[:500]}"
-            else:
-                message = "connection test failed"
+            message = "connection test failed"
             raise ConfigIntegrationError(message, 502) from exc
-
-    @staticmethod
-    def _is_local_embedding(service: str, draft: Any) -> bool:
-        if service != "embedding" or not isinstance(draft, dict):
-            return False
-        provider = str(draft.get("provider") or "").strip().lower()
-        return provider.replace("-", "_") == "local_onnx"

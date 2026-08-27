@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from agent.plugin import PluginContext
 
 from ._ui_snapshot import read_current_tree
 
@@ -22,11 +23,12 @@ TOOL_DEF = {"type": "function", "function": {
 TOOL_METADATA = {"read_only": True, "resource_keys": ("cyrene:current-surface",), "requires_order": True}
 
 
-async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify: Any) -> str:
+async def handler(args: dict[str, Any], context: PluginContext) -> str:
     request = dict(args)
     request.setdefault("include", ["interactive", "text"])
     return await read_current_tree(
         request,
+        context,
         operation_id="cyrene.ui.snapshot",
         success_message="Current UI layer snapshot read.",
     )

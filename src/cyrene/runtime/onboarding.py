@@ -5,25 +5,41 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from cyrene.config import (
-    DATA_DIR,
-    DB_PATH,
-    OPENAI_BASE_URL,
-    OPENAI_MODEL,
-    STATE_FILE,
-    STORE_DIR,
-    write_env_keys,
+from agent.plugin import active_plugin_service
+from cyrene.config import DATA_DIR, DB_PATH
+from cyrene.runtime.model_configuration import (
+    candidates_for_route,
+    get_model_configuration,
+    save_model_configuration,
 )
 from cyrene.runtime.setup import mark_setup_done, normalize_custom_soul_content
-from cyrene.runtime.memory.soul import get_default_soul_content, get_soul_path, read_soul
 from cyrene.runtime.model_probe_service import ModelProbeService
 
 logger = logging.getLogger(__name__)
+
+
+def _memory_service():
+    service = active_plugin_service("memory")
+    if service is None:
+        raise RuntimeError("memory Plugin is not available")
+    return service
+
+
+def get_default_soul_content() -> str:
+    return _memory_service().default_soul()
+
+
+def get_soul_path() -> Path:
+    return _memory_service().soul_path()
+
+
+def read_soul() -> str:
+    return _memory_service().read_soul()
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -47,10 +63,6 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
         "llm": {
             "completed_at": str(llm.get("completed_at") or "").strip(),
             "source": str(llm.get("source") or "").strip(),
-            "provider": str(llm.get("provider") or "").strip(),
-            "base_url": str(llm.get("base_url") or "").strip(),
-            "model": str(llm.get("model") or "").strip(),
-            "reasoning_effort": str(llm.get("reasoning_effort") or "").strip(),
         },
         "personality": {
             "completed_at": str(personality.get("completed_at") or "").strip(),
@@ -90,8 +102,25 @@ def reset_onboarding_state() -> None:
             logger.exception("Failed to remove onboarding state file: %s", path)
 
 
-def _api_key_present() -> bool:
-    return bool(os.environ.get("OPENAI_API_KEY", "").strip())
+def _primary_model() -> dict[str, Any]:
+    """Return the canonical primary-route model, including its secret."""
+
+    try:
+        candidates = candidates_for_route("primary")
+    except Exception:
+        logger.warning("Failed to resolve the primary model route", exc_info=True)
+        return {}
+    return dict(candidates[0]) if candidates else {}
+
+
+def _model_configured() -> bool:
+    return bool(_primary_model())
+
+
+def _provider_id(candidate: dict[str, Any]) -> str:
+    options = candidate.get("options")
+    preset = options.get("provider_preset") if isinstance(options, dict) else ""
+    return str(preset or candidate.get("adapter") or candidate.get("provider") or "").strip()
 
 
 def _is_default_soul(content: str) -> bool:
@@ -105,25 +134,18 @@ def _personality_inferred_configured(content: str) -> bool:
 
 
 def _has_runtime_activity() -> bool:
-    if STATE_FILE.exists():
-        try:
-            data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and data.get("messages"):
-                return True
-        except Exception:
-            return True
-
-    from cyrene.runtime.memory.conversations import CONVERSATIONS_DIR
-
-    return CONVERSATIONS_DIR.exists() and any(CONVERSATIONS_DIR.glob("*.md"))
+    try:
+        return _memory_service().has_existing_data()
+    except RuntimeError:
+        return False
 
 
 def _has_existing_data() -> bool:
     """True when the install already holds user content from prior use — any
     signal that this is not a brand-new first run.
 
-    Covers both the legacy agent (runtime state / conversations) and the
-    Workbench (chat threads, accumulated per-workspace memory). The first-run
+    Covers both the Agent runtime and Workbench chat threads. Memory-owned
+    persistence is queried through the memory Plugin. The first-run
     onboarding takeover is suppressed whenever this is True, so an existing user
     is never dragged back into setup just because their SOUL.md is still the
     default. Only a full "reset app data" — which clears every source below —
@@ -132,36 +154,18 @@ def _has_existing_data() -> bool:
     if _has_runtime_activity():
         return True
 
-    # Workbench chat threads. SQLite is authoritative; legacy JSON remains an
-    # import fallback for installations that have not started the new version.
+    # Workbench chat threads. Memory documents are intentionally not inspected
+    # here; their storage layout belongs to the memory Plugin.
     try:
-        from cyrene.workbench.store import has_document_data, list_document_keys
+        from cyrene.workbench.store import has_document_data
 
-        for workbench_db in dict.fromkeys((DB_PATH, STORE_DIR / "cyrene.db")):
-            if workbench_db.exists() and has_document_data(workbench_db, "chats"):
-                return True
-            if workbench_db.exists() and list_document_keys(workbench_db, prefix="memory:"):
-                return True
+        if DB_PATH.exists() and has_document_data(DB_PATH, "chats"):
+            return True
     except Exception:
         logger.warning("Failed to detect existing workbench data; user may be misjudged as new install", exc_info=True)
 
     # Note: projects are excluded on purpose — an empty default project is
     # auto-created and is not evidence of prior use.
-    chats_path = DATA_DIR / "workbench_chats.json"
-    if chats_path.exists():
-        try:
-            if json.loads(chats_path.read_text(encoding="utf-8")):
-                return True
-        except Exception:
-            return True
-
-    # Accumulated per-workspace agent memory (store/wb_memory_<ws>.json).
-    try:
-        if any(STORE_DIR.glob("wb_memory_*.json")):
-            return True
-    except Exception:
-        pass
-
     return False
 
 
@@ -170,12 +174,12 @@ def _is_absolute_fresh_start(
     *,
     existing_data: bool | None = None,
 ) -> bool:
-    """A pristine first run: no onboarding markers, no API key, default/empty
+    """A pristine first run: no onboarding markers or primary model, default/empty
     SOUL.md, and no pre-existing user data of any kind."""
     return (
         not _onboarding_state_path().exists()
         and not _setup_flag_path().exists()
-        and not _api_key_present()
+        and not _model_configured()
         and (not soul_content.strip() or _is_default_soul(soul_content))
         and not (_has_existing_data() if existing_data is None else existing_data)
     )
@@ -186,19 +190,12 @@ def _merge_inferred_state(state: dict[str, Any]) -> tuple[dict[str, Any], str]:
     soul_content = read_soul()
     dirty = False
 
-    llm_configured = bool(merged["llm"]["completed_at"]) or _api_key_present()
-    if not merged["llm"]["completed_at"] and _api_key_present():
-        merged["llm"]["completed_at"] = _now_iso()
-        merged["llm"]["source"] = "legacy-env"
-        merged["llm"]["provider"] = "openai_compatible"
-        merged["llm"]["base_url"] = os.environ.get("OPENAI_BASE_URL", OPENAI_BASE_URL).strip()
-        merged["llm"]["model"] = os.environ.get("OPENAI_MODEL", OPENAI_MODEL).strip()
-        dirty = True
+    llm_configured = _model_configured()
 
     personality_configured = bool(merged["personality"]["completed_at"]) or _personality_inferred_configured(soul_content)
     if not merged["personality"]["completed_at"] and _personality_inferred_configured(soul_content):
         merged["personality"]["completed_at"] = _now_iso()
-        merged["personality"]["source"] = "legacy-flag" if _setup_flag_path().exists() else "legacy-soul"
+        merged["personality"]["source"] = "setup-flag" if _setup_flag_path().exists() else "soul"
         merged["personality"]["mode"] = "custom" if soul_content.strip() and not _is_default_soul(soul_content) else "default"
         dirty = True
 
@@ -213,7 +210,8 @@ def _merge_inferred_state(state: dict[str, Any]) -> tuple[dict[str, Any], str]:
 
 def get_onboarding_status() -> dict[str, Any]:
     state, soul_content = _merge_inferred_state(load_onboarding_state())
-    llm_configured = bool(state["llm"]["completed_at"]) or _api_key_present()
+    primary = _primary_model()
+    llm_configured = bool(primary)
     personality_configured = bool(state["personality"]["completed_at"]) or _personality_inferred_configured(soul_content)
     both_configured = llm_configured and personality_configured
 
@@ -222,9 +220,9 @@ def get_onboarding_status() -> dict[str, Any]:
         soul_content,
         existing_data=existing_data,
     )
-    # The wizard is mid-flow only when a step was completed *through the wizard*
-    # (legacy inference tags its sources "legacy-*") and setup isn't finished —
-    # e.g. a fresh user saved the model step but hasn't picked a personality.
+    # The wizard is mid-flow only when a step was completed through the wizard
+    # and setup isn't finished — e.g. the model step is saved but personality
+    # selection is still pending.
     wizard_in_progress = not both_configured and (
         state["llm"].get("source") == "wizard"
         or state["personality"].get("source") == "wizard"
@@ -248,17 +246,11 @@ def get_onboarding_status() -> dict[str, Any]:
         "completedAt": state.get("completed_at", ""),
         "llm": {
             "configured": llm_configured,
-            "hasApiKey": _api_key_present(),
-            "provider": state["llm"].get("provider") or "openai_compatible",
-            "baseUrl": (
-                state["llm"].get("base_url")
-                or os.environ.get("OPENAI_BASE_URL", OPENAI_BASE_URL).strip()
-            ),
-            "model": (
-                state["llm"].get("model")
-                or os.environ.get("OPENAI_MODEL", OPENAI_MODEL).strip()
-            ),
-            "reasoningEffort": state["llm"].get("reasoning_effort", ""),
+            "hasApiKey": bool(str(primary.get("api_key") or "").strip()),
+            "provider": _provider_id(primary),
+            "baseUrl": str(primary.get("base_url") or ""),
+            "model": str(primary.get("model") or ""),
+            "reasoningEffort": str(primary.get("reasoning_effort") or ""),
             "completedAt": state["llm"].get("completed_at", ""),
         },
         "personality": {
@@ -298,54 +290,42 @@ async def save_and_test_llm_setup(api_key: str, base_url: str, model: str) -> di
     vision_capability = await test_llm_vision_capability(
         clean_api_key, clean_base_url, clean_model
     )
-    write_env_keys({
-        "OPENAI_API_KEY": clean_api_key,
-        "OPENAI_BASE_URL": clean_base_url,
-        "OPENAI_MODEL": clean_model,
-    })
-
-    from cyrene.runtime.settings_store import (
-        get_custom_models,
-        save_custom_models,
-        save_model_source,
-        save_models,
-    )
-
-    current_models = get_custom_models()
-    model_names = {
-        str(m.get("model") or m.get("name") or m.get("id") or "").strip()
-        for m in (current_models or [])
-    }
-    if clean_model not in model_names:
-        new_entry = {
-            "id": clean_model,
-            "name": clean_model,
-            "model": clean_model,
-            "desc": "",
-            "ctx": "",
-            "price": "",
-            "api_key": clean_api_key,
+    _save_primary_model(
+        connection_id="onboarding-openai-compatible",
+        profile_id="onboarding-primary",
+        connection={
+            "name": "OpenAI Compatible",
+            "adapter": "openai_compatible",
+            "enabled": True,
+            "use_proxy": False,
             "base_url": clean_base_url,
-            **vision_capability,
-        }
-        custom_models = [new_entry] + list(current_models or [])
-    else:
-        custom_models = []
-        for entry in current_models or []:
-            entry_model = str(entry.get("model") or entry.get("name") or entry.get("id") or "").strip()
-            custom_models.append({**entry, **vision_capability} if entry_model == clean_model else entry)
-    save_custom_models(custom_models)
-    save_model_source("custom")
-    save_models(custom_models)
+            "api_key": clean_api_key,
+            "clear_api_key": not bool(clean_api_key),
+            "options": {"provider_preset": "openai_compatible"},
+        },
+        profile={
+            "model": clean_model,
+            "name": clean_model,
+            "enabled": True,
+            "capabilities": [
+                "chat",
+                *(["vision"] if vision_capability.get("vision_capable") is True else []),
+            ],
+            "context_limit": 0,
+            "ctx": "",
+            "dimensions": 0,
+            "reasoning_effort": "",
+            "description": "",
+            "price": "",
+            "max_concurrency": 0,
+            "options": {},
+        },
+    )
 
     state = load_onboarding_state()
     state["llm"] = {
         "completed_at": _now_iso(),
         "source": "wizard",
-        "provider": "openai_compatible",
-        "base_url": clean_base_url,
-        "model": clean_model,
-        "reasoning_effort": "",
     }
     save_onboarding_state(state)
     return {
@@ -362,15 +342,8 @@ async def save_codex_oauth_setup(
     """Persist a logged-in Codex model as the primary onboarding candidate."""
     from cyrene.model_runtime.codex_provider import (
         CODEX_BASE_URL,
-        CODEX_PROVIDER,
         get_codex_provider,
     )
-    from cyrene.runtime.settings_store import (
-        save_codex_model,
-        save_model_source,
-        save_models,
-    )
-
     clean_model = model.strip()
     clean_effort = reasoning_effort.strip().lower()
     if not clean_model:
@@ -416,40 +389,94 @@ async def save_codex_oauth_setup(
     if clean_effort and supported_efforts and clean_effort not in supported_efforts:
         raise ValueError("Selected reasoning effort is unavailable for this model")
 
-    candidate = {
-        "id": f"codex-{clean_model}",
-        "name": clean_model,
-        "model": clean_model,
-        "provider": CODEX_PROVIDER,
-        "reasoning_effort": clean_effort,
-        "desc": "OpenAI OAuth",
-        "ctx": "",
-        "price": "Codex quota",
-        "api_key": "",
-        "base_url": CODEX_BASE_URL,
-        "vision_capable": True,
-        "vision_checked_at": _now_iso(),
-        "vision_check_error": "",
-    }
-    save_codex_model(candidate)
-    save_model_source("codex")
-    save_models([candidate])
-    write_env_keys({"OPENAI_MODEL": clean_model})
+    _save_primary_model(
+        connection_id="onboarding-codex-oauth",
+        profile_id="onboarding-codex-primary",
+        connection={
+            "name": "OpenAI Codex OAuth",
+            "adapter": "codex_oauth",
+            "enabled": True,
+            "use_proxy": False,
+            "base_url": CODEX_BASE_URL,
+            "api_key": "",
+            "options": {"provider_preset": "codex_oauth"},
+        },
+        profile={
+            "model": clean_model,
+            "name": clean_model,
+            "enabled": True,
+            "capabilities": ["chat", "vision", "tools", "reasoning"],
+            "context_limit": 0,
+            "ctx": "",
+            "dimensions": 0,
+            "reasoning_effort": clean_effort,
+            "description": "OpenAI OAuth",
+            "price": "Codex quota",
+            "max_concurrency": 0,
+            "options": {},
+        },
+    )
 
     state = load_onboarding_state()
     state["llm"] = {
         "completed_at": _now_iso(),
         "source": "wizard",
-        "provider": CODEX_PROVIDER,
-        "base_url": CODEX_BASE_URL,
-        "model": clean_model,
-        "reasoning_effort": clean_effort,
     }
     save_onboarding_state(state)
     return {
         "ok": True,
         "onboarding": get_onboarding_status(),
     }
+
+
+def _save_primary_model(
+    *,
+    connection_id: str,
+    profile_id: str,
+    connection: dict[str, Any],
+    profile: dict[str, Any],
+) -> None:
+    """Upsert the onboarding model directly into the canonical model graph."""
+
+    configuration = get_model_configuration()
+    connections = [dict(item) for item in configuration.get("connections") or []]
+    profiles = [dict(item) for item in configuration.get("profiles") or []]
+
+    normalized_connection = {"id": connection_id, **connection}
+    if any(item.get("id") == connection_id for item in connections):
+        connections = [
+            normalized_connection if item.get("id") == connection_id else item
+            for item in connections
+        ]
+    else:
+        connections.append(normalized_connection)
+
+    normalized_profile = {
+        "id": profile_id,
+        "connection_id": connection_id,
+        **profile,
+    }
+    if any(item.get("id") == profile_id for item in profiles):
+        profiles = [
+            normalized_profile if item.get("id") == profile_id else item
+            for item in profiles
+        ]
+    else:
+        profiles.append(normalized_profile)
+
+    routes = {
+        name: list((configuration.get("routes") or {}).get(name) or [])
+        for name in ("primary", "secondary", "vision", "embedding")
+    }
+    # Onboarding selects one definitive primary Provider. Cross-provider
+    # fallback is not implicit in the new Plugin protocol.
+    routes["primary"] = [profile_id]
+    save_model_configuration({
+        "version": configuration.get("version", 1),
+        "connections": connections,
+        "profiles": profiles,
+        "routes": routes,
+    })
 
 
 async def save_personality_setup(mode: str, name: str = "", content: str = "") -> dict[str, Any]:
@@ -472,9 +499,7 @@ async def save_personality_setup(mode: str, name: str = "", content: str = "") -
         raise ValueError("Unsupported personality mode")
 
     if clean_mode != "name":
-        soul_path = get_soul_path()
-        soul_path.parent.mkdir(parents=True, exist_ok=True)
-        soul_path.write_text(soul_content, encoding="utf-8")
+        _memory_service().write_soul(soul_content)
 
     mark_setup_done()
 
@@ -487,9 +512,6 @@ async def save_personality_setup(mode: str, name: str = "", content: str = "") -
     }
     save_onboarding_state(state)
 
-    from cyrene.agent import clear_session_id
-
-    await clear_session_id()
     return {
         "ok": True,
         "soulContent": soul_content,

@@ -73,7 +73,7 @@ function wbcClosePageContextMenu(context) {
 
 function wbcOpenPageContextMenu(context, event) {
   var chat = context.activeChat;
-  if (!chat || chat.legacy || !wbcCanOpenPageContextMenu(event)) return;
+  if (!chat || !wbcCanOpenPageContextMenu(event)) return;
   event.preventDefault();
   event.stopPropagation();
   wbcClosePageContextMenu(context);

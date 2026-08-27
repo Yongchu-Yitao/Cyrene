@@ -4,21 +4,26 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+
+from ._service import current_agent_id, result_text, subagent_manager
 from .definitions import get_native_tool_def
 
 TOOL_NAME = 'query_round'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
-async def _tool_query_round(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+def _tool_query_round(
+    args: dict[str, Any],
+    context: PluginContext,
+) -> str:
     """Query live round status for the main agent."""
-    from cyrene.agent.context import get_current_agent_id
-
-    if get_current_agent_id() != "main":
+    if current_agent_id(context) != "main":
         return "Only the main agent can inspect live round status."
-    from cyrene.agent.round import query_live_rounds
-
-    return query_live_rounds(round_id=str(args.get("round_id", "")).strip())
+    result = subagent_manager(context).query(
+        round_id=str(args.get("round_id", "")).strip()
+    )
+    return result_text(result)
 
 
 handler = _tool_query_round

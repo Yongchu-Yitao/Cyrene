@@ -1,17 +1,61 @@
 """Editable Cyrene remote-device Plugin pack."""
 
-from ._runtime import create_plugin_pack
+from types import ModuleType
+from typing import Any
 
-plugin_pack = create_plugin_pack(
-    package_name=__name__,
-    pack_id="cyrene_remote",
+from agent.plugin import Plugin, PluginPack
+
+from . import action, files, harness, jobs, list_devices, run, status
+
+_MAIN_ONLY = frozenset({
+    "RemoteCyreneAction",
+    "RemoteCyreneFiles",
+    "RemoteCyreneJobs",
+    "RemoteHarness",
+    "RunRemoteCyrene",
+})
+
+
+def _plugin(module: ModuleType) -> Plugin:
+    function = module.TOOL_DEF["function"]
+    name = str(function["name"])
+    metadata: dict[str, Any] = dict(getattr(module, "TOOL_METADATA", {}))
+    if name in _MAIN_ONLY:
+        metadata["main_only"] = True
+    return Plugin(
+        name=name,
+        description=str(function.get("description") or ""),
+        input_schema=dict(
+            function.get("parameters")
+            or {"type": "object", "properties": {}}
+        ),
+        handler=module.handler,
+        allow_parallel=bool(
+            metadata.get(
+                "allow_parallel",
+                not metadata.get("requires_order", True),
+            )
+        ),
+        timeout_seconds=float(metadata.get("timeout_seconds", 180.0)),
+        metadata=metadata,
+    )
+
+
+plugin_pack = PluginPack(
+    id="cyrene_remote",
     description="Operate explicitly selected paired Cyrene devices.",
-    native_module_names=(
-        "list_devices", "status", "files", "jobs", "harness", "action", "run",
+    plugins=tuple(
+        _plugin(module)
+        for module in (
+            list_devices,
+            status,
+            files,
+            jobs,
+            harness,
+            action,
+            run,
+        )
     ),
-    registration_providers=(),
 )
-if len(plugin_pack.plugins) != 7:
-    raise RuntimeError("remote pack must contain exactly 7 Plugins")
 
 __all__ = ["plugin_pack"]

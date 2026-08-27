@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+from agent.plugin.native_runtime import run_context_value
+
 from .definitions import get_native_tool_def
 
 TOOL_NAME = 'send_notification'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
-async def _tool_send_notification(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+async def _tool_send_notification(args: dict[str, Any], context: PluginContext) -> str:
     from cyrene.runtime.notifications import notify
-    from cyrene.agent.context import get_current_conversation_source
 
     title = str(args.get("title") or "Cyrene").strip()
     text = str(args.get("text") or "").strip()
@@ -20,7 +22,7 @@ async def _tool_send_notification(args: dict[str, Any], _bot: Any, _chat_id: int
     if not text:
         return "No notification text provided."
 
-    source = get_current_conversation_source()
+    source = str(run_context_value(context, "conversation_source") or "")
 
     # When the conversation started from WebUI (default), skip Telegram and WeChat
     # so that WebUI interactions don't leak to external messaging channels.

@@ -4,23 +4,18 @@ from __future__ import annotations
 
 
 async def shutdown_background_work() -> None:
-    """Stop agent jobs and flush short telemetry writes in dependency order."""
-    from cyrene.agent.coordinator import shutdown_background_tasks as shutdown_coordinator
-    from cyrene.agent.session import shutdown_session_tasks
-    from cyrene.model_runtime.client import shutdown_background_tasks as shutdown_llm_telemetry
-    from cyrene.knowledge.ingest import cancel_pending_tasks as cancel_knowledge_indexing
-    from cyrene.hooks.config_agent import shutdown_background_tasks as shutdown_hook_configuration
-    from cyrene.subagent import timeout_all_subagent_tasks
-    from cyrene.tooling.executor import shutdown_background_tasks as shutdown_tool_telemetry
+    """Flush host-owned background work after domain run managers stop.
+
+    Workbench Chat, Task, and Goal Loop own their AgentSession bridges and are
+    drained by the application lifespan before this cross-cutting cleanup is
+    entered.  Keeping the retired global Agent coordinator here caused a
+    graceful server shutdown to mutate an unrelated legacy session instead of
+    preserving the Plugin ContextTrees that startup recovery reopens.
+    """
     from cyrene.agent_runtime import get_acp_runtime_service
     from cyrene.agent_runtime.model_gateway import revoke_all_model_gateway_scopes
+    from cyrene.model_runtime.codex_provider import get_codex_provider
 
-    await shutdown_session_tasks()
-    await shutdown_coordinator()
-    await shutdown_hook_configuration()
-    await timeout_all_subagent_tasks("服务关闭，子代理已停止；重启后可重新执行任务。")
-    await cancel_knowledge_indexing()
     await get_acp_runtime_service().close_all()
     revoke_all_model_gateway_scopes()
-    await shutdown_tool_telemetry()
-    await shutdown_llm_telemetry()
+    await get_codex_provider().close()

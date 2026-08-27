@@ -215,6 +215,5 @@ npm install
 npm run dev
 ```
 
-Electron directly executes `src/cyrene/local_cli.py`, which bootstraps the
-checkout and delegates to `cyrene.runtime.host`. Keep that physical launcher
-until Electron's process contract changes.
+Electron executes `uv run cyrene --workbench --electron-mode`, so development
+and manual source launches share the same project entry point and environment.

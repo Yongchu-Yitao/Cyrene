@@ -2,28 +2,41 @@
 
 from __future__ import annotations
 
+import json
 import re as _re
 from typing import Any
 
+from agent.plugin import PluginContext
 from agent.plugin.execution import invoke_plugin
+from agent.plugin.native_runtime import run_context_value
 from .definitions import get_native_tool_def
-from cyrene.learning.engine import (
-    REPLAY_IGNORED_TOOLS as _BL_IGNORED_TOOLS,
-    _AUTO_REPLAY_BLOCKED_TOOLS as _BL_BLOCKED_TOOLS,
-    _HIGH_RISK_TOOLS as _BL_HIGH_RISK_TOOLS,
+from cyrene.learning.replay import (
+    AUTO_REPLAY_BLOCKED_TOOLS,
+    HIGH_RISK_TOOLS,
+    REPLAY_IGNORED_TOOLS,
 )
-from cyrene.tooling.runtime_api import json
-from cyrene.tooling.adapters.learned_skills import normalize_learned_step
 
 TOOL_NAME = "RunLearnedSkill"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
-# WARNING: When adding a new destructive or interactive capability,
-# add it to the appropriate set below so RunLearnedSkill does not auto-execute it.
-_HIGH_RISK_TOOLS: frozenset[str] = _BL_HIGH_RISK_TOOLS
-
-_AUTO_REPLAY_BLOCKED_TOOLS = _BL_BLOCKED_TOOLS
-_REPLAY_IGNORED_TOOLS = _BL_IGNORED_TOOLS
+def _normalize_learned_step(
+    step: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    reference = step.get("implementation_reference") or {}
+    return (
+        str(
+            step.get("capability_id")
+            or step.get("tool")
+            or reference.get("tool_name")
+            or ""
+        ).strip(),
+        dict(
+            step.get("arguments")
+            or step.get("args")
+            or reference.get("args_template")
+            or {}
+        ),
+    )
 
 
 def _has_unsafe_step(steps: list[dict[str, Any]]) -> bool:
@@ -38,9 +51,9 @@ def _has_unsafe_step(steps: list[dict[str, Any]]) -> bool:
             # normal agent permission path.
             return True
         tool_name = str(ref.get("tool_name") or "")
-        if tool_name in _REPLAY_IGNORED_TOOLS:
+        if tool_name in REPLAY_IGNORED_TOOLS:
             continue
-        if tool_name in _HIGH_RISK_TOOLS or tool_name in _AUTO_REPLAY_BLOCKED_TOOLS:
+        if tool_name in HIGH_RISK_TOOLS or tool_name in AUTO_REPLAY_BLOCKED_TOOLS:
             return True
     return False
 
@@ -99,20 +112,36 @@ def _resolve_value_template(value: Any, params: dict[str, Any]) -> Any:
 async def _execute_one(
     tool_name: str,
     resolved_args: dict[str, Any] | Any,
-    bot: Any,
-    chat_id: int,
-    db_path: str,
-    notify_state: dict[str, bool] | None,
 ) -> dict[str, Any]:
+    if not str(tool_name or "").strip():
+        return {
+            "tool": "",
+            "ok": False,
+            "output": "Learned step is missing its Plugin name.",
+            "truncated": False,
+        }
     if not isinstance(resolved_args, dict):
         raw = f"Tool {tool_name} failed: resolved arguments must be a dict, got {type(resolved_args).__name__}"
         return {"tool": tool_name, "ok": False, "output": raw, "truncated": False}
     try:
         raw = await invoke_plugin(tool_name, resolved_args, review=True)
     except Exception as exc:
-        raw = f"Tool {tool_name} failed: {exc}"
+        raw = f"Plugin {tool_name} failed: {exc}"
+        ok = False
+    else:
+        ok = True
     raw_str = str(raw)
-    ok = not raw_str.startswith(f"Tool {tool_name} failed:")
+    if ok:
+        try:
+            decoded = json.loads(raw_str)
+        except (TypeError, ValueError):
+            decoded = None
+        if isinstance(decoded, dict) and (
+            decoded.get("ok") is False
+            or bool(decoded.get("error"))
+            or str(decoded.get("status") or "").lower() in {"error", "failed", "failure"}
+        ):
+            ok = False
     is_truncated = len(raw_str) > 4000
     return {
         "tool": tool_name,
@@ -122,7 +151,10 @@ async def _execute_one(
     }
 
 
-async def _tool_run_learned_skill(args: dict[str, Any], bot: Any, chat_id: int, db_path: str, notify_state: dict[str, bool] | None) -> str:
+async def _tool_run_learned_skill(
+    args: dict[str, Any],
+    context: PluginContext,
+) -> str:
     name = str(args.get("name") or "").strip()
     if not name:
         return json.dumps({"ok": False, "error": "name is required"}, ensure_ascii=False)
@@ -130,9 +162,18 @@ async def _tool_run_learned_skill(args: dict[str, Any], bot: Any, chat_id: int, 
     params = dict(args.get("params") or {})
 
     try:
-        from cyrene.learning import engine as _bl
+        import cyrene.learning.orchestrator as learning
 
-        skill = await _bl.get_learned_skill_by_name(name)
+        explicit_skill_id = str(context.data.get("learning_skill_id") or "").strip()
+        if explicit_skill_id:
+            skill = await learning.get_learned_skill(explicit_skill_id)
+            if skill is not None and str(skill.get("name") or "") != name:
+                skill = None
+        else:
+            skill = await learning.get_learned_skill_by_name(
+                name,
+                session_id=str(run_context_value(context, "session_id") or ""),
+            )
         if skill is None:
             return json.dumps({"ok": False, "error": f"no active learned skill named '{name}'"}, ensure_ascii=False)
 
@@ -140,14 +181,14 @@ async def _tool_run_learned_skill(args: dict[str, Any], bot: Any, chat_id: int, 
         params = _params_with_defaults(schema, params)
         param_errors = _validate_params(schema, params)
         if param_errors:
-            await _bl.record_manual_skill_run(
+            await learning.record_manual_skill_run(
                 skill["skill_id"], int(skill["version"]),
                 execution_status="fallback",
             )
             return json.dumps({"ok": False, "error": "; ".join(param_errors)}, ensure_ascii=False)
 
         if _has_unsafe_step(skill["steps"]):
-            await _bl.record_manual_skill_run(
+            await learning.record_manual_skill_run(
                 skill["skill_id"], int(skill["version"]),
                 execution_status="fallback",
             )
@@ -161,28 +202,28 @@ async def _tool_run_learned_skill(args: dict[str, Any], bot: Any, chat_id: int, 
         for step in skill["steps"]:
             if not step.get("enabled", True):
                 continue
-            tool_name, args_template = normalize_learned_step(step)
-            if tool_name in _REPLAY_IGNORED_TOOLS:
+            tool_name, args_template = _normalize_learned_step(step)
+            if tool_name in REPLAY_IGNORED_TOOLS:
                 continue
             items = args_template.get("_items")
             if isinstance(items, list) and items:
                 for item_args in items:
                     resolved = _resolve_value_template(item_args, params)
-                    step_result = await _execute_one(tool_name, resolved, bot, chat_id, db_path, notify_state)
+                    step_result = await _execute_one(tool_name, resolved)
                     all_ok = all_ok and step_result["ok"]
                     results.append(step_result)
                     if not step_result["ok"]:
                         break
             else:
                 resolved_args = _resolve_value_template(args_template, params)
-                step_result = await _execute_one(tool_name, resolved_args, bot, chat_id, db_path, notify_state)
+                step_result = await _execute_one(tool_name, resolved_args)
                 all_ok = all_ok and step_result["ok"]
                 results.append(step_result)
             if not all_ok:
                 break
 
         status = "success" if all_ok else "failure"
-        await _bl.record_manual_skill_run(
+        await learning.record_manual_skill_run(
             skill["skill_id"], int(skill["version"]),
             execution_status=status,
             consistency_score=1.0 if all_ok else 0.0,

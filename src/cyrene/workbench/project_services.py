@@ -29,7 +29,6 @@ class ProjectOperationError(RuntimeError):
 class ProjectRouteDependencies:
     """Explicit owner functions used to compose project services."""
 
-    legacy_data_key: str
     get_model: Callable[[], str]
     persist_selection: Callable[[str | None, str | None], dict[str, Any]]
     read_store: Callable[[], dict[str, Any]]
@@ -51,7 +50,7 @@ class ProjectRouteDependencies:
     new_init_session: Callable[..., dict[str, Any]]
     new_session: Callable[..., dict[str, Any]]
     project_data_key: Callable[[dict[str, Any]], str]
-    project_memory_key: Callable[[dict[str, Any]], str]
+    project_resource_key: Callable[[dict[str, Any]], str]
     resolve_workspace: Callable[..., Path]
     resolve_workspace_async: Callable[..., Awaitable[Path]]
     write_store: Callable[..., None]
@@ -60,40 +59,59 @@ class ProjectRouteDependencies:
     mark_notifications_read: Callable[..., dict[str, Any]]
 
     @classmethod
-    def from_runtime(cls, runtime: Any) -> ProjectRouteDependencies:
+    def from_modules(
+        cls,
+        *,
+        generate_init_form: Callable[..., Awaitable[dict[str, Any] | None]],
+    ) -> ProjectRouteDependencies:
+        """Compose projects from their concrete repositories and domain helpers.
+
+        The HTTP composition root uses this constructor so deleting the retired
+        ``cyrene.workbench.runtime`` facade cannot change project behavior.
+        """
+
+        from cyrene.workbench import (
+            notifications,
+            planning_runtime,
+            project_repository,
+            project_runtime,
+        )
+
         return cls(
-            legacy_data_key=runtime._WORKBENCH_LEGACY_DATA_KEY,
-            get_model=runtime._get_model,
-            persist_selection=runtime._persist_workbench_selection,
-            read_store=runtime._read_workbench_store,
-            read_store_lightweight=runtime._read_workbench_store_lightweight,
-            safe_data_key=runtime._safe_workbench_data_key,
-            short_id=runtime._short_id,
-            utc_now=runtime._utc_now_iso,
-            default_init_form=runtime._workbench_default_init_form,
-            default_project=runtime._workbench_default_project,
-            find_project=runtime._workbench_find_project,
-            find_project_lightweight=runtime._workbench_find_project_lightweight,
-            find_session=runtime._workbench_find_session,
-            follow_up_seed=runtime._workbench_follow_up_seed,
-            generate_init_form=runtime._workbench_generate_init_form,
-            lightweight_store=runtime._workbench_lightweight_store,
-            new_init_session=runtime._workbench_new_init_session,
-            new_session=runtime._workbench_new_session,
-            project_data_key=runtime._workbench_project_data_key,
-            project_memory_key=runtime._workbench_project_memory_key,
-            resolve_workspace=runtime._workbench_resolve_workspace_dir,
-            resolve_workspace_async=runtime._workbench_resolve_workspace_dir_async,
-            write_store=runtime._write_workbench_store,
-            append_notification=runtime.append_notification,
-            list_notifications=runtime.list_notifications,
-            mark_notifications_read=runtime.mark_notifications_read,
+            get_model=project_runtime._get_model,
+            persist_selection=project_repository._persist_workbench_selection,
+            read_store=project_repository._read_workbench_store,
+            read_store_lightweight=project_repository._read_workbench_store_lightweight,
+            safe_data_key=project_runtime._safe_workbench_data_key,
+            short_id=project_runtime._short_id,
+            utc_now=project_runtime._utc_now_iso,
+            default_init_form=project_runtime._workbench_default_init_form,
+            default_project=project_runtime._workbench_default_project,
+            find_project=project_repository._workbench_find_project,
+            find_project_lightweight=(
+                project_repository.find_workbench_project_lightweight
+            ),
+            find_session=project_repository._workbench_find_session,
+            follow_up_seed=planning_runtime._workbench_follow_up_seed,
+            generate_init_form=generate_init_form,
+            lightweight_store=project_repository._workbench_lightweight_store,
+            new_init_session=project_runtime._workbench_new_init_session,
+            new_session=project_runtime._workbench_new_session,
+            project_data_key=project_runtime._workbench_project_data_key,
+            project_resource_key=project_runtime._workbench_project_resource_key,
+            resolve_workspace=project_repository.resolve_project_workspace_dir,
+            resolve_workspace_async=(
+                project_repository.resolve_project_workspace_dir_async
+            ),
+            write_store=project_repository._write_workbench_store,
+            append_notification=notifications.append_notification,
+            list_notifications=notifications.list_notifications,
+            mark_notifications_read=notifications.mark_notifications_read,
         )
 
 
 @dataclass(frozen=True, slots=True)
 class ProjectLifecyclePort:
-    legacy_data_key: str
     workspace_root: Path
     validate_workspace: Callable[..., Path]
     get_model: Callable[[], str]
@@ -107,7 +125,7 @@ class ProjectLifecyclePort:
     new_init_session: Callable[..., dict[str, Any]]
     new_session: Callable[..., dict[str, Any]]
     project_data_key: Callable[[dict[str, Any]], str]
-    project_memory_key: Callable[[dict[str, Any]], str]
+    project_resource_key: Callable[[dict[str, Any]], str]
     notify: Callable[..., Any]
     list_notifications: Callable[..., dict[str, Any]]
     mark_notifications_read: Callable[..., dict[str, Any]]
@@ -341,13 +359,7 @@ class ProjectApplicationService:
         payload, project = self.repository.get(project_id)
         projects = payload.get("projects", [])
         data_key = self.lifecycle.project_data_key(project)
-        if data_key == self.lifecycle.legacy_data_key:
-            raise ProjectOperationError(
-                "The default project cannot be deleted",
-                400,
-                "default_project_protected",
-            )
-        memory_key = self.lifecycle.project_memory_key(project)
+        resource_key = self.lifecycle.project_resource_key(project)
         chat_ids = self.chats.list_project_chat_ids(project_id)
         await self._terminate_sessions(project)
         try:
@@ -359,7 +371,7 @@ class ProjectApplicationService:
                 503,
                 "project_chat_agents_not_terminated",
             ) from exc
-        await self._cleanup_project_data(project_id, data_key, memory_key, chat_ids)
+        await self._cleanup_project_data(project_id, data_key, resource_key, chat_ids)
         base_payload = getattr(payload, "_workbench_base", None)
         payload["projects"] = [
             item for item in projects if str(item.get("id") or "") != project_id
@@ -382,7 +394,6 @@ class ProjectApplicationService:
                 self.agent_runs.interrupt(session_id=session_id)
                 await self.agent_runs.clear_session(
                     session_id=session_id,
-                    deleting=True,
                 )
             except Exception as exc:
                 logger.exception("Failed to clear session state for %s", session_id)
@@ -396,12 +407,12 @@ class ProjectApplicationService:
         self,
         project_id: str,
         data_key: str,
-        memory_key: str,
+        resource_key: str,
         chat_ids: list[str],
     ) -> None:
         try:
-            self.knowledge.delete_database(memory_key)
-            self.memory.delete_workspace(memory_key)
+            self.knowledge.delete_database(resource_key)
+            self.memory.delete_workspace(resource_key)
             await self.memory.cancel_jobs(project_id)
             self.memory.delete_project(project_id, chat_ids)
             await self.schedules.delete_project_tasks(data_key)

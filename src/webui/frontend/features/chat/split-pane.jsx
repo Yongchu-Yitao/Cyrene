@@ -1531,7 +1531,7 @@ function WbcSide({
     var currentChatId = String(activeChatId || "");
     var disposed = false;
     setChangesAvailability({ chatId: currentChatId, hasChanges: false });
-    if (!currentChatId || currentChatId.indexOf("legacy:") === 0) return undefined;
+    if (!currentChatId) return undefined;
 
     function revealFromEvent(event) {
       var detail = (event && event.detail) || {};
@@ -1644,7 +1644,7 @@ function WbcSide({
     <>
       {activeTab === "overview" && <WbcOverviewTab chat={chat} loading={chatLoading} detailed={chatDetailed} runtime={runtime} onRename={onRename} onDelete={onDelete} onToTask={onToTask} toTaskBusy={toTaskBusy} onCompact={onCompact} compactBusy={compactBusy} />}
       {activeTab === "plan" && <WbcPlanTab plan={pendingPlan} />}
-      {activeTab === "context" && <WbcContextTab project={project} chat={chat} runtime={runtime} contextBlocks={contextBlocks} inboxView={inboxView} />}
+      {activeTab === "context" && <WbcContextTab chat={chat} contextBlocks={contextBlocks} inboxView={inboxView} />}
       {activeTab === "files" && <WbcArtifactsTab chat={chat} onSelectArtifact={onSelectArtifact} />}
       {activeTab === "artifacts" && <WbcArtifactsTab chat={chat} files={artifactItems} emptyKey="workbenchChat.noArtifacts" emptyFallback="This chat has not delivered any artifacts yet." onSelectArtifact={onSelectArtifact} />}
       {activeTab === "changes" && <WbcChangesTab chatId={activeChatId} onSelectChange={onSelectChange} />}

@@ -9,7 +9,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from cyrene.agent.context import current_run_context
+from agent.plugin.execution import current_plugin_execution
+from agent.plugin.native_runtime import run_context_value
 from cyrene.config import DATA_DIR
 from cyrene.runtime.host_bridge import HostBridgeError, call_host
 
@@ -73,7 +74,13 @@ def schedule_action(
     normalized = str(action or "").strip()
     if normalized not in _ALLOWED_ACTIONS:
         raise ValueError("unsupported lifecycle action")
-    context = current_run_context()
+    execution = current_plugin_execution()
+    context = execution.context if execution is not None else None
+
+    def context_value(name: str) -> str:
+        if context is None:
+            return ""
+        return str(run_context_value(context, name) or "")
     with _LOCK:
         state = _read()
         actions = state.setdefault("actions", [])
@@ -88,9 +95,9 @@ def schedule_action(
             "action": normalized,
             "idempotency_key": idempotency_key,
             "parameter_hash": parameter_hash,
-            "origin_session_id": context.session_id,
-            "origin_run_id": context.client_request_id,
-            "origin_round_id": context.round_id,
+            "origin_session_id": context_value("session_id"),
+            "origin_run_id": context_value("client_request_id"),
+            "origin_round_id": context_value("round_id"),
             "approval_fingerprint": str(approval_receipt or parameter_hash),
             "required_host_kind": "electron",
             "expected_app_version": str(expected_app_version or ""),
@@ -181,7 +188,7 @@ async def _execute(item: dict[str, Any]) -> None:
     if action == "update_install":
         expected = dict(item.get("revalidation") or {})
         from cyrene.runtime.updater import get_download_progress
-        from cyrene.workbench import runtime as workbench_runtime
+        from cyrene.runtime.update_install import launch_update_restart
         progress = get_download_progress()
         if (
             not progress.get("done")
@@ -202,7 +209,7 @@ async def _execute(item: dict[str, Any]) -> None:
         if prepared.get("ok") is False:
             _settle(action_id, "failed", str(prepared.get("error") or "host rejected update preparation"))
             return
-        ok, message, code, _status = workbench_runtime._launch_update_restart(progress)
+        ok, message, code, _status = launch_update_restart(progress)
         if not ok:
             _settle(action_id, "failed", f"{code}: {message}")
             return

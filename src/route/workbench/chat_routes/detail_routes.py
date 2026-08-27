@@ -16,11 +16,42 @@ from route.workbench.chat_routes.context import ChatRouteContext
 logger = logging.getLogger(__name__)
 
 
+def _merge_context_activity_messages(
+    chat: dict[str, Any],
+    activity_messages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Add ContextTree-derived activity cards without duplicating persisted ones."""
+
+    result = dict(chat)
+    messages = [
+        dict(message)
+        for message in chat.get("messages") or []
+        if isinstance(message, dict)
+    ]
+    known_ids = {
+        str(message.get("id") or "")
+        for message in messages
+        if str(message.get("id") or "")
+    }
+    for activity in activity_messages:
+        activity_id = str(activity.get("id") or "")
+        if not activity_id or activity_id in known_ids:
+            continue
+        known_ids.add(activity_id)
+        messages.append(dict(activity))
+    messages.sort(
+        key=lambda message: (
+            not bool(str(message.get("createdAt") or "")),
+            str(message.get("createdAt") or ""),
+        )
+    )
+    result["messages"] = messages
+    return result
+
+
 def _register_get_route(router: APIRouter, context: ChatRouteContext):
     service = context.service
     _routes = context.runtime
-    _project_data_key = context.project_data_key
-    _legacy_chats = service.legacy_chats
     _prewarm_workspace_changes = service.prewarm_workspace_changes
     _prune_orphaned_fork_metadata = service.prune_orphaned_fork_metadata
     _public_chat_full = service.public_chat_full
@@ -34,22 +65,6 @@ def _register_get_route(router: APIRouter, context: ChatRouteContext):
     @router.get("/api/workbench/chats/{chat_id}")
     async def api_workbench_get_chat(chat_id: str):
         started = time.monotonic()
-        if chat_id.startswith("legacy:"):
-            _prefix, project_id, _session_id = (chat_id.split(":", 2) + ["", ""])[:3]
-            data_key = await asyncio.to_thread(_project_data_key, project_id) if project_id else ""
-            if not project_id or data_key != "default":
-                return JSONResponse({"error": "chat not found"}, status_code=404)
-            legacy = await asyncio.to_thread(_legacy_chats, project_id, full_id=chat_id)
-            if not legacy:
-                return JSONResponse({"error": "chat not found"}, status_code=404)
-            elapsed_ms = (time.monotonic() - started) * 1000
-            if elapsed_ms >= 1000:
-                logger.warning(
-                    "Slow legacy Workbench chat detail load [chat_id=%s duration_ms=%.1f]",
-                    chat_id,
-                    elapsed_ms,
-                )
-            return {"chat": legacy[0]}
         summary_payload = await asyncio.to_thread(_read_chat_summaries_store)
         if _prune_orphaned_fork_metadata(summary_payload):
             full_payload = await asyncio.to_thread(_read_chats_store)
@@ -80,10 +95,26 @@ def _register_get_route(router: APIRouter, context: ChatRouteContext):
                 )
 
         asyncio.create_task(prewarm_opened_workspace())
+        public_chat = _public_chat_full(chat)
+        try:
+            activity_messages = await context.conversation_context.activity_messages(
+                chat_id
+            )
+        except Exception:
+            logger.debug(
+                "ContextTree activity-history projection skipped for %s",
+                chat_id,
+                exc_info=True,
+            )
+        else:
+            public_chat = _merge_context_activity_messages(
+                public_chat,
+                activity_messages,
+            )
         elapsed_ms = (time.monotonic() - started) * 1000
         if elapsed_ms >= 1000:
             logger.warning("Slow Workbench chat detail load [chat_id=%s duration_ms=%.1f]", chat_id, elapsed_ms)
-        return {"chat": _public_chat_full(chat)}
+        return {"chat": public_chat}
 
     return api_workbench_get_chat
 
@@ -202,8 +233,6 @@ def _register_update_route(router: APIRouter, context: ChatRouteContext):
     @router.patch("/api/workbench/chats/{chat_id}")
     async def api_workbench_update_chat(chat_id: str, body_model: api_models.ChatUpdateBody):
         body = api_models.body_dict(body_model)
-        if chat_id.startswith("legacy:"):
-            return JSONResponse({"error": "legacy chat metadata is read-only"}, status_code=403)
         chat = await asyncio.to_thread(_get_workbench_chat, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)

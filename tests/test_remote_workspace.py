@@ -8,6 +8,7 @@ import sys
 
 import pytest
 
+from agent.plugin import PluginContext
 from cyrene.runtime.remote_control import DEFAULT_REMOTE_CAPABILITIES, RemoteControlStore
 from cyrene.runtime.remote_commands import RemoteCommandExecutor
 from cyrene.runtime.remote_workspace import RemoteJobManager, RemoteWorkspaceFiles
@@ -30,11 +31,11 @@ def paired_stores(monkeypatch, tmp_path):
 
 def _bind_workspace(monkeypatch, workspace):
     monkeypatch.setattr(
-        "cyrene.runtime.remote_workspace.workbench_runtime._workbench_find_project_lightweight",
+        "cyrene.runtime.remote_workspace.find_workbench_project_lightweight",
         lambda project_id: {"id": project_id, "workspacePath": str(workspace)},
     )
     monkeypatch.setattr(
-        "cyrene.runtime.remote_workspace.workbench_runtime._workbench_resolve_workspace_dir",
+        "cyrene.runtime.remote_workspace.resolve_project_workspace_dir",
         lambda _project: str(workspace),
     )
 
@@ -184,7 +185,7 @@ async def test_remote_download_accumulates_digest_without_final_file_rescan(
     monkeypatch,
     tmp_path,
 ):
-    from cyrene.tool_impl.remote import files as remote_files_tool
+    from agent.plugin.plugin_impl.cyrene_remote import files as remote_files_tool
 
     content = b"streamed remote payload"
     expected = hashlib.sha256(content).hexdigest()
@@ -192,8 +193,7 @@ async def test_remote_download_accumulates_digest_without_final_file_rescan(
 
     async def fake_request(
         _args,
-        _db_path,
-        _chat_id,
+        _context,
         *,
         command,
         payload,
@@ -238,8 +238,7 @@ async def test_remote_download_accumulates_digest_without_final_file_rescan(
 
     result = await remote_files_tool._download(
         {"device_id": "device", "project_id": "project", "remote_path": "payload.bin"},
-        "db.sqlite3",
-        1,
+        PluginContext(),
     )
 
     assert result["sha256"] == expected
@@ -252,7 +251,7 @@ async def test_remote_download_accumulates_digest_without_final_file_rescan(
 
 @pytest.mark.asyncio
 async def test_remote_sync_upload_reuses_stable_manifest_digest(monkeypatch, tmp_path):
-    from cyrene.tool_impl.remote import files as remote_files_tool
+    from agent.plugin.plugin_impl.cyrene_remote import files as remote_files_tool
 
     source = tmp_path / "stable.bin"
     source.write_bytes(b"stable manifest bytes")
@@ -262,8 +261,7 @@ async def test_remote_sync_upload_reuses_stable_manifest_digest(monkeypatch, tmp
 
     async def fake_request(
         _args,
-        _db_path,
-        _chat_id,
+        _context,
         *,
         command,
         payload,
@@ -294,8 +292,7 @@ async def test_remote_sync_upload_reuses_stable_manifest_digest(monkeypatch, tmp
 
     result = await remote_files_tool._upload_file(
         {"device_id": "device", "project_id": "project"},
-        "db.sqlite3",
-        1,
+        PluginContext(),
         source,
         "stable.bin",
         conflict_policy="overwrite",

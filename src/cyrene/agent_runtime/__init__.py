@@ -61,7 +61,6 @@ from cyrene.agent_runtime.errors import (
 from cyrene.agent_runtime.events import (
     CORE_EVENT_TYPES,
     event_envelope,
-    normalize_builtin_event,
     sanitize_event_payload,
 )
 from cyrene.agent_runtime.models import (
@@ -196,7 +195,6 @@ __all__ = [
     "merge_capabilities",
     "normalize_agent_binding",
     "normalize_agent_fields",
-    "normalize_builtin_event",
     "normalize_capabilities",
     "normalize_capability_state",
     "normalize_model_access",

@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from cyrene.config import DATA_DIR, DB_PATH
+from cyrene.config import DB_PATH
 from cyrene.observability.context_trace import context_block
 from cyrene.workbench.store import (
     has_document_data,
@@ -41,14 +41,12 @@ def _default_projects_doc() -> dict[str, Any]:
     return {"projects": [], "activeProjectId": "", "activeSessionId": ""}
 
 
-def _workbench_doc_available(db: str | Path, legacy: Path) -> bool:
+def _workbench_doc_available(db: str | Path) -> bool:
     """Return True when Workbench state already exists.
 
     Read-only context resolution must not create an empty Workbench projects
     document for ordinary agent sessions that merely happen to have a session id.
     """
-    if legacy.exists():
-        return True
     db_path = Path(db)
     if not db_path.exists():
         return False
@@ -143,18 +141,15 @@ def resolve_task_scope(
     session_id: str,
     *,
     db_path: str | Path | None = None,
-    legacy_path: str | Path | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
     """Read the latest Workbench projects document and resolve a task session."""
     db = str(db_path or DB_PATH)
-    legacy = Path(legacy_path) if legacy_path else DATA_DIR / "workbench_projects.json"
-    if not _workbench_doc_available(db, legacy):
+    if not _workbench_doc_available(db):
         return None, None, None
     payload = read_project_bundle(
         db,
         _default_projects_doc,
         summarize_task_session,
-        legacy_path=legacy,
     )
     project, session = find_task_scope(payload, session_id)
     return payload, project, session
@@ -412,8 +407,6 @@ def append_shared_outcome(
     agent_id: str,
     source: str,
     text: str,
-    legacy_path: str | Path | None = None,
-    export_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
     """Append a subagent/main-agent result to the project shared context.
 
@@ -424,14 +417,12 @@ def append_shared_outcome(
     if not clean:
         return None
     db = str(db_path or DB_PATH)
-    legacy = Path(legacy_path) if legacy_path else DATA_DIR / "workbench_projects.json"
-    if not _workbench_doc_available(db, legacy):
+    if not _workbench_doc_available(db):
         return None
     payload = read_project_bundle(
         db,
         _default_projects_doc,
         summarize_task_session,
-        legacy_path=legacy,
     )
     project, session = find_task_scope(payload, session_id)
     if not project or not session:
@@ -469,7 +460,5 @@ def append_shared_outcome(
         payload,
         _default_projects_doc,
         summarize_task_session,
-        legacy_path=legacy,
-        export_path=Path(export_path) if export_path else legacy,
     )
     return entry

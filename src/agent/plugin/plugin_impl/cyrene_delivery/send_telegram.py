@@ -4,22 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import request_external_delivery_confirmation
 
 TOOL_NAME = 'send_telegram'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
-async def _tool_send_message(args: dict[str, Any], bot: Any, chat_id: int, _db_path: str, notify_state: dict[str, bool] | None) -> str:
+async def _tool_send_message(args: dict[str, Any], context: PluginContext) -> str:
+    bot = context.data.get("bot")
+    chat_id = context.data.get("chat_id")
+    notify_state = context.data.get("notify_state")
     text = str(args.get("text", ""))
-    confirm = await request_external_delivery_confirmation(
-        tool_name="send_telegram",
-        operation="外发 Telegram 消息",
-        detail=f"消息内容：{text[:240]}",
-    )
-    if confirm is not None:
-        return confirm
     if bot is not None:
         await bot.send_message(chat_id=chat_id, text=text)
     if notify_state is not None:

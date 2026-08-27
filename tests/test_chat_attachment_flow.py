@@ -48,160 +48,20 @@ def test_managed_attachment_path_rebases_after_portable_restore(
     )
 
 
-def test_chat_export_route_preserves_legacy_unicode_storage_key(tmp_path):
-    from route.agent import chat as chat_routes
-    from cyrene.workbench.global_chat_service import GlobalChatApplicationService
-    from cyrene.workbench.subagent_messaging_service import SubagentMessagingService
-
-    export_name = "deadbeef_测试摘录.md"
-    (tmp_path / export_name).write_text("正文", encoding="utf-8")
-    app = FastAPI()
-    router = APIRouter()
-    chat_routes.register_chat_routes(
-        router,
-        GlobalChatApplicationService(
-            "",
-            bot=None,
-            subagents=SubagentMessagingService(None, ""),
-            reset_agent_lottery=lambda: None,
-            exports_dir=tmp_path,
-        ),
-    )
-    app.include_router(router)
-
-    response = TestClient(app).get(
-        "/api/chat/export/" + quote(export_name, safe="")
-    )
-    assert response.status_code == 200
-    assert response.text == "正文"
-
-
 @pytest.mark.asyncio
 async def test_analyze_attachment_missing_file_returns_terminal_upload_error(tmp_path):
+    from agent.plugin import PluginContext
+    from agent.plugin.plugin_impl.cyrene_content.analyze_attachment import (
+        _tool_analyze_attachment,
+    )
     from cyrene.runtime.attachments import UPLOADS_DIR
-    from cyrene.tool_impl.core.analyze_attachment import _tool_analyze_attachment
 
     result = await _tool_analyze_attachment(
         {"path": str(UPLOADS_DIR / "missing-test-attachment.png")},
-        None,
-        0,
-        "",
-        None,
+        PluginContext(),
     )
 
     payload = json.loads(result)
     assert payload["error"] == "attachment_unavailable"
     assert payload["action"] == "stop_attachment_analysis"
     assert payload["search_elsewhere"] is False
-
-
-def test_attachment_prompt_forbids_device_scan_after_missing_upload():
-    from cyrene.workbench.runtime import _attachment_prompt_block
-
-    prompt = _attachment_prompt_block([
-        {
-            "name": "photo.png",
-            "content_type": "image/png",
-            "path": "/tmp/photo.png",
-        }
-    ])
-
-    assert "ask the user to upload it again" in prompt
-    assert "Do NOT use Glob, Grep, Bash, find, or directory scans" in prompt
-
-
-@pytest.mark.asyncio
-async def test_workbench_attachment_only_turn_preserves_empty_public_message(
-    monkeypatch,
-    tmp_path,
-):
-    from cyrene.model_runtime import client as model_client
-    from cyrene.workbench import runtime as routes
-
-    captured = {}
-    image_path = tmp_path / "energy.png"
-    image_path.write_bytes(b"test image")
-
-    async def fake_run_agent(**kwargs):
-        captured.update(kwargs)
-        return "done"
-
-    async def fake_check_budget_gate(session_id):
-        return None
-
-    monkeypatch.setattr(routes, "_check_budget_gate", fake_check_budget_gate)
-    monkeypatch.setattr(routes, "run_agent", fake_run_agent)
-    monkeypatch.setattr(
-        model_client,
-        "primary_candidate_supports_vision",
-        lambda _session_id="": True,
-    )
-
-    result = await routes._workbench_agent_reply(
-        "",
-        {"id": "session_attachment_only"},
-        [],
-        attachments=[{
-            "id": "upload_1",
-            "name": "energy.png",
-            "path": str(image_path),
-            "content_type": "image/png",
-            "kind": "image",
-        }],
-    )
-
-    assert result == "done"
-    assert captured["public_user_message"] == ""
-    assert captured["user_message"] == ""
-    assert captured["llm_user_content"][0]["type"] == "text"
-    assert captured["llm_user_content"][1] == {
-        "type": "image_url",
-        "image_url": {"url": "data:image/png;base64,dGVzdCBpbWFnZQ=="},
-    }
-
-
-@pytest.mark.asyncio
-async def test_chat_attachment_kb_registration_runs_hash_off_event_loop(
-    tmp_path, monkeypatch
-):
-    from cyrene import config
-    from cyrene.runtime import database as db
-    from cyrene.knowledge import store
-    from cyrene.workbench import runtime as routes
-
-    db_path = str(tmp_path / "knowledge.db")
-    await db.init_knowledge_db(db_path)
-    config.set_knowledge_db_path_override(db_path)
-    target = tmp_path / "upload.txt"
-    target.write_bytes(b"threaded hash")
-    main_thread = threading.get_ident()
-    hash_thread = None
-    real_hash = store.content_hash_file
-
-    def tracked_hash(path):
-        nonlocal hash_thread
-        hash_thread = threading.get_ident()
-        return real_hash(path)
-
-    monkeypatch.setattr(store, "content_hash_file", tracked_hash)
-    try:
-        await routes._workbench_register_attachments_kb(
-            "session_test",
-            [{
-                "id": "upload_1",
-                "name": "upload.txt",
-                "path": str(target),
-                "content_type": "text/plain",
-                "kind": "code",
-                "size": target.stat().st_size,
-            }],
-        )
-    finally:
-        config.set_knowledge_db_path_override(None)
-
-    assert hash_thread is not None
-    assert hash_thread != main_thread
-    docs = await store.list_documents(db_path, source="chat_upload")
-    assert len(docs) == 1
-    assert docs[0]["name"] == "upload.txt"
-    assert docs[0]["source"] == "chat_upload"

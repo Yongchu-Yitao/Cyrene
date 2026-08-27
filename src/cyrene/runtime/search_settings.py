@@ -73,7 +73,7 @@ def runtime_settings() -> SearchRuntimeSettings:
     order = _ordered_provider_ids(raw)
     enabled_map = _enabled_provider_map(raw)
     return SearchRuntimeSettings(
-        enabled=config_store.is_tool_enabled("WebSearch"),
+        enabled=config_store.is_plugin_enabled("WebSearch"),
         providers=tuple(provider for provider in order if enabled_map[provider]),
     )
 
@@ -89,7 +89,7 @@ def public_settings() -> dict[str, Any]:
     order = _ordered_provider_ids(raw)
     return {
         "revision": config_store.get_settings_revision(),
-        "enabled": config_store.is_tool_enabled("WebSearch"),
+        "enabled": config_store.is_plugin_enabled("WebSearch"),
         "providers": [
             {
                 "id": provider,
@@ -151,15 +151,15 @@ def update_settings(body: Any) -> dict[str, Any]:
     order, enabled_map, env_updates = _normalized_provider_rows(body.get("providers"))
     if master_enabled and not any(enabled_map.values()):
         raise SearchSettingsError("enable at least one search provider")
-    current_tools = config_store.get_enabled_tools()
-    current_tools["WebSearch"] = master_enabled
+    current_plugins = config_store.get_enabled_plugins()
+    current_plugins["WebSearch"] = master_enabled
     revision, _settings = config_store.update_settings_and_env_atomic(
         {
             "search": {
                 "provider_order": order,
                 "provider_enabled": enabled_map,
             },
-            "enabled_tools": current_tools,
+            "enabled_plugins": current_plugins,
         },
         env_updates,
         expected_revision=body.get("expected_revision"),

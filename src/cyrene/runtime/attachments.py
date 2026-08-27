@@ -1,6 +1,5 @@
 import base64
 import hashlib
-from importlib import import_module
 import io
 import json
 import logging
@@ -14,7 +13,6 @@ from typing import Any
 from PIL import Image
 from pypdf import PdfReader
 
-from cyrene.call_llm import call_llm
 from cyrene.config import DATA_DIR
 from cyrene.model_runtime.messages import assistant_text, truncate
 from cyrene.runtime.file_hashing import sha256_file
@@ -66,10 +64,25 @@ def _file_content_hash(path: Path) -> str:
 
 
 def _vision_model_fingerprint() -> str:
-    """A stable string that changes whenever the configured vision model(s) change."""
+    """A stable, secret-free fingerprint of models that may receive images."""
     try:
-        from cyrene.runtime.config_store import get_vision_models
-        return json.dumps(get_vision_models() or [], sort_keys=True, ensure_ascii=False)
+        from cyrene.runtime.model_configuration import candidates_for_route
+
+        candidates = [
+            *candidates_for_route("primary"),
+            *candidates_for_route("vision"),
+        ]
+        public = [
+            {
+                "id": item.get("id"),
+                "adapter": item.get("adapter"),
+                "model": item.get("model"),
+                "base_url": item.get("base_url"),
+                "capabilities": item.get("capabilities"),
+            }
+            for item in candidates
+        ]
+        return json.dumps(public, sort_keys=True, ensure_ascii=False)
     except Exception:
         return ""
 
@@ -77,9 +90,13 @@ def _vision_model_fingerprint() -> str:
 def _local_ocr_fingerprint() -> str:
     """Include local OCR availability in attachment-analysis cache identity."""
     try:
-        from cyrene.knowledge import local_models, ocr
+        from agent.plugin import active_plugin_service
 
-        return f"{ocr.MODEL_ID}:{int(local_models.is_ready(ocr.MODEL_ID))}"
+        service = active_plugin_service("knowledge")
+        if service is None:
+            return "pp-ocrv6-medium:0"
+        model_id = service.ocr_model_id
+        return f"{model_id}:{int(service.is_local_model_ready(model_id))}"
     except Exception:
         return "pp-ocrv6-medium:0"
 
@@ -201,9 +218,40 @@ def is_image_path(path: Path) -> bool:
 
 
 def model_supports_multimodal(model: str | None = None) -> bool:
-    model_name = str(model or os.environ.get("OPENAI_MODEL", "")).strip().lower()
+    if model is None:
+        try:
+            from cyrene.runtime.model_configuration import candidates_for_route
+
+            vision = candidates_for_route("vision")
+            return bool(
+                vision
+                and "vision" in set(vision[0].get("capabilities") or [])
+            )
+        except Exception:
+            return False
+    model_name = str(model or "").strip().lower()
     if not model_name:
         return False
+    try:
+        from cyrene.runtime.model_configuration import get_model_configuration
+
+        matched = next(
+            (
+                profile
+                for profile in get_model_configuration().get("profiles") or []
+                if model_name
+                in {
+                    str(profile.get("id") or "").strip().lower(),
+                    str(profile.get("model") or "").strip().lower(),
+                    str(profile.get("name") or "").strip().lower(),
+                }
+            ),
+            None,
+        )
+        if isinstance(matched, dict):
+            return "vision" in set(matched.get("capabilities") or [])
+    except Exception:
+        pass
     return any(hint in model_name for hint in _MULTIMODAL_MODEL_HINTS)
 
 
@@ -214,11 +262,13 @@ def primary_model_supports_vision() -> bool:
     model-name heuristics are intentionally not used for that high-cost path.
     """
     try:
-        from cyrene.runtime.settings_store import get_models
+        from cyrene.runtime.model_configuration import candidates_for_route
 
-        models = get_models() or []
+        models = candidates_for_route("primary")
         primary = models[0] if models else {}
-        return isinstance(primary, dict) and primary.get("vision_capable") is True
+        return isinstance(primary, dict) and "vision" in set(
+            primary.get("capabilities") or []
+        )
     except Exception:
         return False
 
@@ -232,13 +282,16 @@ async def analyze_image_with_primary_model(path_str: str, prompt: str) -> dict[s
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
     ]
-    result = await call_llm(
+    from agent.plugin import active_plugin_service
+
+    gateway = active_plugin_service("model")
+    if gateway is None:
+        raise RuntimeError("Model Provider Plugins are not available")
+    result = await gateway.complete(
         [{"role": "user", "content": content}],
-        model_type="primary",
-        thinking="disabled",
+        route="primary",
         caller="browser_vision",
-        publish_events=False,
-        record_usage=False,
+        session_id="browser-vision",
     )
     return {
         "vision_model": result.get("model", ""),
@@ -288,9 +341,9 @@ def build_public_attachment_payload(item: dict[str, Any]) -> dict[str, Any]:
     if not url and attachment_id:
         path_str = str(item.get("path") or "").strip()
         if path_str and is_uploaded_attachment_path(path_str):
-            url = f"/api/chat/upload/{attachment_id}"
+            url = f"/api/workbench/uploads/{attachment_id}"
         elif path_str and is_exported_attachment_path(path_str):
-            url = f"/api/chat/export/{attachment_id}"
+            url = f"/api/workbench/exports/{attachment_id}"
     return {
         "id": attachment_id,
         "name": str(item.get("name") or "file"),
@@ -309,6 +362,9 @@ def _image_dimensions(path: Path) -> tuple[int | None, int | None]:
             return int(image.width), int(image.height)
     except Exception:
         return None, None
+
+
+image_dimensions = _image_dimensions
 
 
 def register_generated_attachment(path_str: str, display_name: str | None = None) -> dict[str, Any]:
@@ -336,7 +392,7 @@ def register_generated_attachment(path_str: str, display_name: str | None = None
         "content_type": content_type,
         "size": target.stat().st_size,
         "kind": kind,
-        "url": f"/api/chat/export/{target.name}",
+        "url": f"/api/workbench/exports/{target.name}",
         **({"width": width} if isinstance(width, int) else {}),
         **({"height": height} if isinstance(height, int) else {}),
     }
@@ -403,7 +459,7 @@ def register_generated_image_bytes(
         "content_type": content_type,
         "size": target.stat().st_size,
         "kind": "image",
-        "url": f"/api/chat/export/{target.name}",
+        "url": f"/api/workbench/exports/{target.name}",
         "width": width,
         "height": height,
     }
@@ -457,7 +513,7 @@ def register_generated_attachment_bytes(
         "content_type": effective_type,
         "size": target.stat().st_size,
         "kind": attachment_kind_from_meta(effective_type, requested_name),
-        "url": f"/api/chat/export/{target.name}",
+        "url": f"/api/workbench/exports/{target.name}",
     }
 
 
@@ -566,19 +622,19 @@ async def run_vision_chat(
 ) -> dict[str, Any]:
     """Run a vision-capable LLM call with image content."""
     # Vision analysis is an optional high-level execution path. Keep its model
-    # gateway dependency at this service boundary so the low-level attachment
-    # helpers remain importable by model/runtime infrastructure.
-    call_model = import_module("cyrene.call_llm").call_llm
-    result = await call_model(
+    # Plugin dependency at this service boundary so low-level helpers remain
+    # importable by Provider implementations.
+    from agent.plugin import active_plugin_service
+
+    gateway = active_plugin_service("model")
+    if gateway is None:
+        raise RuntimeError("Model Provider Plugins are not available")
+    result = await gateway.complete(
         [{"role": "user", "content": content}],
-        model_type="vision",
+        route="vision",
         max_tokens=max_tokens,
-        timeout=timeout,
-        thinking="disabled",
         caller="vision",
-        publish_events=False,
-        record_usage=False,
-        record_latency=record_latency,
+        session_id="vision-analysis",
     )
     vision_text = assistant_text(result) or ""
     return {
@@ -611,12 +667,16 @@ async def analyze_attachment(path_str: str, prompt: str = "", force_refresh: boo
         payload["multimodal_model"] = model_supports_multimodal()
         recognized = ""
         try:
-            from cyrene.knowledge import local_models, ocr
+            from agent.plugin import active_plugin_service
 
-            payload["local_ocr_available"] = local_models.is_ready(ocr.MODEL_ID)
+            service = active_plugin_service("knowledge")
+            model_id = service.ocr_model_id if service is not None else "pp-ocrv6-medium"
+            payload["local_ocr_available"] = bool(
+                service is not None and service.is_local_model_ready(model_id)
+            )
             if payload["local_ocr_available"]:
-                recognized = (await ocr.recognize(str(path))).strip()
-                payload["ocr_model"] = ocr.MODEL_ID
+                recognized = (await service.recognize_image(path)).strip()
+                payload["ocr_model"] = model_id
                 payload["ocr_text"] = truncate(recognized, 12000)
                 payload["ocr_chars"] = len(recognized)
         except Exception:
@@ -639,9 +699,10 @@ async def analyze_attachment(path_str: str, prompt: str = "", force_refresh: boo
         elif payload.get("ocr_text"):
             payload["note"] = "Text extracted with the local OCR model."
     else:
-        from cyrene.knowledge.extractors import extract_office_xml_text
+        from agent.plugin import active_plugin_service
 
-        text = extract_office_xml_text(path)
+        service = active_plugin_service("knowledge")
+        text = service.extract_file_text(path)[0] if service is not None else ""
         if text.strip():
             payload["kind"] = "document"
             payload["text_chars"] = len(text)

@@ -18,8 +18,8 @@ def _resolve_pinned_file_path(body: dict[str, Any]) -> None:
 
     parsed = unquote(urlparse(str(body.get("url") or "")).path)
     roots = (
-        ("/api/chat/upload/", UPLOADS_DIR),
-        ("/api/chat/export/", EXPORTS_DIR),
+        ("/api/workbench/uploads/", UPLOADS_DIR),
+        ("/api/workbench/exports/", EXPORTS_DIR),
     )
     for prefix, root in roots:
         if not parsed.startswith(prefix):

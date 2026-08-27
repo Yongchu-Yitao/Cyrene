@@ -92,11 +92,6 @@ function useWorkbenchLaunchOverlayLifecycle(
   loading,
   launchReadyRef,
   dataStore,
-  pythonPromptCheckedRef,
-  t,
-  setSettingsTab,
-  setSettingsScrollTo,
-  setFullPage,
   searchOpen
 ) {
   useEffect(function () {
@@ -109,29 +104,6 @@ function useWorkbenchLaunchOverlayLifecycle(
   }, [loading]);
 
   useEffect(function () { wbResetBrowserOverlayObscured(); }, []);
-
-  useEffect(function () {
-    if (pythonPromptCheckedRef.current) return undefined;
-    pythonPromptCheckedRef.current = true;
-    workbenchServices.api().json("/api/extensions", { toast: false })
-      .then(function (payload) {
-        if (!payload || payload.python_prompt_required !== true) return;
-        workbenchServices.feedback().confirmModal({
-          title: t("settings.extensionPythonMissingTitle"),
-          body: t("settings.extensionPythonMissingBody"),
-          confirmLabel: t("settings.extensionViewInstall"),
-          cancelLabel: t("settings.close"),
-        }).then(function (open) {
-          if (open) {
-            setSettingsTab("extensions");
-            setSettingsScrollTo(null);
-            setFullPage("settings");
-          }
-        });
-      })
-      .catch(function () {});
-    return undefined;
-  }, []);
 
   useEffect(function () {
     if (searchOpen) {

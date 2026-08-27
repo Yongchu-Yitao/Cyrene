@@ -13,11 +13,10 @@ import sqlite3
 import time
 from pathlib import Path
 
-from cyrene.config import WORKSPACE_DIR
+from agent.plugin import PluginContext
+from agent.plugin.native_runtime import workspace_root
 
 logger = logging.getLogger(__name__)
-
-INDEX_DB = WORKSPACE_DIR.parent / "data" / "code_index.db"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS files (
@@ -65,27 +64,28 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(source_file_id);
 CREATE INDEX IF NOT EXISTS idx_imports_module ON imports(module);
 """
 
-_schema_ensured = False
+_schema_ensured: set[Path] = set()
 
 
-def _ensure_schema() -> None:
-    global _schema_ensured
-    if _schema_ensured:
+def _ensure_schema(index_db: Path) -> None:
+    resolved_db = Path(index_db).expanduser().resolve()
+    if resolved_db in _schema_ensured:
         return
-    INDEX_DB.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(INDEX_DB))
+    resolved_db.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(resolved_db))
     try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA_SQL)
         conn.commit()
     finally:
         conn.close()
-    _schema_ensured = True
+    _schema_ensured.add(resolved_db)
 
 
-def _connect() -> sqlite3.Connection:
-    _ensure_schema()
-    conn = sqlite3.connect(str(INDEX_DB))
+def _connect(index_db: Path) -> sqlite3.Connection:
+    resolved_db = Path(index_db).expanduser().resolve()
+    _ensure_schema(resolved_db)
+    conn = sqlite3.connect(str(resolved_db))
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
@@ -236,9 +236,12 @@ class _Extractor(ast.NodeVisitor):
 
 # ── Indexing ──
 
-def _index_file(conn: sqlite3.Connection, file_path: Path) -> dict | None:
+def _index_file(
+    conn: sqlite3.Connection,
+    file_path: Path,
+    project_root: Path,
+) -> dict | None:
     """Index a single Python file. Returns dict or None if file is gone."""
-    project_root = WORKSPACE_DIR.parent
     rel_path = _compute_rel_path(file_path, project_root)
     if rel_path is None:
         return None
@@ -335,8 +338,13 @@ def _collect_py_files(root: Path) -> list[Path]:
     return files
 
 
-def build_index(path: str = ".", force: bool = False) -> dict:
-    project_root = WORKSPACE_DIR.parent
+def build_index(
+    project_root: Path,
+    index_db: Path,
+    path: str = ".",
+    force: bool = False,
+) -> dict:
+    project_root = Path(project_root).expanduser().resolve()
     candidate = Path(path)
     resolved = (project_root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
 
@@ -346,7 +354,7 @@ def build_index(path: str = ".", force: bool = False) -> dict:
     if not resolved.exists():
         return {"error": f"Path not found: {path}"}
 
-    conn = _connect()
+    conn = _connect(index_db)
     try:
         if force:
             conn.execute("DELETE FROM refs")
@@ -370,7 +378,7 @@ def build_index(path: str = ".", force: bool = False) -> dict:
 
         results = []
         for fp in py_files:
-            result = _index_file(conn, fp)
+            result = _index_file(conn, fp, project_root)
             if result is not None:
                 results.append(result)
 
@@ -414,8 +422,8 @@ def build_index(path: str = ".", force: bool = False) -> dict:
 
 # ── Query functions ──
 
-def search_symbol(name: str, kind: str = "") -> dict:
-    conn = _connect()
+def search_symbol(index_db: Path, name: str, kind: str = "") -> dict:
+    conn = _connect(index_db)
     try:
         query = (
             "SELECT s.name, s.kind, s.class_name, s.signature, s.line, s.end_line, s.docstring, f.path "
@@ -440,8 +448,8 @@ def search_symbol(name: str, kind: str = "") -> dict:
     return {"status": "ok", "results": results, "count": len(results)}
 
 
-def find_references(name: str) -> dict:
-    conn = _connect()
+def find_references(index_db: Path, name: str) -> dict:
+    conn = _connect(index_db)
     try:
         cur = conn.execute(
             "SELECT r.target_name, r.caller_name, r.line, r.kind, f.path "
@@ -461,8 +469,8 @@ def find_references(name: str) -> dict:
     return {"status": "ok", "results": refs, "count": len(refs)}
 
 
-def get_file_symbols(path: str) -> dict:
-    conn = _connect()
+def get_file_symbols(index_db: Path, path: str) -> dict:
+    conn = _connect(index_db)
     try:
         cur = conn.execute(
             "SELECT s.name, s.kind, s.class_name, s.signature, s.line, s.end_line, s.docstring "
@@ -485,35 +493,60 @@ def get_file_symbols(path: str) -> dict:
 
 # ── Tool handlers (wrapped in asyncio.to_thread to avoid blocking) ──
 
-async def _tool_index_codebase(args: dict, bot=None, chat_id=None, db_path=None, notify_state=None) -> str:
+def _context_index_db(context: PluginContext) -> Path:
+    value = context.services.get("code_index_db")
+    if value is None:
+        raise RuntimeError("The code Plugin pack requires the code_index_db service")
+    return Path(value).expanduser().resolve()
+
+
+async def _tool_index_codebase(
+    args: dict,
+    context: PluginContext,
+) -> str:
     path = str(args.get("path", "."))
     force = bool(args.get("force", False))
-    result = await asyncio.to_thread(build_index, path, force)
+    result = await asyncio.to_thread(
+        build_index,
+        workspace_root(context),
+        _context_index_db(context),
+        path,
+        force,
+    )
     return json.dumps(result, ensure_ascii=False)
 
 
-async def _tool_search_symbol(args: dict, bot=None, chat_id=None, db_path=None, notify_state=None) -> str:
+async def _tool_search_symbol(
+    args: dict,
+    context: PluginContext,
+) -> str:
     name = str(args.get("name", ""))
     kind = str(args.get("kind", ""))
     if not name:
         return json.dumps({"error": "name is required"}, ensure_ascii=False)
-    result = await asyncio.to_thread(search_symbol, name, kind)
+    result = await asyncio.to_thread(search_symbol, _context_index_db(context), name, kind)
     return json.dumps(result, ensure_ascii=False)
 
 
-async def _tool_find_references(args: dict, bot=None, chat_id=None, db_path=None, notify_state=None) -> str:
+async def _tool_find_references(
+    args: dict,
+    context: PluginContext,
+) -> str:
     name = str(args.get("name", ""))
     if not name:
         return json.dumps({"error": "name is required"}, ensure_ascii=False)
-    result = await asyncio.to_thread(find_references, name)
+    result = await asyncio.to_thread(find_references, _context_index_db(context), name)
     return json.dumps(result, ensure_ascii=False)
 
 
-async def _tool_get_file_symbols(args: dict, bot=None, chat_id=None, db_path=None, notify_state=None) -> str:
+async def _tool_get_file_symbols(
+    args: dict,
+    context: PluginContext,
+) -> str:
     path = str(args.get("path", ""))
     if not path:
         return json.dumps({"error": "path is required"}, ensure_ascii=False)
-    result = await asyncio.to_thread(get_file_symbols, path)
+    result = await asyncio.to_thread(get_file_symbols, _context_index_db(context), path)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -599,13 +632,11 @@ GET_FILE_SYMBOLS_DEF = {
     },
 }
 
+PLUGIN_DECLARATIONS = (
+    (INDEX_CODEBASE_DEF, _tool_index_codebase),
+    (SEARCH_SYMBOL_DEF, _tool_search_symbol),
+    (FIND_REFERENCES_DEF, _tool_find_references),
+    (GET_FILE_SYMBOLS_DEF, _tool_get_file_symbols),
+)
 
-def register_to(tool_defs: list, tool_handlers: dict) -> None:
-    tool_defs.append(INDEX_CODEBASE_DEF)
-    tool_handlers["IndexCodebase"] = _tool_index_codebase
-    tool_defs.append(SEARCH_SYMBOL_DEF)
-    tool_handlers["SearchSymbol"] = _tool_search_symbol
-    tool_defs.append(FIND_REFERENCES_DEF)
-    tool_handlers["FindReferences"] = _tool_find_references
-    tool_defs.append(GET_FILE_SYMBOLS_DEF)
-    tool_handlers["GetFileSymbols"] = _tool_get_file_symbols
+__all__ = ["PLUGIN_DECLARATIONS"]

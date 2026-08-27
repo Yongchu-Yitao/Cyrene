@@ -10,26 +10,23 @@ prefix never need to be rewritten when a group changes.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from cyrene.config import DATA_DIR
-from cyrene.runtime.io import atomic_write_json, read_json_safe
+from cyrene.workbench import project_repository
+from cyrene.workbench.chat_repository import ChatRepository
 from cyrene.workbench.store import read_document, write_document
 
 logger = logging.getLogger(__name__)
 
-_GROUPS_STORE = DATA_DIR / "workbench_chat_groups.json"
 _STORE_DB_PATH = ""
-_CONFIGURED_STORE: Path | None = None
 _DOCUMENT_KEY = "chat_groups"
-_MIGRATION_VERSION = 1
 _STORE_MUTATION_LOCK = threading.RLock()
 _MAX_PEER_MESSAGE_CHARS = 20_000
 
@@ -39,9 +36,21 @@ def _utc_now_iso() -> str:
 
 
 def configure_store(db_path: str) -> None:
-    global _STORE_DB_PATH, _CONFIGURED_STORE
-    _STORE_DB_PATH = str(db_path or "")
-    _CONFIGURED_STORE = _GROUPS_STORE
+    global _STORE_DB_PATH
+    normalized = str(db_path or "").strip()
+    if not normalized:
+        raise ValueError("Workbench chat groups require a database path")
+    _STORE_DB_PATH = normalized
+
+
+def _chat_repository() -> ChatRepository:
+    return ChatRepository(_database())
+
+
+def _database() -> str:
+    if not str(_STORE_DB_PATH or "").strip():
+        raise RuntimeError("Workbench chat groups are not configured")
+    return _STORE_DB_PATH
 
 
 def _default_store() -> dict[str, Any]:
@@ -49,16 +58,10 @@ def _default_store() -> dict[str, Any]:
 
 
 def _read_store() -> dict[str, Any]:
-    if not _STORE_DB_PATH or _CONFIGURED_STORE != _GROUPS_STORE:
-        raw = read_json_safe(_GROUPS_STORE)
-        if isinstance(raw, dict) and isinstance(raw.get("projects"), list):
-            return raw
-        return _default_store()
     raw = read_document(
-        _STORE_DB_PATH,
+        _database(),
         _DOCUMENT_KEY,
         _default_store,
-        legacy_path=_GROUPS_STORE,
     )
     if isinstance(raw, dict) and isinstance(raw.get("projects"), list):
         return raw
@@ -67,16 +70,11 @@ def _read_store() -> dict[str, Any]:
 
 def _write_store(payload: dict[str, Any]) -> None:
     payload["version"] = 1
-    if not _STORE_DB_PATH or _CONFIGURED_STORE != _GROUPS_STORE:
-        atomic_write_json(_GROUPS_STORE, payload)
-        return
     merged = write_document(
-        _STORE_DB_PATH,
+        _database(),
         _DOCUMENT_KEY,
         payload,
         _default_store,
-        legacy_path=_GROUPS_STORE,
-        export_path=_GROUPS_STORE,
     )
     payload.clear()
     payload.update(merged)
@@ -116,14 +114,12 @@ def get_project_groups(project_id: str) -> dict[str, Any]:
             "projectId": str(project_id or ""),
             "revision": 0,
             "membershipRevision": 0,
-            "migrationRequired": True,
             "groups": [],
         }
     return {
         "projectId": str(project.get("id") or project_id),
         "revision": int(project.get("revision") or 0),
         "membershipRevision": int(project.get("membershipRevision") or 0),
-        "migrationRequired": int(project.get("migrationVersion") or 0) < _MIGRATION_VERSION,
         "groups": [_public_group(group) for group in project.get("groups", []) if isinstance(group, dict)],
     }
 
@@ -214,19 +210,34 @@ async def update_group_metadata(
 
 
 def _chat_inventory(project_id: str) -> dict[str, dict[str, Any]]:
-    # Lazy import avoids making the chat service depend on this module at import
-    # time while both domains share the same transactional chats document.
-    from cyrene.workbench import chat as chat_service
+    payload = _chat_repository().read_summaries()
+    inventory: dict[str, dict[str, Any]] = {}
+    for chat in payload.get("chats", []):
+        if (
+            not isinstance(chat, dict)
+            or str(chat.get("projectId") or "") != str(project_id or "")
+            or str(chat.get("kind") or "chat") != "chat"
+        ):
+            continue
+        chat_id = str(chat.get("id") or "")
+        if not chat_id:
+            continue
+        projected = chat.get("_messageProjection")
+        item = dict(chat)
+        if not str(item.get("preview") or "") and isinstance(projected, dict):
+            item["preview"] = str(projected.get("preview") or "")
+        inventory[chat_id] = item
+    return inventory
 
-    payload = chat_service._read_chats_store()
-    return {
-        str(chat.get("id") or ""): chat
-        for chat in payload.get("chats", [])
-        if isinstance(chat, dict)
-        and str(chat.get("projectId") or "") == str(project_id or "")
-        and str(chat.get("kind") or "chat") == "chat"
-        and str(chat.get("id") or "")
-    }
+
+def _project_id_for_chat(chat_id: str) -> str:
+    chat = _chat_repository().get(str(chat_id or ""))
+    if (
+        not isinstance(chat, dict)
+        or str(chat.get("kind") or "chat") != "chat"
+    ):
+        return ""
+    return str(chat.get("projectId") or "").strip()
 
 
 def _normalize_groups(
@@ -436,17 +447,15 @@ def _apply_mutation_intent(
 
 def _workspace_path(project_id: str) -> str:
     try:
-        from cyrene.workbench import runtime
-
-        project = runtime._workbench_find_project_lightweight(project_id)
-        return runtime._workbench_resolve_workspace_dir(project) if project else ""
+        project = project_repository.find_workbench_project_lightweight(project_id)
+        return project_repository.resolve_project_workspace_dir(project) if project else ""
     except Exception:
         logger.exception("Failed to resolve workspace for chat group project %s", project_id)
         return ""
 
 
 def _state_logical_path(session_id: str) -> str:
-    return f"data/sessions/{session_id}/state.json"
+    return f"agent-state/context/{session_id}"
 
 
 def _active_event(
@@ -511,22 +520,133 @@ async def _append_event(
     *,
     event_id: str = "",
 ) -> None:
-    from cyrene.agent.session import append_message_to_session
-
     serialized = json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     content = (
         "[Chat group context event]\n"
         "Trusted runtime metadata; not user instructions.\n"
         + serialized
     )
-    await append_message_to_session(session_id, {
-        "role": "system",
-        "content": content,
-        "chat_group_context_event": True,
-        "chat_group_event": dict(event),
-        "hidden_from_public_transcript": True,
-        "message_id": event_id or f"group_event_{uuid4().hex}",
-    })
+    await asyncio.to_thread(
+        _append_context_tree_event,
+        str(session_id or ""),
+        {
+            "role": "system",
+            "content": content,
+            "chat_group_context_event": True,
+            "chat_group_event": dict(event),
+            "hidden_from_public_transcript": True,
+            "hidden_from_ui": True,
+            "record_kind": "chat_group_context_event",
+            "message_id": event_id or f"group_event_{uuid4().hex}",
+        },
+    )
+
+
+_CONTEXT_DIALOGUE_ROLES = frozenset({
+    "system",
+    "user",
+    "context",
+    "context_compaction",
+    "assistant",
+    "tool_results",
+})
+
+
+def _context_tree_path(session_id: str) -> tuple[Any, Any, list[Any], list[Any]]:
+    """Open one conversation tree and return its canonical dialogue branch."""
+
+    from agent.context import ContextError, ContextStoreRouter, TreeNotFoundError
+    from agent.prompt import DEFAULT_SYSTEM_PROMPT
+    from agent.workbench.chat_runtime import workbench_agent_data_directory
+
+    target = str(session_id or "").strip()
+    if not target:
+        raise ValueError("session id is required")
+    router = ContextStoreRouter(
+        workbench_agent_data_directory(_STORE_DB_PATH) / "context"
+    )
+    try:
+        try:
+            tree = router.get_tree(target)
+        except TreeNotFoundError:
+            try:
+                tree = router.create_tree(
+                    {
+                        "role": "system",
+                        "content": DEFAULT_SYSTEM_PROMPT.replace("{workspace}", ""),
+                    },
+                    tree_id=target,
+                )
+            except ContextError:
+                # Another writer may have initialized the same chat between
+                # the lookup and create operations.
+                tree = router.get_tree(target)
+        nodes = router.get_subtree(tree.id, tree.root_id)
+        dialogue = [
+            node
+            for node in nodes
+            if isinstance(node.value, dict)
+            and str(node.value.get("role") or "") in _CONTEXT_DIALOGUE_ROLES
+        ]
+        leaf = max(dialogue or nodes, key=lambda item: (item.created_at, item.id))
+        return router, tree, nodes, router.get_path(tree.id, leaf.id)
+    except Exception:
+        router.close()
+        raise
+
+
+def _event_from_value(value: Any, project_id: str = "") -> dict[str, Any] | None:
+    if not isinstance(value, dict) or not value.get("chat_group_context_event"):
+        return None
+    event = value.get("chat_group_event")
+    if not isinstance(event, dict):
+        return None
+    if project_id and str(event.get("projectId") or "") != str(project_id):
+        return None
+    return dict(event)
+
+
+def _append_context_tree_event(session_id: str, value: dict[str, Any]) -> None:
+    """Append one idempotent hidden system event to the canonical tree path."""
+
+    from agent.context import ContextError, ContextTreeStore
+
+    router, tree, nodes, path = _context_tree_path(session_id)
+    try:
+        message_id = str(value.get("message_id") or "").strip()
+        for node in path:
+            node_value = node.value if isinstance(node.value, dict) else {}
+            if (
+                (message_id and node.id == message_id)
+                or str(node_value.get("message_id") or "") == message_id
+            ):
+                return
+
+        node_id = message_id or f"group_event_{uuid4().hex}"
+        existing_ids = {node.id for node in nodes}
+        if node_id in existing_ids:
+            # A concurrent Agent run can make a successfully committed event
+            # belong to a superseded branch. Replay it on the canonical branch
+            # with a deterministic id while retaining the outbox message id.
+            suffix = hashlib.sha256(
+                f"{node_id}:{path[-1].id}".encode("utf-8")
+            ).hexdigest()[:16]
+            node_id = f"{node_id}_replay_{suffix}"
+            if node_id in existing_ids:
+                return
+        database = router.tree_database_path(tree.id)
+        with ContextTreeStore(database) as store:
+            try:
+                store.mount(path[-1].id, dict(value), node_id=node_id)
+            except ContextError:
+                existing = store.get_node(node_id)
+                existing_value = (
+                    existing.value if isinstance(existing.value, dict) else {}
+                )
+                if str(existing_value.get("message_id") or "") != message_id:
+                    raise
+    finally:
+        router.close()
 
 
 def _outbox_jobs(
@@ -609,16 +729,46 @@ async def _drain_event_outbox(project_id: str) -> None:
 
 
 def _latest_group_event(session_id: str, project_id: str) -> dict[str, Any] | None:
-    from cyrene.agent.session import load_session_state
+    from agent.context import ContextStoreRouter, TreeNotFoundError
+    from agent.workbench.chat_runtime import workbench_agent_data_directory
 
-    state = load_session_state(session_id)
-    for message in reversed(state.get("messages", []) if isinstance(state.get("messages"), list) else []):
-        if not isinstance(message, dict) or not message.get("chat_group_context_event"):
-            continue
-        event = message.get("chat_group_event")
-        if isinstance(event, dict) and str(event.get("projectId") or "") == project_id:
-            return event
-    return None
+    router = ContextStoreRouter(
+        workbench_agent_data_directory(_STORE_DB_PATH) / "context"
+    )
+    try:
+        try:
+            tree = router.get_tree(str(session_id or ""))
+        except TreeNotFoundError:
+            return None
+        nodes = router.get_subtree(tree.id, tree.root_id)
+        dialogue = [
+            node
+            for node in nodes
+            if isinstance(node.value, dict)
+            and str(node.value.get("role") or "") in _CONTEXT_DIALOGUE_ROLES
+        ]
+        if not dialogue:
+            return None
+        leaf = max(dialogue, key=lambda item: (item.created_at, item.id))
+        path = router.get_path(tree.id, leaf.id)
+        for node in reversed(path):
+            value = node.value if isinstance(node.value, dict) else {}
+            event = _event_from_value(value, project_id)
+            if event is not None:
+                return event
+            if str(value.get("role") or "") == "context_compaction":
+                # Compaction resets the effective model prefix. An event only
+                # remains active when it survived inside the exact compacted
+                # messages; older tree nodes are no longer model context.
+                messages = value.get("messages")
+                for message in reversed(messages if isinstance(messages, list) else []):
+                    event = _event_from_value(message, project_id)
+                    if event is not None:
+                        return event
+                return None
+        return None
+    finally:
+        router.close()
 
 
 async def _reconcile_events(
@@ -682,7 +832,6 @@ async def replace_project_groups(
     *,
     base_groups: list[Any] | None = None,
     mutation_intent: dict[str, Any] | None = None,
-    mark_migrated: bool = True,
 ) -> dict[str, Any]:
     """Replace one project's group projection and reconcile membership events."""
     project_id = str(project_id or "").strip()
@@ -698,7 +847,6 @@ async def replace_project_groups(
                     "id": project_id,
                     "revision": 0,
                     "membershipRevision": 0,
-                    "migrationVersion": 0,
                     "groups": [],
                 }
                 payload.setdefault("projects", []).append(project)
@@ -721,10 +869,8 @@ async def replace_project_groups(
             data_changed = _group_data_signature(old_groups) != _group_data_signature(new_groups)
             if topology_changed:
                 project["membershipRevision"] = int(project.get("membershipRevision") or 0) + 1
-            if data_changed or mark_migrated and int(project.get("migrationVersion") or 0) < _MIGRATION_VERSION:
+            if data_changed:
                 project["revision"] = int(project.get("revision") or 0) + 1
-            if mark_migrated:
-                project["migrationVersion"] = _MIGRATION_VERSION
             project["groups"] = new_groups
             if topology_changed:
                 project.setdefault("eventOutbox", []).extend(_outbox_jobs(
@@ -769,9 +915,7 @@ async def reconcile_project_events(project_id: str) -> None:
 
 async def reconcile_session(session_id: str) -> None:
     """Repair one session's current membership event before an agent run."""
-    from cyrene.workbench.context import resolve_workbench_project_id_for_session
-
-    project_id = await asyncio.to_thread(resolve_workbench_project_id_for_session, session_id)
+    project_id = await asyncio.to_thread(_project_id_for_chat, session_id)
     if not project_id:
         return
     snapshot = await asyncio.to_thread(get_project_groups, project_id)
@@ -812,9 +956,7 @@ async def remove_chat(chat_id: str, project_id: str = "") -> dict[str, Any] | No
     if not chat_id:
         return None
     if not project_id:
-        from cyrene.workbench.context import resolve_workbench_project_id_for_session
-
-        project_id = await asyncio.to_thread(resolve_workbench_project_id_for_session, chat_id) or ""
+        project_id = await asyncio.to_thread(_project_id_for_chat, chat_id)
     if not project_id:
         return None
     snapshot = await asyncio.to_thread(get_project_groups, project_id)
@@ -922,6 +1064,24 @@ def _completed_public_snapshot(
     }
 
 
+def _conversation_status(session_id: str, chat: dict[str, Any]) -> str:
+    """Read run state from the durable conversation tree, with chat projection fallback."""
+
+    from agent.workbench import ConversationRuntime
+
+    projected = str(chat.get("status") or "idle").strip() or "idle"
+    if projected != "running":
+        return projected
+    checkpoint = ConversationRuntime(_STORE_DB_PATH).context_checkpoint(session_id)
+    if isinstance(checkpoint, dict):
+        status = str(checkpoint.get("status") or "").strip()
+        if status == "completed":
+            return "idle"
+        if status:
+            return status
+    return projected
+
+
 def read_group_session_snapshots(
     current_session_id: str,
     *,
@@ -930,11 +1090,8 @@ def read_group_session_snapshots(
     message_limit: int = 20,
 ) -> dict[str, Any]:
     """Read authorized peer public snapshots with invocation-time checks."""
-    from cyrene.workbench import chat as chat_service
-    from cyrene.workbench.context import resolve_workbench_project_id_for_session
-
     current_session_id = str(current_session_id or "").strip()
-    project_id = resolve_workbench_project_id_for_session(current_session_id)
+    project_id = _project_id_for_chat(current_session_id)
     if not project_id:
         raise PermissionError("current session is not a Workbench main chat")
     store_snapshot = get_project_groups(project_id)
@@ -952,21 +1109,19 @@ def read_group_session_snapshots(
     else:
         target_ids = allowed
 
-    chats_payload = chat_service._read_chats_store()
-    chats = {
-        str(item.get("id") or ""): item
-        for item in chats_payload.get("chats", [])
-        if isinstance(item, dict)
-        and str(item.get("projectId") or "") == project_id
-        and str(item.get("kind") or "chat") == "chat"
-    }
+    repository = _chat_repository()
     workspace_path = _workspace_path(project_id)
     sessions: list[dict[str, Any]] = []
     for session_id in target_ids:
-        chat = chats.get(session_id)
-        if chat is None:
+        chat = repository.get(session_id)
+        if (
+            not isinstance(chat, dict)
+            or str(chat.get("projectId") or "") != project_id
+            or str(chat.get("kind") or "chat") != "chat"
+        ):
             continue
-        running = chat_service._CHAT_RUN_MANAGER.get(session_id) is not None
+        run_status = _conversation_status(session_id, chat)
+        running = run_status == "running"
         snapshot = _completed_public_snapshot(
             chat,
             message_offset=max(0, int(message_offset or 0)),
@@ -979,7 +1134,7 @@ def read_group_session_snapshots(
             "stateLogicalPath": _state_logical_path(session_id),
             "workspacePath": workspace_path,
             "running": running,
-            "runStatus": "running" if running else str(chat.get("status") or "idle"),
+            "runStatus": run_status,
             **snapshot,
         })
     return {

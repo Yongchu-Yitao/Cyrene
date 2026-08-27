@@ -1095,7 +1095,7 @@ async def test_external_agent_receives_scoped_cyrene_model_gateway(fake_acp_bin,
         lambda installation_id: install if installation_id == install["installation_id"] else None,
     )
     monkeypatch.setattr(
-        "cyrene.model_runtime.client.resolve_session_model_candidate",
+        "agent.plugin.model_catalog.resolve_session_model_candidate",
         lambda session_id: {
             "id": "cyrene-primary",
             "provider": "openai_compatible",

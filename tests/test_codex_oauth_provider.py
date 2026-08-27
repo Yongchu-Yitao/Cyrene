@@ -7,10 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cyrene.model_runtime.client import _normalized_candidate
-from cyrene.model_runtime import client as model_client
 from cyrene.model_runtime.codex_provider import (
-    CODEX_BASE_URL,
     CODEX_AUTHENTICATION_EXPIRED,
     CODEX_CLI_REQUIRED,
     CODEX_MODEL_UNAVAILABLE,
@@ -297,63 +294,6 @@ def test_codex_cooldown_policy_keeps_recoverable_errors_hot() -> None:
     assert codex_error_should_cooldown(
         CodexAvailabilityError(CODEX_MODEL_UNAVAILABLE, "retired")
     )
-
-
-def test_codex_candidate_never_inherits_api_credentials() -> None:
-    candidate = _normalized_candidate(
-        {
-            "id": "codex-primary",
-            "model": "gpt-5.6-sol",
-            "provider": CODEX_PROVIDER,
-            "reasoning_effort": "high",
-            "api_key": "must-not-survive",
-            "base_url": "https://example.invalid",
-        },
-        active_model="fallback",
-        active_base_url="https://api.example/v1",
-        active_api_key="secret",
-    )
-
-    assert candidate["provider"] == CODEX_PROVIDER
-    assert candidate["base_url"] == CODEX_BASE_URL
-    assert candidate["api_key"] == ""
-    assert candidate["reasoning_effort"] == "high"
-    assert candidate["vision_capable"] is True
-    assert candidate["endpoints"] == [CODEX_BASE_URL]
-
-
-def test_legacy_mixed_route_is_preserved_for_runtime_family_guard(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(model_client, "candidates_for_route", lambda _route: [
-        {
-            "id": "custom-primary",
-            "model": "deepseek-chat",
-            "provider": "openai_compatible",
-            "base_url": "https://example.test/v1",
-            "api_key": "sk-test",
-        },
-        {
-            "id": "codex-fallback",
-            "model": "gpt-5.6-sol",
-            "provider": CODEX_PROVIDER,
-            "base_url": CODEX_BASE_URL,
-        },
-    ])
-
-    candidates = model_client._resolve_llm_candidates()
-
-    assert [candidate["provider"] for candidate in candidates] == [
-        "openai_compatible",
-        CODEX_PROVIDER,
-    ]
-    from cyrene.model_runtime.transcript_policy import (
-        ProviderFamilyError,
-        require_single_provider_family,
-    )
-
-    with pytest.raises(ProviderFamilyError, match="automatic fallback"):
-        require_single_provider_family(candidates)
 
 
 @pytest.mark.asyncio

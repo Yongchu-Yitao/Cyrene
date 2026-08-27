@@ -1,6 +1,5 @@
 """FastAPI app factory and WebBot adapter for the scheduler."""
 
-import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -14,8 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 from starlette.types import Receive, Scope, Send
 
-from cyrene.config import WEB_PORT
-from cyrene.runtime.task_lifecycle import cancel_and_wait
+from cyrene.config import DATA_DIR, WEB_PORT
 
 
 class NoCacheStaticFiles(StaticFiles):
@@ -113,6 +111,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
 
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):
+        await plugin_application_host.startup()
         await _start_workbench_chat_runs()
         terminal_wake_bridge = getattr(_app.state, "terminal_wake_bridge", None)
         if terminal_wake_bridge is not None:
@@ -126,9 +125,6 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         await _start_remote_control()
         await _start_office_gateway(instance_id)
         await _start_wechat()
-        await _migrate_knowledge_db()
-        await _sync_knowledge_catalog()
-        await _decouple_default_project_knowledge()
         try:
             yield
         finally:
@@ -138,23 +134,48 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
                 await media_daemon.stop()
             if terminal_wake_bridge is not None:
                 await terminal_wake_bridge.stop_daemon_bridge()
-            plugin_manager = getattr(_app.state, "plugin_manager", None)
-            if plugin_manager is not None:
-                await plugin_manager.close()
-            await _stop_office_gateway(instance_id)
+            # Drain native Agent/Chat work while Plugin services and their
+            # model/provider ports are still available.
             await _close_browser_session()
+            await plugin_application_host.shutdown()
+            from agent.plugin import (
+                active_plugin_application_host,
+                set_active_plugin_application_host,
+            )
+
+            if active_plugin_application_host() is plugin_application_host:
+                set_active_plugin_application_host(None)
+            await _stop_office_gateway(instance_id)
 
     app = FastAPI(title="Cyrene", lifespan=_lifespan)
+    from agent.plugin import (
+        PluginApplicationHost,
+        set_active_plugin_application_host,
+    )
+
+    plugin_application_host = PluginApplicationHost.load_user_plugins(
+        app=app,
+        bot=bot,
+        db_path=db_path,
+        data_directory=DATA_DIR,
+    )
+    app.state.plugin_application_host = plugin_application_host
+    set_active_plugin_application_host(plugin_application_host)
     # ``ui_mode`` remains in the Python call signature for historical callers,
     # but Workbench is now the only served UI.
     _configure_app(app, LocalAuthMiddleware, register_routes, bot, db_path, instance_id)
 
     async def _start_workbench_chat_runs() -> None:
-        from cyrene.workbench.chat import startup_chat_runs
+        from cyrene.workbench.chat_runs import startup_chat_runs
         from cyrene.workbench.task_runs import recover_interrupted_task_runs
 
-        startup_chat_runs()
-        await asyncio.to_thread(recover_interrupted_task_runs)
+        startup_chat_runs(db_path)
+        task_context = getattr(app.state, "task_session_context", None)
+        if task_context is not None:
+            await recover_interrupted_task_runs(
+                db_path,
+                task_context.resume_interrupted_run,
+            )
         manager = getattr(app.state, "goal_loop_manager", None)
         if manager is not None:
             await manager.startup()
@@ -173,59 +194,6 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
             await runtime.start()
         except Exception:
             logger.warning("Remote-control gateway startup failed", exc_info=True)
-
-    async def _migrate_knowledge_db() -> None:
-        try:
-            from cyrene.config import migrate_knowledge_to_workspace_db
-            result = await migrate_knowledge_to_workspace_db()
-            if result["migrated"]:
-                logger.info("Knowledge base migrated: %s", result["reason"])
-        except Exception:
-            logger.warning("Knowledge base migration failed (non-fatal)")
-
-    async def _sync_knowledge_catalog() -> None:
-        try:
-            from cyrene.config import get_knowledge_db_path
-            from cyrene.runtime.database import init_knowledge_db
-            from cyrene.knowledge import store, ingest
-            _kb_db_path = str(get_knowledge_db_path())
-            await init_knowledge_db(_kb_db_path)
-            await store.sync_filesystem(_kb_db_path)
-            app.state._knowledge_sync_task = asyncio.create_task(
-                ingest.process_pending(_kb_db_path)
-            )
-        except Exception:
-            logger.warning("Knowledge catalog sync failed — check your knowledge base")
-
-    async def _decouple_default_project_knowledge() -> None:
-        # One-time: lift the Workbench default project's own knowledge docs out of
-        # the shared legacy kb_default.db (which the catalog fills with every
-        # project's files) into its id-scoped db. Idempotent, non-destructive.
-        #
-        # Runs in the BACKGROUND. The migration re-indexes every doc it moves —
-        # vision analysis for images, embeddings for the rest — which is an
-        # unbounded series of LLM calls. uvicorn only finishes startup (and our
-        # launcher only then prints PORT=) once every startup handler returns,
-        # and Electron gives up waiting after 30s. A default project with a few
-        # images easily blows past that, leaving the desktop app unable to start
-        # ("The Python backend did not start within 30 seconds"). Fire it off so
-        # the server comes up immediately; keep a reference so the task isn't
-        # garbage-collected mid-flight.
-        async def _run() -> None:
-            try:
-                from cyrene.knowledge.workbench import migrate_default_project_knowledge
-
-                result = await migrate_default_project_knowledge()
-                if result.get("migrated"):
-                    logger.info(
-                        "Default project knowledge decoupled: %s docs -> kb_%s.db",
-                        result.get("migrated"),
-                        result.get("target"),
-                    )
-            except Exception:
-                logger.warning("Default project knowledge decouple failed (non-fatal)")
-
-        app.state._decouple_task = asyncio.create_task(_run())
 
     async def _close_browser_session() -> None:
         remote_runtime = getattr(app.state, "remote_control_runtime", None)
@@ -253,11 +221,15 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
             logger.warning("Workbench task run shutdown failed", exc_info=True)
 
         try:
-            from cyrene.workbench.chat import shutdown_chat_runs
+            from cyrene.workbench.chat_runs import shutdown_chat_runs
+            from cyrene.workbench.chat_service import shutdown_chat_services
 
-            await shutdown_chat_runs()
+            try:
+                await shutdown_chat_runs()
+            finally:
+                await shutdown_chat_services()
         except Exception:
-            logger.warning("Workbench chat run shutdown failed")
+            logger.warning("Workbench chat run shutdown failed", exc_info=True)
 
         try:
             from cyrene.browser import close_session
@@ -278,16 +250,6 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
                 await client.close()
         except Exception:
             logger.warning("WeChat shutdown failed", exc_info=True)
-
-        app_tasks = {
-            task
-            for task in (
-                getattr(app.state, "_knowledge_sync_task", None),
-                getattr(app.state, "_decouple_task", None),
-            )
-            if isinstance(task, asyncio.Task)
-        }
-        await cancel_and_wait(app_tasks)
 
         # Cancel and await all agent/telemetry/indexing work while the event loop
         # and SQLite worker threads are still alive.

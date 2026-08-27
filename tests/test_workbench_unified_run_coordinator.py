@@ -58,20 +58,18 @@ def _projects_payload(workspace, *, two_sessions: bool = False):
 
 async def test_one_shared_coordinator_owns_chat_task_and_goal_loop(tmp_path, monkeypatch):
     from cyrene.runtime.run_coordinator import RunCoordinator
-    from cyrene.workbench import chat as chat_service
     from cyrene.workbench import task_runs
     from cyrene.workbench.chat_runs import ChatRunManager
     from cyrene.workbench.goal_loop import GoalLoopManager
 
     db_path = str(tmp_path / "coordinator.sqlite3")
-    monkeypatch.setattr(chat_service, "_record_chat_run_outcome", lambda *_a, **_k: None)
     manager = ChatRunManager(retention_seconds=0)
     manager.configure(db_path)
     coordinator = task_runs.coordinator_for(db_path)
 
     assert isinstance(coordinator, RunCoordinator)
     assert manager._coordinator is coordinator
-    assert GoalLoopManager(db_path).coordinator is coordinator
+    assert GoalLoopManager(db_path, object()).coordinator is coordinator
 
     release_chat = asyncio.Event()
 
@@ -106,7 +104,7 @@ async def test_one_shared_coordinator_owns_chat_task_and_goal_loop(tmp_path, mon
         "task", "same_public_id", "task_run_2", bind_current_task=False
     ) is None
 
-    goal_manager = GoalLoopManager(db_path)
+    goal_manager = GoalLoopManager(db_path, object())
     goal_manager.register_run("goal_run_conflict", "same_public_id")
     assert goal_manager.wake("goal_run_conflict") is False
     coordinator.finish(task_lease)
@@ -116,78 +114,16 @@ async def test_one_shared_coordinator_owns_chat_task_and_goal_loop(tmp_path, mon
     await manager.shutdown()
 
 
-async def test_low_level_session_conflict_never_cancels_the_existing_run():
-    from cyrene.agent.coordinator import (
-        SessionRunConflictError,
-        run_session_operation,
-    )
-
-    entered = asyncio.Event()
-    release = asyncio.Event()
-    cancelled = False
-
-    async def first_operation():
-        nonlocal cancelled
-        entered.set()
-        try:
-            await release.wait()
-            return "first-completed"
-        except asyncio.CancelledError:
-            cancelled = True
-            raise
-
-    first = asyncio.create_task(
-        run_session_operation("conflict-session", first_operation)
-    )
-    await asyncio.wait_for(entered.wait(), timeout=1)
-
-    try:
-        await run_session_operation(
-            "conflict-session",
-            lambda: asyncio.sleep(0, result="second"),
-        )
-    except SessionRunConflictError as exc:
-        assert exc.session_id == "conflict-session"
-    else:
-        raise AssertionError("the competing run should have been rejected")
-
-    assert cancelled is False
-    assert first.done() is False
-    release.set()
-    assert await asyncio.wait_for(first, timeout=1) == "first-completed"
-
-
-async def test_session_operation_reports_only_after_lock_acquisition():
-    from cyrene.agent.coordinator import run_session_operation
-
-    acquired = []
-
-    async def operation():
-        assert acquired == ["acquired"]
-        return "done"
-
-    result = await run_session_operation(
-        "acquisition-callback-session",
-        operation,
-        on_acquired=lambda: acquired.append("acquired"),
-    )
-
-    assert result == "done"
-    assert acquired == ["acquired"]
-
-
-def test_project_storage_migrates_to_one_row_per_task_and_updates_only_one(tmp_path):
+def test_project_storage_uses_one_row_per_task_and_updates_only_one(tmp_path):
     from cyrene.workbench.store import read_document, write_document
 
     db_path = tmp_path / "storage.sqlite3"
-    export_path = tmp_path / "workbench_projects.json"
     payload = _projects_payload(tmp_path, two_sessions=True)
     write_document(
         db_path,
         "projects",
         payload,
         lambda: {"projects": []},
-        export_path=export_path,
     )
 
     with sqlite3.connect(db_path) as conn:
@@ -221,7 +157,6 @@ def test_project_storage_migrates_to_one_row_per_task_and_updates_only_one(tmp_p
         "projects",
         hydrated,
         lambda: {"projects": []},
-        export_path=export_path,
     )
 
     with sqlite3.connect(db_path) as conn:
@@ -239,11 +174,6 @@ def test_project_storage_migrates_to_one_row_per_task_and_updates_only_one(tmp_p
     }
     assert by_id["session_1"]["runs"][0]["id"] == "run_1"
     assert by_id["session_2"]["runs"] == []
-    exported = json.loads(export_path.read_text(encoding="utf-8"))
-    assert all(
-        not item.get("isSummary")
-        for item in exported["projects"][0]["sessions"]
-    )
 
 
 def test_normalized_project_read_does_not_request_a_write_lock(tmp_path):
@@ -265,134 +195,27 @@ def test_normalized_project_read_does_not_request_a_write_lock(tmp_path):
     assert hydrated["projects"][0]["id"] == "project_1"
 
 
-def test_task_chat_audits_before_agent_rejects_competitor_and_keeps_task_open(
+async def test_restart_rebinds_provisional_task_run_and_resumes_same_run_id(
     tmp_path,
     monkeypatch,
 ):
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-    from route.registry import register_routes
-    from cyrene.workbench import runtime as runtime
-
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    store_path = data_dir / "workbench_projects.json"
-    store_path.write_text(
-        json.dumps(_projects_payload(tmp_path), ensure_ascii=False),
-        encoding="utf-8",
-    )
-    db_path = str(tmp_path / "api.sqlite3")
-    entered_agent = threading.Event()
-    release_agent = threading.Event()
-    cancelled = threading.Event()
-
-    async def fake_agent_reply(*_args, **_kwargs):
-        entered_agent.set()
-        try:
-            await asyncio.to_thread(release_agent.wait)
-        except asyncio.CancelledError:
-            cancelled.set()
-            raise
-        return "A bounded task-chat reply"
-
-    async def allow_budget(_session_id):
-        return None
-
-    async def no_archive(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(runtime, "DATA_DIR", data_dir)
-    monkeypatch.setattr(runtime, "_WORKBENCH_STORE", store_path)
-    monkeypatch.setattr(runtime, "_db_path", "")
-    monkeypatch.setattr(runtime, "_CONFIGURED_WORKBENCH_STORE", None)
-    monkeypatch.setattr(runtime, "_workbench_agent_reply", fake_agent_reply)
-    monkeypatch.setattr(runtime, "_check_budget_gate", allow_budget)
-    monkeypatch.setattr(runtime, "_workbench_archive_run_knowledge", no_archive)
-    monkeypatch.setattr(runtime, "schedule_capture", lambda *_a, **_k: None)
-    monkeypatch.setattr(runtime, "append_notification", lambda **_kwargs: {})
-
-    app = FastAPI()
-    register_routes(app, bot=None, db_path=db_path)
-    first_client = TestClient(app)
-    second_client = TestClient(app)
-    first_response = {}
-
-    def send_first():
-        first_response["response"] = first_client.post(
-            "/api/task-sessions/session_1/chat",
-            json={"message": "first", "clientRequestId": "request_1"},
-        )
-
-    thread = threading.Thread(target=send_first, daemon=True)
-    thread.start()
-    assert entered_agent.wait(timeout=3)
-
-    running_payload = runtime._read_workbench_store()
-    _, running_session = runtime._workbench_find_session(
-        running_payload, "session_1"
-    )
-    assert running_session is not None
-    assert running_session["activeRunId"]
-    assert len(running_session["runs"]) == 1
-    provisional = running_session["runs"][0]
-    provisional_id = provisional["id"]
-    assert provisional["status"] == "running"
-    assert provisional["events"][0]["type"] == "RunAcceptedEvent"
-
-    competing = second_client.post(
-        "/api/task-sessions/session_1/chat",
-        json={"message": "second", "clientRequestId": "request_2"},
-    )
-    assert competing.status_code == 409
-    assert competing.json()["code"] == "task_run_in_progress"
-    assert cancelled.is_set() is False
-    assert thread.is_alive()
-
-    release_agent.set()
-    thread.join(timeout=5)
-    assert thread.is_alive() is False
-    response = first_response["response"]
-    assert response.status_code == 200
-    body = response.json()
-    session = body["session"]
-    run = body["run"]
-    assert run["id"] == provisional_id
-    assert session["status"] == "answered"
-    assert session.get("activeRunId") is None
-    assert len(session["runs"]) == 1
-    assert session["runs"][0]["status"] == "completed"
-    event_types = [item["type"] for item in session["runs"][0]["events"]]
-    assert event_types[0] == "RunAcceptedEvent"
-    assert "UserMessageEvent" in event_types
-    assert "AgentResponseEvent" in event_types
-    assert event_types[-1] == "RunCompletedEvent"
-    assert cancelled.is_set() is False
-
-
-def test_restart_reconciles_provisional_task_run_and_requeues_step(
-    tmp_path,
-    monkeypatch,
-):
-    from cyrene.workbench import runtime
+    from cyrene.workbench import project_repository, task_runs
     from cyrene.workbench.task_runs import (
         begin_task_run,
+        current_task_run_id,
         recover_interrupted_task_runs,
     )
     from cyrene.workbench.store import write_document
 
     db_path = str(tmp_path / "recovery.sqlite3")
-    store_path = tmp_path / "workbench_projects.json"
     payload = _projects_payload(tmp_path)
     write_document(
         db_path,
         "projects",
         payload,
         lambda: {"projects": []},
-        export_path=store_path,
     )
-    monkeypatch.setattr(runtime, "_WORKBENCH_STORE", store_path)
-    monkeypatch.setattr(runtime, "_db_path", db_path)
-    monkeypatch.setattr(runtime, "_CONFIGURED_WORKBENCH_STORE", store_path)
+    project_repository._configure_workbench_store(db_path)
 
     assert begin_task_run(
         "session_1",
@@ -401,14 +224,48 @@ def test_restart_reconciles_provisional_task_run_and_requeues_step(
         run_type="execution",
         body={"input": "execute", "stepId": "step_session_1"},
     ) is True
-    assert recover_interrupted_task_runs() == 1
 
-    recovered = runtime._read_workbench_store()
-    _, session = runtime._workbench_find_session(recovered, "session_1")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    resumed = {}
+
+    async def resume_run(session_id, run_type, body):
+        resumed.update(
+            session_id=session_id,
+            run_type=run_type,
+            body=body,
+            run_id=current_task_run_id(),
+        )
+        entered.set()
+        await release.wait()
+        return {"ok": True}
+
+    assert await recover_interrupted_task_runs(db_path, resume_run) == 1
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    lease = task_runs.coordinator_for(db_path).get("task", "session_1")
+    assert lease is not None
+    recovery_task = lease.task
+    assert recovery_task is not None
+    assert resumed == {
+        "session_id": "session_1",
+        "run_type": "execution",
+        "body": {"input": "execute", "stepId": "step_session_1"},
+        "run_id": "run_crashed",
+    }
+    release.set()
+    await asyncio.wait_for(recovery_task, timeout=1)
+
+    recovered = project_repository._read_workbench_store()
+    _, session = project_repository._workbench_find_session(
+        recovered, "session_1"
+    )
     assert session is not None
     run = next(item for item in session["runs"] if item["id"] == "run_crashed")
-    assert run["status"] == "interrupted"
-    assert run["terminationReason"] == "process_restarted"
-    assert run["events"][-1]["type"] == "RunInterruptedEvent"
+    assert run["status"] == "completed"
+    assert run["resumeBody"] == {
+        "input": "execute",
+        "stepId": "step_session_1",
+    }
+    assert run["events"][-1]["type"] == "RunCompletedEvent"
     assert session.get("activeRunId") is None
-    assert session["plan"][0]["status"] == "pending"
+    assert session["plan"][0]["status"] == "running"

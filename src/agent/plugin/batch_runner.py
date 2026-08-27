@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable, Iterable, Mapping
 
+from ..observability import operation
 from .batch_catcher import PluginBatchCatcher
 from .plugin import PluginCall, PluginCallResult, PluginContext
 from .runtime import PluginRuntime
+
+logger = logging.getLogger(__name__)
 
 
 class PluginBatchRunner:
@@ -28,42 +32,75 @@ class PluginBatchRunner:
         on_result: Callable[[PluginCallResult], None] | None = None,
     ) -> tuple[PluginCallResult, ...]:
         batch = tuple(calls)
-        catcher = PluginBatchCatcher(batch, on_result=on_result)
-        completed = dict(completed or {})
-        for call in batch:
-            if call.id in completed:
-                catcher.catch(completed[call.id], notify=False)
-        pending = tuple(call for call in batch if call.id not in completed)
-        reviewed = await self.runtime.review_batch(pending, context)
+        context_fields = {
+            "tree_id": context.tree_id if context is not None else None,
+            "node_id": context.node_id if context is not None else None,
+            "context_data": dict(context.data) if context is not None else {},
+        }
+        with operation(
+            logger,
+            "plugin.batch",
+            "run",
+            calls=[
+                {"call_id": call.id, "plugin": call.name, "arguments": dict(call.arguments)}
+                for call in batch
+            ],
+            restored_call_ids=tuple((completed or {}).keys()),
+            max_parallel_tools=self.max_parallel_tools,
+            **context_fields,
+        ) as op:
+            catcher = PluginBatchCatcher(batch, on_result=on_result)
+            completed = dict(completed or {})
+            for call in batch:
+                if call.id in completed:
+                    catcher.catch(completed[call.id], notify=False)
+            pending = tuple(call for call in batch if call.id not in completed)
+            reviewed = await self.runtime.review_batch(pending, context)
 
-        allowed = []
-        for item in reviewed:
-            if isinstance(item, PluginCallResult):
-                catcher.catch(item)
-            else:
-                allowed.append(item)
+            allowed = []
+            for item in reviewed:
+                if isinstance(item, PluginCallResult):
+                    catcher.catch(item)
+                else:
+                    allowed.append(item)
 
-        async def execute(item) -> None:
-            catcher.catch(await self.runtime.execute(item, context))
+            async def execute(item) -> None:
+                catcher.catch(await self.runtime.execute(item, context))
 
-        parallel: list = []
+            parallel: list = []
 
-        async def flush_parallel() -> None:
-            nonlocal parallel
-            for offset in range(0, len(parallel), self.max_parallel_tools):
-                await asyncio.gather(
-                    *(execute(item) for item in parallel[offset:offset + self.max_parallel_tools])
-                )
-            parallel = []
+            async def flush_parallel() -> None:
+                nonlocal parallel
+                for offset in range(0, len(parallel), self.max_parallel_tools):
+                    await asyncio.gather(
+                        *(execute(item) for item in parallel[offset:offset + self.max_parallel_tools])
+                    )
+                parallel = []
 
-        for item in allowed:
-            if item.plugin.allow_parallel:
-                parallel.append(item)
-                continue
+            for item in allowed:
+                if item.plugin.allow_parallel:
+                    parallel.append(item)
+                    continue
+                await flush_parallel()
+                await execute(item)
             await flush_parallel()
-            await execute(item)
-        await flush_parallel()
-        return catcher.results()
+            results = catcher.results()
+            op.finish(
+                result_count=len(results),
+                succeeded=sum(item.success for item in results),
+                failed=sum(not item.success for item in results),
+                results=[
+                    {
+                        "call_id": item.call_id,
+                        "plugin": item.name,
+                        "success": item.success,
+                        "value": item.value,
+                        "error": item.error,
+                    }
+                    for item in results
+                ],
+            )
+            return results
 
 
 __all__ = ["PluginBatchRunner"]

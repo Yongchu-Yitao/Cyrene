@@ -6,14 +6,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from cyrene.config import DATA_DIR
-from cyrene.runtime.io import atomic_write_json, read_json_safe
-from cyrene.workbench.compat import runtime_service
+from cyrene.workbench import project_repository, project_runtime
 from cyrene.workbench.store import read_document, write_document
 
-_NOTIFICATIONS_STORE = DATA_DIR / "workbench_notifications.json"
 _STORE_DB_PATH = ""
-_CONFIGURED_NOTIFICATIONS_STORE = None
 _MAX_ITEMS = 400
 _VALID_TABS = {"all", "mention", "comment", "system"}
 
@@ -42,11 +38,10 @@ def _resolve_project_ref(project_ref: str | None) -> dict[str, str]:
     if not raw:
         return out
     try:
-        R = runtime_service()
-        payload = R._read_workbench_store()
+        payload = project_repository._read_workbench_store_lightweight()
         for project in payload.get("projects", []):
             pid = str(project.get("id") or "")
-            pkey = str(R._workbench_project_data_key(project) or "")
+            pkey = str(project_runtime._workbench_project_data_key(project) or "")
             if raw in (pid, pkey):
                 out["projectId"] = pid
                 out["projectKey"] = pkey
@@ -61,16 +56,12 @@ def _resolve_project_ref(project_ref: str | None) -> dict[str, str]:
 
 
 def _read_store() -> dict[str, Any]:
-    if not _STORE_DB_PATH or _CONFIGURED_NOTIFICATIONS_STORE != _NOTIFICATIONS_STORE:
-        data = read_json_safe(_NOTIFICATIONS_STORE)
-        if isinstance(data, dict) and isinstance(data.get("items"), list):
-            return data
-        return {"items": []}
+    if not _STORE_DB_PATH:
+        raise RuntimeError("Workbench notifications are not configured")
     data = read_document(
         _STORE_DB_PATH,
         "notifications",
         lambda: {"items": []},
-        legacy_path=_NOTIFICATIONS_STORE,
     )
     if isinstance(data, dict) and isinstance(data.get("items"), list):
         return data
@@ -78,16 +69,13 @@ def _read_store() -> dict[str, Any]:
 
 
 def _write_store(payload: dict[str, Any]) -> None:
-    if not _STORE_DB_PATH or _CONFIGURED_NOTIFICATIONS_STORE != _NOTIFICATIONS_STORE:
-        atomic_write_json(_NOTIFICATIONS_STORE, payload)
-        return
+    if not _STORE_DB_PATH:
+        raise RuntimeError("Workbench notifications are not configured")
     merged = write_document(
         _STORE_DB_PATH,
         "notifications",
         payload,
         lambda: {"items": []},
-        legacy_path=_NOTIFICATIONS_STORE,
-        export_path=_NOTIFICATIONS_STORE,
     )
     payload.clear()
     payload.update(merged)
@@ -96,9 +84,11 @@ def _write_store(payload: dict[str, Any]) -> None:
 
 
 def configure_store(db_path: str) -> None:
-    global _STORE_DB_PATH, _CONFIGURED_NOTIFICATIONS_STORE
-    _STORE_DB_PATH = str(db_path or "")
-    _CONFIGURED_NOTIFICATIONS_STORE = _NOTIFICATIONS_STORE
+    global _STORE_DB_PATH
+    normalized = str(db_path or "").strip()
+    if not normalized:
+        raise ValueError("Workbench notifications require a database path")
+    _STORE_DB_PATH = normalized
 
 
 def append_notification(

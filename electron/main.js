@@ -5327,7 +5327,7 @@ function registerQuickChatShortcut(accelerator) {
 
 function getPythonBinaryPath() {
   if (isDev) {
-    return null; // use system python
+    return 'uv'; // use the same source entry point as `uv run cyrene`
   }
   // In a packaged Electron app, extraResources are in process.resourcesPath
   const base = process.resourcesPath;
@@ -5338,7 +5338,8 @@ function getPythonBinaryPath() {
 function getPythonArgs() {
   if (isDev) {
     return [
-      path.join(__dirname, '..', 'src', 'cyrene', 'local_cli.py'),
+      'run',
+      'cyrene',
       '--workbench',
       '--electron-mode',
     ];
@@ -5405,6 +5406,7 @@ function spawnPython() {
     pythonProcess = spawn(binaryPath, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
+      cwd: cwd,
       env: childEnv,
     });
   } else {

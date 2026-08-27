@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+from agent.plugin.native_runtime import run_context_value
+
 TOOL_NAME = "browser_user_events"
 TOOL_DEF = {
     "type": "function",
@@ -88,22 +91,18 @@ def _event_label(event: dict[str, Any]) -> str:
 
 async def _tool_browser_user_events(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
-    from cyrene.learning import engine as behavior_learning
-    from cyrene.agent.context import get_current_round_id, get_current_session_id
+    import cyrene.learning.orchestrator as behavior_learning
 
     try:
         limit = int(args.get("limit") or 20)
     except (TypeError, ValueError):
         limit = 20
-    session_id = str(get_current_session_id() or "").strip()
+    session_id = str(run_context_value(context, "session_id") or "").strip()
     round_id = str(args.get("round_id") or "").strip()
     if round_id == "current":
-        round_id = str(get_current_round_id() or "").strip()
+        round_id = str(run_context_value(context, "round_id") or "").strip()
     events = await behavior_learning.list_recent_browser_user_events(
         session_id=session_id,
         round_id=round_id,

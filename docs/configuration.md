@@ -4,9 +4,9 @@
 
 ## Encrypted Config Store
 
-Cyrene stores most configuration in a Fernet-encrypted JSON config blob (`data/config.enc` by default). You do **not** need a `.env` file for normal operation. The first-run onboarding wizard writes the required values, and the Web UI Settings page can update them at runtime.
-
-A legacy `.env.example` is still shipped for backward compatibility, but new installs should use the onboarding wizard or Settings UI.
+Cyrene stores configuration in a Fernet-encrypted JSON config blob
+(`data/config.enc` by default). The first-run onboarding wizard writes the
+required values, and the Web UI Settings page can update them at runtime.
 
 The encrypted values live in `data/config.enc`. Its Fernet key is stored in the
 OS keyring when available. Headless/portable environments without a working
@@ -33,34 +33,24 @@ can override the resolved paths before Python imports Cyrene:
 | `CYRENE_INSTALL_RESOURCES_DIR` | Packaged/static resource override |
 | `CYRENE_ALLOWED_WORKSPACE_ROOTS` | Additional allowed project roots |
 
-The active main database is `store/cyrene.runtime.database`. On first startup,
-an existing `store/cyrene.db` is migrated only when the new target is absent or
-row-empty. The source remains in place as a rollback copy.
+The active main database is `store/cyrene.runtime.database`.
 
 ## Environment Variables
 
 The following variables are read at startup. Most can also be edited at runtime through the Web UI.
 
-### LLM
+### Models
 
-| Variable | Description | Default |
-|---|---|---|
-| `OPENAI_API_KEY` | API key (OpenAI / DeepSeek / compatible) | — |
-| `OPENAI_BASE_URL` | API endpoint URL | `https://api.deepseek.com/v1` |
-| `OPENAI_MODEL` | Model name | `deepseek-v4-flash` |
-
-Settings → Models includes ready-to-configure connections for MiniMax,
-DeepSeek, Kimi, GLM, OpenCode Go, Gemini, OpenRouter, AMD GPU Cloud, Codex
-OAuth, and Local ONNX. Model catalogs are fetched from each provider instead
-of being frozen in the app. OpenCode Go profiles automatically select Chat
-Completions, Responses, or Anthropic Messages according to the selected model.
+Models are not configured through environment variables. Settings → Models
+stores one canonical graph of Provider Plugin connections, model profiles, and
+independent primary, secondary, vision, and embedding routes. Provider catalogs
+and inference operations are supplied by editable Model Plugins.
 
 ### Agent
 
 | Variable | Description | Default |
 |---|---|---|
 | `ASSISTANT_NAME` | Agent display name | `Cyrene` |
-| `MAX_HISTORY_MESSAGES` | Messages kept in the context window | `40` |
 | `MAX_TOOL_OUTPUT_CHARS` | Optional character cap for tool results sent to the LLM (`0` disables the global cap) | `0` |
 
 ### Telegram (optional)
@@ -75,27 +65,19 @@ Completions, Responses, or Anthropic Messages according to the selected model.
 | Variable | Description | Default |
 |---|---|---|
 | `WECHAT_BOT_TOKEN` | WeChat bot token | — |
-| `WECHAT_OWNER_ID` | Historical owner-ID compatibility field; the current QR flow discovers senders | — |
+| `WECHAT_OWNER_ID` | Optional WeChat owner ID | — |
 
 ### Embedding / Knowledge Base (optional)
 
-| Variable | Description | Default |
-|---|---|---|
-| `EMBEDDING_BASE_URL` | OpenAI-compatible embedding endpoint | — |
-| `EMBEDDING_API_KEY` | API key for the embedding endpoint | — |
-| `EMBEDDING_MODEL` | Embedding model name | — |
-
-> If no embedding endpoint is configured, the knowledge base falls back to FTS/text search.
+Configure an embedding-capable profile in Settings → Models and add it to the
+embedding route. If that route is empty, the knowledge base falls back to
+FTS/text search.
 
 ### Scheduling
 
 | Variable | Description | Default |
 |---|---|---|
 | `SCHEDULER_INTERVAL` | Scheduled-task polling interval in seconds | `60` |
-| `HEARTBEAT_INTERVAL` | Historical compatibility value; not the active proactive cadence | `300` |
-| `HEARTBEAT_LOTTERY_INTERVAL` | Historical compatibility value; not read by the current scheduler | `1800` |
-| `DAYTIME_START` | Historical compatibility value; current proactive window is fixed at 06:00 | `6` |
-| `DAYTIME_END` | Historical compatibility value; current proactive window ends at 22:00 | `22` |
 
 ### Steward & Pattern Learning
 
@@ -103,14 +85,10 @@ Completions, Responses, or Anthropic Messages according to the selected model.
 |---|---|---|
 | `STEWARD_INTERVAL` | Seconds between SOUL.md steward runs (minimum one hour) | `3600` |
 | `PATTERN_DETECTION_INTERVAL` | Seconds between behavior-pattern scans | `600` |
-| `LOTTERY_DELTA` | Historical compatibility value; current lottery increment is fixed at `0.15` | `0.15` |
-| `LOTTERY_MAX` | Historical compatibility value; current lottery cap is fixed at `0.85` | `0.85` |
 
 The active proactive cadence is the encrypted runtime setting
 `heartbeat_interval`, exposed in Settings and defaulting to `1800` seconds.
-The scheduler reads it at startup. The historical environment keys above are
-still parsed for compatibility, but changing them does not currently change
-the proactive cadence, daytime window, or lottery parameters.
+The scheduler reads it at startup.
 
 ### Search
 
@@ -147,11 +125,9 @@ the proactive cadence, daytime window, or lottery parameters.
 
 Most settings can be edited at runtime through the Web UI **Settings** page without restarting:
 
-- **API Keys** — Update `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, `TELEGRAM_BOT_TOKEN`, `WECHAT_BOT_TOKEN`, `AMAP_API_KEY`, embedding credentials
-- **Models** — Add or remove model configurations
-- **Tool packages** — Enable or disable complete progressive-disclosure
-  packages; direct control/filesystem/web tools remain part of the stable wire
-  contract
+- **Credentials** — Update channel and map credentials
+- **Models** — Manage Provider Plugin connections, profiles, and role routes
+- **Plugin packs and standalone Plugins** — Enable or disable Agent capabilities
 - **Agents** — Main-agent execution is completion-driven with no tool-round limit; configure execution subagent lease checkpoints, no-progress detection, wide tool/time/cost/context safety fuses, and separate discussion round/message/information-gain limits
 - **Search** — official DeepSeek Responses Web Search when configured, with built-in SimpleXNG fallback
 - **MCP Servers** — Add, remove, and restart MCP server connections
@@ -161,17 +137,16 @@ Most settings can be edited at runtime through the Web UI **Settings** page with
 
 ### Agent-visible typed settings
 
-`cyrene.settings.describe`, `cyrene.settings.read`, and
-`cyrene.settings.update` are available only to the main agent through
-`cyrene_tools`. The registry contains 52 scalar settings and 31 complex-control
-coverage entries across every non-model Settings tab. The namespaces are
+`CyreneSettingsDescribe`, `CyreneSettingsRead`, and `CyreneSettingsUpdate` are
+available only to the main Agent through the `cyrene_application` Plugin pack.
+The namespaces are
 `runtime`, `desktop`, `appearance`, `profile`, and `shortcuts`.
 
 Updates are atomic compare-and-swap patches and require the latest
 `expected_revision`. A stale revision returns a conflict and preserves the
 user's newer edit. Shortcut patches preserve unspecified actions and use
 `null` only to reset a named binding. Models, secret values, secret redaction,
-and the availability of `cyrene_tools` itself cannot be changed through this
+and the availability of the settings Plugins themselves cannot be changed through this
 control plane.
 
 ## Browser Configuration

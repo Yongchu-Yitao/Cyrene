@@ -4,6 +4,9 @@ import asyncio
 import ast
 import json
 
+from agent.plugin import PluginContext
+from agent.plugin.native_runtime import resolve_workspace_path
+
 # ── Ruff helpers ──
 
 async def _run_ruff_check(path: str) -> list[dict]:
@@ -57,10 +60,9 @@ async def _run_ruff_format(path: str, check_only: bool = False) -> dict:
 
 # ── AST analysis ──
 
-def analyze_structure(path: str) -> dict:
+def analyze_structure(path: str, context: PluginContext) -> dict:
     """Analyze Python file structure: functions, classes, complexity, imports."""
-    from cyrene.tooling.runtime_api import resolve_workspace_path
-    resolved = resolve_workspace_path(path)
+    resolved = resolve_workspace_path(path, context)
     try:
         source = resolved.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -122,34 +124,40 @@ def analyze_structure(path: str) -> dict:
 
 # ── Tool handlers ──
 
-async def _tool_lint_code(args: dict, bot=None, chat_id=None, db_path=None, notify_state=None) -> str:
-    from cyrene.tooling.runtime_api import resolve_workspace_path
+async def _tool_lint_code(
+    args: dict,
+    context: PluginContext,
+) -> str:
     path = str(args.get("path", "."))
     try:
-        resolved = resolve_workspace_path(path)
+        resolved = resolve_workspace_path(path, context)
     except ValueError as e:
         return json.dumps({"error": str(e)}, ensure_ascii=False)
     results = await _run_ruff_check(str(resolved))
     return json.dumps({"status": "ok", "file": str(resolved), "issues": results}, ensure_ascii=False)
 
 
-async def _tool_format_code(args: dict, bot=None, chat_id=None, db_path=None, notify_state=None) -> str:
-    from cyrene.tooling.runtime_api import resolve_workspace_path
+async def _tool_format_code(
+    args: dict,
+    context: PluginContext,
+) -> str:
     path = str(args.get("path", "."))
     check_only = bool(args.get("check_only", False))
     try:
-        resolved = resolve_workspace_path(path)
+        resolved = resolve_workspace_path(path, context)
     except ValueError as e:
         return json.dumps({"error": str(e)}, ensure_ascii=False)
     result = await _run_ruff_format(str(resolved), check_only=check_only)
     return json.dumps({"status": "ok", "file": str(resolved), **result}, ensure_ascii=False)
 
 
-async def _tool_code_review(args: dict, bot=None, chat_id=None, db_path=None, notify_state=None) -> str:
-    from cyrene.tooling.runtime_api import resolve_workspace_path
+async def _tool_code_review(
+    args: dict,
+    context: PluginContext,
+) -> str:
     path = str(args.get("path", "."))
     try:
-        resolved = resolve_workspace_path(path)
+        resolved = resolve_workspace_path(path, context)
     except ValueError as e:
         return json.dumps({"error": str(e)}, ensure_ascii=False)
 
@@ -160,7 +168,7 @@ async def _tool_code_review(args: dict, bot=None, chat_id=None, db_path=None, no
     lint_results, format_results = await asyncio.gather(lint_task, format_task)
 
     # Structure analysis (sync, but fast)
-    structure = analyze_structure(str(resolved))
+    structure = analyze_structure(str(resolved), context)
 
     suggestions = []
     if lint_results:
@@ -242,11 +250,10 @@ CODE_REVIEW_DEF = {
     },
 }
 
+PLUGIN_DECLARATIONS = (
+    (LINT_CODE_DEF, _tool_lint_code),
+    (FORMAT_CODE_DEF, _tool_format_code),
+    (CODE_REVIEW_DEF, _tool_code_review),
+)
 
-def register_to(tool_defs: list, tool_handlers: dict) -> None:
-    tool_defs.append(LINT_CODE_DEF)
-    tool_handlers["LintCode"] = _tool_lint_code
-    tool_defs.append(FORMAT_CODE_DEF)
-    tool_handlers["FormatCode"] = _tool_format_code
-    tool_defs.append(CODE_REVIEW_DEF)
-    tool_handlers["CodeReview"] = _tool_code_review
+__all__ = ["PLUGIN_DECLARATIONS", "analyze_structure"]

@@ -5,7 +5,7 @@ import { wbcStartFileDrag } from "./file-resources.jsx"
 
 import { moveChatOrderBlock } from "./behavior.mjs"
 import { WbcRenameDialog } from "./rename-dialog.jsx"
-import { WBC_CHAT_GROUPS_PREFIX, WbcConversationStatusPreview, WbcHoverMarquee, wbcBuildChatRailItems, wbcConversationTrackIsCompleted, wbcConversationTrackIsRunning, wbcConversationTrackPositions, wbcConversationTrackState, wbcConversationTrackRuntimeText, wbcCreateChatGroup, wbcFindChatGroup, wbcLoadChatGroups, wbcLoadChatOrder, wbcMoveChatOrder, wbcMoveChatOrderBlock, wbcNormalizeChatGroups, wbcNormalizeChatOrder, wbcOrderChatsByPinned, wbcProjectFileResource, wbcProjectFileVisual, wbcRemoveChatFromGroups, wbcViewportChatIds } from "./rail-model.jsx"
+import { WbcConversationStatusPreview, WbcHoverMarquee, wbcBuildChatRailItems, wbcConversationTrackIsCompleted, wbcConversationTrackIsRunning, wbcConversationTrackPositions, wbcConversationTrackState, wbcConversationTrackRuntimeText, wbcCreateChatGroup, wbcFindChatGroup, wbcLoadChatOrder, wbcMoveChatOrder, wbcMoveChatOrderBlock, wbcNormalizeChatGroups, wbcNormalizeChatOrder, wbcOrderChatsByPinned, wbcProjectFileResource, wbcProjectFileVisual, wbcRemoveChatFromGroups, wbcViewportChatIds } from "./rail-model.jsx"
 import { WbcTaskRailCards, WbcTaskRailList, useWbcTaskRail } from "./rail-tasks.jsx"
 import { useWbcRailOrdering, wbcDefaultRailOrder } from "./rail-ordering.jsx"
 import { useWbcRailDropController } from "./rail-drop-controller.jsx"
@@ -126,10 +126,7 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
   var [terminalDragId, setTerminalDragId] = useWbcState("");
   var taskRail = useWbcTaskRail(projectId, tasks, pinnedTaskIds, query);
   var [collapsedGroups, setCollapsedGroups] = useWbcState({});
-  var defaultOrderSeed = wbcDefaultRailOrder(chats, pinnedChatIds);
-  var [groups, setGroups] = useWbcState(function () {
-    return wbcLoadChatGroups(projectId, defaultOrderSeed);
-  });
+  var [groups, setGroups] = useWbcState([]);
   var [announcement, setAnnouncement] = useWbcState("");
   var ordering = useWbcRailOrdering({
     chats: chats,
@@ -563,13 +560,9 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
 
   useWbcEffect(function () {
     setOrder(wbcLoadChatOrder(projectId, defaultOrder));
-    var legacyGroups = wbcLoadChatGroups(projectId, defaultOrder);
-    setGroups(legacyGroups);
+    setGroups([]);
     setGroupBackendReady(false);
-    setCollapsedGroups(legacyGroups.reduce(function (state, group) {
-      state[group.id] = true;
-      return state;
-    }, {}));
+    setCollapsedGroups({});
     setGroupMetadataPending({});
     groupMetadataRequestRef.current.active = {};
     setDragState(null);
@@ -582,15 +575,6 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
     backendRef.chain = Promise.resolve();
     backendRef.baseGroups = [];
     var loadPromise = WorkbenchChatModel.listChatGroups(projectId).then(function (payload) {
-      if (groupBackendLoadRef.current !== loadToken) return null;
-      if (payload && payload.migrationRequired) {
-        return WorkbenchChatModel.migrateChatGroups({
-          projectId: projectId,
-          groups: legacyGroups,
-        });
-      }
-      return payload;
-    }).then(function (payload) {
       if (!payload || groupBackendLoadRef.current !== loadToken) return;
       var authoritative = storeNormalizedGroups(payload.groups || []);
       backendRef.baseGroups = authoritative;
@@ -600,10 +584,7 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
         return state;
       }, {}));
       setGroupBackendReady(true);
-    }).catch(function () {
-      // Keep the legacy/last-known browser cache for offline startup. The next
-      // project load or mutation retries against the authoritative backend.
-    });
+    }).catch(function () {});
     backendRef.chain = loadPromise;
     return function () {
       if (groupBackendLoadRef.current === loadToken) groupBackendLoadRef.current += 1;
@@ -634,14 +615,7 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
   }, [projectId, groupBackendReady, groupMetadataLang, groupMetadataRefreshKey]);
 
   function storeNormalizedGroups(nextGroups) {
-    var normalized = wbcNormalizeChatGroups(nextGroups, defaultOrder);
-    try {
-      localStorage.setItem(
-        WBC_CHAT_GROUPS_PREFIX + String(projectId || ""),
-        JSON.stringify(normalized)
-      );
-    } catch (e) {}
-    return normalized;
+    return wbcNormalizeChatGroups(nextGroups, defaultOrder);
   }
 
   function commitGroups(nextGroups, intent) {
@@ -1173,16 +1147,14 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
                       ? wbcT("workbenchChat.unpin", "Unpin chat")
                       : wbcT("workbenchChat.pin", "Pin chat")}</span>
                   </button>
-                  {!chat.legacy && (
-                    <button type="button" role="menuitem" data-cyrene-node-id="chat_menu_rename" className="wbc-chat-menu-action" onClick={function (e) {
-                      e.stopPropagation();
-                      setMenuId("");
-                      setRenameChat(chat);
-                    }}>
-                      <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.edit}</span>
-                      <span>{wbcT("workbenchChat.rename", "Rename chat")}</span>
-                    </button>
-                  )}
+                  <button type="button" role="menuitem" data-cyrene-node-id="chat_menu_rename" className="wbc-chat-menu-action" onClick={function (e) {
+                    e.stopPropagation();
+                    setMenuId("");
+                    setRenameChat(chat);
+                  }}>
+                    <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.edit}</span>
+                    <span>{wbcT("workbenchChat.rename", "Rename chat")}</span>
+                  </button>
                   <button type="button" role="menuitem" data-cyrene-node-id="chat_menu_to_task" className="wbc-chat-menu-action" disabled={toTaskBusy} onClick={function (e) {
                     e.stopPropagation();
                     setMenuId("");
@@ -1800,17 +1772,15 @@ function WbcRail({ projectId, projectName, chats, tasks, terminals, terminalsLoa
           actions: [{ action_id: "invoke", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"] }],
           handlers: { invoke: function () { setMenuId(""); return onTogglePinned && onTogglePinned(menuChat, !pinned); } },
         }));
-        if (!menuChat.legacy) {
-          unregister.push(uiSurface.register({
-            node_id: "chat_menu_rename",
-            parent_id: "chat_context_menu",
-            scope: "chat_menu",
-            order: 30,
-            get_node: function () { return { role: "menuitem", name: wbcT("workbenchChat.rename", "Rename chat") }; },
-            actions: [{ action_id: "invoke", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"] }],
-            handlers: { invoke: function () { setMenuId(""); setRenameChat(menuChat); } },
-          }));
-        }
+        unregister.push(uiSurface.register({
+          node_id: "chat_menu_rename",
+          parent_id: "chat_context_menu",
+          scope: "chat_menu",
+          order: 30,
+          get_node: function () { return { role: "menuitem", name: wbcT("workbenchChat.rename", "Rename chat") }; },
+          actions: [{ action_id: "invoke", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"] }],
+          handlers: { invoke: function () { setMenuId(""); setRenameChat(menuChat); } },
+        }));
         unregister.push(uiSurface.register({
           node_id: "chat_menu_to_task",
           parent_id: "chat_context_menu",

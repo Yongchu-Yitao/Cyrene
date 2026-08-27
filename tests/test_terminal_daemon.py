@@ -114,7 +114,7 @@ async def test_terminal_daemon_survives_view_disconnect_until_explicit_delete(
         classmethod(lambda cls, project_id, cwd="": tmp_path),
     )
     monkeypatch.setattr(
-        "cyrene.tooling.backends.shell_runtime.interactive_argv",
+        "cyrene.terminal.shell_runtime.interactive_argv",
         lambda: ("sh", ["/bin/sh"]),
     )
     client = TerminalDaemonClient(state_dir=state_dir)
@@ -240,7 +240,7 @@ async def test_exited_terminal_input_does_not_drop_daemon_subscription(
         classmethod(lambda cls, project_id, cwd="": tmp_path),
     )
     monkeypatch.setattr(
-        "cyrene.tooling.backends.shell_runtime.interactive_argv",
+        "cyrene.terminal.shell_runtime.interactive_argv",
         lambda: ("sh", ["/bin/sh", "-c", "exit 0"]),
     )
     client = TerminalDaemonClient(state_dir=state_dir)
@@ -292,7 +292,7 @@ async def test_terminal_daemon_shutdown_closes_views_and_recovers_shell(
         classmethod(lambda cls, project_id, cwd="": tmp_path),
     )
     monkeypatch.setattr(
-        "cyrene.tooling.backends.shell_runtime.interactive_argv",
+        "cyrene.terminal.shell_runtime.interactive_argv",
         lambda: ("sh", ["/bin/sh"]),
     )
     client = TerminalDaemonClient(state_dir=state_dir)

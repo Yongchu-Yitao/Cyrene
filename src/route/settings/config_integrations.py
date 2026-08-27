@@ -63,7 +63,7 @@ def register_local_model_routes(
 ) -> None:
     @router.get("/api/settings/integrations")
     async def api_get_integration_settings():
-        """Return Zotero/embedding settings without exposing stored secrets."""
+        """Return Zotero integration settings."""
         return service.integration_settings()
 
     @router.get("/api/settings/local-models/status")
@@ -109,7 +109,7 @@ def register_integration_routes(
 
     @router.post("/api/settings/integrations/test")
     async def api_test_integration(request: Request):
-        """Probe unsaved integration settings and return only safe metadata."""
+        """Probe unsaved Zotero settings and return only safe metadata."""
         body = await request.json()
         if not isinstance(body, dict):
             body = {}

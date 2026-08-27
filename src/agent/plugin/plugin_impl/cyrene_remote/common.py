@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from collections.abc import Sequence
 from typing import Any
 from uuid import uuid4
 
+from agent.plugin import PluginContext
+from agent.plugin.native_runtime import run_context_value
 from cyrene.runtime.remote_control import (
     RemoteControlStore,
     get_remote_gateway,
@@ -60,20 +63,29 @@ def remote_tool_error(exc: Exception) -> dict[str, Any]:
 
 
 def selected_remote_devices(
-    db_path: str,
-    *,
-    fallback_chat_id: object = "",
+    context: PluginContext,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Return the current chat and only its still-trusted selected devices."""
-    from cyrene.agent.context import get_current_session_id
-    from cyrene.workbench import chat as chat_service
-
-    chat_id = str(get_current_session_id() or fallback_chat_id or "").strip()
+    chat_id = str(run_context_value(context, "session_id", "") or "").strip()
     if not chat_id:
         raise ValueError("当前没有活动对话，无法解析远程设备上下文")
-    chat = chat_service.get_workbench_chat(chat_id)
-    if chat is None:
-        raise ValueError("当前对话不存在，无法解析远程设备上下文")
+    raw_device_ids = context.data.get("remote_device_ids")
+    if not isinstance(raw_device_ids, Sequence) or isinstance(
+        raw_device_ids,
+        (str, bytes, bytearray),
+    ):
+        raw_device_ids = ()
+    chat = {
+        "id": chat_id,
+        "remoteDeviceIds": [
+            str(item or "").strip()
+            for item in raw_device_ids
+            if str(item or "").strip()
+        ],
+    }
+    db_path = str(context.data.get("db_path") or "").strip()
+    if not db_path:
+        raise ValueError("远程设备工具缺少数据库上下文")
 
     store = RemoteControlStore(db_path)
     selected: list[dict[str, Any]] = []
@@ -92,14 +104,9 @@ def selected_remote_devices(
 
 def resolve_selected_remote_device(
     args: dict[str, Any],
-    db_path: str,
-    *,
-    fallback_chat_id: object = "",
+    context: PluginContext,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    chat, devices = selected_remote_devices(
-        db_path,
-        fallback_chat_id=fallback_chat_id,
-    )
+    chat, devices = selected_remote_devices(context)
     requested = str(args.get("device_id") or "").strip()
     if requested:
         for device in devices:
@@ -117,15 +124,15 @@ def resolve_selected_remote_device(
 
 async def request_remote_command(
     args: dict[str, Any],
-    db_path: str,
-    *,
-    fallback_chat_id: object = "",
+    context: PluginContext,
 ) -> dict[str, Any]:
     _chat, device = resolve_selected_remote_device(
         args,
-        db_path,
-        fallback_chat_id=fallback_chat_id,
+        context,
     )
+    db_path = str(context.data.get("db_path") or "").strip()
+    if not db_path:
+        raise ValueError("远程设备工具缺少数据库上下文")
     gateway = get_remote_gateway(db_path)
     if gateway is None:
         raise RuntimeError("远程连接尚未启动，请先在设置中启用远程控制")

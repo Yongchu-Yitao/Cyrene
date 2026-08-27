@@ -41,10 +41,9 @@ function WbcUsageRing({ usage }) {
   );
 }
 
-// Context-window gauge + composition for ONE conversation. Reads the agent's
-// raw per-session state (sessions/<id>/state.json) so the numbers are scoped to
-// this chat and reflect what the compactor actually measures; polls while a run
-// streams so the panel updates in real time as turns are appended.
+// Context-window gauge + composition for one conversation. The HTTP read model
+// is projected exclusively from the Agent ContextTree; poll while a run streams
+// so the panel updates as the durable tree is extended.
 var WBC_CTX_SEG_ORDER = ["compacted", "system", "user", "assistant", "tool"];
 var WBC_CTX_SEG_LABEL = {
   compacted: ["workbenchChat.ctx.seg.compacted", "Compressed"],
@@ -74,14 +73,31 @@ function useWbcLiveChatMetrics(chat, running) {
     if (!chatId) { setData(null); return undefined; }
     var cancelled = false;
     var requestRevision = 0;
+    var inFlight = false;
+    var pendingLoad = false;
+    var timer = null;
+    var requestController = null;
     function storePayload(payload) {
       var nextData = { chatId: chatId, payload: payload };
       WBC_LIVE_CHAT_METRICS_CACHE.set(chatId, nextData);
       setData(nextData);
     }
     function load() {
+      if (cancelled) return;
+      if (inFlight) {
+        pendingLoad = true;
+        return;
+      }
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      inFlight = true;
       var revision = ++requestRevision;
-      fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/context")
+      requestController = typeof AbortController === "function" ? new AbortController() : null;
+      var requestOptions = { cache: "no-store" };
+      if (requestController) requestOptions.signal = requestController.signal;
+      fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/context", requestOptions)
         .then(function (r) { return r.json(); })
         .then(function (payload) {
           // A model switch can invalidate an older in-flight request. Always
@@ -89,7 +105,18 @@ function useWbcLiveChatMetrics(chat, running) {
           // fallback model) rather than merging an optimistic selection over it.
           if (!cancelled && revision === requestRevision && payload && !payload.error) storePayload(payload);
         })
-        .catch(function () {});
+        .catch(function () {})
+        .finally(function () {
+          inFlight = false;
+          requestController = null;
+          if (cancelled) return;
+          if (pendingLoad) {
+            pendingLoad = false;
+            load();
+          } else if (running) {
+            timer = setTimeout(load, 3500);
+          }
+        });
     }
     function applyOptimisticModel(detail) {
       if (!detail || (detail.chatId && String(detail.chatId) !== String(chatId))) return;
@@ -151,10 +178,12 @@ function useWbcLiveChatMetrics(chat, running) {
     window.addEventListener(WBC_CHAT_MODEL_CHANGED_EVENT, onChatModelChanged);
     window.addEventListener("cyrene:model-configuration-changed", onModelConfigurationChanged);
     load();
-    var timer = running ? setInterval(load, 3500) : null;
     return function () {
       cancelled = true;
-      if (timer) clearInterval(timer);
+      if (timer) clearTimeout(timer);
+      if (requestController) {
+        try { requestController.abort(); } catch (e) {}
+      }
       window.removeEventListener(WBC_CHAT_MODEL_CHANGED_EVENT, onChatModelChanged);
       window.removeEventListener("cyrene:model-configuration-changed", onModelConfigurationChanged);
     };
@@ -180,21 +209,43 @@ function useWbcLiveContextBlocks(chat, running) {
   useWbcEffect(function () {
     if (!chatId) { setData(null); return undefined; }
     var cancelled = false;
+    var requestRevision = 0;
+    var inFlight = false;
+    var timer = null;
+    var requestController = null;
     function load() {
-      fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/context-blocks")
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      var revision = ++requestRevision;
+      requestController = typeof AbortController === "function" ? new AbortController() : null;
+      var requestOptions = { cache: "no-store" };
+      if (requestController) requestOptions.signal = requestController.signal;
+      fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/context-blocks", requestOptions)
         .then(function (r) { return r.json(); })
         .then(function (payload) {
-          if (!cancelled && payload && !payload.error) {
+          if (!cancelled && revision === requestRevision && payload && !payload.error) {
             var next = { chatId: chatId, payload: payload };
             WBC_CONTEXT_BLOCKS_CACHE.set(chatId, next);
             setData(next);
           }
         })
-        .catch(function () {});
+        .catch(function (err) {
+          if (!err || err.name !== "AbortError") return undefined;
+        })
+        .finally(function () {
+          inFlight = false;
+          requestController = null;
+          if (!cancelled && running) timer = setTimeout(load, 3500);
+        });
     }
     load();
-    var timer = running ? setInterval(load, 3500) : null;
-    return function () { cancelled = true; if (timer) clearInterval(timer); };
+    return function () {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      if (requestController) {
+        try { requestController.abort(); } catch (e) {}
+      }
+    };
   }, [chatId, updatedAt, contextRevision, running]);
 
   return data && data.chatId === chatId ? data.payload : null;
@@ -323,13 +374,13 @@ function WbcQuickActionItems({ chat, menu, onBeforeAction, onRename, onDelete, o
     <>
       <button type="button" role={role} onClick={run(onRename)}>{WBC_ICONS.edit}<span>{wbcT("workbenchChat.rename", "Rename chat")}</span></button>
       <button type="button" role={role} disabled={toTaskBusy} onClick={run(onToTask)}>{WBC_ICONS.task}<span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span></button>
-      {!chat.legacy && onCompact && (
+      {onCompact && (
         <button type="button" role={role} disabled={compactBusy} onClick={run(onCompact)}>
           {compactBusy ? <span className="wbc-spinner" aria-hidden="true"></span> : WBC_ICONS.compact}
           <span>{wbcT(compactBusy ? "workbenchChat.compactBusy" : "workbenchChat.compact", compactBusy ? "Compressing…" : "Compress chat")}</span>
         </button>
       )}
-      {!chat.legacy && onGenerateMemory && (
+      {onGenerateMemory && (
         <button type="button" role={role} disabled={memoryLearningBusy} onClick={run(onGenerateMemory)}>
           {memoryLearningBusy ? <span className="wbc-spinner" aria-hidden="true"></span> : WBC_ICONS.spark}
           <span>{wbcT(memoryLearningBusy ? "workbenchChat.generateMemoryBusy" : "workbenchChat.generateMemory", memoryLearningBusy ? "Starting memory learning…" : "Generate memory")}</span>
@@ -529,7 +580,7 @@ function WbcOverviewTab({ chat, loading, detailed, runtime }) {
       : wbcT("workbenchChat.noMessages", "Select or create a chat.")}</p>;
   }
   var runtimeUsage = runtime && runtime.usage && typeof runtime.usage === "object" ? runtime.usage : {};
-  var usage = Object.assign({}, (liveData && liveData.usage) || chat.usage || {}, runtimeUsage);
+  var usage = Object.assign({}, (liveData && liveData.usage) || {}, runtimeUsage);
   if (runtime && runtime.contextUsage && typeof runtime.contextUsage === "object") {
     var context = runtime.contextUsage;
     var used = Number(context.used || 0);
@@ -542,7 +593,11 @@ function WbcOverviewTab({ chat, loading, detailed, runtime }) {
       usage: usage,
     });
   }
-  var currentModel = wbcCurrentModel(chat, null, runtime, liveData);
+  var currentModel = String(
+    runtime && runtime.activeModel
+    || liveData && liveData.model
+    || ""
+  ).trim();
   var convertedTitle = chat.convertedSessionId ? String(chat.convertedTaskTitle || "").trim() : "";
   // Agent identity block (handoff §9). Legacy chats normalize to the built-in
   // Cyrene Agent; external Agents surface connection, model source and both
@@ -609,7 +664,7 @@ function WbcOverviewTab({ chat, loading, detailed, runtime }) {
         <div className="wbc-overview-facts">
           <div>
             <span>{wbcT("workbenchChat.messageCount", "Messages")}</span>
-            <b>{chat.messageCount != null ? chat.messageCount : (chat.messages || []).length}</b>
+            <b>{liveData && liveData.messageCount != null ? liveData.messageCount : 0}</b>
           </div>
           <div>
             <span>{wbcT("workbenchChat.createdAt", "Created")}</span>
@@ -636,17 +691,51 @@ function wbcBlockLabel(block) {
   // key exists. wbcT returns the key itself when it does not, so never render
   // that value as user-facing copy.
   if (label && label !== key) return label;
-  // Match known prefixes for a generic label
-  if (id.startsWith("history.compacted.")) return wbcT("workbenchChat.ctxBlock.history.compacted", "Compacted history");
-  if (id.startsWith("history.deep_reflection.")) return wbcT("workbenchChat.ctxBlock.history.deep_reflection", "Deep reflection");
-  if (id.startsWith("history.tool_result.")) return wbcT("workbenchChat.ctxBlock.history.tool_result", "Tool result");
-  if (id.startsWith("session.history.")) return wbcT("workbenchChat.ctxBlock.session.history", "History message");
-  if (id.startsWith("user.current.")) return wbcT("workbenchChat.ctxBlock.user.current", "User message");
-  return id.replace(/^(main\.|runtime\.|command\.|spawn_policy\.|history\.|session\.)/, "");
+  // Context kinds may be supplied by user plugins, so unknown kinds use one
+  // stable label instead of leaking a generated identifier.
+  if (id.startsWith("context.")) return wbcT("workbenchChat.ctxBlock.context", "Turn context");
+  return id;
 }
 
 // Data is supplied by the panel-level useWbcLiveContextBlocks preload; this
 // stays a pure renderer so expanding the Context tab never waits on a fetch.
+function WbcContextLayerDisclosure({ layerId, label, tokens, items }) {
+  var [open, setOpen] = useWbcState(true);
+  return React.createElement("div", {
+      className: "wbc-ctx-layer-detail" + (open ? " is-open" : " is-collapsed"),
+    },
+    React.createElement("button", {
+        type: "button",
+        className: "wbc-ctx-legend-layer-head",
+        "aria-expanded": open ? "true" : "false",
+        "aria-controls": "wbc-context-layer-" + layerId,
+        onClick: function () { setOpen(function (current) { return !current; }); },
+      },
+      React.createElement("i", { className: "wbc-ctx-dot seg-" + layerId, "aria-hidden": "true" }),
+      React.createElement("span", null, label),
+      React.createElement("em", null, wbcCompactNumber(tokens)),
+      React.createElement("span", { className: "wbc-ctx-layer-chevron", "aria-hidden": "true" }, WBC_ICONS.chevronDown)
+    ),
+    React.createElement("div", {
+        id: "wbc-context-layer-" + layerId,
+        className: "wbc-ctx-layer-collapse",
+        "aria-hidden": open ? "false" : "true",
+      },
+      React.createElement("div", { className: "wbc-ctx-layer-collapse-inner" },
+        React.createElement("div", { className: "wbc-ctx-legend-layer-body" },
+          items.map(function (item) {
+            return React.createElement("div", { key: item.key, className: "wbc-ctx-legend-item" },
+              React.createElement("i", { className: "wbc-ctx-dot " + item.dotClass }),
+              React.createElement("span", null, item.label),
+              React.createElement("em", null, wbcCompactNumber(item.tokens))
+            );
+          })
+        )
+      )
+    )
+  );
+}
+
 function WbcContextBlockList({ data, compact }) {
   if (!data || !Array.isArray(data.layers) || data.layers.length === 0) {
     return React.createElement("p", { className: "workbench-muted" },
@@ -654,45 +743,24 @@ function WbcContextBlockList({ data, compact }) {
   }
 
   var layers = data.layers;
-  var usesTranscriptEstimate = data.compositionSource === "public_transcript";
-  var usesAgentReport = data.compositionSource === "agent_report";
-  var sourceNote = usesAgentReport
-    ? (data.agentContextDetailAvailable
-        ? wbcT("workbenchChat.ctxBlocks.agentReportDetailed", "Context composition reported by the Agent.")
-        : wbcT("workbenchChat.ctxBlocks.agentReportTotal", "Context usage reported by the Agent; no detailed composition was provided."))
-    : usesTranscriptEstimate
-      ? wbcT(
-          "workbenchChat.ctxBlocks.externalEstimate",
-          "Showing the conversation visible to Cyrene. This Agent does not expose its private system prompt, memory, or full context composition."
-        )
-      : "";
-  var msgTokens = data.messageTokens || 0;
   // Total for the bar: include all layers (system + ephemeral + messages)
   var barTotal = layers.reduce(function (sum, l) { return sum + (Number(l.totalTokens) || 0); }, 0);
-  // Gauge head shows message tokens only (matches Overview ctxUsed)
-  var total = msgTokens || barTotal;
+  // Use the same complete next-request context total shown in Overview.
+  var total = Number(data.contextUsed);
+  if (!Number.isFinite(total) || total < 0) total = barTotal;
 
   // Build legend: explode system_prefix and messages sub-blocks for the bar
-  var SYS_SHADE_MAP = { system: 0, memory: 1, skills: 2, runtime: 3, command_prompt: 4, spawn_policy: 5, short_term: 6 };
+  var SYS_SHADE_MAP = {
+    identity: 0,
+    instructions: 2,
+    tools: 3,
+    workspace: 4,
+    memory: 1,
+    runtime: 5,
+    system: 6,
+  };
   function sysShadeForBlock(b) {
-    // Use block type first, fall back to id prefix matching for "system"-typed blocks
     var t = b.type || "";
-    if (SYS_SHADE_MAP[t] != null && t !== "system") return SYS_SHADE_MAP[t];
-    // "system" type covers many blocks — differentiate by id prefix
-    var id = b.id || "";
-    if (id.startsWith("main.system.static_extra")) return 4;
-    if (id.startsWith("main.system.language")) return 1;
-    if (id.startsWith("memory.")) return 1;
-    if (id.startsWith("skills.")) return 2;
-    if (id.startsWith("runtime.workspace")) return 3;
-    if (id.startsWith("runtime.permission")) return 6;
-    if (id.startsWith("runtime.project")) return 1;
-    if (id.startsWith("runtime.session")) return 2;
-    if (id.startsWith("runtime.spawn")) return 5;
-    if (id.startsWith("runtime.goal")) return 4;
-    if (id.startsWith("command.")) return 5;
-    if (id.startsWith("spawn_policy.")) return 7;
-    if (id.startsWith("short_term.")) return 7;
     return SYS_SHADE_MAP[t] != null ? SYS_SHADE_MAP[t] : 7;
   }
   function msgSubClass(b) {
@@ -788,16 +856,9 @@ function WbcContextBlockList({ data, compact }) {
     // Gauge head
     React.createElement("div", { className: "wbc-ctx-gauge-head" },
       React.createElement("div", { className: "wbc-ctx-token-total" },
-        sourceNote && React.createElement("details", { className: "wbc-context-source-info" },
-          React.createElement("summary", {
-            "aria-label": wbcT("workbenchChat.ctxBlocks.sourceInfo", "Context usage information"),
-            title: wbcT("workbenchChat.ctxBlocks.sourceInfo", "Context usage information"),
-          }, WBC_ICONS.infoCircle),
-          React.createElement("div", { className: "wbc-context-source-popover", role: "note" }, sourceNote)
-        ),
         React.createElement("b", null, wbcCompactNumber(total))
       ),
-      React.createElement("span", null, usesAgentReport && Number(data.contextLimit || 0) > 0
+      React.createElement("span", null, Number(data.contextLimit || 0) > 0
         ? ("/ " + wbcCompactNumber(data.contextLimit) + " " + wbcT("workbenchChat.ctxBlocks.totalTokens", "tokens"))
         : wbcT("workbenchChat.ctxBlocks.totalTokens", "tokens"))
     ),
@@ -829,25 +890,16 @@ function WbcContextBlockList({ data, compact }) {
               React.createElement("em", null, wbcCompactNumber(tokens))
             );
           }
-          return React.createElement("details", { key: layer.id, className: "wbc-ctx-layer-detail", open: true },
-            React.createElement("summary", { className: "wbc-ctx-legend-layer-head" },
-              React.createElement("i", { className: "wbc-ctx-dot seg-" + layer.id, "aria-hidden": "true" }),
-              React.createElement("span", null, layerLabel),
-              React.createElement("em", null, wbcCompactNumber(tokens)),
-              React.createElement("span", { className: "wbc-ctx-layer-chevron", "aria-hidden": "true" }, WBC_ICONS.chevronDown)
-            ),
-            React.createElement("div", { className: "wbc-ctx-legend-layer-body" },
-              blocks.map(function (b) {
-                    var seg = _ctxSegFromBlock(b, isMsg);
-                    if (!seg) return null;
-                    return React.createElement("div", { key: seg.key, className: "wbc-ctx-legend-item" },
-                      React.createElement("i", { className: "wbc-ctx-dot " + seg.dotClass }),
-                      React.createElement("span", null, seg.label),
-                      React.createElement("em", null, wbcCompactNumber(seg.tokens))
-                    );
-                  }).filter(Boolean)
-            )
-          );
+          var items = blocks.map(function (b) {
+            return _ctxSegFromBlock(b, isMsg);
+          }).filter(Boolean);
+          return React.createElement(WbcContextLayerDisclosure, {
+            key: layer.id,
+            layerId: layer.id,
+            label: layerLabel,
+            tokens: tokens,
+            items: items,
+          });
         })
       )
     )
@@ -954,9 +1006,8 @@ function useWbcLiveInbox(chat, activeHint) {
     }
 
     load();
-    // The inbox can change independently of the chat transcript (tool result,
-    // guidance claim, recovery), so keep observing while the Context tab is
-    // mounted instead of relying on the UI's possibly stale `running` flag.
+    // Agent-to-agent messages can arrive independently of the transcript, so
+    // keep observing while the Context tab is mounted.
     return function () {
       cancelled = true;
       if (timer) clearTimeout(timer);
@@ -977,73 +1028,36 @@ function useWbcLiveInbox(chat, activeHint) {
 }
 
 function wbcInboxStatus(status) {
-  var value = String(status || "queued");
+  var value = String(status || "ready") === "consumed" ? "consumed" : "ready";
   var labels = {
-    queued: ["workbenchChat.inbox.status.queued", "Queued"],
-    claimed: ["workbenchChat.inbox.status.claimed", "Claimed"],
-    completed: ["workbenchChat.inbox.status.completed", "Completed"],
-    failed: ["workbenchChat.inbox.status.failed", "Failed"],
-    cancelled: ["workbenchChat.inbox.status.cancelled", "Cancelled"],
-    running: ["workbenchChat.inbox.status.running", "Running"],
     ready: ["workbenchChat.inbox.status.ready", "Ready"],
     consumed: ["workbenchChat.inbox.status.consumed", "Consumed"],
   };
-  var item = labels[value] || ["workbenchChat.inbox.status.unknown", value || "Unknown"];
+  var item = labels[value];
   return { value: value, label: wbcT(item[0], item[1]) };
 }
 
 function wbcInboxEventLabel(item) {
-  if (item.type === "guidance") return wbcT("workbenchChat.inbox.guidance", "User guidance");
-  if (item.type === "tool_result" || item.type === "tool_activity") {
-    return item.toolName
-      ? wbcT("toolName." + item.toolName, item.toolName)
-      : wbcT(
-          item.type === "tool_result" ? "workbenchChat.inbox.toolResult" : "workbenchChat.inbox.toolActivity",
-          item.type === "tool_result" ? "Tool result" : "Tool activity"
-        );
-  }
-  return String(item.type || wbcT("workbenchChat.inbox.event", "Inbox event"));
+  return item.messageType === "result" || item.messageType === "task_result"
+    ? wbcT("workbenchChat.inbox.subagentResult", "Subagent result")
+    : wbcT("workbenchChat.inbox.agentMessage", "Agent message");
 }
 
-function wbcInboxArgumentPreview(argumentsValue) {
-  if (!argumentsValue || typeof argumentsValue !== "object" || Array.isArray(argumentsValue)) return "";
-  return Object.keys(argumentsValue).map(function (key) {
-    var value = argumentsValue[key];
-    if (value === null || value === undefined || value === "") return "";
-    if (typeof value === "string") return value;
-    try { return JSON.stringify(value); } catch (e) { return String(value); }
-  }).filter(Boolean).join(" · ").slice(0, 240);
-}
-
-// The live inbox view is produced by the panel-level useWbcLiveInbox preload
+// The Agent inbox view is produced by the panel-level useWbcLiveInbox preload
 // so the card renders the latest snapshot the moment the tab opens.
 function WbcInboxCard({ liveView, hideTitle }) {
   var data = liveView.data;
   var counts = (data && data.counts) || {};
-  var live = (data && data.live) || {};
   var events = data && Array.isArray(data.events) ? data.events : [];
-  var tools = data && Array.isArray(data.tools) ? data.tools : [];
-  var activeTools = tools.filter(function (tool) {
-    return tool.state === "queued" || tool.state === "running";
-  });
-  var feed = events.concat(activeTools.map(function (tool) {
-    return {
-      eventId: "active:" + tool.toolCallId,
-      type: "tool_activity",
-      status: tool.state,
-      toolName: tool.toolName,
-      toolCallId: tool.toolCallId,
-      createdAt: tool.updatedAt,
-      preview: wbcInboxArgumentPreview(tool.arguments),
-    };
-  })).sort(function (left, right) {
+  var feed = events.slice().sort(function (left, right) {
     return String(right.createdAt || "").localeCompare(String(left.createdAt || ""));
-  }).slice(0, 20);
+  });
   var queueDepth = !data
     ? null
-    : data.active
-      ? Number(live.queueDepth || 0)
-      : Number(counts.queued || 0) + Number(counts.claimed || 0);
+    : Number(data.queueDepth != null ? data.queueDepth : counts.ready || 0);
+  var historyTruncated = !!(data && (
+    data.eventsTruncated || data.historyWindowTruncated
+  ));
 
   return (
     <section className={"workbench-side-section wbc-inbox-card" + (hideTitle ? " title-hidden" : "")} aria-labelledby={hideTitle ? undefined : "wbc-inbox-title"} aria-label={hideTitle ? wbcT("workbenchChat.inbox.title", "Session inbox") : undefined}>
@@ -1054,8 +1068,10 @@ function WbcInboxCard({ liveView, hideTitle }) {
           <span className="wbc-context-empty-label">{wbcT("workbenchChat.inbox.title", "Session inbox")}</span>
         )}
         <span className={"wbc-inbox-queue-count" + (queueDepth !== null && queueDepth > 0 ? " active" : "")} aria-live="polite">
-          {queueDepth === 0 ? (
+          {queueDepth === 0 && !historyTruncated ? (
             <span>{wbcT("workbenchChat.inbox.queueEmpty", "Queue empty")}</span>
+          ) : queueDepth === 0 ? (
+            <span>{wbcT("workbenchChat.inbox.visibleWindow", "Recent window")}</span>
           ) : (
             <React.Fragment>
               <span>{wbcT("workbenchChat.inbox.queue", "In queue")}</span>
@@ -1078,7 +1094,9 @@ function WbcInboxCard({ liveView, hideTitle }) {
             </div>
           ) : feed.length === 0 ? (
             <div className="wbc-side-empty">
-              <p>{wbcT("workbenchChat.inbox.empty", "No inbox events for this run yet.")}</p>
+              <p>{historyTruncated
+                ? wbcT("workbenchChat.inbox.visibleEmpty", "No inbox events are present in the visible history window.")
+                : wbcT("workbenchChat.inbox.empty", "No inbox events for this run yet.")}</p>
             </div>
           ) : (
             <div className="wbc-inbox-feed">
@@ -1094,7 +1112,7 @@ function WbcInboxCard({ liveView, hideTitle }) {
                       <div className="wbc-inbox-event-meta">
                         {item.preview && (
                           <p
-                            className={"wbc-inbox-event-preview" + (item.type === "tool_result" || item.type === "tool_activity" ? " is-tool" : "")}
+                            className="wbc-inbox-event-preview"
                             title={item.preview}
                           >
                             {item.preview}
@@ -1106,6 +1124,12 @@ function WbcInboxCard({ liveView, hideTitle }) {
                   </article>
                 );
               })}
+              {historyTruncated && (
+                <p className="workbench-muted">{wbcT(
+                  "workbenchChat.inbox.historyTruncated",
+                  "Showing the most recent inbox events."
+                )}</p>
+              )}
             </div>
           )}
         </React.Fragment>
@@ -1114,63 +1138,27 @@ function WbcInboxCard({ liveView, hideTitle }) {
   );
 }
 
-var WBC_PROGRESSIVE_TOOL_PACKAGES = new Set([
-  "code_tools",
-  "browser_tools",
-  "desktop_tools",
-  "memory_tools",
-  "knowledge_tools",
-  "task_tools",
-  "entity_tools",
-  "map_tools",
-  "subagent_tools",
-  "delivery_tools",
-  "environment_tools",
-  "skill_tools",
-  "remote_tools",
-  "cyrene_tools",
-  "office_tools",
-  "plugin_tools",
-  "custom_tools",
-  "integration_tools",
-]);
-
-function wbcUsedToolPackages(chat, runtime) {
+function wbcUsedPluginPacks(contextBlocks) {
   var used = [];
   var seen = new Set();
-  function addToolName(value) {
+  function addReportedPackage(value) {
     var name = String(value || "").trim();
-    if (!WBC_PROGRESSIVE_TOOL_PACKAGES.has(name) || seen.has(name)) return;
+    if (!name || seen.has(name)) return;
     seen.add(name);
     used.push(name);
   }
-  (chat && Array.isArray(chat.messages) ? chat.messages : []).forEach(function (message) {
-    (message && Array.isArray(message.tools) ? message.tools : []).forEach(function (tool) {
-      addToolName(tool && tool.name);
-    });
-    (message && Array.isArray(message.trace) ? message.trace : []).forEach(function (entry) {
-      addToolName(entry && entry.tool);
-    });
-  });
-  function addProgress(items) {
-    (Array.isArray(items) ? items : []).forEach(function (entry) {
-      addToolName(entry && (entry.tool || entry.text));
-    });
-  }
-  addProgress(runtime && runtime.progress);
-  (runtime && Array.isArray(runtime.activities) ? runtime.activities : []).forEach(function (activity) {
-    addProgress(activity && activity.progress);
-    addProgress(activity && activity.trace);
-  });
-  (runtime && Array.isArray(runtime.segments) ? runtime.segments : []).forEach(function (segment) {
-    addProgress(segment && segment.progress);
-    addProgress(segment && segment.trace);
-  });
+  (contextBlocks && Array.isArray(contextBlocks.usedPluginPacks)
+    ? contextBlocks.usedPluginPacks
+    : []).forEach(addReportedPackage);
   return used;
 }
 
-function WbcContextTab({ project, chat, runtime, contextBlocks, inboxView }) {
-  var usedToolPackages = wbcUsedToolPackages(chat, runtime);
+function WbcContextTab({ chat, contextBlocks, inboxView }) {
+  var usedPluginPacks = wbcUsedPluginPacks(contextBlocks);
+  var messageCount = contextBlocks && contextBlocks.messageCount != null
+    ? Number(contextBlocks.messageCount) || 0
+    : 0;
+  var contextUpdatedAt = contextBlocks ? String(contextBlocks.updatedAt || "") : "";
   var conversationTitle = wbcT("workbenchChat.conversationContext", "Conversation context");
   var externalAgent = !!wbcChatAgent(chat) && !wbcIsBuiltinAgent(wbcChatAgent(chat));
   return (
@@ -1179,29 +1167,29 @@ function WbcContextTab({ project, chat, runtime, contextBlocks, inboxView }) {
         <WbcContextBlockList data={contextBlocks} compact={false} />
       </section>
       {!externalAgent && <WbcInboxCard liveView={inboxView} hideTitle={true} />}
-      {!externalAgent && <section className="workbench-side-section" aria-label={wbcT("workbenchChat.usedToolPackages", "Used tool packages")}>
-        <div className="wbc-context-empty-head wbc-tool-pack-head">
-          <span className="wbc-context-empty-label">{wbcT("workbenchChat.usedToolPackages", "Used tool packages")}</span>
-          {usedToolPackages.length === 0 ? <b>{wbcT("workbenchChat.notUsed", "Not used")}</b> : null}
+      {!externalAgent && <section className="workbench-side-section" aria-label={wbcT("workbenchChat.usedPluginPacks", "Used Plugin packs")}>
+        <div className="wbc-context-empty-head wbc-plugin-pack-head">
+          <span className="wbc-context-empty-label">{wbcT("workbenchChat.usedPluginPacks", "Used Plugin packs")}</span>
+          {usedPluginPacks.length === 0 ? <b>{wbcT("workbenchChat.notUsed", "Not used")}</b> : null}
         </div>
-        {usedToolPackages.length === 0 ? (
+        {usedPluginPacks.length === 0 ? (
           <div className="wbc-context-empty-module">
             <div className="wbc-side-empty">
-              <p>{wbcT("workbenchChat.noUsedToolPackages", "The agent has not used a tool package in this chat.")}</p>
+              <p>{wbcT("workbenchChat.noUsedPluginPacks", "The agent has not used a Plugin pack in this chat.")}</p>
             </div>
           </div>
-        ) : usedToolPackages.map(function (wireName) {
+        ) : usedPluginPacks.map(function (packId) {
             return (
-              <div className="workbench-check wbc-tool-pack-row" key={wireName}>
+              <div className="workbench-check wbc-plugin-pack-row" key={packId}>
                 <span className="workbench-status-dot green" aria-hidden="true"></span>
-                <span>{wbcT("toolName." + wireName, wireName)}</span>
+                <span>{packId}</span>
               </div>
             );
           })}
       </section>}
       <section className="workbench-side-section wbc-context-stats" aria-label={wbcT("workbenchChat.stats", "Chat stats")}>
-        <div className="wb-kv"><span>{wbcT("workbenchChat.messageCount", "Messages")}</span><b>{chat ? (chat.messageCount != null ? chat.messageCount : (chat.messages || []).length) : 0}</b></div>
-        <div className="wb-kv"><span>{wbcT("workbenchChat.updatedAt", "Last updated")}</span><b>{chat ? (wbcFormatTime(chat.updatedAt) || "—") : "—"}</b></div>
+        <div className="wb-kv"><span>{wbcT("workbenchChat.messageCount", "Messages")}</span><b>{messageCount}</b></div>
+        <div className="wb-kv"><span>{wbcT("workbenchChat.updatedAt", "Last updated")}</span><b>{wbcFormatTime(contextUpdatedAt) || "—"}</b></div>
       </section>
     </div>
   );

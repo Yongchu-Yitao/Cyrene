@@ -1,4 +1,4 @@
-"""Curated catalog and detection declarations for the Extension Center."""
+"""Curated catalog and detection declarations for Plugin-managed environments."""
 
 from __future__ import annotations
 

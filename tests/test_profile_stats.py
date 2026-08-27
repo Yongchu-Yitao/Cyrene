@@ -9,7 +9,7 @@ import pytest
 import aiosqlite
 
 from cyrene.runtime import database as cy_db
-from cyrene.workbench import runtime as routes
+from cyrene.workbench import presentation_runtime as routes
 
 
 @pytest.mark.asyncio
@@ -108,8 +108,11 @@ async def test_task_time_totals_merges_task_logs_and_goal_runs(tmp_path):
     empty = await cy_db.get_task_time_totals(db_path)
     assert empty == {"total_ms": 0, "longest_ms": 0, "runs": 0}
 
-    await cy_db.log_task_run(db_path, "t1", 1000, "ok")
-    await cy_db.log_task_run(db_path, "t2", 3000, "ok")
+    from cyrene.runtime.persistence.scheduler import SchedulerRepository
+
+    repository = SchedulerRepository(db_path)
+    await repository.log_run("t1", 1000, "ok")
+    await repository.log_run("t2", 3000, "ok")
 
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(db_path) as db:

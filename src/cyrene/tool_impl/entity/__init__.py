@@ -1,1 +1,0 @@
-"""Durable entity tool implementations."""

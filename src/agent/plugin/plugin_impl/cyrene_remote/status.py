@@ -6,12 +6,11 @@ import base64
 from typing import Any
 from uuid import uuid4
 
+from agent.plugin import PluginContext
 from .common import remote_tool_error, request_remote_command
 from agent.plugin.execution import publish_plugin_progress as publish_tool_progress
-from cyrene.tooling.runtime_api import (
-    json_result,
-    register_generated_attachment,
-)
+from agent.plugin.native_runtime import json_result
+from cyrene.runtime.attachments import register_generated_attachment
 
 _TRANSFER_COMMANDS = frozenset({"artifacts.read", "attachments.read"})
 _TRANSFER_CHUNK_BYTES = 512 * 1024
@@ -87,10 +86,7 @@ TOOL_METADATA = {
 
 async def handler(
     args: dict[str, Any],
-    _bot: Any,
-    chat_id: int,
-    db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
     try:
         command = str(args.get("command") or "")
@@ -98,15 +94,10 @@ async def handler(
             return json_result(
                 await _download_remote_file(
                     args,
-                    db_path,
-                    fallback_chat_id=chat_id,
+                    context,
                 )
             )
-        result = await request_remote_command(
-            args,
-            db_path,
-            fallback_chat_id=chat_id,
-        )
+        result = await request_remote_command(args, context)
         return json_result(result)
     except Exception as exc:
         return json_result(remote_tool_error(exc))
@@ -114,9 +105,7 @@ async def handler(
 
 async def _download_remote_file(
     args: dict[str, Any],
-    db_path: str,
-    *,
-    fallback_chat_id: object,
+    context: PluginContext,
 ) -> dict[str, Any]:
     """Assemble an unlimited remote file without exposing chunks to the LLM."""
     payload = dict(args.get("payload") or {})
@@ -147,8 +136,7 @@ async def _download_remote_file(
                             f"{transfer_key}:chunk:{offset}"
                         ),
                     },
-                    db_path,
-                    fallback_chat_id=fallback_chat_id,
+                    context,
                 )
                 if result.get("ok") is False:
                     return result

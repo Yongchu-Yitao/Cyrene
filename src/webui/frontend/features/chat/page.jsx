@@ -633,7 +633,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   useWbcEffect(function () {
     var chatId = String(activeChatId || "");
     var cancelled = false;
-    if (!chatId || chatId.indexOf("legacy:") === 0) {
+    if (!chatId) {
       setSideAgents([]);
       setSideAgentsLoading(false);
       return undefined;
@@ -1229,7 +1229,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   function handleAskSelection(text) {
     var quote = String(text || "").trim().slice(0, 12000);
     var parentChatId = String(activeChatIdRef.current || "");
-    if (!quote || !parentChatId || parentChatId.indexOf("legacy:") === 0 || sideAgentCreating) {
+    if (!quote || !parentChatId || sideAgentCreating) {
       return Promise.resolve(null);
     }
     setSideAgentCreating(true);
@@ -1883,7 +1883,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   }
 
   function handleCompact() {
-    if (!activeChat || activeChat.legacy || compactBusy) return;
+    if (!activeChat || compactBusy) return;
     setCompactBusy(true);
     setError("");
     model.compactChat(activeChat.id).then(function (payload) {
@@ -1925,7 +1925,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   }
 
   function handleGenerateMemory() {
-    if (!activeChat || activeChat.legacy || memoryLearningBusy) return;
+    if (!activeChat || memoryLearningBusy) return;
     setMemoryLearningBusy(true);
     setErrorKind("memory");
     setError("");

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+from ._native import create_tool, service as memory_service
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import json_result
-from cyrene.workbench.context import resolve_workbench_project_id_for_session
+from agent.plugin.native_runtime import json_result
 
 TOOL_NAME = "search_project_memory"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -14,14 +15,9 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 async def _tool_search_project_memory(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
     """Search durable memory using keyword matching within one project."""
-    from cyrene.agent.context import get_current_session_id
-
     query = str(args.get("query", "") or "").strip()
     if not query:
         return json_result({
@@ -35,7 +31,8 @@ async def _tool_search_project_memory(
     limit = max(1, min(int(args.get("limit", 10) or 10), 20))
     include_stale = bool(args.get("include_stale", False))
 
-    project_id = resolve_workbench_project_id_for_session(get_current_session_id())
+    memory = memory_service(context)
+    project_id = memory.project_id
     if project_id is None:
         return json_result({
             "status": "error",
@@ -43,9 +40,9 @@ async def _tool_search_project_memory(
             "message": "Project memory is only available inside a Workbench project task/chat.",
         })
 
-    from cyrene.workbench.memory import configure_store, search_project_memories
+    from .structured import search_project_memories
 
-    configure_store(_db_path)
+    memory.configure_stores()
 
     memories = search_project_memories(
         project_id,
@@ -72,10 +69,12 @@ async def _tool_search_project_memory(
 
 
 handler = _tool_search_project_memory
+plugin = create_tool(TOOL_DEF, handler, allow_parallel=True)
 
 __all__ = [
     "TOOL_NAME",
     "TOOL_DEF",
     "handler",
+    "plugin",
     "_tool_search_project_memory",
 ]

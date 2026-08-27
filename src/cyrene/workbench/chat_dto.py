@@ -1,8 +1,7 @@
 """Typed boundary objects for Workbench chat application services.
 
-The persisted chat document intentionally remains backward-compatible JSON.
-These TypedDicts make the application/route seam explicit without changing
-the on-disk representation or dropping extension-owned fields.
+These TypedDicts make the application/route seam explicit while preserving
+extension-owned fields in the SQLite document model.
 """
 
 from __future__ import annotations
@@ -18,6 +17,11 @@ class ChatMessageDTO(TypedDict, total=False):
     attachments: list[dict[str, Any]]
     trace: list[dict[str, Any]]
     usage: dict[str, int]
+    model: str
+    modelIdentity: dict[str, Any]
+    processingDurationMs: int
+    modelGenerationDurationMs: float
+    outputTokensPerSecond: float
     modelStatusCard: bool
     modelStatus: dict[str, str]
 
@@ -65,11 +69,21 @@ class ChatCreateDTO(TypedDict):
 
 
 class ChatContextDTO(TypedDict, total=False):
-    chatId: str
-    messages: list[ChatMessageDTO]
+    model: str
+    selectedModel: str
+    actualModel: str
+    modelIdentity: dict[str, str]
     usage: dict[str, int]
-    segments: dict[str, int]
-    contextWindow: int
+    ctxLimit: int
+    ctxUsed: int
+    ratio: float | None
+    compactTriggerRatio: float
+    messageCount: int
+    segments: list[dict[str, Any]]
+    compaction: dict[str, Any]
+    usedPluginPacks: list[str]
+    usedStandalonePlugins: list[str]
+    compositionSource: str
 
 
 __all__ = [

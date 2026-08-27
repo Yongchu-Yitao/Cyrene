@@ -4,11 +4,35 @@ Sets up SOUL.md with user's chosen personality.
 """
 
 import logging
+from pathlib import Path
 
+from agent.plugin import active_plugin_service
 from cyrene.config import DATA_DIR
-from cyrene.runtime.memory.soul import get_default_soul_content, get_soul_path
 
 logger = logging.getLogger(__name__)
+
+
+def _memory_service():
+    service = active_plugin_service("memory")
+    if service is None:
+        raise RuntimeError("memory Plugin is not available")
+    return service
+
+
+def _web_search_service():
+    service = active_plugin_service("web_search")
+    search = getattr(service, "search", None)
+    if not callable(search):
+        raise RuntimeError("content Plugin web-search service is not available")
+    return service
+
+
+def get_soul_path() -> Path:
+    return _memory_service().soul_path()
+
+
+def get_default_soul_content() -> str:
+    return _memory_service().default_soul()
 
 _SETUP_FLAG = None  # Path to .setup_done
 
@@ -66,8 +90,6 @@ async def run_setup() -> None:
         print("使用默认人格。")
 
     mark_setup_done()
-    from cyrene.agent import clear_session_id
-    await clear_session_id()
     print()
     print("设置完成！你可以开始和 Cyrene 聊天了。")
     print()
@@ -83,7 +105,7 @@ async def _setup_from_name(name: str) -> None:
 
 async def _generate_soul_profile(name: str, bio: str = "", style: str = "", lang: str = "") -> str:
     """用搜索结果 + 模型知识生成行为人格文件。"""
-    from cyrene.agent.model_service import call_agent_model
+    from agent.plugin import active_plugin_service
     from cyrene.model_runtime.messages import assistant_text
 
     research_section = ""
@@ -131,13 +153,27 @@ Include EXACTLY these sections:
 - 2-3 example dialogues showing how they respond to common questions
 
 Write in concise bullet points with exact example quotes. No markdown formatting.
-Write the ENTIRE profile in English."""
+    Write the ENTIRE profile in English."""
 
     try:
-        response = await call_agent_model([
-            {"role": "system", "content": "You create character behavior profiles. Focus on exact speech patterns and behavioral quirks. Use concrete examples."},
-            {"role": "user", "content": prompt}
-        ], tools=None)
+        gateway = active_plugin_service("model")
+        if gateway is None:
+            raise RuntimeError("Model Provider Plugins are not available")
+        response = await gateway.complete(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You create character behavior profiles. Focus on exact "
+                        "speech patterns and behavioral quirks. Use concrete examples."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            route="secondary",
+            caller="personality_setup",
+            session_id=f"personality:{name}",
+        )
         result = assistant_text(response) or ""
         if result and len(result) > 100:
             return f"# {name}'s Soul\n\n{result}"
@@ -156,12 +192,19 @@ Write the ENTIRE profile in English."""
 
 async def create_soul_profile_from_name(name: str) -> str:
     """Create and persist a generated SOUL.md for the given personality name."""
-    from cyrene.tooling.backends.search import deep_search
-
-    bio = await deep_search(f"{name} 生平 人物经历 背景")
-    style = await deep_search(f"{name} 说话方式 语录 口头禅 名场面 梗")
+    search = _web_search_service().search
+    bio = await search(
+        f"{name} 生平 人物经历 背景",
+        detail="content",
+        max_results=5,
+    )
+    style = await search(
+        f"{name} 说话方式 语录 口头禅 名场面 梗",
+        detail="content",
+        max_results=5,
+    )
     soul_content = await _generate_soul_profile(name, bio, style)
-    get_soul_path().write_text(soul_content, encoding="utf-8")
+    _memory_service().write_soul(soul_content)
     return soul_content
 
 
@@ -180,8 +223,7 @@ async def _setup_custom() -> None:
 
     content = "\n".join(lines).strip()
     if content:
-        soul_path = get_soul_path()
-        soul_path.write_text(normalize_custom_soul_content(content), encoding="utf-8")
+        _memory_service().write_soul(normalize_custom_soul_content(content))
         print("已写入自定义人格文件！")
     else:
         print("内容为空，使用默认人格。")

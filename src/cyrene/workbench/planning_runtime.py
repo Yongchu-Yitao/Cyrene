@@ -2,20 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
-from pathlib import Path
 from typing import Any
 
-from cyrene.workbench import generation_gateway
-from cyrene.workbench import (
-    memory,
-    planning_contracts,
-    project_runtime,
-    task_initialization_runtime,
-)
+from agent.plugin import active_plugin_service
+from cyrene.workbench import project_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -25,58 +18,189 @@ def _workbench_render_reflection_block(session: dict[str, Any]) -> str:
     packet = reflection.get("packet") if isinstance(reflection, dict) else None
     if not isinstance(packet, dict) or not packet:
         return ""
-    try:
-        from cyrene.agent.deep_reflection_prompts import render_deep_reflection_packet
-
-        return render_deep_reflection_packet(packet)
-    except Exception:
-        logger.exception("Failed to render reflection packet")
-        return ""
+    labels = (
+        ("目标", packet.get("objective") or packet.get("goal")),
+        ("尝试总结", packet.get("attempt_summary")),
+        ("下一步", packet.get("next_step")),
+    )
+    lines = [f"{label}：{str(value).strip()}" for label, value in labels if str(value or "").strip()]
+    for label, key in (
+        ("根因", "root_causes"),
+        ("应避免", "excluded_paths"),
+        ("可行方向", "promising_directions"),
+    ):
+        values = packet.get(key)
+        if isinstance(values, list):
+            lines.extend(f"{label}：{str(value).strip()}" for value in values if str(value).strip())
+    return "\n".join(lines)
 
 
 def _workbench_render_past_task_reports(project: dict[str, Any] | None) -> str:
     if not project:
         return ""
     try:
-        return memory.render_task_reports_for_planning(
-            project_runtime._workbench_project_memory_key(project), limit=3, max_chars=2500
+        memory_service = active_plugin_service("memory")
+        if memory_service is None:
+            return ""
+        return memory_service.render_past_task_reports(
+            project,
+            limit=3,
+            max_chars=2500,
         )
     except Exception:
         logger.exception("Failed to render past task reports for planning")
         return ""
 
-async def _workbench_extract_constraints(text: str) -> list[str]:
-    """Use a lightweight semantic pass to extract explicit task constraints.
 
-    Constraints are requirements that restrict scope, implementation choices,
-    compatibility, resources, timing, or behavior.  A model is used instead of
-    keyword matching so negation in questions and descriptive prose is not
-    mistaken for a task requirement.  Failure is fail-soft: the original user
-    text remains available as the task goal/message and no guessed constraint is
-    persisted.
-    """
-    source = str(text or '').strip()
-    if not source:
+def _workbench_store_reflection(
+    session: dict[str, Any],
+    packet: dict[str, Any],
+    *,
+    trigger: str = "manual",
+    source_session_id: str = "",
+    project: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attach a Plugin-generated reflection packet to Task state."""
+
+    created_at = project_runtime._utc_now_iso()
+    entry = {
+        "packet": dict(packet),
+        "createdAt": created_at,
+        "trigger": str(trigger or "manual"),
+        "sourceSessionId": str(source_session_id or session.get("id") or ""),
+    }
+    session["reflection"] = entry
+    next_step = str(packet.get("next_step") or "").strip()
+    session["events"] = list(session.get("events") or []) + [{
+        "id": project_runtime._short_id("event"),
+        "type": "DeepReflection",
+        "createdAt": created_at,
+        "body": "已完成深度反思。" + (
+            f"建议下一步：{next_step}" if next_step else "已生成方向重整建议。"
+        ),
+    }]
+    memory_service = active_plugin_service("memory")
+    if memory_service is not None and project is not None:
+        try:
+            memory_service.store_reflection_insights(project, packet)
+        except Exception:
+            logger.exception("Failed to store reflection insights")
+    return entry
+
+
+_WORKBENCH_OPEN_STATUSES = {
+    "idle", "pending", "planning", "paused", "review", "failed"
+}
+
+
+def _workbench_reflection_candidates(
+    project: dict[str, Any] | None,
+    source_session: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not isinstance(project, dict):
         return []
-    prompt = f'请判断下面的用户任务表述中是否包含明确的执行约束。约束是用户真正要求遵守的范围、禁止事项、必须保留项、技术/平台限制、兼容性要求、截止时间或资源限制。不要因为文本出现‘不’‘只’‘保留’等字样就机械提取；疑问、解释、背景事实、目标本身、建议和无法确定为用户要求的内容都不是约束。每条约束应保持原意、可独立理解、简洁，不得补充用户没有表达的要求。只返回 JSON：{{"constraints":["约束"]}}；没有约束时返回空数组，最多 8 条。\n\n用户表述：{source}'
-    try:
-        response = await asyncio.wait_for(generation_gateway.call_llm([{'role': 'user', 'content': prompt}], tools=None, max_tokens=700, secondary=True, thinking='disabled'), timeout=20)
-    except Exception:
-        logger.exception('Workbench constraint extraction failed')
+    source_id = str(source_session.get("id") or "")
+    return [
+        session for session in project.get("sessions") or []
+        if isinstance(session, dict)
+        and str(session.get("id") or "") != source_id
+        and str(session.get("status") or "idle") in _WORKBENCH_OPEN_STATUSES
+    ]
+
+
+def _workbench_apply_reflection_hints(
+    project: dict[str, Any] | None,
+    source_session: dict[str, Any],
+    packet: dict[str, Any],
+    matches: dict[str, str],
+) -> None:
+    """Apply model-selected cross-Task hints without performing model work."""
+
+    if not isinstance(project, dict) or not packet or not matches:
+        return
+    source_id = str(source_session.get("id") or "")
+    source_title = str(source_session.get("title") or "任务")
+    now = project_runtime._utc_now_iso()
+    for session in _workbench_reflection_candidates(project, source_session):
+        hint_text = str(matches.get(str(session.get("id") or "")) or "").strip()
+        if not hint_text:
+            continue
+        hints = session.setdefault("pendingHints", [])
+        if not isinstance(hints, list):
+            hints = []
+            session["pendingHints"] = hints
+        if any(
+            isinstance(item, dict)
+            and str(item.get("fromSessionId") or "") == source_id
+            and str(item.get("status") or "") == "pending"
+            for item in hints
+        ):
+            continue
+        hints.append({
+            "id": project_runtime._short_id("hint"),
+            "fromSessionId": source_id,
+            "fromTitle": source_title,
+            "hint": hint_text[:200],
+            "packet": dict(packet),
+            "status": "pending",
+            "createdAt": now,
+        })
+        session["events"] = list(session.get("events") or []) + [{
+            "id": project_runtime._short_id("event"),
+            "type": "ReflectionHint",
+            "createdAt": now,
+            "body": f"相关任务《{source_title}》反思发现：{hint_text[:200]}",
+        }]
+        session["updatedAt"] = now
+
+
+def _workbench_merge_hint_mutations(
+    original_project: dict[str, Any],
+    latest_project: dict[str, Any],
+) -> None:
+    """Merge append-only reflection hints after concurrent plan generation."""
+
+    latest = {
+        str(session.get("id") or ""): session
+        for session in latest_project.get("sessions") or []
+        if isinstance(session, dict) and str(session.get("id") or "")
+    }
+    for source in original_project.get("sessions") or []:
+        if not isinstance(source, dict):
+            continue
+        target = latest.get(str(source.get("id") or ""))
+        if target is None:
+            continue
+        for field in ("pendingHints", "events"):
+            values = source.get(field)
+            if not isinstance(values, list):
+                continue
+            destination = target.setdefault(field, [])
+            if not isinstance(destination, list):
+                destination = []
+                target[field] = destination
+            known = {
+                str(item.get("id") or "") for item in destination
+                if isinstance(item, dict)
+            }
+            destination.extend(
+                item for item in values
+                if isinstance(item, dict) and str(item.get("id") or "") not in known
+            )
+        target["updatedAt"] = source.get("updatedAt") or target.get("updatedAt")
+
+async def _workbench_extract_constraints(
+    text: str,
+    *,
+    agent_runtime: Any = None,
+    session: dict[str, Any] | None = None,
+    project: dict[str, Any] | None = None,
+) -> list[str]:
+    """New-kernel constraint seam retained for pure-domain callers."""
+
+    if agent_runtime is None or session is None or project is None:
         return []
-    content = str(response.get('content') or '') if isinstance(response, dict) else ''
-    parsed = task_initialization_runtime._workbench_parse_json_object(content)
-    raw = parsed.get('constraints') if isinstance(parsed, dict) else None
-    if not isinstance(raw, list):
-        return []
-    constraints: list[str] = []
-    for value in raw:
-        item = re.sub('\\s+', ' ', str(value or '').strip())[:300]
-        if item and item not in constraints:
-            constraints.append(item)
-        if len(constraints) >= 8:
-            break
-    return constraints
+    return await agent_runtime.extract_constraints(text, session, project)
 
 def _workbench_new_plan_step(title: str, description: str, order: int, task_id: str='') -> dict[str, Any]:
     """A single execution-plan step — always starts pending (no pre-completion)."""
@@ -448,7 +572,15 @@ def _workbench_reconcile_revised_plan(existing: list[dict[str, Any]], generated:
     final_plan = _workbench_normalize_plan(merged_generated[:12])
     return _workbench_keep_ordered_dependencies(final_plan)
 
-async def _workbench_generate_plan_steps(session: dict[str, Any], project: dict[str, Any], feedback: str='', auto_start: bool=False, requested_operation: str='auto') -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool, str]:
+async def _workbench_generate_plan_steps(
+    session: dict[str, Any],
+    project: dict[str, Any],
+    feedback: str = '',
+    auto_start: bool = False,
+    requested_operation: str = 'auto',
+    *,
+    agent_runtime: Any = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool, str]:
     """Generate a REAL execution plan for a task session from its goal +
     constraints, exploring the project workspace. Returns
     ``(steps, acceptance_criteria, from_llm, operation)``; ``from_llm`` is False
@@ -469,41 +601,46 @@ async def _workbench_generate_plan_steps(session: dict[str, Any], project: dict[
     fallback = existing_plan if feedback and existing_plan else _workbench_plan_from_input(goal, {'id': session.get('id', '')})
     existing_acceptance = session.get('acceptanceCriteria') if isinstance(session.get('acceptanceCriteria'), list) else []
     fallback_acceptance = [dict(item) for item in existing_acceptance if isinstance(item, dict)] if feedback and existing_plan and existing_acceptance else _workbench_fallback_acceptance(session, fallback)
-    if not goal:
+    if not goal or agent_runtime is None:
         return (fallback, fallback_acceptance, False, 'create')
     constraints = [str(c).strip() for c in session.get('constraints') or [] if str(c).strip()]
-    workspace_path = str(project.get('workspacePath') or '').strip()
-    workspace_root = Path(workspace_path).expanduser().resolve() if workspace_path else None
-    planning_thread = task_initialization_runtime._workbench_planning_thread(session, workspace_root)
+    planning_thread = session.setdefault('planningThread', {})
+    if not isinstance(planning_thread, dict):
+        planning_thread = {}
+        session['planningThread'] = planning_thread
     previous_workspace_revision = str(planning_thread.get('workspaceRevision') or '')
     previous_workspace_snapshot = planning_thread.get('workspaceSnapshot') if isinstance(planning_thread.get('workspaceSnapshot'), dict) else {}
-    tool_bundle_version, workspace_revision, workspace_snapshot, routing = await task_initialization_runtime._workbench_plan_tool_bundle(session, project, workspace_root, feedback=feedback, requested_operation=requested_operation, auto_start=auto_start)
+    workspace_revision = ''
+    workspace_snapshot: dict[str, str] = {}
+    routing = {'revisionMode': 'revise'}
     constraints_block = '\n约束：\n' + '\n'.join((f'- {c}' for c in constraints)) if constraints else ''
     feedback_block = '\n用户对计划的修改反馈（请据此调整）：' + feedback if feedback else ''
     workspace_delta_block = ''
     if previous_workspace_revision and previous_workspace_revision != workspace_revision:
         changed_files = sorted((path for path in set(previous_workspace_snapshot) | set(workspace_snapshot) if previous_workspace_snapshot.get(path) != workspace_snapshot.get(path)))
-        workspace_delta_block = '\n工作区增量：' + task_initialization_runtime._workbench_stable_json({'type': 'workspace_delta', 'baseRevision': previous_workspace_revision, 'revision': workspace_revision, 'changedFiles': changed_files[:200], 'invalidatedObservations': ['directory/glob observations']})
+        workspace_delta_block = '\n工作区增量：' + json.dumps({'type': 'workspace_delta', 'baseRevision': previous_workspace_revision, 'revision': workspace_revision, 'changedFiles': changed_files[:200], 'invalidatedObservations': ['directory/glob observations']}, ensure_ascii=False, sort_keys=True)
     existing_plan_block = _workbench_existing_plan_block(session) if feedback and requested_operation != 'replace' else ''
     reflection_text = _workbench_render_reflection_block(session)
     reflection_block = '\n\n## 深度反思结论（必须据此调整计划）\n下面是对既往尝试的复盘。请避开其中的 excluded_paths（已被证明是死路的做法），优先采用 promising_directions（更有希望的方向），并参考 next_step：\n' + reflection_text if reflection_text else ''
-    if tool_bundle_version == planning_contracts._WORKBENCH_PLANNER_EXPLORE_VERSION:
-        explore_directive = '如确有必要，可用 list_directory、read_file、glob 探索工作区；已观察且未变化的内容不要重复读取，够用即止。'
-    else:
-        explore_directive = '本次不提供工作区探索工具，请基于规划历史、既往观察结果和下面的信息直接给出计划，不要尝试调用工具。'
+    explore_directive = '如确有必要，可通过 Plugin toolbox 探索工作区；够用即止。'
     past_reports_block = _workbench_render_past_task_reports(project)
     reports_section = f'\n\n{past_reports_block}' if past_reports_block else ''
     if auto_start:
-        if tool_bundle_version == planning_contracts._WORKBENCH_PLANNER_EXPLORE_VERSION:
-            lead_in = '这是「直接开始」的任务——用户没有明确给出目标。请先用 list_directory、read_file、glob 通读这个项目（工作区文件 + 项目说明），判断当前最应该推进的一件工作，再据此给出 goal、title 和执行步骤；已观察且未变化的内容不要重复读取。'
-        else:
-            lead_in = '这是「直接开始」的任务——用户没有明确给出目标，且本次没有可用的工作区探索工具。请基于规划方向和已有信息，判断当前最应该推进的一件工作，再据此给出 goal、title 和执行步骤。'
+        lead_in = '这是「直接开始」的任务——用户没有明确给出目标。请先通过 Plugin toolbox 通读项目，判断当前最应该推进的一件工作，再据此给出 goal、title 和执行步骤。'
         prompt = f'{lead_in}\n\n规划方向：{goal}{constraints_block}{workspace_delta_block}{reflection_block}{reports_section}\n\ngoal 要具体、贴合本项目实际、不要泛泛而谈，并尽量引用真实文件/目录/模块；验收标准要可独立核验，避免“目标清晰”这类过程性描述。按系统提示约定的 JSON 结构，只返回一个 JSON 对象，不要 Markdown 代码块标记。'
     else:
         prompt = f'请把下面这个任务拆解成清晰、有顺序、可逐步执行的步骤。\n{explore_directive}\n\n任务目标：{goal}{constraints_block}{existing_plan_block}{feedback_block}{workspace_delta_block}{reflection_block}{reports_section}\n\n任务涉及当前项目时，尽量引用真实文件、目录或模块；与当前项目无关时，围绕任务本身规划，不要引入无关的文件或代码操作。revisionMode 自行判断：仅补充、删改、调序或改变局部做法时用 revise；要求完全不同、全新、换一套、从头重做，或新目标与原计划明显不符时用 replace。按系统提示约定的 JSON 结构，只返回一个 JSON 对象，不要 Markdown 代码块标记。'
         if requested_operation == 'replace':
             prompt += '\n这是用户主动点击的「重新生成」：必须从最终任务目标重新独立拆解，至少一半步骤应采用不同的拆解方式或执行路径，不能只是改写措辞。'
-    parsed = await task_initialization_runtime._workbench_run_explore_agent(workspace_root, prompt, max_tokens=12000, timeout=120, session_id=str(session.get('id') or ''), planning_thread=planning_thread, tool_bundle_version=tool_bundle_version, workspace_revision=workspace_revision)
+    try:
+        parsed = await agent_runtime._independent_json_agent(
+            project=project,
+            session=session,
+            purpose='task_planning',
+            prompt=prompt,
+        )
+    except Exception:
+        parsed = None
     if not isinstance(parsed, dict):
         fallback_operation = 'replace' if requested_operation == 'replace' else 'revise' if feedback else 'create'
         return (fallback, fallback_acceptance, False, fallback_operation)
@@ -547,7 +684,9 @@ async def _workbench_generate_plan_steps(session: dict[str, Any], project: dict[
             decisions.append(feedback[:2000])
             if len(decisions) > 30:
                 del decisions[:-30]
-    task_initialization_runtime._workbench_maybe_compact_planning_thread(planning_thread)
+    planning_thread['workspaceRevision'] = workspace_revision
+    if len(planning_thread.get('userDecisions') or []) > 30:
+        planning_thread['userDecisions'] = list(planning_thread['userDecisions'])[-30:]
     acceptance_session = dict(session)
     acceptance_session['plan'] = steps
     acceptance_fallback = _workbench_fallback_acceptance(acceptance_session, steps)
@@ -602,17 +741,30 @@ def _workbench_coerce_acceptance_criteria(raw: Any, fallback: list[dict[str, Any
             break
     return criteria or fallback
 
-async def _workbench_generate_acceptance_criteria(session: dict[str, Any], project: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
+async def _workbench_generate_acceptance_criteria(
+    session: dict[str, Any],
+    project: dict[str, Any],
+    *,
+    agent_runtime: Any = None,
+) -> tuple[list[dict[str, Any]], bool]:
     """Ask an agent to derive verifiable criteria from the current task plan."""
     plan = session.get('plan') if isinstance(session.get('plan'), list) else []
     fallback = _workbench_fallback_acceptance(session, plan)
     goal = str(session.get('goal') or session.get('title') or '').strip()
     constraints = [str(item).strip() for item in session.get('constraints') or [] if str(item).strip()]
     plan_lines = '\n'.join((f"- {step.get('title') or ''}：{step.get('description') or ''}" for step in plan if isinstance(step, dict)))
-    workspace_path = str(project.get('workspacePath') or '').strip()
-    workspace_root = Path(workspace_path).expanduser().resolve() if workspace_path else None
     prompt = f"""你是任务验收设计 Agent。请根据任务目标、约束、当前执行计划和工作区实际内容，生成清晰、具体、可核验的验收标准。你可以使用 list_directory、read_file、glob 工具探索项目，标准应尽量对应真实文件、功能、测试或产物，避免“目标清晰”这类过程性描述。\n\n任务目标：{goal or '暂无明确目标'}\n约束：{json.dumps(constraints, ensure_ascii=False)}\n当前计划：\n{plan_lines or '暂无计划'}\n\n只返回一个 JSON 对象，不要 Markdown。结构：\n{{\n  "acceptanceCriteria": ["可独立核验的验收标准"]\n}}\n\n要求：生成 3-8 条；每条只表达一个可验证结果；覆盖核心功能、约束和必要验证；全部使用简体中文。"""
-    parsed = await task_initialization_runtime._workbench_run_explore_agent(workspace_root, prompt, max_tokens=6000, timeout=120, session_id=str(session.get('id') or ''))
+    if agent_runtime is None:
+        return (fallback, False)
+    try:
+        parsed = await agent_runtime._independent_json_agent(
+            project=project,
+            session=session,
+            purpose='acceptance_design',
+            prompt=prompt,
+        )
+    except Exception:
+        parsed = None
     if not isinstance(parsed, dict):
         return (fallback, False)
     criteria = _workbench_coerce_acceptance_criteria(parsed, fallback)
@@ -620,4 +772,4 @@ async def _workbench_generate_acceptance_criteria(session: dict[str, Any], proje
     generated = isinstance(raw_criteria, list) and any((str(item.get('text') if isinstance(item, dict) else item).strip() for item in raw_criteria))
     return (criteria, generated)
 
-__all__ = ['_workbench_acceptance_from_session', '_workbench_coerce_acceptance_criteria', '_workbench_coerce_plan_steps', '_workbench_dependency_ids', '_workbench_existing_plan_block', '_workbench_extract_constraints', '_workbench_fallback_acceptance', '_workbench_follow_up_seed', '_workbench_generate_acceptance_criteria', '_workbench_generate_plan_steps', '_workbench_keep_ordered_dependencies', '_workbench_new_plan_step', '_workbench_normalize_plan', '_workbench_plan_definition_signature', '_workbench_plan_from_input', '_workbench_plan_has_started', '_workbench_plan_title_key', '_workbench_reconcile_revised_plan', '_workbench_render_task_brief_block', '_workbench_session_summary_text', '_workbench_step_dependencies_satisfied', '_workbench_validate_plan_graph']
+__all__ = ['_workbench_acceptance_from_session', '_workbench_apply_reflection_hints', '_workbench_coerce_acceptance_criteria', '_workbench_coerce_plan_steps', '_workbench_dependency_ids', '_workbench_existing_plan_block', '_workbench_extract_constraints', '_workbench_fallback_acceptance', '_workbench_follow_up_seed', '_workbench_generate_acceptance_criteria', '_workbench_generate_plan_steps', '_workbench_keep_ordered_dependencies', '_workbench_merge_hint_mutations', '_workbench_new_plan_step', '_workbench_normalize_plan', '_workbench_plan_definition_signature', '_workbench_plan_from_input', '_workbench_plan_has_started', '_workbench_plan_title_key', '_workbench_reconcile_revised_plan', '_workbench_reflection_candidates', '_workbench_render_task_brief_block', '_workbench_session_summary_text', '_workbench_step_dependencies_satisfied', '_workbench_store_reflection', '_workbench_validate_plan_graph']

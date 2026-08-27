@@ -3,8 +3,7 @@ import { WORKBENCH_TRANSLATIONS_EN } from "./shared/i18n/catalog-en.jsx"
 import { WORKBENCH_TRANSLATIONS_ZH } from "./shared/i18n/catalog-zh.jsx"
 import { WORKBENCH_TOOL_NAME_ALIASES } from "./shared/i18n/tool-name-aliases.jsx"
 
-// Workbench-only i18n. This intentionally does not depend on the legacy WebUI
-// i18n globals, so the workbench can evolve its language keys independently.
+// Workbench-only i18n, independent from global renderer state.
 var WORKBENCH_TRANSLATIONS = {
   en: { ...EXTENSION_TRANSLATIONS.en, ...WORKBENCH_TRANSLATIONS_EN },
   zh: { ...EXTENSION_TRANSLATIONS.zh, ...WORKBENCH_TRANSLATIONS_ZH },
@@ -78,32 +77,11 @@ function workbenchToolName(toolName, lang) {
 function workbenchPermissionQuestionText(pending, lang) {
   var question = pending && typeof pending === "object" ? pending : {};
   var meta = question.meta && typeof question.meta === "object" ? { ...question.meta } : {};
-  var legacyText = String(question.text || "").trim();
-  // Questions persisted by older builds contain only the backend-formatted
-  // text. Recover its display fields so upgrading the renderer localizes an
-  // already-open permission card as well as newly created cards.
-  if (!meta.tool_name && legacyText) {
-    var legacyTool = legacyText.match(/(?:^|\n)(?:工具|Tool)\s*[：:]\s*([^\n]+)/i);
-    if (legacyTool) meta.tool_name = String(legacyTool[1] || "").trim();
-  }
-  if (!meta.operation && legacyText) {
-    var legacyOperation = legacyText.match(/\bcyrene\.[a-z0-9_.-]+(?:\.r[23])?\b/i);
-    if (legacyOperation) meta.operation = String(legacyOperation[0] || "").trim();
-  }
-  if (!meta.path_hint && legacyText) {
-    var legacyTarget = legacyText.match(/(?:^|\n)(?:📂\s*)?(?:目标路径|Target)\s*[：:]\s*([^\n]+)/i);
-    if (legacyTarget) meta.path_hint = String(legacyTarget[1] || "").trim();
-  }
-  if (!meta.reason && legacyText) {
-    var legacyReason = legacyText.match(/(?:^|\n)(?:💡\s*)?(?:原因|Reason)\s*[：:]\s*([^\n]+)/i);
-    if (legacyReason) meta.reason = String(legacyReason[1] || "").trim();
-  }
+  var rawText = String(question.text || "").trim();
   var operationId = String(meta.operation || meta.tool_name || "").trim();
   var toolId = String(meta.tool_name || operationId).trim();
-  // Older persisted questions predate structured public metadata. Preserve
-  // their readable text instead of inventing an empty "Tool" field.
   if (!operationId && !toolId) {
-    return legacyText;
+    return rawText;
   }
   var resolvedLang = lang || workbenchI18nLang || "en";
   var operationName = workbenchToolName(operationId, resolvedLang);

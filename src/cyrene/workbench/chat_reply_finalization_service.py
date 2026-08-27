@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import copy
-import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from cyrene.runtime.memory.conversations import archive_session_exchange
 from cyrene.workbench.chat_external_turn_service import ExternalTurnProjection
 from cyrene.workbench.notifications import append_notification
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -67,8 +63,10 @@ class ChatReplyFinalizationApplicationService:
                 return {}
             base_chat = copy.deepcopy(chat)
             request.commit_retry_cut(chat)
-            model = self.dependencies.last_model(state_messages, request.state_ids_before) or str(
-                chat.get("model") or ""
+            model = (
+                request.projection.model
+                or self.dependencies.last_model(state_messages, request.state_ids_before)
+                or str(chat.get("model") or "")
             )
             for entry in timeline:
                 entry.setdefault("model", model)
@@ -77,7 +75,7 @@ class ChatReplyFinalizationApplicationService:
             saved_messages = [*timeline, assistant]
             turn_count = self._update_chat(request, chat, saved_messages, assistant, model)
             self.dependencies.write_chat(chat, base_chat=base_chat)
-        self._archive_and_notify(request, chat, reply_text)
+        self._notify(request, chat)
         summary = self.dependencies.public_chat_light(chat)
         summary["status"] = "idle"
         summary["runStatus"] = "completed"
@@ -111,10 +109,21 @@ class ChatReplyFinalizationApplicationService:
             ),
         }
         effective_usage = dict(usage)
-        if request.is_external_agent:
+        if any(request.projection.usage.values()):
             effective_usage.update(request.projection.usage)
         if any(effective_usage.values()):
             assistant["usage"] = effective_usage
+        if request.projection.model_identity:
+            assistant["modelIdentity"] = dict(request.projection.model_identity)
+        generation_duration_ms = request.projection.generation_duration_ms
+        if generation_duration_ms is not None and generation_duration_ms > 0:
+            assistant["modelGenerationDurationMs"] = round(
+                generation_duration_ms,
+                3,
+            )
+        output_rate = request.projection.output_tokens_per_second
+        if output_rate is not None and output_rate > 0:
+            assistant["outputTokensPerSecond"] = round(output_rate, 3)
         attachments = self._deduplicate_files([*files, *request.projection.artifacts])
         if attachments:
             assistant["attachments"] = attachments
@@ -141,6 +150,32 @@ class ChatReplyFinalizationApplicationService:
         assistant: dict[str, Any],
         model: str,
     ) -> None:
+        known_ids = {
+            str(entry.get("id") or "")
+            for entry in timeline
+            if isinstance(entry, dict) and str(entry.get("id") or "")
+        }
+        durable_activities: list[dict[str, Any]] = []
+        for raw_activity in projection.activity_messages:
+            if not isinstance(raw_activity, dict):
+                continue
+            activity = copy.deepcopy(raw_activity)
+            activity_id = str(activity.get("id") or "")
+            if activity_id and activity_id in known_ids:
+                continue
+            activity.setdefault("id", self.dependencies.short_id("activity"))
+            activity.setdefault("role", "assistant")
+            activity.setdefault("content", "")
+            activity.setdefault("createdAt", assistant["createdAt"])
+            activity.setdefault("activityCard", True)
+            activity.setdefault("intermediate", True)
+            activity.setdefault("model", model)
+            trace = activity.get("trace")
+            activity["trace"] = list(trace[-40:]) if isinstance(trace, list) else []
+            durable_activities.append(activity)
+            known_ids.add(str(activity.get("id") or ""))
+        if durable_activities:
+            timeline[0:0] = durable_activities
         if projection.trace or projection.reasoning_parts:
             timeline.insert(
                 0,
@@ -214,21 +249,10 @@ class ChatReplyFinalizationApplicationService:
         return turn_count
 
     @staticmethod
-    def _archive_and_notify(
+    def _notify(
         request: ChatReplyFinalizationRequest,
         chat: dict[str, Any],
-        reply_text: str,
     ) -> None:
-        try:
-            archive_session_exchange(
-                request.chat_id,
-                request.message,
-                str(reply_text or ""),
-                workspace_dir=request.workspace_dir,
-                session_title=str(chat.get("title") or ""),
-            )
-        except Exception:
-            logger.exception("Failed to archive workbench conversation %s", request.chat_id)
         if request.command or request.retry or request.is_side_agent:
             return
         append_notification(

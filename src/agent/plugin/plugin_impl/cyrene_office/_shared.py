@@ -12,12 +12,13 @@ from typing import Any
 
 from PIL import Image, UnidentifiedImageError
 
+from agent.plugin import PluginContext
 from cyrene.config import DATA_DIR
 from cyrene.office.gateway import get_office_gateway_runtime
 from cyrene.office.file_engine import PptxFileError, get_pptx_file_engine
 from cyrene.office.slide_layout import compile_slide_spec
 from cyrene.office.service import OfficeBridgeError, get_office_bridge
-from cyrene.tooling.runtime_api import json_result, resolve_workspace_path
+from agent.plugin.native_runtime import json_result, resolve_workspace_path
 
 CONTEXT_PROPERTIES = {
     "mode": {
@@ -303,13 +304,13 @@ def _normalize_operation(value: Any, index: int) -> dict[str, Any]:
         operation.update({"x": box[0], "y": box[1], "width": box[2], "height": box[3]})
     unknown = sorted(set(operation) - _OPERATION_FIELDS)
     if unknown:
-        raise _request_error("unknown_operation_field", f"Unsupported operation field: {unknown[0]}.", index=index, field=unknown[0], suggestion="Use the canonical ppt.apply_batch schema returned by ppt.tool_search describe.")
+        raise _request_error("unknown_operation_field", f"Unsupported operation field: {unknown[0]}.", index=index, field=unknown[0], suggestion="Use toolbox.describe for the PowerPointApplyBatch Plugin and follow its canonical schema.")
     op = str(operation.get("op") or "").strip()
     if not op:
         raise _request_error("operation_type_required", "Operation is missing op.", index=index, field="op", suggestion="Use op, not type, in agent-visible calls.")
     operation["op"] = op
     if op not in _SUPPORTED_OPERATIONS:
-        raise _request_error("unsupported_operation", f"Unsupported PowerPoint operation: {op}.", index=index, field="op", suggestion="Use ppt.tool_search to discover an advanced capability.")
+        raise _request_error("unsupported_operation", f"Unsupported PowerPoint operation: {op}.", index=index, field="op", suggestion="Use toolbox.list, then toolbox.describe, to discover the matching PowerPoint Plugin.")
     target = operation.get("shapeRef") or operation.get("target")
     if op in _TARGET_OPERATIONS and not target:
         raise _request_error("shape_target_required", f"{op} requires shapeRef or target.", index=index, field="shapeRef", suggestion="Inspect the slide and reuse a returned stable shape reference.")
@@ -507,12 +508,18 @@ def _compile_exported_presentation(
         path.unlink(missing_ok=True)
 
 
-async def setup_handler(_args: dict[str, Any], *_rest: Any) -> str:
+async def setup_handler(
+    _args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     info = await asyncio.to_thread(get_office_gateway_runtime().info)
     return _success("office.setup.get", info)
 
 
-async def list_sessions_handler(args: dict[str, Any], *_rest: Any) -> str:
+async def list_sessions_handler(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     setup = await asyncio.to_thread(get_office_gateway_runtime().info)
     return _success("office.sessions.list", {
         "sessions": get_office_bridge().list_sessions(str(args.get("host") or "") or None),
@@ -520,31 +527,52 @@ async def list_sessions_handler(args: dict[str, Any], *_rest: Any) -> str:
     })
 
 
-async def get_context_handler(args: dict[str, Any], *_rest: Any) -> str:
+async def get_context_handler(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     return await execute_powerpoint_request(args, "ppt.context.get", "ppt.get_context")
 
 
-async def inspect_handler(args: dict[str, Any], *_rest: Any) -> str:
+async def inspect_handler(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     return await execute_powerpoint_request(args, "ppt.inspect", "ppt.inspect", timeout=60)
 
 
-async def list_slides_handler(args: dict[str, Any], *_rest: Any) -> str:
+async def list_slides_handler(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     return await execute_powerpoint_request(args, "ppt.slides.list", "ppt.list_slides")
 
 
-async def list_shapes_handler(args: dict[str, Any], *_rest: Any) -> str:
+async def list_shapes_handler(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     return await execute_powerpoint_request(args, "ppt.shapes.list", "ppt.list_shapes")
 
 
-async def read_text_handler(args: dict[str, Any], *_rest: Any) -> str:
+async def read_text_handler(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     return await execute_powerpoint_request(args, "ppt.text.read", "ppt.read_text")
 
 
-async def apply_batch_handler(args: dict[str, Any], *_rest: Any) -> str:
+async def apply_batch_handler(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     return await execute_powerpoint_request(args, "ppt.batch.apply", "ppt.apply_batch", timeout=300)
 
 
-async def render_slide_handler(args: dict[str, Any], *_rest: Any) -> str:
+async def render_slide_handler(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     params = dict(args)
     if str(params.get("mode") or "") == "file" or params.get("filePath"):
         return await execute_powerpoint_request(params, "ppt.slide.render", "ppt.render_slide", timeout=120)
@@ -563,11 +591,17 @@ async def render_slide_handler(args: dict[str, Any], *_rest: Any) -> str:
         return _failure("ppt.slide.render", bridge_exc)
 
 
-async def verify_slide_handler(args: dict[str, Any], *_rest: Any) -> str:
+async def verify_slide_handler(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     return await execute_powerpoint_request(args, "ppt.slide.verify", "ppt.verify_slide", timeout=60)
 
 
-async def edit_chart_handler(args: dict[str, Any], *_rest: Any) -> str:
+async def edit_chart_handler(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     request = dict(args)
     if str(request.get("chartMode") or "visual") != "native":
         return await execute_powerpoint_request(request, "ppt.edit_chart", "ppt.edit_chart", timeout=120)
@@ -608,7 +642,10 @@ async def edit_chart_handler(args: dict[str, Any], *_rest: Any) -> str:
         return _failure("ppt.edit_chart", OfficeBridgeError(code, str(exc)))
 
 
-async def apply_ooxml_patch_handler(args: dict[str, Any], *_rest: Any) -> str:
+async def apply_ooxml_patch_handler(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     """Compile a confirmed slide-package patch off-process, then replace one live slide."""
     request = dict(args)
     if str(request.get("mode") or "") == "file" or request.get("filePath"):
@@ -647,11 +684,17 @@ async def apply_ooxml_patch_handler(args: dict[str, Any], *_rest: Any) -> str:
         return _failure("ppt.apply_ooxml_patch", OfficeBridgeError(code, str(exc)))
 
 
-async def undo_batch_handler(args: dict[str, Any], *_rest: Any) -> str:
+async def undo_batch_handler(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     return await execute_powerpoint_request(args, "ppt.batch.undo", "ppt.undo_batch", timeout=90)
 
 
-async def insert_slides_handler(args: dict[str, Any], *_rest: Any) -> str:
+async def insert_slides_handler(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     request = dict(args)
     if str(request.get("mode") or "") == "file" or request.get("filePath"):
         return await execute_powerpoint_request(request, "ppt.slides.import", "ppt.import_slides", timeout=120)
@@ -666,7 +709,10 @@ async def insert_slides_handler(args: dict[str, Any], *_rest: Any) -> str:
     return await execute_powerpoint_request(request, "ppt.slides.insert", "ppt.insert_slides", timeout=120)
 
 
-async def replace_slide_ooxml_handler(args: dict[str, Any], *_rest: Any) -> str:
+async def replace_slide_ooxml_handler(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     request = dict(args)
     if request.get("confirmed") is not True:
         return json_result({

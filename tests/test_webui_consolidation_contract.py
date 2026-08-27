@@ -23,10 +23,10 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 389
+OPENAPI_OPERATION_COUNT = 333
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "7d7603d95ff82a4e5450f2a88dab0a7275c5b82cbb6ba92960dfef4373840c8f"
+OPENAPI_SHA256 = "534330bdabbf36018bc02c3b321747bd6de426007a841a833e6442623806daf2"
 TOOL_REGISTRY_SHA256 = "f89051bdebdc54bb76288dbfbaf526765ab64fc7289e2bebd25f03510a6f7c45"
 MAIN_WIRE_SHA256 = "455f99062dd310cf5dbec1c3f02ccb3cb34b4018fcba17d3f2dd517c9b82d12a"
 SUBAGENT_WIRE_SHA256 = "1d28ab5db6096330a6a9c33877b04e1ff5e2f45c79df4b208e7f1a5a1516cd86"
@@ -144,54 +144,6 @@ def test_openapi_contract_matches_locked_generator_baseline():
     assert schema_hash == OPENAPI_SHA256, (
         f"OpenAPI schema hash changed after operation/parameter audit: expected={OPENAPI_SHA256}, actual={schema_hash}, operation_count={operation_count}"
     )
-
-
-def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged(monkeypatch):
-    from cyrene.runtime import settings_store
-    from cyrene.tool_impl import NATIVE_TOOL_MODULES
-    from cyrene.tool_impl.office import kit as office_kit
-    from cyrene.tooling import catalog, wire
-
-    monkeypatch.setattr(
-        settings_store,
-        "get_models",
-        lambda: [{"provider": "openai_compatible", "model": "custom-model"}],
-    )
-    tool_names = [str((tool_def.get("function") or {}).get("name") or "") for tool_def in catalog.TOOL_DEFS]
-    assert all(tool_names)
-    assert len(tool_names) == len(set(tool_names))
-    assert set(tool_names) == set(catalog.TOOL_HANDLERS)
-    assert all(callable(catalog.TOOL_HANDLERS[name]) for name in tool_names)
-
-    # Office is an additive native tool family. Keep the pre-Office registry
-    # locked while allowing that family to grow, and require every registered
-    # Office definition to retain its handler and canonical object schema.
-    legacy_defs = [tool_def for tool_def in catalog.TOOL_DEFS if not str(tool_def["function"]["name"]).startswith(("Office", "PowerPoint"))]
-    office_defs = [tool_def for tool_def in catalog.TOOL_DEFS if tool_def not in legacy_defs]
-    assert len(legacy_defs) == 151
-    assert _sha256_json(legacy_defs) == TOOL_REGISTRY_SHA256
-    expected_office_names = {importlib.import_module(module_name).TOOL_DEF["function"]["name"] for module_name in NATIVE_TOOL_MODULES if ".office." in module_name}
-    for family in (
-        office_kit.READ_DEFS,
-        office_kit.EDIT_OPS,
-        office_kit.COMPOSE,
-        office_kit.REVIEW,
-        office_kit.ADVANCED,
-        office_kit.ESCAPE,
-    ):
-        expected_office_names.update(item[0] for item in family)
-    assert {tool_def["function"]["name"] for tool_def in office_defs} == expected_office_names
-    for tool_def in office_defs:
-        function = tool_def["function"]
-        assert function["description"]
-        assert function["parameters"]["type"] == "object"
-        assert function["name"] in catalog.TOOL_HANDLERS
-    assert len(catalog._MAIN_ONLY_TOOLS) == 85
-
-    assert len(wire.get_main_wire_tool_defs()) == 18
-    assert wire.get_wire_bundle_hash("main") == MAIN_WIRE_SHA256
-    assert len(wire.get_subagent_wire_tool_defs()) == 12
-    assert wire.get_wire_bundle_hash("subagent") == SUBAGENT_WIRE_SHA256
 
 
 def test_workbench_cross_script_globals_are_registered():
@@ -363,7 +315,7 @@ global.__fetchCalls = [];
 global.fetch = async (url) => {
   const requestUrl = String(url);
   __fetchCalls.push(requestUrl);
-  if (requestUrl === "/api/sessions") return { ok: true, json: async () => ({ sessions: [], model_stats: [] }) };
+  if (requestUrl === "/api/workbench/sessions") return { ok: true, json: async () => ({ sessions: [] }) };
   if (requestUrl === "/api/status") return { ok: true, json: async () => ({ services: [] }) };
   if (requestUrl.startsWith("/api/dashboard?tz=")) return { ok: true, json: async () => ({ usage: {} }) };
   if (requestUrl === "/api/settings/config") return { ok: false, json: async () => ({}) };

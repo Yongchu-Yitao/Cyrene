@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
@@ -21,6 +22,8 @@ from cyrene.workbench.task_services import (
     TaskMutationError,
     TaskSessionNotFoundError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _body(value: Any) -> dict[str, Any]:
@@ -101,8 +104,7 @@ class WorkbenchChatApplicationPort:
         project = await asyncio.to_thread(runtime.find_project_lightweight, project_id)
         if not project:
             raise ControlServiceError("project not found", status_code=404)
-        from cyrene.workbench.project_memory_prompt import current_snapshot
-        snapshot = await asyncio.to_thread(current_snapshot, project_id)
+        snapshot = await self.context.project_memory_snapshot(project_id)
 
         def persist() -> dict[str, Any]:
             payload = self.service.repository.read()
@@ -164,10 +166,87 @@ class WorkbenchChatApplicationPort:
         payload["chats"] = [item for item in chats if str(item.get("id") or "") not in removed]
         await asyncio.to_thread(self.service.repository.write, payload)
         await publish_chat_changed(chat_id, project_id, "deleted")
+        for removed_chat_id in removed:
+            try:
+                await self.context.delete_chat_memory(removed_chat_id)
+            except Exception:
+                # Chat deletion is authoritative; a user-edited optional
+                # Plugin must not resurrect the chat by failing its cleanup.
+                logger.exception(
+                    "Memory Plugin cleanup failed for deleted chat %s",
+                    removed_chat_id,
+                )
         return {"ok": True}
 
     async def send(self, chat_id: str, body: dict[str, Any]) -> dict[str, Any]:
         return _domain_result(await self._send(chat_id, body, detached=True))
+
+    async def dispatch_agent_message(
+        self,
+        chat_id: str,
+        message: str,
+        *,
+        origin_session_id: str = "",
+        client_request_id: str = "",
+    ) -> dict[str, Any]:
+        """Send one cross-session Agent message through the normal Chat kernel."""
+
+        text = str(message or "").strip()
+        if not text:
+            raise ControlServiceError("message is required", status_code=400)
+        request_id = str(client_request_id or "").strip()
+        if not request_id:
+            from uuid import uuid4
+
+            request_id = f"agent_session_{uuid4().hex}"
+        origin = str(origin_session_id or "").strip()
+
+        async def guide_active() -> dict[str, Any]:
+            result = await self._guidance.submit(
+                chat_id=chat_id,
+                message=text,
+                client_request_id=request_id,
+                agent_originated=True,
+                origin_session_id=origin,
+            )
+            if result.status_code >= 400:
+                raise ControlServiceError(
+                    str(result.payload.get("error") or "guidance failed"),
+                    code=str(result.payload.get("code") or ""),
+                    status_code=result.status_code,
+                    payload=result.payload,
+                )
+            return {
+                **result.payload,
+                "status": "guided",
+                "session_id": str(chat_id),
+                "run_id": str(result.payload.get("runId") or ""),
+            }
+
+        if self.run_manager.get(chat_id) is not None:
+            return await guide_active()
+        try:
+            payload = await self.send(
+                chat_id,
+                {
+                    "message": text,
+                    "clientRequestId": request_id,
+                    "conversationSource": "agent_session",
+                    "agentOriginated": True,
+                    "sourceSessionId": origin,
+                    "stream": True,
+                },
+            )
+        except ControlServiceError as exc:
+            if exc.status_code == 409 or exc.code == "chat_run_in_progress":
+                return await guide_active()
+            raise
+        return {
+            **payload,
+            "status": "started",
+            "session_id": str(chat_id),
+            "run_id": str(payload.get("run_id") or payload.get("runId") or ""),
+        }
 
     async def guide(self, chat_id: str, command: Any) -> dict[str, Any]:
         values = _body(command)

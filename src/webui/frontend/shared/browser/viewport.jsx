@@ -1332,7 +1332,7 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
       return;
     }
 
-    fetch("/api/chat/answer-question", {
+    fetch("/api/workbench/chats/" + encodeURIComponent(String(browserSessionId || "")) + "/answer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

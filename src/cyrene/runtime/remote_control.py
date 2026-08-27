@@ -45,7 +45,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 logger = logging.getLogger(__name__)
 
-REMOTE_PROTOCOL_VERSION = 1
+REMOTE_PROTOCOL_VERSION = 2
 DEFAULT_RELAY_URL = "wss://relay.cyrene.invalid/v1"
 PAIRING_TTL_SECONDS = 120
 DIRECT_PAIRING_PORT = 37841
@@ -113,29 +113,26 @@ DEFAULT_REMOTE_CAPABILITIES = (
     "settings:read",
     "settings:update",
 )
-REMOTE_TOOL_PACK_PREFIX = "toolpack:"
-REMOTE_TOOL_PACK_WIRE_NAMES = (
-    "code_tools",
-    "browser_tools",
-    "desktop_tools",
-    "memory_tools",
-    "knowledge_tools",
-    "task_tools",
-    "entity_tools",
-    "map_tools",
-    "subagent_tools",
-    "delivery_tools",
-    "skill_tools",
-    "integration_tools",
-    "custom_tools",
+REMOTE_PLUGIN_PACK_PREFIX = "pluginpack:"
+REMOTE_PLUGIN_PACK_IDS = (
+    "cyrene_code",
+    "cyrene_browser",
+    "cyrene_desktop",
+    "cyrene_memory",
+    "cyrene_knowledge",
+    "cyrene_task",
+    "cyrene_map",
+    "cyrene_subagent",
+    "cyrene_delivery",
+    "cyrene_skills",
+    "cyrene_extensions",
 )
-REMOTE_TOOL_PACK_CAPABILITIES = frozenset(
-    REMOTE_TOOL_PACK_PREFIX + wire_name
-    for wire_name in REMOTE_TOOL_PACK_WIRE_NAMES
+REMOTE_PLUGIN_PACK_CAPABILITIES = frozenset(
+    REMOTE_PLUGIN_PACK_PREFIX + pack_id
+    for pack_id in REMOTE_PLUGIN_PACK_IDS
 )
-ALL_REMOTE_GRANTS = REMOTE_CAPABILITIES | REMOTE_TOOL_PACK_CAPABILITIES
+ALL_REMOTE_GRANTS = REMOTE_CAPABILITIES | REMOTE_PLUGIN_PACK_CAPABILITIES
 _REMOTE_STORE_SUFFIX = ".remote-control"
-_REMOTE_STORE_MIGRATION_ID = "split_remote_control_store_v1"
 
 _COMMAND_CAPABILITIES = {
     "capabilities.read": "",
@@ -199,12 +196,12 @@ _COMMAND_CAPABILITIES = {
     "settings.openai_oauth.read": "settings:read",
     "settings.openai_oauth.login": "settings:update",
     "settings.openai_oauth.logout": "settings:update",
-    "shell.open": "toolpack:code_tools",
-    "shell.read": "toolpack:code_tools",
-    "shell.write": "toolpack:code_tools",
-    "shell.interrupt": "toolpack:code_tools",
-    "shell.close": "toolpack:code_tools",
-    "harness.discover": "",
+    "shell.open": "pluginpack:cyrene_code",
+    "shell.read": "pluginpack:cyrene_code",
+    "shell.write": "pluginpack:cyrene_code",
+    "shell.interrupt": "pluginpack:cyrene_code",
+    "shell.close": "pluginpack:cyrene_code",
+    "harness.list": "",
     "harness.describe": "",
     "harness.invoke": "",
 }
@@ -573,18 +570,12 @@ class RemoteControlStore:
         with self._lock, self._connect() as conn:
             conn.executescript(
                 """
-                CREATE TABLE IF NOT EXISTS remote_store_migrations (
-                    migration_id TEXT PRIMARY KEY,
-                    applied_at TEXT NOT NULL
-                );
-
                 CREATE TABLE IF NOT EXISTS remote_settings (
                     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                     enabled INTEGER NOT NULL DEFAULT 0,
                     relay_url TEXT NOT NULL DEFAULT '',
                     device_name TEXT NOT NULL DEFAULT '',
                     listen_port INTEGER NOT NULL DEFAULT 37841,
-                    default_tool_packs_json TEXT NOT NULL DEFAULT '[]',
                     updated_at TEXT NOT NULL
                 );
 
@@ -682,73 +673,6 @@ class RemoteControlStore:
                 );
                 """
             )
-            self._migrate_legacy_store(conn)
-            dedupe_columns = {
-                str(row["name"])
-                for row in conn.execute(
-                    "PRAGMA table_info(remote_command_dedupe)"
-                ).fetchall()
-            }
-            if "state" not in dedupe_columns:
-                conn.execute(
-                    """
-                    ALTER TABLE remote_command_dedupe
-                    ADD COLUMN state TEXT NOT NULL DEFAULT 'complete'
-                    """
-                )
-            peer_columns = {
-                str(row["name"])
-                for row in conn.execute(
-                    "PRAGMA table_info(remote_peers)"
-                ).fetchall()
-            }
-            if "lan_address" not in peer_columns:
-                conn.execute(
-                    """
-                    ALTER TABLE remote_peers
-                    ADD COLUMN lan_address TEXT NOT NULL DEFAULT ''
-                    """
-                )
-            settings_columns = {
-                str(row["name"])
-                for row in conn.execute(
-                    "PRAGMA table_info(remote_settings)"
-                ).fetchall()
-            }
-            if "listen_port" not in settings_columns:
-                conn.execute(
-                    """
-                    ALTER TABLE remote_settings
-                    ADD COLUMN listen_port INTEGER NOT NULL DEFAULT 37841
-                    """
-                )
-            if "default_tool_packs_json" not in settings_columns:
-                conn.execute(
-                    """
-                    ALTER TABLE remote_settings
-                    ADD COLUMN default_tool_packs_json TEXT NOT NULL DEFAULT '[]'
-                    """
-                )
-            job_columns = {
-                str(row["name"])
-                for row in conn.execute(
-                    "PRAGMA table_info(remote_jobs)"
-                ).fetchall()
-            }
-            if "origin_chat_id" not in job_columns:
-                conn.execute(
-                    """
-                    ALTER TABLE remote_jobs
-                    ADD COLUMN origin_chat_id TEXT NOT NULL DEFAULT ''
-                    """
-                )
-            if "outside_workspace" not in job_columns:
-                conn.execute(
-                    """
-                    ALTER TABLE remote_jobs
-                    ADD COLUMN outside_workspace INTEGER NOT NULL DEFAULT 0
-                    """
-                )
             conn.execute(
                 """
                 INSERT OR IGNORE INTO remote_settings(
@@ -769,129 +693,6 @@ class RemoteControlStore:
                 """,
                 (utc_iso(),),
             )
-            self._upgrade_required_compatibility_grants(conn)
-
-    def _migrate_legacy_store(self, conn: sqlite3.Connection) -> None:
-        """Move remote-only state away from the high-frequency runtime DB.
-
-        Workbench streams persist thousands of run events in the main runtime
-        database. Remote command audit and idempotency records must not compete
-        with that traffic because the audit write happens before the encrypted
-        command is sent. Copy legacy rows once into a dedicated WAL database;
-        the old tables remain untouched for rollback compatibility.
-        """
-        migrated = conn.execute(
-            """
-            SELECT 1 FROM remote_store_migrations
-            WHERE migration_id = ?
-            """,
-            (_REMOTE_STORE_MIGRATION_ID,),
-        ).fetchone()
-        legacy_path = Path(self.db_path)
-        if migrated is not None or not legacy_path.exists():
-            return
-        if legacy_path.resolve() == Path(self.remote_db_path).resolve():
-            return
-
-        conn.execute("ATTACH DATABASE ? AS legacy_remote", (str(legacy_path),))
-        try:
-            legacy_tables = {
-                str(row["name"])
-                for row in conn.execute(
-                    """
-                    SELECT name FROM legacy_remote.sqlite_master
-                    WHERE type = 'table'
-                    """
-                ).fetchall()
-            }
-            for table in (
-                "remote_settings",
-                "remote_peers",
-                "remote_pairings",
-                "remote_replay_nonces",
-                "remote_command_dedupe",
-                "remote_audit_events",
-            ):
-                if table not in legacy_tables:
-                    continue
-                target_columns = [
-                    str(row["name"])
-                    for row in conn.execute(
-                        f"PRAGMA main.table_info({table})"
-                    ).fetchall()
-                ]
-                legacy_columns = {
-                    str(row["name"])
-                    for row in conn.execute(
-                        f"PRAGMA legacy_remote.table_info({table})"
-                    ).fetchall()
-                }
-                columns = [
-                    column for column in target_columns
-                    if column in legacy_columns
-                ]
-                if not columns:
-                    continue
-                column_sql = ", ".join(f'"{column}"' for column in columns)
-                conflict = "REPLACE" if table == "remote_settings" else "IGNORE"
-                conn.execute(
-                    f"""
-                    INSERT OR {conflict} INTO main.{table} ({column_sql})
-                    SELECT {column_sql} FROM legacy_remote.{table}
-                    """
-                )
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO remote_store_migrations(
-                    migration_id, applied_at
-                ) VALUES (?, ?)
-                """,
-                (_REMOTE_STORE_MIGRATION_ID, utc_iso()),
-            )
-            conn.commit()
-        finally:
-            conn.execute("DETACH DATABASE legacy_remote")
-
-    @staticmethod
-    def _upgrade_required_compatibility_grants(
-        conn: sqlite3.Connection,
-    ) -> None:
-        """Keep the compatibility protocol enabled for every trusted peer."""
-        rows = conn.execute(
-            """
-            SELECT device_id, granted_capabilities_json,
-                   received_capabilities_json
-            FROM remote_peers
-            """
-        ).fetchall()
-        for row in rows:
-            updates: dict[str, str] = {}
-            for column in (
-                "granted_capabilities_json",
-                "received_capabilities_json",
-            ):
-                try:
-                    capabilities = {
-                        str(item)
-                        for item in json.loads(str(row[column]))
-                    }
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    continue
-                # Only the original compatibility surface is mandatory. New
-                # protocol extensions are negotiated explicitly so upgrading
-                # one desktop never silently expands an old peer's authority.
-                upgraded = capabilities | BASE_REMOTE_CAPABILITIES
-                if upgraded != capabilities:
-                    capabilities = upgraded
-                    updates[column] = _json_dumps(sorted(capabilities))
-            if updates:
-                assignments = ", ".join(
-                    f"{column} = ?" for column in updates
-                )
-                conn.execute(
-                    f"UPDATE remote_peers SET {assignments} WHERE device_id = ?",
-                    (*updates.values(), str(row["device_id"])),
-                )
 
     def public_identity(self) -> dict[str, str]:
         identity = self.identity
@@ -907,25 +708,15 @@ class RemoteControlStore:
     def get_settings(self) -> dict[str, Any]:
         with self._lock, self._connect() as conn:
             row = conn.execute(
-                "SELECT enabled, relay_url, device_name, listen_port, "
-                "default_tool_packs_json, updated_at "
+                "SELECT enabled, relay_url, device_name, listen_port, updated_at "
                 "FROM remote_settings WHERE singleton = 1"
             ).fetchone()
         assert row is not None
-        try:
-            default_tool_packs = [
-                str(item)
-                for item in json.loads(str(row["default_tool_packs_json"]))
-                if str(item) in REMOTE_TOOL_PACK_WIRE_NAMES
-            ]
-        except (TypeError, ValueError, json.JSONDecodeError):
-            default_tool_packs = []
         return {
             "enabled": bool(row["enabled"]),
             "relay_url": str(row["relay_url"]),
             "device_name": str(row["device_name"]),
             "listen_port": int(row["listen_port"] or DIRECT_PAIRING_PORT),
-            "default_tool_packs": sorted(set(default_tool_packs)),
             "updated_at": str(row["updated_at"]),
         }
 
@@ -958,7 +749,6 @@ class RemoteControlStore:
         enabled: bool,
         relay_url: str,
         device_name: str,
-        default_tool_packs: list[str] | tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
         relay = str(relay_url or "").strip()
         if relay:
@@ -968,39 +758,18 @@ class RemoteControlStore:
             raise ValueError("device name is required")
         if len(name) > 120:
             raise ValueError("device name is too long")
-        current = self.get_settings()
-        packs = (
-            list(current["default_tool_packs"])
-            if default_tool_packs is None
-            else sorted({
-                str(item).strip()
-                for item in default_tool_packs
-                if str(item).strip()
-            })
-        )
-        invalid_packs = [
-            item for item in packs
-            if item not in REMOTE_TOOL_PACK_WIRE_NAMES
-        ]
-        if invalid_packs:
-            raise ValueError(
-                "unsupported remote tool packages: "
-                + ", ".join(invalid_packs)
-            )
         now = utc_iso()
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
                 UPDATE remote_settings
-                SET enabled = ?, relay_url = ?, device_name = ?,
-                    default_tool_packs_json = ?, updated_at = ?
+                SET enabled = ?, relay_url = ?, device_name = ?, updated_at = ?
                 WHERE singleton = 1
                 """,
                 (
                     int(bool(enabled)),
                     relay,
                     name,
-                    _json_dumps(packs),
                     now,
                 ),
             )
@@ -2748,9 +2517,9 @@ __all__ = [
     "PAIRING_TTL_SECONDS",
     "REMOTE_CAPABILITIES",
     "REMOTE_EXTENSION_CAPABILITIES",
-    "REMOTE_TOOL_PACK_CAPABILITIES",
-    "REMOTE_TOOL_PACK_PREFIX",
-    "REMOTE_TOOL_PACK_WIRE_NAMES",
+    "REMOTE_PLUGIN_PACK_CAPABILITIES",
+    "REMOTE_PLUGIN_PACK_IDS",
+    "REMOTE_PLUGIN_PACK_PREFIX",
     "REMOTE_PROTOCOL_VERSION",
     "RemoteControlStore",
     "RemoteEnvelopeCodec",

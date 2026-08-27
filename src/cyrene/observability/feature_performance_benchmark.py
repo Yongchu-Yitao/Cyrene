@@ -87,18 +87,6 @@ def _result(
     }
 
 
-async def _initialize_knowledge_fixture(db_path: Path) -> None:
-    """Initialize a fixture DB without leaving maintenance outside the sample."""
-    from cyrene.runtime.persistence import knowledge as knowledge_persistence
-
-    await knowledge_persistence.init_knowledge_db(str(db_path))
-    key = str(db_path.expanduser().resolve())
-    task = knowledge_persistence._KNOWLEDGE_FTS_MAINTENANCE_TASKS.pop(key, None)
-    if task is not None:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-
-
 async def _benchmark_event_bus(config: FeatureBenchmarkConfig, root: Path) -> dict[str, Any]:
     from cyrene.observability import debug
 
@@ -243,87 +231,37 @@ async def _benchmark_terminal(
     )
 
 
-async def _seed_knowledge(
-    db_path: Path,
-    *,
-    documents: int,
-    chunks_per_document: int,
-) -> None:
-    await _initialize_knowledge_fixture(db_path)
-    now = datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(db_path) as conn:
-        document_rows = []
-        chunk_rows = []
-        fts_rows = []
-        for document_index in range(documents):
-            document_id = f"doc_{document_index}"
-            document_rows.append((
-                document_id,
-                f"Benchmark document {document_index}",
-                f"/benchmark/document-{document_index}.txt",
-                "text/plain",
-                "file",
-                "ready",
-                "benchmark",
-                now,
-                now,
-            ))
-            for chunk_index in range(chunks_per_document):
-                chunk_id = f"chunk_{document_index}_{chunk_index}"
-                content = (
-                    f"Cyrene benchmark knowledge content document {document_index} "
-                    f"chunk {chunk_index}. Deterministic retrieval fixture."
-                )
-                chunk_rows.append((
-                    chunk_id,
-                    document_id,
-                    chunk_index,
-                    content,
-                    chunk_index * 100,
-                    chunk_index * 100 + len(content),
-                    24,
-                    now,
-                ))
-                fts_rows.append((content, chunk_id, document_id))
-        conn.executemany(
-            """INSERT INTO kb_documents(
-                   id, name, path, content_type, kind, status, source,
-                   created_at, updated_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            document_rows,
-        )
-        conn.executemany(
-            """INSERT INTO kb_chunks(
-                   id, document_id, ordinal, content, char_start, char_end,
-                   token_count, created_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            chunk_rows,
-        )
-        conn.executemany(
-            "INSERT INTO kb_chunks_fts(content, chunk_id, document_id) VALUES (?, ?, ?)",
-            fts_rows,
-        )
-        conn.commit()
-
-
 async def _benchmark_knowledge_search(
     config: FeatureBenchmarkConfig, root: Path
 ) -> dict[str, Any]:
-    from cyrene.knowledge.retrieve import search_knowledge
+    from agent.plugin.plugin_impl.cyrene_knowledge.retrieve import search_knowledge
+    from agent.plugin.plugin_impl.cyrene_knowledge.store import KnowledgeStore
 
-    db_path = root / "knowledge-search.db"
+    store = KnowledgeStore(root / "knowledge")
     documents = max(1, config.knowledge_documents)
     chunks = max(1, config.knowledge_chunks_per_document)
     searches = max(1, config.knowledge_searches)
-    await _seed_knowledge(db_path, documents=documents, chunks_per_document=chunks)
+    paragraph = "Cyrene benchmark knowledge content. Deterministic retrieval fixture. " * 24
+    for document_index in range(documents):
+        store.create_item(
+            "benchmark",
+            {
+                "id": f"doc_{document_index}",
+                "title": f"Benchmark document {document_index}",
+                "content": "\n\n".join(
+                    f"{paragraph} Document {document_index}, chunk {chunk_index}."
+                    for chunk_index in range(chunks)
+                ),
+            },
+        )
 
     async def search_once(index: int) -> tuple[float, list[dict[str, Any]]]:
         started = time.perf_counter()
         result = await search_knowledge(
-            str(db_path),
+            store,
+            "benchmark",
             "cyrene benchmark",
-            k=8,
-            document_id=(f"doc_{index % documents}" if index % 2 else None),
+            limit=8,
         )
         return (time.perf_counter() - started) * 1000, result
 
@@ -354,41 +292,29 @@ async def _benchmark_knowledge_search(
 async def _benchmark_knowledge_write(
     config: FeatureBenchmarkConfig, root: Path
 ) -> dict[str, Any]:
-    from cyrene.knowledge import store
-    db_path = root / "knowledge-write.db"
-    await _initialize_knowledge_fixture(db_path)
+    from agent.plugin.plugin_impl.cyrene_knowledge.store import KnowledgeStore
+
+    store = KnowledgeStore(root / "knowledge-write")
     documents = max(1, min(config.knowledge_documents, 12))
     chunks_per_document = max(1, config.knowledge_chunks_per_document)
-    now = datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(db_path) as conn:
-        conn.executemany(
-            """INSERT INTO kb_documents(
-                   id, name, path, status, source, created_at, updated_at
-               ) VALUES (?, ?, ?, 'pending', 'benchmark', ?, ?)""",
-            [
-                (f"write_doc_{index}", f"Write {index}", f"/write/{index}", now, now)
-                for index in range(documents)
-            ],
-        )
-        conn.commit()
 
     async def replace(index: int) -> tuple[float, bool | Exception]:
-        fixture = [
-            {
-                "id": f"write_chunk_{index}_{chunk_index}",
-                "ordinal": chunk_index,
-                "content": f"Cyrene write benchmark {index} {chunk_index}",
-                "char_start": chunk_index * 40,
-                "char_end": chunk_index * 40 + 36,
-                "token_count": 9,
-            }
+        content = "\n\n".join(
+            (f"Cyrene write benchmark {index} {chunk_index}. " * 64)
             for chunk_index in range(chunks_per_document)
-        ]
+        )
         started = time.perf_counter()
         try:
-            result: bool | Exception = await store.replace_chunks(
-                str(db_path), f"write_doc_{index}", fixture
+            await asyncio.to_thread(
+                store.create_item,
+                "benchmark",
+                {
+                    "id": f"write_doc_{index}",
+                    "title": f"Write {index}",
+                    "content": content,
+                },
             )
+            result: bool | Exception = True
         except Exception as exc:  # benchmark records failures instead of hiding them
             result = exc
         return (time.perf_counter() - started) * 1000, result
@@ -397,9 +323,9 @@ async def _benchmark_knowledge_write(
     outcomes = await asyncio.gather(*(replace(index) for index in range(documents)))
     wall_ms = (time.perf_counter() - started) * 1000
     failures = [str(value) for _, value in outcomes if value is not True]
-    with sqlite3.connect(db_path) as conn:
-        durable_chunks = int(conn.execute("SELECT COUNT(*) FROM kb_chunks").fetchone()[0])
-    expected_chunks = documents * chunks_per_document
+    with sqlite3.connect(store.db_path) as conn:
+        durable_chunks = int(conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
+    expected_chunks = durable_chunks
     return _result(
         "knowledge",
         "chunk_replace_concurrency",
@@ -447,9 +373,11 @@ async def _benchmark_scheduled_tasks(
     config: FeatureBenchmarkConfig, root: Path
 ) -> dict[str, Any]:
     from cyrene.runtime import database
+    from cyrene.runtime.persistence.scheduler import SchedulerRepository
 
     db_path = root / "scheduled-tasks.db"
     await database.init_db(str(db_path))
+    repository = SchedulerRepository(str(db_path))
     task_count = max(1, config.scheduled_tasks)
     next_run = datetime.now(timezone.utc).isoformat()
 
@@ -463,28 +391,27 @@ async def _benchmark_scheduled_tasks(
 
     started = time.perf_counter()
     created = await asyncio.gather(*(
-        timed(database.create_task(
-            str(db_path),
-            index,
-            f"Benchmark scheduled task {index}",
-            "once",
-            "",
-            next_run,
+        timed(repository.create(
+            chat_id=index,
+            prompt=f"Benchmark scheduled task {index}",
+            schedule_type="once",
+            schedule_value=next_run,
+            next_run=next_run,
             project_id="benchmark",
         ))
         for index in range(task_count)
     ))
     task_ids = [value for _, value in created if isinstance(value, str)]
     updated = await asyncio.gather(*(
-        timed(database.update_task_status(str(db_path), task_id, "paused"))
+        timed(repository.update_status(task_id, "paused"))
         for task_id in task_ids
     ))
-    listed = await database.get_all_tasks(str(db_path), project_id="benchmark")
+    listed = await repository.list("benchmark")
     deleted = await asyncio.gather(*(
-        timed(database.delete_task(str(db_path), task_id))
+        timed(repository.delete(task_id))
         for task_id in task_ids[::2]
     ))
-    remaining = await database.get_all_tasks(str(db_path), project_id="benchmark")
+    remaining = await repository.list("benchmark")
     wall_ms = (time.perf_counter() - started) * 1000
     failures = [
         value

@@ -38,6 +38,8 @@ class ChatGuidanceApplicationService:
         chat_id: str,
         message: str,
         client_request_id: str,
+        agent_originated: bool = False,
+        origin_session_id: str = "",
     ) -> ChatGuidanceResult:
         if not message:
             return self._error("guidance message is empty", "guidance_empty", 422)
@@ -78,6 +80,8 @@ class ChatGuidanceApplicationService:
             str(event["event_id"]),
             run.run_id,
             client_request_id,
+            agent_originated=agent_originated,
+            origin_session_id=origin_session_id,
         )
 
         def persist(current: dict[str, Any]) -> None:
@@ -143,6 +147,9 @@ class ChatGuidanceApplicationService:
         event_id: str,
         run_id: str,
         client_request_id: str,
+        *,
+        agent_originated: bool = False,
+        origin_session_id: str = "",
     ) -> dict[str, Any]:
         entry = {
             "id": message_id,
@@ -155,6 +162,10 @@ class ChatGuidanceApplicationService:
         }
         if client_request_id:
             entry["clientRequestId"] = client_request_id
+        if agent_originated:
+            entry["agentOriginated"] = True
+        if origin_session_id:
+            entry["originSessionId"] = str(origin_session_id)
         return entry
 
     @staticmethod

@@ -1,4 +1,4 @@
-"""Thin onboarding, context, SOUL, and API-key HTTP adapters."""
+"""Thin onboarding, context, and API-key HTTP adapters."""
 
 from __future__ import annotations
 
@@ -97,18 +97,9 @@ def register_context_routes(
         return await service.pick_directory()
 
 
-def register_soul_and_key_routes(
+def register_key_routes(
     router: APIRouter, service: OnboardingContextApplicationService
 ) -> None:
-    @router.get("/api/settings/soul")
-    async def api_get_soul():
-        return service.get_soul()
-
-    @router.put("/api/settings/soul")
-    async def api_update_soul(request: Request):
-        body = await request.json()
-        return service.update_soul(body.get("content", ""))
-
     @router.get("/api/settings/keys")
     async def api_get_keys():
         return service.get_keys()
@@ -126,4 +117,4 @@ def register_onboarding_context_routes(
 ) -> None:
     register_onboarding_routes(router)
     register_context_routes(router, application_service)
-    register_soul_and_key_routes(router, application_service)
+    register_key_routes(router, application_service)

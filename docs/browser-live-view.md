@@ -143,9 +143,9 @@ headless, screencast, and locale settings apply to non-Electron Playwright mode;
 
 The profile directory is `<DATA_DIR>/browser_profile`.
 
-For Electron development, run `npm run dev` from `electron/`. The Electron
-process starts the Python backend through `src/cyrene/local_cli.py`; successful
-startup prints `UIMODE=workbench` and `PORT=4242`.
+For Electron development, run `npm run dev` from `electron/`. Electron starts
+the Python backend through `uv run cyrene --workbench --electron-mode`;
+successful startup prints `UIMODE=workbench` and `PORT=4242`.
 
 ## Permissions
 

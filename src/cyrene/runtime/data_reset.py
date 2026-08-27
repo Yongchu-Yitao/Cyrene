@@ -2,23 +2,18 @@
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import shutil
 from pathlib import Path
 from typing import Any
 
-import cyrene.agent.state as agent_state
 from cyrene.config import (
     BASE_DIR,
     DATA_DIR,
     DB_PATH,
-    DEFAULT_OPENAI_BASE_URL,
-    DEFAULT_OPENAI_MODEL,
     WORKSPACE_DIR,
     cyrene_dir,
 )
-from cyrene.runtime.memory.conversations import CONVERSATIONS_DIR
 
 
 def remove_path(path: Path) -> None:
@@ -40,24 +35,6 @@ def remove_path_checked(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def reset_legacy_workspace_root_leftovers() -> None:
-    from cyrene.runtime.cyrene_migration import (
-        looks_like_cyrene_folder,
-        looks_like_cyrene_soul,
-    )
-
-    for name in ("conversations", "patterns", "plan", "projects"):
-        path = WORKSPACE_DIR / name
-        if path.is_dir() and looks_like_cyrene_folder(WORKSPACE_DIR, name):
-            remove_path_checked(path)
-    scratch = WORKSPACE_DIR / "scratch"
-    if scratch.is_dir():
-        remove_path_checked(scratch)
-    soul = WORKSPACE_DIR / "SOUL.md"
-    if soul.is_file() and looks_like_cyrene_soul(soul):
-        remove_path_checked(soul)
-
-
 def remove_directory_children(
     root: Path, *, preserve: frozenset[str] = frozenset()
 ) -> None:
@@ -67,45 +44,28 @@ def remove_directory_children(
             remove_path_checked(child)
 
 
-async def reset_process_runtime_state() -> None:
-    from cyrene.agent.session import shutdown_session_tasks
-    from cyrene.model_runtime.client import reset_runtime_state
+async def reset_process_runtime_state(db_path: str = "") -> None:
+    from agent.plugin.mcp_service import get_mcp_service
+    from cyrene.model_runtime.codex_provider import get_codex_provider
     from cyrene.runtime.shell_wake import get_shell_wake_service
-    from cyrene.tooling.backends.mcp_manager import stop_mcp_async
-    from cyrene.workbench import chat as workbench_chat
+    from cyrene.workbench.chat_runs import get_chat_run_manager, shutdown_chat_runs
+    from cyrene.workbench.task_runs import shutdown_task_runs
 
     goal_loop = importlib.import_module("cyrene.workbench.goal_loop")
-    manager = workbench_chat._CHAT_RUN_MANAGER
+    manager = get_chat_run_manager()
     for chat_id in list(manager.runs):
         await manager.terminate(chat_id, termination_reason="application_data_reset")
-    for task in list(manager._cleanup_tasks):
-        task.cancel()
-    if manager._cleanup_tasks:
-        await asyncio.gather(*manager._cleanup_tasks, return_exceptions=True)
-    manager._cleanup_tasks.clear()
+    await shutdown_chat_runs()
+    manager.runs.clear()
+    await shutdown_task_runs(str(db_path or DB_PATH))
 
     for goal_manager in list(goal_loop._MANAGERS.values()):
         await goal_manager.shutdown()
         goal_manager.closed = False
     get_shell_wake_service().clear_pending()
 
-    await shutdown_session_tasks()
-    agent_state._sessions.clear()
-    await stop_mcp_async()
-    await reset_runtime_state()
-
-
-async def clear_knowledge_data(store_dir: Path) -> None:
-    from cyrene.knowledge import ingest
-    from cyrene.knowledge.workspace import clear_initialized_databases
-
-    await ingest.cancel_pending_tasks()
-    knowledge_paths: set[Path] = set()
-    for pattern in ("kb_*.db", "kb_*.db-wal", "kb_*.db-shm", "kb_*.db-journal"):
-        knowledge_paths.update(store_dir.glob(pattern))
-    for path in knowledge_paths:
-        remove_path(path)
-    clear_initialized_databases()
+    await get_mcp_service().shutdown()
+    await get_codex_provider().close()
 
 
 class DataResetApplicationService:
@@ -115,20 +75,27 @@ class DataResetApplicationService:
         self.db_path = str(db_path)
 
     async def reset_app_data(self) -> dict[str, Any]:
+        from agent.plugin import active_plugin_application_host
         from cyrene.browser import clear_browser_data
         from cyrene.config import CACHE_DIR, STORE_DIR, write_env_keys
-        from cyrene.knowledge.local_models import delete_all_models
-        from cyrene.runtime.database import init_db, init_knowledge_db
+        from cyrene.runtime.database import init_db
         from cyrene.runtime.inbox import clear_all_inboxes
         from cyrene.runtime.onboarding import get_onboarding_status, reset_onboarding_state
         from cyrene.runtime.settings_store import reset_all as reset_web_settings
-        from cyrene.runtime.memory.soul import get_default_soul_content, get_soul_path
         from cyrene.workbench import presentation_runtime
 
-        await reset_process_runtime_state()
+        await reset_process_runtime_state(self.db_path)
         browser_result = await clear_browser_data()
-        await delete_all_models()
-        await clear_knowledge_data(STORE_DIR)
+        plugin_host = active_plugin_application_host()
+        knowledge_service = (
+            plugin_host.service("knowledge") if plugin_host is not None else None
+        )
+        memory_service = (
+            plugin_host.service("memory") if plugin_host is not None else None
+        )
+        if knowledge_service is not None:
+            await knowledge_service.delete_all_local_models()
+            await knowledge_service.reset_data()
         importlib.import_module("cyrene.runtime.scheduler").reset_lottery()
         await clear_all_inboxes()
 
@@ -141,7 +108,6 @@ class DataResetApplicationService:
 
         cyrene_root = cyrene_dir(WORKSPACE_DIR)
         for path in (
-            cyrene_root / "conversations",
             cyrene_root / "patterns",
             cyrene_root / "plan",
             cyrene_root / "projects",
@@ -150,32 +116,26 @@ class DataResetApplicationService:
             CACHE_DIR / "voice",
         ):
             remove_path_checked(path)
-        reset_legacy_workspace_root_leftovers()
-
         db_path = Path(self.db_path or str(DB_PATH))
         remove_path_checked(db_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         await init_db(str(db_path))
-        await init_knowledge_db(str(STORE_DIR / "kb_default.db"))
+        from cyrene.workbench.chat_runs import startup_chat_runs
+
+        startup_chat_runs(str(db_path))
+        if knowledge_service is not None:
+            await knowledge_service.startup()
+        if memory_service is not None:
+            await memory_service.reset_data()
 
         WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
-        CONVERSATIONS_DIR.mkdir(parents=True, exist_ok=True)
-        soul_path = get_soul_path()
-        soul_path.parent.mkdir(parents=True, exist_ok=True)
-        soul_path.write_text(get_default_soul_content(), encoding="utf-8")
 
         write_env_keys(
             {
-                "OPENAI_API_KEY": "",
-                "OPENAI_BASE_URL": DEFAULT_OPENAI_BASE_URL,
-                "OPENAI_MODEL": DEFAULT_OPENAI_MODEL,
                 "TELEGRAM_BOT_TOKEN": "",
                 "WECHAT_BOT_TOKEN": "",
                 "WECHAT_OWNER_ID": "",
                 "AMAP_API_KEY": "",
-                "EMBEDDING_BASE_URL": "",
-                "EMBEDDING_API_KEY": "",
-                "EMBEDDING_MODEL": "",
             }
         )
         return {
@@ -187,12 +147,10 @@ class DataResetApplicationService:
                 "runtime_state": True,
             },
             "onboarding": get_onboarding_status(),
-            "sessions": presentation_runtime._build_sessions(),
+            "sessions": presentation_runtime.build_sessions(db_path),
         }
 
 
 __all__ = [
     "DataResetApplicationService",
-    "clear_knowledge_data",
-    "reset_legacy_workspace_root_leftovers",
 ]

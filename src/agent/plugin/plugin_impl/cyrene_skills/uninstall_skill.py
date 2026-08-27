@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
+from agent.plugin import PluginContext
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import (
-    build_skills,
-    request_scope_elevation,
-    uninstall_skill,
-    json,
-)
+from cyrene.learning.skills import build_skills, uninstall_skill
 
 TOOL_NAME = 'UninstallSkill'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
-async def _tool_uninstall_skill(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+async def _tool_uninstall_skill(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     skill_id = str(args.get("skill_id", "")).strip()
     if not skill_id:
         return json.dumps({"ok": False, "error": "skill_id is required"}, ensure_ascii=False)
@@ -28,15 +28,6 @@ async def _tool_uninstall_skill(args: dict[str, Any], _bot: Any, _chat_id: int, 
             break
     if not match:
         return json.dumps({"ok": False, "error": f"skill not found: {skill_id}"}, ensure_ascii=False)
-    reviewed = await request_scope_elevation(
-        tool_name=TOOL_NAME,
-        path_hint=f"extension:skill:{match['id']}",
-        operation=f"卸载全局 Skill：{match.get('name') or match['id']}",
-        reason="Uninstalling a Skill changes Cyrene's persistent global capabilities.",
-        permission_kind="extension_change",
-    )
-    if reviewed is not None:
-        return reviewed
     removed = uninstall_skill(match["id"])
     return json.dumps({"ok": removed, "skill_id": match["id"], "name": match.get("name")}, ensure_ascii=False)
 

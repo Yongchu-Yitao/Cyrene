@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import Any
 
-from cyrene.agent.context import current_run_context
+from agent.plugin import PluginContext
 
 from .common import (
     remote_tool_error,
     request_remote_command,
     resolve_selected_remote_device,
 )
-from cyrene.tooling.runtime_api import json_result, request_scope_elevation
+from agent.plugin.native_runtime import json_result, run_context_value
 
 TOOL_NAME = "RunRemoteCyrene"
 TOOL_DEF = {
@@ -21,9 +19,8 @@ TOOL_DEF = {
     "function": {
         "name": TOOL_NAME,
         "description": (
-            "Compatibility fallback: start work on a paired Cyrene selected in "
-            "the current chat. Prefer RemoteHarness for ordinary remote control. This "
-            "creates a remote chat, sends the instruction to the remote Agent, "
+            "Start Agent work on a paired Cyrene selected in the current chat. "
+            "This creates a remote chat, sends the instruction to the remote Agent, "
             "and returns chat_id/run_id for RemoteCyreneStatus. The remote "
             "Cyrene keeps its own tools, skills, permissions, approvals, and "
             "sandbox; this tool never bypasses its harness."
@@ -57,8 +54,8 @@ TOOL_DEF = {
                     "type": "string",
                     "enum": ["auto", "default", "plan", "full_access"],
                     "description": (
-                        "Compatibility input. The current controller chat's local "
-                        "permission mode is authoritative."
+                        "The current controller chat's local permission mode remains "
+                        "authoritative for this remote run."
                     ),
                 },
                 "language": {
@@ -99,16 +96,12 @@ TOOL_METADATA = {
 
 async def handler(
     args: dict[str, Any],
-    _bot: Any,
-    chat_id: int,
-    db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
     try:
         _chat, device = resolve_selected_remote_device(
             args,
-            db_path,
-            fallback_chat_id=chat_id,
+            context,
         )
         project_id = str(args.get("project_id") or "").strip()
         message = str(args.get("message") or "").strip()
@@ -120,45 +113,10 @@ async def handler(
         if len(idempotency_key) < 8:
             raise ValueError("idempotency_key must contain at least 8 characters")
 
-        controller_mode = current_run_context().permission_mode
-        exact_operation = json.dumps(
-            {
-                "device_id": str(device["device_id"]),
-                "project_id": project_id,
-                "message": message,
-                "title": str(args.get("title") or "")[:160],
-                "permission_mode": controller_mode,
-                "language": str(args.get("language") or ""),
-                "idempotency_key": idempotency_key,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
+        controller_mode = str(
+            run_context_value(context, "permission_mode", "default")
+            or "default"
         )
-        operation_sha256 = hashlib.sha256(exact_operation.encode("utf-8")).hexdigest()
-        permission = await request_scope_elevation(
-            tool_name=TOOL_NAME,
-            path_hint=str(device["device_id"]),
-            operation="在远程 Cyrene 创建对话并启动 Agent",
-            reason=(
-                str(args.get("reason") or "执行用户请求的远程工作")
-                + "\n精确操作："
-                + exact_operation[:8000]
-                + "\nSHA-256："
-                + operation_sha256
-            ),
-            permission_kind="remote_device_action",
-            options=["允许执行这一次", "拒绝"],
-            scope_hint="远程设备操作的 ",
-            meta_extra={
-                "device_id": str(device["device_id"]),
-                "project_id": project_id,
-                "operation_sha256": operation_sha256,
-            },
-        )
-        if permission is not None:
-            return permission
-
         shared = {
             "device_id": str(device["device_id"]),
             "project_id": project_id,
@@ -171,8 +129,7 @@ async def handler(
                 "payload": {"title": str(args.get("title") or "")[:160]},
                 "idempotency_key": f"{idempotency_key}:create",
             },
-            db_path,
-            fallback_chat_id=chat_id,
+            context,
         )
         if created.get("ok") is False:
             return json_result(
@@ -199,8 +156,7 @@ async def handler(
                 },
                 "idempotency_key": f"{idempotency_key}:send",
             },
-            db_path,
-            fallback_chat_id=chat_id,
+            context,
         )
         if started.get("ok") is False:
             return json_result(

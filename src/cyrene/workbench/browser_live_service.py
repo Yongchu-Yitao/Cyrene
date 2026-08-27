@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from cyrene import browser
-from cyrene.learning import engine as behavior_learning
+import cyrene.learning.orchestrator as behavior_learning
 
 
 class BrowserSessionPort(Protocol):

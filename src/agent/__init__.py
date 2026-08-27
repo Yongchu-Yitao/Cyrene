@@ -1,9 +1,4 @@
-"""Cyrene's component-based agent kernel.
-
-The package is intentionally independent from the legacy :mod:`cyrene.agent`
-implementation.  Components are added here incrementally while the old backend
-remains in service.
-"""
+"""Cyrene's Plugin-native Agent framework."""
 
 from .context import (
     ContextChange,
@@ -36,6 +31,7 @@ from .hook import (
     HookSet,
     PluginRegistry,
 )
+from .prompt import DEFAULT_SYSTEM_PROMPT
 from .session import AgentEventListener, AgentSession, AgentSessionEvent
 
 __all__ = [
@@ -46,6 +42,7 @@ __all__ = [
     "ContextTree",
     "ContextTreeStore",
     "ContextValueError",
+    "DEFAULT_SYSTEM_PROMPT",
     "CONTEXT_CHANGE",
     "CONTEXT_USED",
     "HOOK_EVENTS",

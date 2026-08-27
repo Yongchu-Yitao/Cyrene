@@ -2,15 +2,37 @@ import json
 
 import pytest
 
+from agent.plugin import PluginContext
+from agent.plugin.plugin_impl.cyrene_memory.definitions import get_native_tool_def
 from cyrene.runtime import settings_store
-from cyrene.tooling import native_definitions
-from cyrene.agent import state as agent_state
-from cyrene.workbench import memory as memory
+from agent.plugin.plugin_impl.cyrene_memory import structured as memory
+
+
+class _MemoryGateway:
+    def __init__(self, handler):
+        self.handler = handler
+
+    async def complete(self, messages, **kwargs):
+        return await self.handler(messages, **kwargs)
 
 
 def _isolate_memory_store(monkeypatch, tmp_path, language):
-    monkeypatch.setattr(memory, "STORE_DIR", tmp_path)
-    monkeypatch.setattr(memory, "_resolve_workspace_id", lambda workspace_id: str(workspace_id))
+    def path(workspace_id):
+        return tmp_path / f"wb_memory_{memory._resolve_workspace_id(workspace_id)}.json"
+
+    def load(workspace_id):
+        target = path(workspace_id)
+        return json.loads(target.read_text(encoding="utf-8")) if target.exists() else []
+
+    def save(workspace_id, entries, *, base_value=None):
+        del base_value
+        path(workspace_id).write_text(
+            json.dumps(entries, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(memory, "_load", load)
+    monkeypatch.setattr(memory, "_save", save)
     monkeypatch.setattr(
         settings_store,
         "get",
@@ -25,8 +47,6 @@ async def test_agent_memory_is_saved_verbatim_without_llm(monkeypatch, tmp_path)
     async def unexpected_call(*args, **kwargs):
         raise AssertionError("agent memory save must not call the LLM")
 
-    monkeypatch.setattr(agent_state, "_call_llm", unexpected_call)
-
     # Mixed technical/Chinese content (as an agent would write it) must be
     # stored exactly as-is — no language detection, translation, or rejection.
     content = (
@@ -40,6 +60,7 @@ async def test_agent_memory_is_saved_verbatim_without_llm(monkeypatch, tmp_path)
         "project-test",
         content,
         category="fact",
+        model_gateway=_MemoryGateway(unexpected_call),
     )
 
     assert retired == []
@@ -57,12 +78,11 @@ async def test_agent_memory_keeps_original_when_translation_fails(monkeypatch, t
     async def failing_llm(*args, **kwargs):
         raise RuntimeError("LLM unavailable")
 
-    monkeypatch.setattr(agent_state, "_call_llm", failing_llm)
-
     saved, retired = await memory.add_agent_memory_checked(
         "project-test",
         "The user prefers concise answers.",
         category="preference",
+        model_gateway=_MemoryGateway(failing_llm),
     )
 
     assert retired == []
@@ -85,19 +105,19 @@ async def test_agent_memory_is_translated_to_configured_language(monkeypatch, tm
             )
         }
 
-    monkeypatch.setattr(agent_state, "_call_llm", fake_call_llm)
-
     saved, retired = await memory.add_agent_memory_checked(
         "project-test",
         "The user prefers concise, structured answers.",
         category="preference",
+        model_gateway=_MemoryGateway(fake_call_llm),
     )
 
     assert retired == []
     assert saved is not None
     assert saved["content"] == "用户偏好简洁、结构化的回答。"
     assert len(calls) == 1
-    assert calls[0][1]["secondary"] is True
+    assert calls[0][1]["route"] == "secondary"
+    assert calls[0][1]["caller"] == "workbench_memory"
     assert calls[0][1]["tools"][0]["function"]["name"] == "submit_memory_result"
     assert calls[0][1]["tool_choice"] == {
         "type": "function",
@@ -106,11 +126,9 @@ async def test_agent_memory_is_translated_to_configured_language(monkeypatch, tm
 
 
 def test_save_project_memory_tool_suggests_but_does_not_require_user_language():
-    content_description = next(
-        item
-        for item in native_definitions.get_native_tool_defs()
-        if item["function"]["name"] == "save_project_memory"
-    )["function"]["parameters"]["properties"]["content"]["description"]
+    content_description = get_native_tool_def("save_project_memory")["function"][
+        "parameters"
+    ]["properties"]["content"]["description"]
 
     assert "user's configured language" in content_description
     assert "MUST" not in content_description
@@ -123,7 +141,8 @@ def test_verified_tool_evidence_includes_successful_current_results_only():
             "role": "assistant",
             "tool_calls": [{
                 "id": "old-call",
-                "function": {"name": "code_tools", "arguments": "{}"},
+                "name": "StartShell",
+                "arguments": {},
             }],
         },
         {"role": "tool", "tool_call_id": "old-call", "content": "old result"},
@@ -133,15 +152,18 @@ def test_verified_tool_evidence_includes_successful_current_results_only():
             "tool_calls": [
                 {
                     "id": "ok-call",
-                    "function": {"name": "remote_tools", "arguments": "{}"},
+                    "name": "RemoteCyreneStatus",
+                    "arguments": {},
                 },
                 {
                     "id": "bad-call",
-                    "function": {"name": "code_tools", "arguments": "{}"},
+                    "name": "StartShell",
+                    "arguments": {},
                 },
                 {
                     "id": "memory-call",
-                    "function": {"name": "memory_tools", "arguments": "{}"},
+                    "name": "save_project_memory",
+                    "arguments": {"content": "saved"},
                 },
             ],
         },
@@ -164,11 +186,11 @@ def test_verified_tool_evidence_includes_successful_current_results_only():
 
     evidence = memory.build_verified_tool_evidence(messages, {"old"})
 
-    assert "remote_tools" in evidence
+    assert "RemoteCyreneStatus" in evidence
     assert "16GB RAM" in evidence
     assert "old result" not in evidence
     assert "failed" not in evidence
-    assert "memory_tools" not in evidence
+    assert "save_project_memory" not in evidence
 
 
 @pytest.mark.asyncio
@@ -197,8 +219,6 @@ async def test_background_extractor_accepts_verified_tool_facts(monkeypatch, tmp
             }],
         }
 
-    monkeypatch.setattr(agent_state, "_call_llm", fake_call_llm)
-
     added = await memory.capture_from_exchange(
         "project-test",
         "看看硬件信息",
@@ -207,14 +227,15 @@ async def test_background_extractor_accepts_verified_tool_facts(monkeypatch, tmp
             '[tool:remote_tools verified result]\n'
             '{"status":"success","result":"Memory: 16GB"}'
         ),
+        model_gateway=_MemoryGateway(fake_call_llm),
     )
 
     assert added == 1
     assert captured["messages"][0]["role"] == "system"
     assert "成功工具结果直接验证" in captured["messages"][0]["content"]
     assert "Memory: 16GB" in captured["messages"][1]["content"]
-    assert captured["kwargs"]["secondary"] is True
-    assert captured["kwargs"]["thinking"] == "disabled"
+    assert captured["kwargs"]["route"] == "secondary"
+    assert captured["kwargs"]["caller"] == "workbench_memory"
     assert captured["kwargs"]["tools"][0]["function"]["name"] == "submit_memory_result"
     assert captured["kwargs"]["tool_choice"] == {
         "type": "function",
@@ -398,8 +419,7 @@ def test_workbench_memory_payload_hides_internal_task_reports(monkeypatch, tmp_p
 
 @pytest.mark.asyncio
 async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_path):
-    from cyrene.agent import state
-    from cyrene.tool_impl.memory import search_project_memory as tool
+    from agent.plugin.plugin_impl.cyrene_memory import search_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-test.json").write_text(
@@ -419,22 +439,10 @@ async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        tool,
-        "resolve_workbench_project_id_for_session",
-        lambda session_id: "project-test",
+    result = await tool._tool_search_project_memory(
+        {"query": "pytest", "limit": 5},
+        PluginContext(data={"project_id": "project-test"}),
     )
-    token = state._current_session_id.set("chat-test")
-    try:
-        result = await tool._tool_search_project_memory(
-            {"query": "pytest", "limit": 5},
-            None,
-            0,
-            "db.sqlite3",
-            None,
-        )
-    finally:
-        state._current_session_id.reset(token)
 
     payload = json.loads(result)
     assert payload["status"] == "success"
@@ -448,9 +456,8 @@ async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_
 async def test_list_memories_combines_short_term_and_current_project(
     monkeypatch, tmp_path
 ):
-    from cyrene.runtime.memory import short_term
-    from cyrene.agent import state
-    from cyrene.tool_impl.memory import list_memories as tool
+    from agent.plugin.plugin_impl.cyrene_memory import short_term
+    from agent.plugin.plugin_impl.cyrene_memory import list_memories as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     short_term.init_short_term(tmp_path)
@@ -473,22 +480,10 @@ async def test_list_memories_combines_short_term_and_current_project(
         }], ensure_ascii=False),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        "cyrene.workbench.context.resolve_workbench_project_id_for_session",
-        lambda session_id: "project-test",
+    result = await tool._tool_list_memories(
+        {"scope": "all", "status": "all"},
+        PluginContext(data={"project_id": "project-test"}),
     )
-
-    token = state._current_session_id.set("chat-test")
-    try:
-        result = await tool._tool_list_memories(
-            {"scope": "all", "status": "all"},
-            None,
-            0,
-            "",
-            None,
-        )
-    finally:
-        state._current_session_id.reset(token)
 
     payload = json.loads(result)
     assert payload["total"] == 2
@@ -502,8 +497,7 @@ async def test_list_memories_combines_short_term_and_current_project(
 
 @pytest.mark.asyncio
 async def test_search_project_memory_allows_default_workbench_project(monkeypatch, tmp_path):
-    from cyrene.agent import state
-    from cyrene.tool_impl.memory import search_project_memory as tool
+    from agent.plugin.plugin_impl.cyrene_memory import search_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-default.json").write_text(json.dumps([{
@@ -515,22 +509,10 @@ async def test_search_project_memory_allows_default_workbench_project(monkeypatc
         "last_mentioned": "2026-06-21",
         "mention_count": 1,
     }], ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(
-        tool,
-        "resolve_workbench_project_id_for_session",
-        lambda session_id: "project-default",
+    result = await tool._tool_search_project_memory(
+        {"query": "pytest"},
+        PluginContext(data={"project_id": "project-default"}),
     )
-    token = state._current_session_id.set("task-in-default-project")
-    try:
-        result = await tool._tool_search_project_memory(
-            {"query": "pytest"},
-            None,
-            0,
-            "db.sqlite3",
-            None,
-        )
-    finally:
-        state._current_session_id.reset(token)
 
     payload = json.loads(result)
     assert payload["status"] == "success"
@@ -573,99 +555,43 @@ def test_workbench_scope_resolver_distinguishes_default_project(monkeypatch, tmp
     assert workbench_context.resolve_workbench_project_id_for_session("missing") is None
 
 
-def test_default_project_memory_does_not_alias_global_short_term(monkeypatch, tmp_path):
-    from cyrene.runtime.memory import short_term
-    from cyrene.workbench import runtime as routes
-
-    monkeypatch.setattr(memory, "STORE_DIR", tmp_path)
-    monkeypatch.setattr(memory, "_STORE_DB_PATH", "")
-    monkeypatch.setattr(memory, "_CONFIGURED_STORE_DIR", None)
-    monkeypatch.setattr(short_term, "_SHORT_TERM_FILE", tmp_path / "short_term.json")
-    monkeypatch.setattr(
-        routes,
-        "_read_workbench_store",
-        lambda: {
-            "projects": [{
-                "id": "project-default",
-                "dataKey": "default",
-            }]
-        },
-    )
-    monkeypatch.setattr(
-        routes,
-        "_workbench_find_project",
-        lambda payload, project_id: next(
-            (
-                project
-                for project in payload["projects"]
-                if project["id"] == project_id
-            ),
-            None,
-        ),
-    )
-
-    short_term.save_entries([{
-        "content": "旧 UI 的全局记忆。",
-        "type": "fact",
-        "first_seen": "2026-06-20",
-        "last_mentioned": "2026-06-20",
-        "mention_count": 1,
-    }])
-    (tmp_path / "wb_memory_project-default.json").write_text(
-        json.dumps([{
-            "id": "mem_project",
-            "content": "默认项目自己的记忆。",
-            "type": "fact",
-            "category": "fact",
-            "source": "conversation",
-            "first_seen": "2026-06-21",
-            "last_mentioned": "2026-06-21",
-            "mention_count": 1,
-        }], ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-    assert memory._resolve_workspace_id("project-default") == "project-default"
-    payload = memory._build_payload("project-default")
-    assert payload["overview"]["total"] == 1
-    assert payload["memories"][0]["content"] == "默认项目自己的记忆。"
-
-
 def test_memory_tools_are_registered_with_distinct_contracts():
-    from cyrene.tooling import catalog as tools
+    from agent.plugin.plugin_impl.cyrene_memory import plugin_pack
 
-    defs = {
-        item["function"]["name"]: item["function"]
-        for item in tools.TOOL_DEFS
-    }
+    plugins = {plugin.name: plugin for plugin in plugin_pack.plugins}
 
-    assert "ListMemories" in defs
-    assert "RecallMemory" in defs
-    assert "RecallConversation" in defs
-    assert "retire_short_term_memory" in defs
-    assert "search_project_memory" in defs
-    assert "retire_project_memory" in defs
-    assert defs["ListMemories"]["parameters"]["required"] == []
-    assert "query" not in defs["ListMemories"]["parameters"]["properties"]
-    assert "session_id" not in defs["RecallMemory"]["parameters"]["properties"]
-    assert "session_id" in defs["RecallConversation"]["parameters"]["properties"]
-    assert defs["retire_short_term_memory"]["parameters"]["required"] == ["memory_id"]
-    assert defs["search_project_memory"]["parameters"]["required"] == ["query"]
-    assert "keyword" in defs["search_project_memory"]["description"].lower()
-    assert "does not use embeddings" in defs["search_project_memory"]["description"].lower()
-    assert defs["retire_project_memory"]["parameters"]["required"] == ["memory_id"]
-    assert tools.is_tool_allowed_for_actor("retire_short_term_memory", "main")
-    assert not tools.is_tool_allowed_for_actor("retire_short_term_memory", "subagent")
-    assert tools.is_tool_allowed_for_actor("retire_project_memory", "main")
-    assert not tools.is_tool_allowed_for_actor("retire_project_memory", "subagent")
+    assert {
+        "ListMemories",
+        "RecallMemory",
+        "RecallConversation",
+        "retire_short_term_memory",
+        "search_project_memory",
+        "retire_project_memory",
+    } <= set(plugins)
+    assert plugins["ListMemories"].input_schema["required"] == []
+    assert "query" not in plugins["ListMemories"].input_schema["properties"]
+    assert "session_id" not in plugins["RecallMemory"].input_schema["properties"]
+    assert "session_id" in plugins["RecallConversation"].input_schema["properties"]
+    assert plugins["retire_short_term_memory"].input_schema["required"] == [
+        "memory_id"
+    ]
+    assert plugins["search_project_memory"].input_schema["required"] == ["query"]
+    assert "keyword" in plugins["search_project_memory"].description.lower()
+    assert "does not use embeddings" in plugins[
+        "search_project_memory"
+    ].description.lower()
+    assert plugins["retire_project_memory"].input_schema["required"] == [
+        "memory_id"
+    ]
+    assert plugins["retire_short_term_memory"].metadata["main_only"] is True
+    assert plugins["retire_project_memory"].metadata["main_only"] is True
 
 
 @pytest.mark.asyncio
 async def test_retire_project_memory_tool_marks_exact_memory_stale(
     monkeypatch, tmp_path
 ):
-    from cyrene.agent import state
-    from cyrene.tool_impl.memory import retire_project_memory as tool
+    from agent.plugin.plugin_impl.cyrene_memory import retire_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-test.json").write_text(
@@ -682,23 +608,10 @@ async def test_retire_project_memory_tool_marks_exact_memory_stale(
         }], ensure_ascii=False),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        tool,
-        "resolve_workbench_project_id_for_session",
-        lambda session_id: "project-test",
+    result = await tool._tool_retire_project_memory(
+        {"memory_id": "mem_old", "reason": "最新版文档为 10 页 v3"},
+        PluginContext(data={"project_id": "project-test"}),
     )
-
-    token = state._current_session_id.set("chat-test")
-    try:
-        result = await tool._tool_retire_project_memory(
-            {"memory_id": "mem_old", "reason": "最新版文档为 10 页 v3"},
-            None,
-            0,
-            "",
-            None,
-        )
-    finally:
-        state._current_session_id.reset(token)
 
     payload = json.loads(result)
     assert payload["status"] == "success"
@@ -722,8 +635,7 @@ async def test_retire_project_memory_tool_marks_exact_memory_stale(
 
 @pytest.mark.asyncio
 async def test_retire_project_memory_tool_is_idempotent(monkeypatch, tmp_path):
-    from cyrene.agent import state
-    from cyrene.tool_impl.memory import retire_project_memory as tool
+    from agent.plugin.plugin_impl.cyrene_memory import retire_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-test.json").write_text(
@@ -740,23 +652,10 @@ async def test_retire_project_memory_tool_is_idempotent(monkeypatch, tmp_path):
         }], ensure_ascii=False),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        tool,
-        "resolve_workbench_project_id_for_session",
-        lambda session_id: "project-test",
+    result = await tool._tool_retire_project_memory(
+        {"memory_id": "mem_old"},
+        PluginContext(data={"project_id": "project-test"}),
     )
-
-    token = state._current_session_id.set("chat-test")
-    try:
-        result = await tool._tool_retire_project_memory(
-            {"memory_id": "mem_old"},
-            None,
-            0,
-            "",
-            None,
-        )
-    finally:
-        state._current_session_id.reset(token)
 
     payload = json.loads(result)
     assert payload["status"] == "success"
@@ -768,8 +667,7 @@ async def test_retire_project_memory_tool_is_idempotent(monkeypatch, tmp_path):
 async def test_retire_project_memory_tool_supports_default_workbench_project(
     monkeypatch, tmp_path
 ):
-    from cyrene.agent import state
-    from cyrene.tool_impl.memory import retire_project_memory as tool
+    from agent.plugin.plugin_impl.cyrene_memory import retire_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     path = tmp_path / "wb_memory_project-default.json"
@@ -783,23 +681,10 @@ async def test_retire_project_memory_tool_supports_default_workbench_project(
         "last_mentioned": "2026-06-20",
         "mention_count": 1,
     }], ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(
-        tool,
-        "resolve_workbench_project_id_for_session",
-        lambda session_id: "project-default",
+    result = await tool._tool_retire_project_memory(
+        {"memory_id": "mem_default_old"},
+        PluginContext(data={"project_id": "project-default"}),
     )
-
-    token = state._current_session_id.set("task-default")
-    try:
-        result = await tool._tool_retire_project_memory(
-            {"memory_id": "mem_default_old"},
-            None,
-            0,
-            "",
-            None,
-        )
-    finally:
-        state._current_session_id.reset(token)
 
     payload = json.loads(result)
     assert payload["status"] == "success"
@@ -814,11 +699,6 @@ async def test_retire_project_memory_tool_supports_default_workbench_project(
 @pytest.mark.asyncio
 async def test_agent_memory_records_citation_and_history_on_create(monkeypatch, tmp_path):
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
-
-    async def fake_call_llm(messages, **kwargs):
-        return {"content": '{"content": "用户使用 pytest 编写测试。"}'}
-
-    monkeypatch.setattr(agent_state, "_call_llm", fake_call_llm)
 
     saved, retired = await memory.add_agent_memory_checked(
         "project-test",
@@ -857,12 +737,11 @@ async def test_agent_memory_records_citation_and_history_on_reinforce(monkeypatc
     async def unexpected_call(*args, **kwargs):
         raise AssertionError("reinforcement should not call the LLM")
 
-    monkeypatch.setattr(agent_state, "_call_llm", unexpected_call)
-
     saved, retired = await memory.add_agent_memory_checked(
         "project-test",
         "用户使用 pytest 编写测试。",
         category="habit",
+        model_gateway=_MemoryGateway(unexpected_call),
     )
 
     assert retired == []
@@ -897,12 +776,11 @@ async def test_agent_memory_revives_stale_and_records_history(monkeypatch, tmp_p
     async def unexpected_call(*args, **kwargs):
         raise AssertionError("reinforcement of existing text should not call the LLM")
 
-    monkeypatch.setattr(agent_state, "_call_llm", unexpected_call)
-
     saved, retired = await memory.add_agent_memory_checked(
         "project-test",
         "用户使用 SQLite 作为数据库。",
         category="fact",
+        model_gateway=_MemoryGateway(unexpected_call),
     )
 
     assert retired == []

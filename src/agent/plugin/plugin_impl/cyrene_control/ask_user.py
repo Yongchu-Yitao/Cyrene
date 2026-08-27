@@ -5,26 +5,23 @@ from __future__ import annotations
 from typing import Any
 
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import (
-    json_result,
-)
+from agent.plugin import PluginContext
+from agent.plugin.execution import require_plugin_execution
+from agent.plugin.native_runtime import json_result, run_context_value
 
 TOOL_NAME = 'ask_user'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
-async def _tool_ask_user(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+async def _tool_ask_user(args: dict[str, Any], context: PluginContext) -> str:
     text = str(args.get("text", "") or "").strip()
     if not text:
         return "Error: 'text' is required."
 
-    from cyrene.agent.context import get_current_agent_id, get_current_client_request_id, get_current_command, get_current_round_id
-    from cyrene.agent.session import upsert_pending_question
-
-    if get_current_agent_id() != "main":
+    if str(run_context_value(context, "agent_id", "main")) != "main":
         return "Only the main agent can ask the user a clarification question."
 
-    round_id = str(get_current_round_id() or "").strip()
+    round_id = str(run_context_value(context, "round_id") or "").strip()
     if not round_id:
         return "Cannot ask the user a question outside an active chat round."
 
@@ -35,22 +32,13 @@ async def _tool_ask_user(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pat
     raw_options = args.get("options", [])
     options = raw_options if isinstance(raw_options, list) else []
 
-    from cyrene.agent.session import get_session_labels
-
-    labels = get_session_labels(round_id)
-    question = await upsert_pending_question({
-        "text": text,
-        "round_id": round_id,
-        "round_title": labels.get("round_title", ""),
-        "client_request_id": str(get_current_client_request_id() or "").strip(),
-        "options": options[:6],
-        "allow_custom": True,
-        "meta": {"command": get_current_command() or ""},
-    })
+    question_id = f"question_{require_plugin_execution().call.id[:24]}"
     return json_result({
         "status": "awaiting_user",
-        "question_id": question.get("id", ""),
-        "option_count": len(question.get("options", []) or []),
+        "question_id": question_id,
+        "option_count": len(options[:6]),
+        "round_id": round_id,
+        "client_request_id": str(run_context_value(context, "client_request_id") or ""),
     })
 
 

@@ -1,8 +1,8 @@
-"""Focused tests for the Cyrene unified Agent Runtime domain foundation.
+"""Focused tests for the external ACP Agent Runtime domain foundation.
 
 Covers stable failure kinds, capability normalization, agent binding / model
-access models, built-in Cyrene normalization fallback, the driver registry,
-and the unified event envelope compatibility mapping.
+access models, built-in Cyrene defaults, the driver registry, and event
+envelopes.
 """
 
 import pytest
@@ -23,7 +23,6 @@ from cyrene.agent_runtime import (
     merge_capabilities,
     normalize_agent_binding,
     normalize_agent_fields,
-    normalize_builtin_event,
     normalize_capabilities,
     normalize_capability_state,
     normalize_model_access,
@@ -326,21 +325,3 @@ def test_sanitize_event_payload_strips_secret_like_keys():
         {"content": "ok", "access_token": "t", "x-api-key": "k", "password": "p", "oauth": "o"}
     )
     assert sanitized == {"content": "ok"}
-
-
-def test_normalize_builtin_event_maps_legacy_types():
-    mapped = normalize_builtin_event(
-        {"type": "reply_start", "text": "hello", "api_key": "nope"},
-        chat_id="wbchat_1",
-        run_id="run_1",
-        installation_id="agent_cyrene_builtin",
-        agent_id="cyrene",
-    )
-    assert mapped["type"] == "message.started"
-    assert mapped["chatId"] == "wbchat_1"
-    assert mapped["runId"] == "run_1"
-    assert mapped["agentId"] == "cyrene"
-    assert mapped["payload"] == {"text": "hello"}
-    assert normalize_builtin_event({"type": "totally_unknown"}) is None
-    assert normalize_builtin_event(None) is None
-    assert normalize_builtin_event("garbage") is None

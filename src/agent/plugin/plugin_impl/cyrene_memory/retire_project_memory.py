@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+from ._native import create_tool, service as memory_service
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import json_result
-from cyrene.workbench.context import resolve_workbench_project_id_for_session
+from agent.plugin.native_runtime import json_result
 
 TOOL_NAME = "retire_project_memory"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -19,14 +20,9 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 async def _tool_retire_project_memory(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
     """Retire one durable memory in the current Workbench project."""
-    from cyrene.agent.context import get_current_session_id
-
     memory_id = str(args.get("memory_id", "") or "").strip()
     if not memory_id:
         return json_result({
@@ -35,9 +31,14 @@ async def _tool_retire_project_memory(
             "message": "memory_id is required",
         })
 
-    project_id = resolve_workbench_project_id_for_session(
-        get_current_session_id()
-    )
+    memory = memory_service(context)
+    if not memory.is_main:
+        return json_result({
+            "status": "error",
+            "type": "permission_denied",
+            "message": "Only the main Agent can retire project memory.",
+        })
+    project_id = memory.project_id
     if project_id is None:
         return json_result({
             "status": "error",
@@ -48,12 +49,11 @@ async def _tool_retire_project_memory(
             ),
         })
 
-    from cyrene.workbench.memory import (
-        configure_store,
+    from .structured import (
         retire_project_memory,
     )
 
-    configure_store(_db_path)
+    memory.configure_stores()
     retired, changed = retire_project_memory(
         project_id,
         memory_id,
@@ -82,10 +82,12 @@ async def _tool_retire_project_memory(
 
 
 handler = _tool_retire_project_memory
+plugin = create_tool(TOOL_DEF, handler)
 
 __all__ = [
     "TOOL_NAME",
     "TOOL_DEF",
     "handler",
+    "plugin",
     "_tool_retire_project_memory",
 ]

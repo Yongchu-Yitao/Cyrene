@@ -18,7 +18,15 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     last_result TEXT,
     status TEXT DEFAULT 'active',
     created_at TEXT NOT NULL,
-    permission_mode TEXT DEFAULT 'workspace_only'
+    updated_at TEXT NOT NULL DEFAULT '',
+    permission_mode TEXT DEFAULT 'workspace_only',
+    definition_revision INTEGER NOT NULL DEFAULT 1,
+    schedule_revision INTEGER NOT NULL DEFAULT 1,
+    lease_token TEXT,
+    lease_until TEXT,
+    current_run_id TEXT,
+    scheduled_for TEXT,
+    last_error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_status ON scheduled_tasks(status);
@@ -31,6 +39,10 @@ CREATE TABLE IF NOT EXISTS task_run_logs (
     status TEXT NOT NULL,
     result TEXT,
     error TEXT,
+    run_id TEXT NOT NULL DEFAULT '',
+    scheduled_for TEXT,
+    started_at TEXT,
+    completed_at TEXT,
     FOREIGN KEY (task_id) REFERENCES scheduled_tasks(id)
 );
 CREATE INDEX IF NOT EXISTS idx_task_run_logs_task_id ON task_run_logs(task_id);
@@ -250,53 +262,6 @@ CREATE INDEX IF NOT EXISTS idx_runtime_trace_spans_trace
 ON runtime_trace_spans(trace_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_runtime_trace_spans_run
 ON runtime_trace_spans(run_id, started_at);
-
-CREATE TABLE IF NOT EXISTS entities (
-    id                  TEXT PRIMARY KEY,
-    type                TEXT NOT NULL,
-    title               TEXT NOT NULL,
-    content             TEXT DEFAULT '',
-    status              TEXT DEFAULT 'active',
-    tags                TEXT DEFAULT '[]',
-    priority            TEXT DEFAULT 'medium',
-    effort              TEXT,
-    created_at          TEXT NOT NULL,
-    updated_at          TEXT NOT NULL,
-    last_referenced_at  TEXT NOT NULL,
-    due_date            TEXT,
-    parent_id           TEXT REFERENCES entities(id),
-    linked_ids          TEXT DEFAULT '[]',
-    people              TEXT DEFAULT '[]',
-    source              TEXT DEFAULT 'extracted',
-    source_round_id     TEXT,
-    confidence          REAL DEFAULT 1.0,
-    metadata            TEXT DEFAULT '{}',
-    project_id          TEXT DEFAULT 'default'
-);
-CREATE INDEX IF NOT EXISTS idx_entities_type   ON entities(type);
-CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status);
-CREATE INDEX IF NOT EXISTS idx_entities_due    ON entities(due_date);
--- idx_entities_project_id is created in init_db() AFTER the ALTER migration, so
--- it also lands on pre-existing DBs whose CREATE TABLE above was a no-op.
-
-CREATE TABLE IF NOT EXISTS entity_candidates (
-    id              TEXT PRIMARY KEY,
-    type            TEXT NOT NULL,
-    title           TEXT NOT NULL,
-    content         TEXT DEFAULT '',
-    confidence      REAL NOT NULL,
-    source_round_id TEXT,
-    project_id      TEXT DEFAULT 'default',
-    raw_text        TEXT,
-    created_at      TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS entity_type_confidence (
-    type         TEXT PRIMARY KEY,
-    adjustment   REAL DEFAULT 0.0,
-    sample_count INTEGER DEFAULT 0,
-    updated_at   TEXT NOT NULL
-);
 
 CREATE TABLE IF NOT EXISTS kb_documents (
     id            TEXT PRIMARY KEY,

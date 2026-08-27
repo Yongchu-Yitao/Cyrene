@@ -12,8 +12,9 @@ from typing import Any
 
 from PIL import Image
 
+from agent.plugin.model_catalog import candidate_provider_id
 from cyrene.config import DATA_DIR
-from cyrene.runtime.settings_store import get_models
+from cyrene.runtime.model_configuration import candidates_for_route
 
 _MAX_IMAGE_BYTES = 30 * 1024 * 1024
 _OUTPUT_FORMATS = {"png", "jpeg", "webp"}
@@ -36,15 +37,13 @@ class GeneratedImage:
 
 
 def _primary_candidate() -> dict[str, Any]:
-    models = get_models() or []
+    models = candidates_for_route("primary")
     if not models:
         raise ImageGenerationError(
             "No primary model is configured. Configure OpenAI OAuth first."
         )
     candidate = dict(models[0])
-    candidate["provider"] = str(
-        candidate.get("provider") or "openai_compatible"
-    ).strip()
+    candidate["provider"] = candidate_provider_id(candidate)
     candidate["model"] = str(
         candidate.get("model") or candidate.get("name") or ""
     ).strip()

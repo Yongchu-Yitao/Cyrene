@@ -20,7 +20,7 @@ Phase 1 (runtime policy allows use_tools / ask_user / quit)
     │   ├── Direct: filesystem, Bash, WebSearch/WebFetch, AnalyzeAttachment
     │   ├── code_tools / browser_tools / desktop_tools
     │   ├── memory_tools / knowledge_tools / task_tools
-    │   ├── entity_tools / map_tools / subagent_tools
+    │   ├── cyrene_entity Plugin / map_tools / subagent_tools
     │   ├── delivery_tools / skill_tools / cyrene_tools / integration_tools
     │   ├── Each module: discover → describe → invoke
     │   └── quit → end interaction
@@ -90,19 +90,21 @@ The short-term memory tracks emotional valence, mention count, and entry type (f
 
 ### Knowledge Base
 
-Documents imported through Workbench, chat attachments, generated exports, and
-Zotero attachment import are hashed and stored in a project-specific SQLite
-database. Extractable content is chunked; embeddings are added only when an
-embedding provider is configured, otherwise lexical/FTS retrieval remains
-available. Merely placing an arbitrary file in a project workspace does not
-automatically ingest it. The `knowledge_tools` module exposes project-document
-and literature-library capabilities. `AnalyzeAttachment`, `WebSearch`, and
-`WebFetch` remain direct tools.
+The editable `cyrene_knowledge` Plugin owns the complete knowledge backend:
+SQLite schema, managed attachment files, extraction, chunking, local vectors,
+hybrid retrieval, Zotero synchronization, Workbench HTTP routes, global search,
+and Agent tools. Its data lives under
+`data/plugin_data/cyrene_knowledge/`; every row is keyed by Workbench project.
+Chat attachments, generated exports, and completed task artifacts enter through
+the same service. The old `cyrene.knowledge`/Workbench-library route stack is
+not part of the active request path. Agent access uses
+`toolbox.list → describe → invoke`.
 
 ### Entities
 
-Structured project entities are managed through `entity_tools`
-(`entity.track`, `entity.query`, `entity.update`, and `entity.delete`).
+Structured project entities are managed exclusively by the editable
+`cyrene_entity` Plugin pack (`entity.track`, `entity.query`, `entity.update`,
+and `entity.delete`) through `toolbox.list → describe → invoke`.
 
 ### Skills Installer
 
@@ -137,8 +139,20 @@ to the fixed wire bundle. Manage servers via the Web UI or CLI.
 
 ### Task Scheduler
 
-Create cron, interval, or one-shot tasks with `task.schedule` through
-`task_tools`. Tasks persist in SQLite with execution history.
+The editable `cyrene_schedule` Plugin pack owns scheduled-task behavior. Agents
+discover `schedule.create`, `schedule.list`, `schedule.edit`, `schedule.pause`,
+`schedule.resume`, `schedule.cancel`, and `schedule.runs` through
+`toolbox.list → describe → invoke`. Its hidden `schedule.tick` Plugin declares a
+background job in metadata; the generic Plugin background host supplies the
+clock and invokes the current user-edited implementation.
+
+Tasks and run history are durable in SQLite. Lease-based claims, stable run IDs,
+and revision-checked finalization prevent duplicate execution and stale runs from
+undoing a concurrent pause or edit. Agent actions execute through the Workbench
+Chat runtime and project one result back into Workbench. The pack's
+`application_setup` contribution owns its Workbench routes, global-search
+provider, and Schedule module activation, so removing or breaking the pack does
+not leave a second built-in schedule backend active.
 
 ### Cyrene self-management control plane
 
@@ -281,7 +295,7 @@ src/
 │   ├── tools.py                     # Public tooling facade
 │   ├── __init__.py                  # Installs lazy legacy module aliases
 │   ├── __main__.py                  # `python -m cyrene`
-│   └── local_cli.py                 # Physical previous-release launcher shim
+│   └── local_cli.py                 # Legacy direct-file compatibility shim
 ├── route/                           # All FastAPI HTTP/WebSocket adapters
 │   ├── registry.py                  # Single route composition root
 │   ├── schemas.py / errors.py       # Request contracts and API errors
@@ -307,6 +321,6 @@ store/                               # Source-run SQLite databases
 Historical imports such as `cyrene.db`, `cyrene.scheduler`, and
 `cyrene.workbench_runtime` are resolved lazily by
 `cyrene/runtime/module_compat.py` to the exact canonical module object; they do not
-require duplicate top-level implementation files. `local_cli.py` is the sole
-physical compatibility launcher because the previous desktop development
-flow executes that exact file path.
+require duplicate top-level implementation files. `local_cli.py` remains a
+legacy direct-file compatibility shim; current source and Electron development
+launches use the `cyrene` project entry point.

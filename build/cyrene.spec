@@ -68,19 +68,14 @@ for f in sorted(_plugin_source_dir.rglob("*")):
     dest = _plugin_source_dest / relative.parent
     _datas.append((str(f), str(dest)))
 
-# .env 模板（打包模式首次启动时复制到用户数据目录）
-_env_tpl = _PROJECT_ROOT / ".env.example"
-if _env_tpl.exists():
-    _datas.append((str(_env_tpl), "."))
-
 # pyproject（供打包后读取当前版本号）
 _pyproject = _PROJECT_ROOT / "pyproject.toml"
 if _pyproject.exists():
     _datas.append((str(_pyproject), "."))
 
 # ---- 本地包模块自动枚举 ----
-# agent/cyrene/webui/route 大量使用 importlib.import_module() 动态加载（tool_impl、
-# Plugin 子包等），PyInstaller 静态分析无法追踪。直接扫描 src/ 下所有 .py 文件生成
+# agent/cyrene/webui/route 使用 importlib.import_module() 动态加载 Plugin 子包等，
+# PyInstaller 静态分析无法追踪。直接扫描 src/ 下所有 .py 文件生成
 # 完整列表，避免手动维护漏项。
 def _enumerate_local_package(src: Path, pkg: str) -> list:
     root = src / pkg

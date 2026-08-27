@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from agent.plugin import PluginContext
 
 TOOL_NAME = "browser_click_ref"
 TOOL_DEF = {
@@ -21,7 +22,7 @@ TOOL_DEF = {
 }
 
 
-async def _tool_browser_click_ref(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+async def _tool_browser_click_ref(args: dict[str, Any], _context: PluginContext) -> str:
     from cyrene.browser import click_ref
 
     ref = str(args.get("ref") or "").strip()

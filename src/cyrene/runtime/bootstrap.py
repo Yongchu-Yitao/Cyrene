@@ -19,23 +19,25 @@ from cyrene.config import (
     WORKSPACE_DIR,
 )
 from cyrene.runtime.context import HostMode, RuntimeConfigSnapshot, RuntimeContext
-from cyrene.runtime.cyrene_migration import migrate_workspace_to_cyrene
 from cyrene.runtime.database import init_db
-from cyrene.runtime.database_migration import (
-    compact_legacy_knowledge_fts,
-    migrate_legacy_database,
-)
 from cyrene.runtime.inbox import ensure_inbox
-from cyrene.runtime.memory.short_term import init_short_term
-from cyrene.runtime.memory.soul import ensure_soul
 from cyrene.runtime.paths import PATHS, cleanup_temporary_artifacts
 from cyrene.runtime.task_lifecycle import cancel_and_wait
 
 logger = logging.getLogger(__name__)
 
 
+def _native_mcp_service():
+    """Return the application-published MCP service or its native singleton."""
+
+    from agent.plugin import active_plugin_service
+    from agent.plugin.mcp_service import get_mcp_service
+
+    return active_plugin_service("mcp") or get_mcp_service()
+
+
 def create_runtime_context(*, host_mode: HostMode = "unknown") -> RuntimeContext:
-    """Build a context snapshot from the current compatibility configuration."""
+    """Build a context snapshot from the current runtime configuration."""
     paths = replace(
         PATHS,
         workspace=WORKSPACE_DIR,
@@ -85,45 +87,8 @@ async def initialize_runtime(
             context.initialized_components.add("temp_cleanup")
 
         if "core" not in context.initialized_components:
-            migration = await asyncio.to_thread(
-                migrate_legacy_database,
-                context.database_path,
-            )
-            if migration.migrated:
-                if migration.rollback_path is not None:
-                    logger.info(
-                        "Legacy database activated at %s; rollback copy retained at %s",
-                        migration.target_path,
-                        migration.rollback_path,
-                    )
-                else:
-                    logger.info(
-                        "Legacy database activated at %s",
-                        migration.target_path,
-                    )
-            elif migration.status not in {"not_needed", "already_migrated"}:
-                logger.warning(
-                    "Legacy database migration status=%s: %s",
-                    migration.status,
-                    migration.detail,
-                )
-                raise RuntimeError(
-                    "Cyrene found legacy database data but could not migrate it "
-                    f"safely (status={migration.status}): {migration.detail}"
-                )
-            await asyncio.to_thread(
-                compact_legacy_knowledge_fts,
-                context.database_path,
-            )
-            # Fold Cyrene-owned workspace folders into the hidden .cyrene dir
-            # before SOUL.md is re-created, so an existing soul file survives.
-            await asyncio.to_thread(
-                migrate_workspace_to_cyrene, context.paths.workspace
-            )
             await init_db(str(context.database_path))
-            ensure_soul()
             ensure_inbox("cyrene")
-            init_short_term(context.paths.data)
             from cyrene.runtime.host_actions import reconcile_startup
             reconcile_startup()
             context.initialized_components.add("core")
@@ -134,7 +99,7 @@ async def initialize_runtime(
             enable_event_bus()
             context.initialized_components.add("events")
         if learning and "learning" not in context.initialized_components:
-            from cyrene.learning import init as initialize_learning
+            from cyrene.learning.orchestrator import init as initialize_learning
 
             await initialize_learning(context.paths.data, context.paths.workspace)
             context.initialized_components.add("learning")
@@ -147,9 +112,8 @@ async def start_external_services(
     context: RuntimeContext | None = None,
     search: bool = True,
     mcp: bool = True,
-    custom_tools: bool = True,
 ) -> RuntimeContext:
-    """Start optional local services and source watchers without failing the host."""
+    """Start optional local services without failing the host."""
     context = context or create_runtime_context()
     async with context.lifecycle_lock():
         if context.closed:
@@ -159,37 +123,34 @@ async def start_external_services(
             and context.config.searxng_auto_start
             and "search" not in context.started_services
         ):
-            from cyrene.tooling.backends.searxng_manager import start_searxng
+            from agent.plugin import active_plugin_service
 
-            try:
-                url = await start_searxng(
-                    context.config.searxng_port,
-                    context.config.searxng_host,
+            service = active_plugin_service("web_search")
+            startup = getattr(service, "startup", None)
+            if callable(startup):
+                try:
+                    url = await startup(
+                        context.config.searxng_port,
+                        context.config.searxng_host,
+                    )
+                    context.started_services.add("search")
+                    if url:
+                        logger.info("Plugin search service started at %s", url)
+                except Exception as exc:
+                    logger.warning("Plugin search service start failed: %s", exc)
+            else:
+                logger.debug(
+                    "Search startup deferred until the content Plugin host starts"
                 )
-                context.started_services.add("search")
-                logger.info("SearXNG auto-started at %s", url)
-            except Exception as exc:
-                logger.warning("SearXNG auto-start failed: %s", exc)
 
         if mcp and "mcp" not in context.started_services:
-            from cyrene.tooling.backends.mcp_manager import start_mcp
-
             try:
-                await start_mcp()
+                await _native_mcp_service().startup()
                 context.started_services.add("mcp")
-                logger.info("MCP manager started")
+                logger.info("MCP Plugin service started")
             except Exception as exc:
-                logger.warning("MCP manager start failed: %s", exc)
+                logger.warning("MCP Plugin service start failed: %s", exc)
 
-        if custom_tools and "custom_tools" not in context.started_services:
-            from cyrene.custom_tools import start_custom_tools
-
-            try:
-                await start_custom_tools()
-                context.started_services.add("custom_tools")
-                logger.info("Custom tool manager started")
-            except Exception as exc:
-                logger.warning("Custom tool manager start failed: %s", exc)
     return context
 
 
@@ -198,32 +159,23 @@ def stop_external_services(
     context: RuntimeContext | None = None,
     search: bool = True,
     mcp: bool = True,
-    custom_tools: bool = True,
 ) -> None:
     """Stop the selected local services and source watchers."""
     if search and (context is None or "search" in context.started_services):
-        from cyrene.tooling.backends.searxng_manager import stop_searxng
+        from agent.plugin import active_plugin_service
 
-        stop_searxng()
+        service = active_plugin_service("web_search")
+        shutdown = getattr(service, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
         if context is not None:
             context.started_services.discard("search")
         logger.info("Stopped search service")
     if mcp and (context is None or "mcp" in context.started_services):
-        from cyrene.tooling.backends.mcp_manager import stop_mcp
-
-        stop_mcp()
+        _native_mcp_service().shutdown_sync()
         if context is not None:
             context.started_services.discard("mcp")
-        logger.info("Stopped MCP service")
-    if custom_tools and (
-        context is None or "custom_tools" in context.started_services
-    ):
-        from cyrene.custom_tools.manager import stop_custom_tools_sync
-
-        stop_custom_tools_sync()
-        if context is not None:
-            context.started_services.discard("custom_tools")
-        logger.info("Stopped custom tool service")
+        logger.info("Stopped MCP Plugin service")
 
 
 async def stop_external_services_async(
@@ -231,32 +183,25 @@ async def stop_external_services_async(
     context: RuntimeContext | None = None,
     search: bool = True,
     mcp: bool = True,
-    custom_tools: bool = True,
 ) -> None:
     """Stop local services while the application loop is still alive."""
     if search and (context is None or "search" in context.started_services):
-        from cyrene.tooling.backends.searxng_manager import stop_searxng
+        from agent.plugin import active_plugin_service
 
-        stop_searxng()
+        service = active_plugin_service("web_search")
+        shutdown = getattr(service, "shutdown", None)
+        if callable(shutdown):
+            result = shutdown()
+            if asyncio.iscoroutine(result):
+                await result
         if context is not None:
             context.started_services.discard("search")
         logger.info("Stopped search service")
     if mcp and (context is None or "mcp" in context.started_services):
-        from cyrene.tooling.backends.mcp_manager import stop_mcp_async
-
-        await stop_mcp_async()
+        await _native_mcp_service().shutdown()
         if context is not None:
             context.started_services.discard("mcp")
-        logger.info("Stopped MCP service")
-    if custom_tools and (
-        context is None or "custom_tools" in context.started_services
-    ):
-        from cyrene.custom_tools import stop_custom_tools
-
-        await stop_custom_tools()
-        if context is not None:
-            context.started_services.discard("custom_tools")
-        logger.info("Stopped custom tool service")
+        logger.info("Stopped MCP Plugin service")
 
 
 def start_update_check() -> asyncio.Task[Any] | None:

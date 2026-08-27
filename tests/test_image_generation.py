@@ -12,8 +12,7 @@ from cyrene.model_runtime.image_generation import (
     GeneratedImage,
     ImageGenerationError,
 )
-from cyrene.tooling import catalog, executor, wire
-from cyrene.tool_impl.image import generate_image as generate_image_tool
+from agent.plugin.plugin_impl.cyrene_image import generate_image as generate_image_tool
 
 
 def _png_bytes() -> bytes:
@@ -23,40 +22,8 @@ def _png_bytes() -> bytes:
     )
 
 
-def test_legacy_generate_image_tool_is_internal_for_every_model_provider(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from cyrene.runtime import settings_store
-
-    monkeypatch.setattr(
-        settings_store,
-        "get_models",
-        lambda: [{"provider": "openai_compatible", "model": "gpt-5.6"}],
-    )
-    custom_wire_names = {
-        item["function"]["name"] for item in wire.get_main_wire_tool_defs()
-    }
-    custom_catalog_names = {
-        item["function"]["name"]
-        for item in catalog.get_active_tool_defs_for_actor("main")
-    }
-    assert "GenerateImage" not in custom_wire_names
-    assert "GenerateImage" not in custom_catalog_names
-
-    monkeypatch.setattr(
-        settings_store,
-        "get_models",
-        lambda: [{"provider": "codex_oauth", "model": "gpt-5.6-sol"}],
-    )
-    oauth_wire_names = {
-        item["function"]["name"] for item in wire.get_main_wire_tool_defs()
-    }
-    oauth_catalog_names = {
-        item["function"]["name"]
-        for item in catalog.get_active_tool_defs_for_actor("main")
-    }
-    assert "GenerateImage" not in oauth_wire_names
-    assert "GenerateImage" not in oauth_catalog_names
+def test_generate_image_plugin_is_hidden_from_the_model_catalog() -> None:
+    assert generate_image_tool.plugin.metadata["model_visible"] is False
 
 
 @pytest.mark.asyncio
@@ -189,18 +156,8 @@ async def test_codex_oauth_image_generation_timeout_depends_on_quality(
     generated.path.unlink()
 
 
-def test_only_high_quality_generate_image_gets_extended_tool_timeout() -> None:
-    assert executor._tool_timeout_seconds(
-        "GenerateImage", {"quality": "high"}
-    ) == 420.0
-    assert executor._tool_timeout_seconds(
-        "GenerateImage", {"quality": " HIGH "}
-    ) == 420.0
-    assert executor._tool_timeout_seconds(
-        "GenerateImage", {"quality": "medium"}
-    ) == 180.0
-    assert executor._tool_timeout_seconds("GenerateImage", {}) == 180.0
-    assert executor._tool_timeout_seconds("WebSearch", {}) == 180.0
+def test_generate_image_plugin_has_an_extended_timeout() -> None:
+    assert generate_image_tool.plugin.timeout_seconds == 420.0
 
 
 @pytest.mark.asyncio
@@ -220,13 +177,14 @@ async def test_generate_image_tool_delivers_and_removes_temporary_file(
             revised_prompt="An otter",
         )
 
-    async def fake_send_file(
+    async def fake_invoke_plugin(
+        name: str,
         args: dict[str, Any],
-        _bot: Any,
-        _chat_id: int,
-        _db_path: str,
-        _notify_state: dict[str, bool] | None,
+        *,
+        review: bool,
     ) -> str:
+        assert name == "send_file"
+        assert review is False
         assert args["path"] == str(temporary)
         assert args["name"] == "otter.png"
         return json.dumps(
@@ -237,18 +195,11 @@ async def test_generate_image_tool_delivers_and_removes_temporary_file(
         )
 
     monkeypatch.setattr(generate_image_tool, "generate_image", fake_generate_image)
-    monkeypatch.setitem(
-        catalog.TOOL_HANDLERS,
-        "send_file",
-        fake_send_file,
-    )
+    monkeypatch.setattr(generate_image_tool, "invoke_plugin", fake_invoke_plugin)
 
     result = await generate_image_tool._tool_generate_image(
         {"prompt": "Draw an otter", "name": "otter.png"},
         None,
-        0,
-        "",
-        {},
     )
     payload = json.loads(result)
 

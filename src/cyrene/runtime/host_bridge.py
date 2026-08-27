@@ -7,7 +7,8 @@ from typing import Any
 
 import httpx
 
-from cyrene.agent.context import current_run_context
+from agent.plugin.execution import current_plugin_execution
+from agent.plugin.native_runtime import run_context_value
 
 _ALLOWED_METHODS = frozenset({
     "host.status",
@@ -40,21 +41,28 @@ async def call_host(
     args: dict[str, Any] | None = None,
     *,
     timeout: float = 8.0,
+    ui_instance_id: str = "",
 ) -> dict[str, Any]:
     normalized_method = str(method or "").strip()
     if normalized_method not in _ALLOWED_METHODS:
         raise HostBridgeError("host method is not allowlisted")
     payload_args = dict(args or {})
-    context = current_run_context()
+    execution = current_plugin_execution()
+    context = execution.context if execution is not None else None
+    active_ui_instance_id = str(ui_instance_id or "").strip()
+    if not active_ui_instance_id and context is not None:
+        active_ui_instance_id = str(
+            run_context_value(context, "ui_instance_id") or ""
+        ).strip()
     port = str(os.environ.get("CYRENE_ELECTRON_RPC_PORT") or "").strip()
     token = str(os.environ.get("CYRENE_ELECTRON_RPC_TOKEN") or "").strip()
     if not port or not token:
         if normalized_method in {"ui.snapshot.current", "ui.gesture.execute_current"}:
-            if not context.ui_instance_id:
+            if not active_ui_instance_id:
                 raise NoCurrentSurface("this run has no current UI surface")
             from cyrene.workbench.ui_surface import request
             result = await request(
-                context.ui_instance_id,
+                active_ui_instance_id,
                 "snapshot" if normalized_method == "ui.snapshot.current" else "act",
                 payload_args,
                 timeout=timeout,
@@ -63,12 +71,16 @@ async def call_host(
                 raise NoCurrentSurface("the bound UI surface is closed")
             return result
         if normalized_method == "host.status":
-            return {"ok": True, "hostKind": "web", "surfaceAvailable": bool(context.ui_instance_id)}
+            return {
+                "ok": True,
+                "hostKind": "web",
+                "surfaceAvailable": bool(active_ui_instance_id),
+            }
         raise HostUnavailable("Electron host is unavailable")
     if normalized_method in _SURFACE_METHODS or normalized_method == "host.status":
-        if normalized_method in _SURFACE_METHODS and not context.ui_instance_id:
+        if normalized_method in _SURFACE_METHODS and not active_ui_instance_id:
             raise NoCurrentSurface("this run has no current UI surface")
-        payload_args["uiInstanceId"] = context.ui_instance_id
+        payload_args["uiInstanceId"] = active_ui_instance_id
     try:
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             response = await client.post(
@@ -99,13 +111,10 @@ async def resolve_conversation_source(ui_instance_id: str) -> str:
     normalized = str(ui_instance_id or "").strip()
     if not normalized:
         return "webui"
-    from cyrene.agent.context import bind_run_context
-
-    with bind_run_context(ui_instance_id=normalized):
-        try:
-            status = await call_host("host.status", {})
-        except HostBridgeError:
-            return "webui"
+    try:
+        status = await call_host("host.status", {}, ui_instance_id=normalized)
+    except HostBridgeError:
+        return "webui"
     if (
         status.get("ok") is not False
         and status.get("hostKind") == "electron"

@@ -170,9 +170,8 @@ npm install
 npm run dev
 ```
 
-Electron 直接执行 `src/cyrene/local_cli.py`，后者 Bootstrap Checkout 并委托
-给 `cyrene.runtime.host`。在 Electron Process Contract 改变前必须保留这个
-物理文件。
+Electron 执行 `uv run cyrene --workbench --electron-mode`，因此开发模式与
+手动源码启动共享同一个项目入口和环境。
 
 ## CI / Release
 

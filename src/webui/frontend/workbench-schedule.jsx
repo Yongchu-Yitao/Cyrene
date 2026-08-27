@@ -671,8 +671,9 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     var ev = props.event;
     var isTask = ev.source === "task";
     var tab = props.tab, setTab = props.setTab;
-    var statusTone = ev.status === "paused" ? "amber" : ev.status === "completed" || ev.status === "done" ? "slate" : "green";
-    var statusText = ev.status === "paused" ? T("status.paused") : ev.status === "completed" || ev.status === "done" ? T("status.done") : T("status.running");
+    var isRunning = ev.run_state === "running";
+    var statusTone = isRunning ? "green" : ev.status === "failed" ? "red" : ev.status === "paused" ? "amber" : ev.status === "completed" || ev.status === "done" ? "slate" : "green";
+    var statusText = isRunning ? T("status.running") : ev.status === "failed" ? T("status.failed") : ev.status === "paused" ? T("status.paused") : ev.status === "completed" || ev.status === "done" ? T("status.done") : T("schedule.active");
 
     var tabs = isTask ? [{ id: "detail", label: T("schedule.detail") }, { id: "runs", label: T("schedule.runHistory") }] : [{ id: "detail", label: T("schedule.detail") }];
 
@@ -705,6 +706,11 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
             "div", { className: "wb-sched-detail-grid" },
             React.createElement(KV, { k: T("schedule.nextRun"), v: absTimeText(ev.next_run) }),
             React.createElement(KV, { k: T("schedule.lastRun"), v: absTimeText(ev.last_run) })
+          ),
+          isTask && ev.last_error && React.createElement(
+            "div", { className: "wb-sched-detail-sec" },
+            React.createElement("div", { className: "wb-sched-detail-sec-title" }, T("schedule.lastError")),
+            React.createElement("p", { className: "wb-sched-detail-prompt" }, String(ev.last_error).slice(0, 1000))
           ),
           !isTask && React.createElement(
             "div", { className: "wb-sched-detail-grid" },
@@ -792,12 +798,16 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       "div", { className: "wb-sched-runs" },
       props.runs.map(function (run) {
         var ok = run.status === "success";
+        var running = run.status === "running";
+        var interrupted = run.status === "interrupted";
+        var label = ok ? T("schedule.success") : running ? T("status.running") : interrupted ? T("schedule.interrupted") : T("schedule.failure");
+        var tone = ok ? "green" : running || interrupted ? "amber" : "red";
         return React.createElement(
           "div", { className: "wb-sched-run", key: run.id },
           React.createElement(
             "div", { className: "wb-sched-run-head" },
-            React.createElement("span", { className: "wb-sched-badge " + (ok ? "green" : "red") }, ok ? T("schedule.success") : T("schedule.failure")),
-            React.createElement("time", null, absTimeText(run.run_at)),
+            React.createElement("span", { className: "wb-sched-badge " + tone }, label),
+            React.createElement("time", null, absTimeText(run.started_at || run.run_at)),
             React.createElement("small", null, (run.duration_ms != null ? Math.round(run.duration_ms / 100) / 10 + "s" : ""))
           ),
           (run.result || run.error) && React.createElement("p", { className: "wb-sched-run-body" }, String(run.error || run.result).slice(0, 400))
@@ -880,7 +890,6 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       var spec = buildSchedule(repeat, startDate, cronText, ivVal, ivUnit, scheduleTimezone, startVal);
       if ((spec.schedule_type === "cron" || spec.schedule_type === "interval") && !spec.schedule_value) { setErr(T("schedule.error.repeatRequired")); return; }
       var body = { prompt: p, action_type: actionType, schedule_type: spec.schedule_type, schedule_value: spec.schedule_value, schedule_timezone: spec.schedule_timezone };
-      if (spec.schedule_type === "once") body.next_run = startDate.toISOString();
       setSaving(true); setErr("");
       var op = props.task ? props.api.update(props.task.id, body) : props.api.create(body);
       op.then(function () { props.onSaved(); }).catch(function (e) { setErr(e.message || String(e)); }).finally(function () { setSaving(false); });

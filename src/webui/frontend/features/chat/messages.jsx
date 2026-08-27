@@ -305,12 +305,9 @@ function WbcHeader({ project, chat, running, finalizing, onRename, onDelete, onT
     });
   }
 
-  var isLegacy = !!chat.legacy;
-  var statusText = isLegacy
-    ? wbcT("workbenchChat.status.archived", "Archived")
-    : finalizing
-      ? wbcT("workbenchChat.status.saving", "Saving")
-      : running ? wbcT("workbenchChat.status.replying", "Replying") : wbcT("workbenchChat.status.idle", "Idle");
+  var statusText = finalizing
+    ? wbcT("workbenchChat.status.saving", "Saving")
+    : running ? wbcT("workbenchChat.status.replying", "Replying") : wbcT("workbenchChat.status.idle", "Idle");
 
   return (
     <div className="wbc-header">
@@ -332,7 +329,7 @@ function WbcHeader({ project, chat, running, finalizing, onRename, onDelete, onT
           ) : (
             <h1 title={chat.title}>{chat.title || wbcT("workbenchChat.newChat", "New chat")}</h1>
           )}
-          {!editing && !isLegacy && (
+          {!editing && (
             <button type="button" className="wbc-icon-btn" title={wbcT("workbenchChat.rename", "Rename chat")} onClick={function () { setEditing(true); }}>
               {WBC_ICONS.edit}
             </button>
@@ -345,30 +342,26 @@ function WbcHeader({ project, chat, running, finalizing, onRename, onDelete, onT
         </div>
       </div>
       <div className="wbc-header-actions">
-        {!isLegacy && (
-          <button type="button" className={"wb-btn primary wbc-totask" + (toTaskBusy ? " is-busy" : "")} disabled={running || toTaskBusy} onClick={onToTask} title={wbcT("workbenchChat.toTaskTitle", "Create a task from this chat")}>
-            {toTaskBusy
-              ? <><span className="wbc-spinner" aria-hidden="true"></span><span>{wbcT("workbenchChat.toTaskBusy", "Analyzing chat…")}</span></>
-              : <>{WBC_ICONS.play}<span>{wbcT("workbenchChat.toTask", "Convert to task")}</span></>}
+        <button type="button" className={"wb-btn primary wbc-totask" + (toTaskBusy ? " is-busy" : "")} disabled={running || toTaskBusy} onClick={onToTask} title={wbcT("workbenchChat.toTaskTitle", "Create a task from this chat")}>
+          {toTaskBusy
+            ? <><span className="wbc-spinner" aria-hidden="true"></span><span>{wbcT("workbenchChat.toTaskBusy", "Analyzing chat…")}</span></>
+            : <>{WBC_ICONS.play}<span>{wbcT("workbenchChat.toTask", "Convert to task")}</span></>}
+        </button>
+        <div className="wbc-menu-wrap">
+          <button type="button" className="wbc-icon-btn" title={wbcT("workbenchChat.more", "More")} onClick={function () { setMenuOpen(!menuOpen); }}>
+            {WBC_ICONS.dots}
           </button>
-        )}
-        {!isLegacy && (
-          <div className="wbc-menu-wrap">
-            <button type="button" className="wbc-icon-btn" title={wbcT("workbenchChat.more", "More")} onClick={function () { setMenuOpen(!menuOpen); }}>
-              {WBC_ICONS.dots}
-            </button>
-            {menuOpen && (
-              <>
-                <div className="wbc-menu-scrim" onClick={function () { setMenuOpen(false); }}></div>
-                <div className="wbc-menu">
-                  <button type="button" onClick={function () { setMenuOpen(false); setEditing(true); }}>{WBC_ICONS.edit}<span>{wbcT("workbenchChat.rename", "Rename chat")}</span></button>
-                  <button type="button" disabled={toTaskBusy} onClick={function () { setMenuOpen(false); onToTask(); }}>{WBC_ICONS.task}<span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span></button>
-                  <button type="button" className="danger" onClick={function () { setMenuOpen(false); onDelete(); }}>{WBC_ICONS.trash}<span>{wbcT("workbenchChat.delete", "Delete chat")}</span></button>
-                </div>
-              </>
-            )}
-          </div>
-        )}
+          {menuOpen && (
+            <>
+              <div className="wbc-menu-scrim" onClick={function () { setMenuOpen(false); }}></div>
+              <div className="wbc-menu">
+                <button type="button" onClick={function () { setMenuOpen(false); setEditing(true); }}>{WBC_ICONS.edit}<span>{wbcT("workbenchChat.rename", "Rename chat")}</span></button>
+                <button type="button" disabled={toTaskBusy} onClick={function () { setMenuOpen(false); onToTask(); }}>{WBC_ICONS.task}<span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span></button>
+                <button type="button" className="danger" onClick={function () { setMenuOpen(false); onDelete(); }}>{WBC_ICONS.trash}<span>{wbcT("workbenchChat.delete", "Delete chat")}</span></button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1126,12 +1119,39 @@ function WbcTraceCard({ trace, live, running, label, reasoning }) {
   );
 }
 
+function wbcAssistantUsageTokenCount(usage) {
+  if (!usage || typeof usage !== "object") return null;
+  function tokenValue(field) {
+    var value = usage[field];
+    return typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? value
+      : null;
+  }
+  var total = tokenValue("total_tokens");
+  if (total !== null) return Math.round(total);
+  var prompt = tokenValue("prompt_tokens");
+  var completion = tokenValue("completion_tokens");
+  if (prompt !== null && completion !== null) return Math.round(prompt + completion);
+  if (completion !== null) return Math.round(completion);
+  var output = tokenValue("output_tokens");
+  if (output !== null) return Math.round(output);
+  return null;
+}
+
+function wbcFormatOutputTokenSpeed(value) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "";
+  if (value < 0.05) return "<0.1 tok/s";
+  return String(Math.round(value * 10) / 10) + " tok/s";
+}
+
 function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
   var [copied, setCopied] = useWbcState(false);
   var [voiceSnapshot, setVoiceSnapshot] = useWbcState({ status: {}, activeKey: "" });
   var messageVoiceKey = "message:" + String(msg && msg.id || "");
   var BrowserIcon = workbenchServices.browser().Icon;
   var processingDuration = wbcFormatProcessingDuration(msg.processingDurationMs);
+  var usageTokenCount = wbcAssistantUsageTokenCount(msg && msg.usage);
+  var outputTokenSpeed = wbcFormatOutputTokenSpeed(msg && msg.outputTokensPerSecond);
   var referenceAttachments = Array.isArray(msg.referenceAttachments)
     ? msg.referenceAttachments
     : (Array.isArray(msg.reference_attachments) ? msg.reference_attachments : []);
@@ -1233,7 +1253,10 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
             title={wbcT("workbenchChat.processingDuration", "Total processing time")}
           >{processingDuration}</small>
         ) : null}
-        {msg.usage && msg.usage.total_tokens ? <small>{wbcCompactNumber(msg.usage.total_tokens)} tokens</small> : null}
+        {usageTokenCount !== null ? (
+          <small className="wbc-msg-token-usage">{wbcCompactNumber(usageTokenCount)} tokens</small>
+        ) : null}
+        {outputTokenSpeed ? <small className="wbc-msg-output-speed">{outputTokenSpeed}</small> : null}
       </div>
     </div>
   );
@@ -1543,7 +1566,7 @@ var WBC_NATIVE_FIELD_SIZING = typeof CSS !== "undefined"
   && CSS.supports("field-sizing", "content");
 
 function wbcIsPersistableChatId(id) {
-  return !!(id && String(id).indexOf("legacy:") !== 0);
+  return !!id;
 }
 
 // The optional `ns` prefix isolates a surface's drafts/attachments/workspace

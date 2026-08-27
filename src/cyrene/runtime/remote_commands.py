@@ -19,37 +19,34 @@ import mimetypes
 import os
 import platform
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from PIL import Image, ImageOps
 
-from cyrene.agent.context import bind_run_context
+from agent.context import ContextStoreRouter, TreeNotFoundError
+from agent.plugin import PluginContext, TOOLBOX_PLUGIN_NAME, active_plugin_application_host
+from agent.workbench.chat_runtime import workbench_agent_data_directory
+from cyrene.config import WORKSPACE_DIR
+from cyrene.observability.context_trace import approx_token_count
 from cyrene.runtime.remote_control import (
     DIRECT_PAIRING_PORT,
     REMOTE_CAPABILITIES,
-    REMOTE_TOOL_PACK_PREFIX,
-    REMOTE_TOOL_PACK_WIRE_NAMES,
+    REMOTE_PLUGIN_PACK_IDS,
+    REMOTE_PLUGIN_PACK_PREFIX,
+    REMOTE_PROTOCOL_VERSION,
     RemoteControlStore,
     RemoteGateway,
     register_remote_gateway,
     unregister_remote_gateway,
 )
-from cyrene.tooling.gateway import execute_wire_tool_in_context
 from cyrene.terminal.client import get_terminal_daemon_client
-from cyrene.tooling.snapshot import build_catalog_snapshot
-from cyrene.tooling.types import ToolExecutionContext
 from cyrene.runtime.remote_pairing import DirectPairingServer
 from cyrene.runtime.remote_workspace import RemoteJobManager, RemoteWorkspaceFiles
 from cyrene.runtime.settings_store import get_all as get_web_settings
 from cyrene.runtime.settings_store import set_ as set_setting
-from cyrene.workbench import runtime as workbench_runtime
-from cyrene.workbench.chat import (
-    chat_context_payload,
-    context_segment_tokens,
-    workbench_subagent_payload,
-)
+from cyrene.workbench import artifact_runtime, project_repository
 from cyrene.workbench.workspace_changes import (
     get_chat_file_change,
     list_chat_change_sets,
@@ -99,58 +96,62 @@ _REMOTE_SETTING_SECTIONS = (
     {"id": "channels", "label": "Channels", "label_zh": "频道"},
     {"id": "updates", "label": "Updates", "label_zh": "更新"},
     {"id": "budget", "label": "Budget", "label_zh": "预算"},
-    {"id": "tool_packs", "label": "Tool packages", "label_zh": "工具包"},
+    {"id": "plugin_packs", "label": "Plugin packs", "label_zh": "插件包"},
+    {"id": "plugins", "label": "Standalone Plugins", "label_zh": "独立插件"},
 )
 
-_REMOTE_TOOL_PACK_LABELS = {
-    "browser_tools": ("Browser tools", "浏览器工具"),
-    "code_tools": ("Code tools", "代码工具"),
-    "delivery_tools": ("Delivery tools", "交付工具"),
-    "desktop_tools": ("Desktop tools", "桌面工具"),
-    "entity_tools": ("User database tools", "用户数据库工具"),
-    "integration_tools": ("Integration tools", "集成工具"),
-    "custom_tools": ("Custom tools", "自定义工具"),
-    "knowledge_tools": ("Knowledge tools", "知识工具"),
-    "map_tools": ("Map tools", "地图工具"),
-    "memory_tools": ("Memory tools", "记忆工具"),
-    "remote_tools": ("Remote Cyrene tools", "远程 Cyrene 工具"),
-    "skill_tools": ("Skill tools", "技能工具"),
-    "subagent_tools": ("Subagent tools", "子代理工具"),
-    "task_tools": ("Task tools", "任务工具"),
+_REMOTE_PLUGIN_PACK_LABELS = {
+    "cyrene_browser": ("Browser Plugins", "浏览器插件"),
+    "cyrene_code": ("Code Plugins", "代码插件"),
+    "cyrene_delivery": ("Delivery Plugins", "交付插件"),
+    "cyrene_desktop": ("Desktop Plugins", "桌面插件"),
+    "cyrene_extensions": ("Integration Plugins", "集成插件"),
+    "cyrene_knowledge": ("Knowledge Plugins", "知识插件"),
+    "cyrene_map": ("Map Plugins", "地图插件"),
+    "cyrene_memory": ("Memory Plugins", "记忆插件"),
+    "cyrene_skills": ("Skill Plugins", "技能插件"),
+    "cyrene_subagent": ("Subagent Plugins", "子代理插件"),
+    "cyrene_task": ("Task Plugins", "任务插件"),
 }
 
-_REMOTE_TOOL_PACK_DESCRIPTIONS_ZH = {
-    "browser_tools": "启用浏览器导航、页面快照、截图、点击、输入、等待和网络检查工具。",
-    "code_tools": "代码分析、Git 与共享持久化终端。",
-    "delivery_tools": "发送进度更新、通知、消息和文件。",
-    "desktop_tools": "通过应用控制发现桌面应用并与其交互。",
-    "entity_tools": "追踪、查询、更新、列出和删除用户数据库中的记录。",
-    "integration_tools": "使用动态连接的 MCP 与外部集成能力。",
-    "custom_tools": "使用用户数据目录中按 Cyrene 原生格式编写的 Python 工具。",
-    "knowledge_tools": "搜索项目知识文档，以及文献库内容与元数据。",
-    "map_tools": "创建地图标记并连接地点。",
-    "memory_tools": "检索和维护对话记忆、短期记忆与项目记忆。",
-    "remote_tools": "操作当前对话中已选择的配对 Cyrene 设备。",
-    "skill_tools": "发现、安装、移除、检查和运行 Agent Skills。",
-    "subagent_tools": "创建、检查子代理并与其通信。",
-    "task_tools": "管理定时任务、持久任务目标与计划状态。",
+_REMOTE_PLUGIN_PACK_DESCRIPTIONS_ZH = {
+    "cyrene_browser": "启用浏览器导航、页面快照、截图、点击、输入、等待和网络检查插件。",
+    "cyrene_code": "代码分析、Git 与共享持久化终端。",
+    "cyrene_delivery": "发送进度更新、通知、消息和文件。",
+    "cyrene_desktop": "通过应用控制发现桌面应用并与其交互。",
+    "cyrene_extensions": "使用动态连接的 MCP 与外部集成能力。",
+    "cyrene_knowledge": "搜索项目知识文档，以及文献库内容与元数据。",
+    "cyrene_map": "创建地图标记并连接地点。",
+    "cyrene_memory": "检索和维护对话记忆、短期记忆与项目记忆。",
+    "cyrene_skills": "发现、安装、移除、检查和运行 Agent Skills。",
+    "cyrene_subagent": "创建、检查子代理并与其通信。",
+    "cyrene_task": "管理持久任务目标与计划状态。定时任务由 cyrene_schedule 插件提供。",
 }
 
-_REMOTE_TOOL_PACK_DESCRIPTIONS = {
-    "browser_tools": "Enable browser navigation, page snapshots, screenshots, clicks, typing, waiting, and network inspection.",
-    "code_tools": "Code analysis, Git, and shared persistent terminals.",
-    "delivery_tools": "Send progress updates, notifications, messages, and files.",
-    "desktop_tools": "Discover and interact with desktop applications through App Use.",
-    "entity_tools": "Track, query, update, list, and delete records in the user database.",
-    "integration_tools": "Use dynamically connected MCP and external integration capabilities.",
-    "custom_tools": "Use Python tools from the user data directory in Cyrene's native tool format.",
-    "knowledge_tools": "Search project knowledge documents and literature-library content and metadata.",
-    "map_tools": "Create map pins and connect locations.",
-    "memory_tools": "Retrieve and maintain conversation, short-term, and project memory.",
-    "remote_tools": "Operate paired Cyrene devices selected in the current chat.",
-    "skill_tools": "Discover, install, remove, inspect, and run Agent Skills.",
-    "subagent_tools": "Spawn, inspect, and communicate with subagents.",
-    "task_tools": "Manage scheduled tasks, durable task goals, and plan state.",
+
+def _remote_project(project_id: str) -> dict[str, Any] | None:
+    return project_repository.find_workbench_project_lightweight(project_id)
+
+
+def _remote_project_workspace(project: dict[str, Any]) -> str:
+    root = artifact_runtime._workbench_workspace_root(project)
+    if root is None:
+        root = Path(WORKSPACE_DIR).expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return str(root)
+
+_REMOTE_PLUGIN_PACK_DESCRIPTIONS = {
+    "cyrene_browser": "Enable browser navigation, page snapshots, screenshots, clicks, typing, waiting, and network inspection.",
+    "cyrene_code": "Code analysis, Git, and shared persistent terminals.",
+    "cyrene_delivery": "Send progress updates, notifications, messages, and files.",
+    "cyrene_desktop": "Discover and interact with desktop applications through App Use.",
+    "cyrene_extensions": "Use dynamically connected MCP and external integration capabilities.",
+    "cyrene_knowledge": "Search project knowledge documents and literature-library content and metadata.",
+    "cyrene_map": "Create map pins and connect locations.",
+    "cyrene_memory": "Retrieve and maintain conversation, short-term, and project memory.",
+    "cyrene_skills": "Discover, install, remove, inspect, and run Agent Skills.",
+    "cyrene_subagent": "Spawn, inspect, and communicate with subagents.",
+    "cyrene_task": "Manage durable task goals and plan state. Scheduling is provided by the cyrene_schedule Plugin.",
 }
 
 
@@ -349,246 +350,49 @@ _REMOTE_SETTING_FIELDS = (
 )
 
 
-def _public_model_candidate(raw: Any) -> dict[str, Any] | None:
-    if not isinstance(raw, dict):
-        return None
-    model = str(raw.get("model") or raw.get("name") or raw.get("id") or "").strip()
-    if not model:
-        return None
-    provider = str(raw.get("provider") or "openai_compatible").strip()
-    return {
-        "id": str(
-            raw.get("id")
-            or f"model-{uuid.uuid5(uuid.NAMESPACE_URL, model).hex[:10]}"
-        ).strip(),
-        "name": str(raw.get("name") or model).strip(),
-        "model": model,
-        "provider": provider,
-        "reasoning_effort": str(raw.get("reasoning_effort") or "").strip(),
-        "base_url": str(raw.get("base_url") or "").strip(),
-        "description": str(raw.get("desc") or "").strip(),
-        "context": str(raw.get("ctx") or "").strip(),
-        "price": str(raw.get("price") or "").strip(),
-        "api_key_configured": bool(str(raw.get("api_key") or "").strip()),
-    }
-
-
 def _public_model_settings() -> dict[str, Any]:
-    from cyrene.runtime.settings_store import (
-        get_codex_model,
-        get_custom_models,
-        get_model_source,
-        get_secondary_model,
-        get_vision_models,
+    from cyrene.runtime.model_configuration import (
+        get_model_configuration,
+        public_model_configuration,
     )
 
-    custom = [
-        item
-        for raw in get_custom_models() or []
-        if (item := _public_model_candidate(raw)) is not None
-    ]
-    codex = _public_model_candidate(get_codex_model())
-    vision = [
-        item
-        for raw in get_vision_models() or []
-        if (item := _public_model_candidate(raw)) is not None
-    ]
-    secondary_raw = get_secondary_model()
-    secondary = _public_model_candidate(secondary_raw)
-    if secondary is not None:
-        secondary["context_limit"] = int(secondary_raw.get("ctx_limit") or 0)
-        secondary["max_concurrency"] = int(
-            secondary_raw.get("max_concurrency") or 0
-        )
-    return {
-        "source": get_model_source(),
-        "custom_models": custom,
-        "codex_model": codex,
-        "vision_models": vision,
-        "secondary_model": secondary,
-    }
-
-
-def _model_match_key(raw: dict[str, Any]) -> tuple[str, str]:
-    return (
-        str(raw.get("id") or "").strip(),
-        str(raw.get("model") or raw.get("name") or "").strip(),
-    )
-
-
-def _normalize_remote_model_candidate(
-    raw: Any,
-    *,
-    previous: list[dict[str, Any]],
-    allow_codex: bool,
-) -> dict[str, Any]:
-    if not isinstance(raw, dict):
-        raise ValueError("model candidate must be an object")
-    model = str(raw.get("model") or raw.get("name") or "").strip()
-    if not model or len(model) > 200:
-        raise ValueError("model identifier is required and must be at most 200 characters")
-    provider = str(raw.get("provider") or "openai_compatible").strip()
-    if provider not in {"openai_compatible", "codex_oauth"}:
-        raise ValueError("unsupported model provider")
-    if provider == "codex_oauth" and not allow_codex:
-        raise ValueError("Codex OAuth is not supported for this model role")
-    model_id = str(raw.get("id") or f"model-{uuid.uuid4().hex[:10]}").strip()
-    if not model_id or len(model_id) > 100:
-        raise ValueError("invalid model id")
-
-    prior = next(
-        (
-            candidate
-            for candidate in previous
-            if _model_match_key(candidate) in {
-                (model_id, model),
-                (model_id, str(candidate.get("model") or "")),
-                (str(candidate.get("id") or ""), model),
-            }
-        ),
-        {},
-    )
-    base_url = str(raw.get("base_url") or prior.get("base_url") or "").strip()
-    if provider != "codex_oauth":
-        parsed = urlsplit(base_url)
-        if (
-            not base_url
-            or parsed.scheme not in {"http", "https"}
-            or not parsed.hostname
-            or parsed.username
-            or parsed.password
-        ):
-            raise ValueError("model Base URL must be an http(s) URL without credentials")
-    else:
-        from cyrene.model_runtime.codex_provider import CODEX_BASE_URL
-
-        base_url = CODEX_BASE_URL
-
-    submitted_key = str(raw.get("api_key") or "").strip()
-    api_key = submitted_key or str(prior.get("api_key") or "").strip()
-    reasoning = str(raw.get("reasoning_effort") or "").strip().lower()
-    if reasoning not in {"", "low", "medium", "high", "xhigh", "max"}:
-        raise ValueError("invalid reasoning effort")
-    return {
-        "id": model_id,
-        "name": str(raw.get("name") or model).strip()[:200] or model,
-        "model": model,
-        "provider": provider,
-        "reasoning_effort": reasoning,
-        "base_url": base_url,
-        "api_key": "" if provider == "codex_oauth" else api_key,
-        "desc": str(raw.get("description") or raw.get("desc") or "").strip()[:500],
-        "ctx": str(raw.get("context") or raw.get("ctx") or "").strip()[:40],
-        "price": str(raw.get("price") or "").strip()[:80],
-    }
+    return public_model_configuration(get_model_configuration())
 
 
 def _update_remote_model_settings(raw: Any) -> None:
-    from cyrene.runtime import config_store
-    from cyrene.runtime.settings_store import (
-        get_codex_model,
-        get_custom_models,
-        get_secondary_model,
-        get_vision_models,
-        save_codex_model,
-        save_custom_models,
-        save_model_source,
-        save_models,
-        save_secondary_model,
-        save_vision_models,
-    )
+    from cyrene.runtime.model_configuration import save_model_configuration
 
     if not isinstance(raw, dict):
-        raise ValueError("models must be an object")
-    source = str(raw.get("source") or "custom").strip().lower()
-    if source not in {"custom", "codex"}:
-        raise ValueError("model source must be custom or codex")
+        raise ValueError("models must be a canonical model configuration object")
+    expected_revision = raw.get("revision")
+    if expected_revision is not None and (
+        not isinstance(expected_revision, int)
+        or isinstance(expected_revision, bool)
+        or expected_revision < 0
+    ):
+        raise ValueError("model configuration revision must be a non-negative integer")
 
-    previous_custom = [item for item in get_custom_models() or [] if isinstance(item, dict)]
-    previous_vision = [item for item in get_vision_models() or [] if isinstance(item, dict)]
-    previous_codex = get_codex_model()
-    previous_secondary = get_secondary_model()
-
-    custom_raw = raw.get("custom_models")
-    if not isinstance(custom_raw, list) or not custom_raw or len(custom_raw) > 10:
-        raise ValueError("custom_models must contain between 1 and 10 models")
-    custom = [
-        _normalize_remote_model_candidate(
-            item,
-            previous=previous_custom,
-            allow_codex=False,
-        )
-        for item in custom_raw
-    ]
-
-    codex_raw = raw.get("codex_model")
-    codex = (
-        _normalize_remote_model_candidate(
-            codex_raw,
-            previous=[previous_codex] if isinstance(previous_codex, dict) else [],
-            allow_codex=True,
-        )
-        if isinstance(codex_raw, dict)
-        else None
-    )
-    if codex is not None and codex["provider"] != "codex_oauth":
-        raise ValueError("Codex model must use the codex_oauth provider")
-    if source == "codex" and codex is None:
-        raise ValueError("a Codex model is required for the Codex source")
-
-    vision_raw = raw.get("vision_models")
-    if not isinstance(vision_raw, list) or not vision_raw or len(vision_raw) > 10:
-        raise ValueError("vision_models must contain between 1 and 10 models")
-    vision = [
-        _normalize_remote_model_candidate(
-            item,
-            previous=previous_vision,
-            allow_codex=False,
-        )
-        for item in vision_raw
-    ]
-
-    secondary_raw = raw.get("secondary_model")
-    secondary = None
-    if isinstance(secondary_raw, dict) and str(
-        secondary_raw.get("model") or ""
-    ).strip():
-        secondary = _normalize_remote_model_candidate(
-            secondary_raw,
-            previous=[previous_secondary]
-            if isinstance(previous_secondary, dict)
-            else [],
-            allow_codex=False,
-        )
-        secondary["ctx_limit"] = max(
-            0, min(int(secondary_raw.get("context_limit") or 0), 4_000_000)
-        )
-        secondary["max_concurrency"] = max(
-            0, min(int(secondary_raw.get("max_concurrency") or 0), 128)
-        )
-
-    save_custom_models(custom)
-    if codex is not None:
-        save_codex_model(codex)
-    save_model_source(source)
-    active_models = [codex] if source == "codex" and codex is not None else custom
-    save_vision_models(vision)
-    save_secondary_model(secondary or {})
-    # Normalize once, after every legacy-shaped input has been updated.  This
-    # compatibility call persists only the model graph and cannot create a
-    # second primary-order setting.
-    save_models(active_models)
-
-    primary = active_models[0]
-    env_updates = {"OPENAI_MODEL": str(primary["model"])}
-    if primary["provider"] != "codex_oauth":
-        env_updates.update(
+    connections: list[dict[str, Any]] = []
+    for item in raw.get("connections") or []:
+        if not isinstance(item, dict):
+            raise ValueError("each model connection must be an object")
+        connections.append(
             {
-                "OPENAI_BASE_URL": str(primary["base_url"]),
-                "OPENAI_API_KEY": str(primary["api_key"]),
+                key: value
+                for key, value in item.items()
+                if key not in {"api_key_configured", "secret_configured"}
             }
         )
-    config_store.set_env_many(env_updates)
+    configuration = {
+        key: value
+        for key, value in raw.items()
+        if key in {"version", "profiles", "routes"}
+    }
+    configuration["connections"] = connections
+    save_model_configuration(
+        configuration,
+        expected_revision=expected_revision,
+    )
 
 
 def _public_pending_question(value: Any) -> dict[str, Any] | None:
@@ -804,7 +608,7 @@ def _store_remote_attachments(value: Any) -> list[dict[str, Any]]:
                     "content_type": content_type,
                     "size": len(content),
                     "kind": attachment_kind_from_meta(content_type, safe_name),
-                    "url": f"/api/chat/upload/{target.name}",
+                    "url": f"/api/workbench/uploads/{target.name}",
                 }
             )
     except Exception:
@@ -930,153 +734,322 @@ def _chat_detail(chat: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-_REMOTE_PROGRESSIVE_TOOL_PACKAGES = {
-    "code_tools",
-    "browser_tools",
-    "desktop_tools",
-    "memory_tools",
-    "knowledge_tools",
-    "task_tools",
-    "entity_tools",
-    "map_tools",
-    "subagent_tools",
-    "delivery_tools",
-    "skill_tools",
-    "remote_tools",
-    "integration_tools",
-}
+def _context_value_text(value: Mapping[str, Any]) -> str:
+    role = str(value.get("role") or "")
+    if role == "tool_results":
+        return json.dumps(value.get("results") or [], ensure_ascii=False, default=str)
+    content = value.get("content")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        text = "\n".join(
+            str(item.get("text") or "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    else:
+        text = str(content or "")
+    if role == "assistant" and value.get("tool_calls"):
+        text += json.dumps(value.get("tool_calls"), ensure_ascii=False, default=str)
+    return text
 
 
-def _remote_used_tool_packages(chat: dict[str, Any]) -> list[str]:
-    used: list[str] = []
-    seen: set[str] = set()
-    aliases = {
-        "pin_location": "map_tools",
-        "connect_pins": "map_tools",
-        "spawn_subagent": "subagent_tools",
-        "send_message_to_subagent": "subagent_tools",
-        "wait_for_subagents": "subagent_tools",
-    }
-    for message in chat.get("messages") or []:
-        if not isinstance(message, dict):
+def _remote_agent_plugin_usage(nodes: list[Any]) -> tuple[list[str], list[str]]:
+    packs: list[str] = []
+    standalone: list[str] = []
+    seen_packs: set[str] = set()
+    seen_standalone: set[str] = set()
+    seen_calls: set[tuple[str, str]] = set()
+
+    def record(result: Any, owner_id: str) -> None:
+        if not isinstance(result, Mapping) or result.get("success") is not True:
+            return
+        call_id = str(result.get("call_id") or "").strip()
+        key = (owner_id, call_id)
+        if call_id and key in seen_calls:
+            return
+        if call_id:
+            seen_calls.add(key)
+        value = result.get("value")
+        if (
+            str(result.get("name") or "") != TOOLBOX_PLUGIN_NAME
+            or not isinstance(value, Mapping)
+            or value.get("operation") != "invoke"
+        ):
+            return
+        pack_id = str(value.get("pack") or "").strip()
+        plugin_name = str(value.get("name") or "").strip()
+        if pack_id and pack_id not in seen_packs:
+            seen_packs.add(pack_id)
+            packs.append(pack_id)
+        elif plugin_name and plugin_name not in seen_standalone:
+            seen_standalone.add(plugin_name)
+            standalone.append(plugin_name)
+
+    for node in nodes:
+        value = node.value if isinstance(node.value, Mapping) else {}
+        effects = value.get("effect_results")
+        for result in effects.values() if isinstance(effects, Mapping) else ():
+            record(result, str(node.id))
+        results = value.get("results") if value.get("role") == "tool_results" else ()
+        for result in results if isinstance(results, list) else ():
+            record(result, str(node.parent_id or node.id))
+    return packs, standalone
+
+
+def _remote_agent_context(
+    chat_id: str,
+    db_path: str,
+    model_name: str,
+    context_limit: int,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Project one Chat's authoritative ContextTree for remote clients."""
+
+    from agent.context.compaction import COMPACT_TRIGGER_RATIO
+
+    router = ContextStoreRouter(
+        workbench_agent_data_directory(db_path) / "context"
+    )
+    try:
+        tree = router.get_tree(str(chat_id))
+        nodes = router.get_subtree(tree.id, tree.root_id)
+        dialogue = [
+            node
+            for node in nodes
+            if isinstance(node.value, Mapping)
+            and str(node.value.get("role") or "")
+            in {
+                "system",
+                "context",
+                "context_compaction",
+                "user",
+                "assistant",
+                "tool_results",
+            }
+        ]
+        leaf = max(dialogue, key=lambda item: (item.created_at, item.id))
+        path = router.get_path(tree.id, leaf.id)
+    except TreeNotFoundError:
+        empty_metrics = {
+            "model": str(model_name or ""),
+            "actualModel": "",
+            "usage": {},
+            "ctxLimit": max(0, int(context_limit or 0)),
+            "ctxUsed": 0,
+            "ratio": 0.0 if context_limit else None,
+            "compactTriggerRatio": COMPACT_TRIGGER_RATIO,
+            "messageCount": 0,
+            "segments": [],
+            "compaction": {
+                "active": False,
+                "blocks": 0,
+                "tokens": 0,
+                "distilled": False,
+            },
+        }
+        return (
+            empty_metrics,
+            {"layers": [], "totalTokensEst": 0, "messageTokens": 0},
+            {"rounds": [], "activeRoundId": "", "agents": [], "messages": []},
+        )
+    finally:
+        router.close()
+
+    values = [
+        dict(node.value)
+        for node in path
+        if isinstance(node.value, Mapping)
+        and str(node.value.get("role") or "")
+        in {
+            "system",
+            "context",
+            "context_compaction",
+            "user",
+            "assistant",
+            "tool_results",
+        }
+    ]
+    segments = {key: 0 for key in ("compacted", "system", "user", "assistant", "tool")}
+    usage: dict[str, int] = {}
+    actual_model = ""
+    compacted_blocks = 0
+    for value in values:
+        role = str(value.get("role") or "")
+        tokens = 4 + approx_token_count(role) + approx_token_count(
+            _context_value_text(value)
+        )
+        if role == "context_compaction":
+            bucket = "compacted"
+            compacted_blocks += 1
+        elif role in {"system", "context"}:
+            bucket = "system"
+        elif role == "tool_results":
+            bucket = "tool"
+        else:
+            bucket = role
+        segments[bucket] += tokens
+        if role != "assistant":
             continue
-        entries = [
-            *(message.get("trace") or []),
-            *(message.get("tools") or []),
-        ]
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            raw_name = str(entry.get("tool") or entry.get("name") or "").strip()
-            wire_name = aliases.get(raw_name, raw_name)
-            if (
-                wire_name in _REMOTE_PROGRESSIVE_TOOL_PACKAGES
-                and wire_name not in seen
-            ):
-                seen.add(wire_name)
-                used.append(wire_name)
-    return used
+        raw_usage = value.get("usage")
+        if isinstance(raw_usage, dict):
+            for key, raw in raw_usage.items():
+                if isinstance(raw, bool):
+                    continue
+                try:
+                    usage[str(key)] = usage.get(str(key), 0) + int(raw or 0)
+                except (TypeError, ValueError):
+                    pass
+        identity = value.get("model_identity")
+        if isinstance(identity, dict):
+            actual_model = str(
+                identity.get("model")
+                or identity.get("model_name")
+                or actual_model
+            )
+        actual_model = str(value.get("model") or actual_model)
 
-
-def _remote_context_blocks(chat_id: str) -> dict[str, Any]:
-    from cyrene.agent.state import _session_state_file
-    from cyrene.model_runtime.client import approx_token_count
-    from cyrene.runtime.io import read_json_safe
-
-    data = read_json_safe(_session_state_file(chat_id))
-    if not isinstance(data, dict):
-        return {"layers": [], "totalTokensEst": 0, "messageTokens": 0}
-    messages = data.get("messages")
-    if not isinstance(messages, list):
-        messages = []
-    segments = context_segment_tokens(messages)
     message_total = sum(segments.values())
-    layers: list[dict[str, Any]] = []
-
-    system_blocks = data.get("system_context_blocks")
-    if isinstance(system_blocks, list) and system_blocks:
-        public_blocks = [
-            {
-                key: block.get(key)
-                for key in ("id", "type", "tokens_est", "chars", "source", "reason")
-                if key in block
-            }
-            for block in system_blocks
-            if isinstance(block, dict)
-        ]
-        system_tokens = sum(
-            int(block.get("tokens_est") or 0)
-            for block in public_blocks
-        )
-        layers.append(
-            {
-                "id": "system_prefix",
-                "label": "System Prefix",
-                "blocks": public_blocks,
-                "totalTokens": system_tokens,
-            }
-        )
-
-    ephemeral = data.get("ephemeral_context")
-    if isinstance(ephemeral, str) and ephemeral.strip():
-        tokens = approx_token_count(ephemeral)
-        layers.append(
-            {
-                "id": "ephemeral",
-                "label": "Ephemeral Tail",
-                "blocks": [
-                    {
-                        "id": "ephemeral.run",
-                        "type": "ephemeral",
-                        "tokens_est": tokens,
-                        "chars": len(ephemeral),
-                    }
-                ],
-                "totalTokens": tokens,
-            }
-        )
-
+    limit = max(0, int(context_limit or 0))
     message_blocks = [
         {
             "id": f"segment.{key}",
             "type": key,
-            "tokens_est": int(segments.get(key) or 0),
+            "tokens_est": int(tokens),
         }
-        for key in ("compacted", "system", "user", "assistant", "tool")
-        if int(segments.get(key) or 0) > 0
+        for key, tokens in segments.items()
+        if tokens > 0
     ]
-    if message_blocks:
-        layers.append(
-            {
-                "id": "messages",
-                "label": "Conversation Messages",
+    used_packs, used_standalone = _remote_agent_plugin_usage(path)
+    blocks = {
+        "layers": (
+            [{
+                "id": "context_tree",
+                "label": "ContextTree",
                 "blocks": message_blocks,
                 "totalTokens": message_total,
-            }
-        )
-    return {
-        "layers": layers,
-        "totalTokensEst": sum(int(layer["totalTokens"]) for layer in layers),
+            }]
+            if message_blocks
+            else []
+        ),
+        "totalTokensEst": message_total,
         "messageTokens": message_total,
+        "usedPluginPacks": used_packs,
+        "usedStandalonePlugins": used_standalone,
     }
+    metrics = {
+        "model": str(model_name or actual_model),
+        "actualModel": actual_model,
+        "usage": usage,
+        "ctxLimit": limit,
+        "ctxUsed": message_total,
+        "ratio": (message_total / limit) if limit else None,
+        "compactTriggerRatio": COMPACT_TRIGGER_RATIO,
+        "messageCount": len(values),
+        "segments": [
+            {"key": key, "tokens": tokens}
+            for key, tokens in segments.items()
+        ],
+        "compaction": {
+            "active": compacted_blocks > 0,
+            "blocks": compacted_blocks,
+            "tokens": segments["compacted"],
+            "distilled": compacted_blocks > 0,
+        },
+    }
+
+    root = next(
+        (
+            node
+            for node in nodes
+            if str(node.id) == str(tree.root_id)
+            and isinstance(node.value, Mapping)
+        ),
+        None,
+    )
+    records = root.value.get("_cyrene_subagents") if root is not None else None
+    public_agents: list[dict[str, Any]] = []
+    if isinstance(records, Mapping):
+        for agent_id, raw in records.items():
+            if not isinstance(raw, Mapping):
+                continue
+            public_agents.append({
+                "id": str(agent_id),
+                "name": str(agent_id),
+                "task": str(raw.get("task") or ""),
+                "status": str(raw.get("status") or "running"),
+                "result": str(raw.get("result") or ""),
+                "error": str(raw.get("error") or ""),
+                "roundId": str(raw.get("round_id") or ""),
+                "runId": str(raw.get("current_run_id") or ""),
+                "treeId": str(raw.get("tree_id") or ""),
+            })
+    round_ids = list(dict.fromkeys(
+        str(item.get("roundId") or "") for item in public_agents
+        if str(item.get("roundId") or "")
+    ))
+    active_round_id = next(
+        (
+            round_id
+            for round_id in reversed(round_ids)
+            if any(
+                item.get("roundId") == round_id
+                and item.get("status") not in {"done", "failed", "cancelled"}
+                for item in public_agents
+            )
+        ),
+        round_ids[-1] if round_ids else "",
+    )
+    subagents = {
+        "rounds": [
+            {
+                "id": round_id,
+                "title": round_id,
+                "status": (
+                    "running"
+                    if any(
+                        item.get("roundId") == round_id
+                        and item.get("status") not in {"done", "failed", "cancelled"}
+                        for item in public_agents
+                    )
+                    else "done"
+                ),
+                "agentCount": sum(
+                    1 for item in public_agents if item.get("roundId") == round_id
+                ),
+                "activeCount": sum(
+                    1
+                    for item in public_agents
+                    if item.get("roundId") == round_id
+                    and item.get("status") not in {"done", "failed", "cancelled"}
+                ),
+            }
+            for round_id in round_ids
+        ],
+        "activeRoundId": active_round_id,
+        "agents": [
+            item for item in public_agents if item.get("roundId") == active_round_id
+        ],
+        "messages": [],
+    }
+    return metrics, blocks, subagents
 
 
 def _remote_map_data(chat_id: str) -> dict[str, Any]:
-    from cyrene.agent.state import _session_state_file
-    from cyrene.runtime.io import read_json_safe
+    from agent.plugin import active_plugin_service
 
-    data = read_json_safe(_session_state_file(chat_id))
-    if not isinstance(data, dict):
+    service = active_plugin_service("maps")
+    if service is None:
         return {"pins": [], "routes": []}
+    data = service.snapshot(chat_id)
     return {
         "pins": [
             dict(item)
-            for item in data.get("map_pins") or []
+            for item in data.get("pins") or []
             if isinstance(item, dict)
         ],
         "routes": [
             dict(item)
-            for item in data.get("map_routes") or []
+            for item in data.get("routes") or []
             if isinstance(item, dict)
         ],
     }
@@ -1236,9 +1209,9 @@ def referenced_chat_attachment_target(
     from cyrene.runtime.attachments import EXPORTS_DIR, UPLOADS_DIR
 
     url = str(attachment.get("url") or "")
-    if url.startswith("/api/chat/upload/"):
+    if url.startswith("/api/workbench/uploads/"):
         candidate_roots = (UPLOADS_DIR,)
-    elif url.startswith("/api/chat/export/"):
+    elif url.startswith("/api/workbench/exports/"):
         candidate_roots = (EXPORTS_DIR,)
     else:
         candidate_roots = (EXPORTS_DIR, UPLOADS_DIR)
@@ -1353,9 +1326,9 @@ class RemoteCommandExecutor:
         if command == "capabilities.read":
             return {
                 "ok": True,
-                "protocol_version": 1,
+                "protocol_version": REMOTE_PROTOCOL_VERSION,
                 "capabilities": sorted(REMOTE_CAPABILITIES),
-                "remote_tool_packages": list(REMOTE_TOOL_PACK_WIRE_NAMES),
+                "remote_plugin_packs": list(REMOTE_PLUGIN_PACK_IDS),
                 "features": {
                     "workspace_files_v1": True,
                     "remote_jobs_v1": True,
@@ -1560,17 +1533,14 @@ class RemoteCommandExecutor:
         project_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        project = workbench_runtime._workbench_find_project_lightweight(project_id)
+        project = _remote_project(project_id)
         if project is None:
             return {
                 "ok": False,
                 "code": "remote_project_not_found",
                 "error": "authorized project no longer exists",
             }
-        workspace_dir = (
-            workbench_runtime._workbench_resolve_workspace_dir(project)
-            or str(workbench_runtime.WORKSPACE_DIR)
-        )
+        workspace_dir = _remote_project_workspace(project)
         if command == "shell.open":
             created = await get_terminal_daemon_client().create(
                 project_id,
@@ -1619,8 +1589,7 @@ class RemoteCommandExecutor:
 
     def _settings_read(self) -> dict[str, Any]:
         from cyrene.learning.skills import build_skills
-        from cyrene.runtime.settings_store import get_enabled_tool_packs
-        from cyrene.tooling.packs import PACKS
+        from cyrene.runtime.settings_store import get_enabled_plugin_packs
 
         settings = get_web_settings()
         fields = [dict(field) for field in _REMOTE_SETTING_FIELDS]
@@ -1628,31 +1597,55 @@ class RemoteCommandExecutor:
             field["key"]: settings.get(field["key"], field.get("default"))
             for field in fields
         }
-        enabled_packs = get_enabled_tool_packs()
-        for pack in PACKS:
-            wire_name = str(pack.wire_name)
-            key = f"toolpack::{wire_name}"
-            label, label_zh = _REMOTE_TOOL_PACK_LABELS.get(
-                wire_name,
-                (wire_name.replace("_", " ").title(), wire_name.replace("_", " ")),
+        enabled_packs = get_enabled_plugin_packs()
+        host = active_plugin_application_host()
+        packs = host.registry.list_packs() if host is not None else ()
+        for pack in packs:
+            pack_id = str(pack.id)
+            if host is not None and host.registry.pack_locked(pack_id):
+                continue
+            key = f"pluginpack::{pack_id}"
+            label, label_zh = _REMOTE_PLUGIN_PACK_LABELS.get(
+                pack_id,
+                (pack_id.replace("_", " ").title(), pack_id.replace("_", " ")),
             )
             fields.append(
                 _remote_setting_field(
                     key,
-                    "tool_packs",
+                    "plugin_packs",
                     "boolean",
                     label,
                     label_zh,
-                    description=_REMOTE_TOOL_PACK_DESCRIPTIONS.get(
-                        wire_name, str(pack.description or "")
+                    description=_REMOTE_PLUGIN_PACK_DESCRIPTIONS.get(
+                        pack_id, str(pack.description or "")
                     ),
-                    description_zh=_REMOTE_TOOL_PACK_DESCRIPTIONS_ZH.get(
-                        wire_name, ""
+                    description_zh=_REMOTE_PLUGIN_PACK_DESCRIPTIONS_ZH.get(
+                        pack_id, ""
                     ),
                     default=True,
                 )
             )
-            values[key] = bool(enabled_packs.get(wire_name, True))
+            values[key] = bool(enabled_packs.get(pack_id, True))
+        if host is not None:
+            activation = host.registry.activation.snapshot()
+            for registered in host.registry.list_plugins():
+                plugin = registered.plugin
+                if registered.pack_id is not None or host.registry.plugin_locked(plugin.name):
+                    continue
+                key = f"plugin::{plugin.name}"
+                fields.append(
+                    _remote_setting_field(
+                        key,
+                        "plugins",
+                        "boolean",
+                        plugin.name,
+                        plugin.name,
+                        description=str(plugin.description or ""),
+                        description_zh=str(plugin.description or ""),
+                        default=True,
+                    )
+                )
+                values[key] = bool(activation.plugins.get(plugin.name, True))
 
         for skill in build_skills():
             skill_id = str(skill.get("id") or "").strip()
@@ -1686,90 +1679,61 @@ class RemoteCommandExecutor:
 
     @staticmethod
     def _settings_models_copy(payload: dict[str, Any]) -> dict[str, Any]:
-        """Return the complete model configuration over the paired E2EE channel.
+        """Return the canonical model graph over the paired E2EE channel.
 
         This endpoint exists specifically for a trusted mobile controller that
-        performs Provider calls on-device. It exports API-compatible model
-        credentials, but never exports Codex OAuth tokens or unrelated secrets.
+        performs Provider Plugin calls on-device. It exports connection API
+        keys, but never exports Codex OAuth tokens or unrelated secrets.
         Access is gated by the existing ``settings:read`` peer grant.
         """
         if payload:
             raise ValueError("settings.models.copy does not accept fields")
-        from cyrene.runtime.settings_store import (
-            get_codex_model,
-            get_custom_models,
-            get_model_source,
-            get_secondary_model,
-            get_vision_models,
-        )
+        from cyrene.runtime import config_store
+        from cyrene.runtime.model_configuration import get_model_configuration
 
-        def candidate(raw: Any) -> dict[str, Any] | None:
-            if not isinstance(raw, dict):
-                return None
-            model = str(raw.get("model") or raw.get("name") or "").strip()
-            if not model:
-                return None
-            provider = str(raw.get("provider") or "openai_compatible").strip()
-            result = {
-                "id": str(raw.get("id") or "").strip(),
-                "name": str(raw.get("name") or model).strip(),
-                "model": model,
-                "provider": provider,
-                "reasoning_effort": str(raw.get("reasoning_effort") or "").strip(),
-                "base_url": str(raw.get("base_url") or "").strip(),
-                "description": str(raw.get("desc") or raw.get("description") or "").strip(),
-                "context": str(raw.get("ctx") or raw.get("context") or "").strip(),
-                "price": str(raw.get("price") or "").strip(),
-            }
-            # OAuth credentials remain in the desktop provider. Only ordinary
-            # API keys, which the mobile Provider client can actually use, are
-            # copied to the Android Keystore-backed store.
-            if provider != "codex_oauth":
-                result["api_key"] = str(raw.get("api_key") or "").strip()
-            return result
-
-        custom = [item for raw in get_custom_models() or [] if (item := candidate(raw))]
-        vision = [item for raw in get_vision_models() or [] if (item := candidate(raw))]
-        codex = candidate(get_codex_model())
-        secondary = candidate(get_secondary_model())
-        if secondary is not None:
-            raw_secondary = get_secondary_model()
-            secondary["context_limit"] = int(raw_secondary.get("ctx_limit") or 0)
-            secondary["max_concurrency"] = int(raw_secondary.get("max_concurrency") or 0)
+        graph = get_model_configuration()
+        graph["revision"] = config_store.get_settings_revision()
         return {
             "ok": True,
-            "models": {
-                "source": str(get_model_source() or "custom"),
-                "custom_models": custom,
-                "codex_model": codex,
-                "vision_models": vision,
-                "secondary_model": secondary,
-            },
+            "models": graph,
         }
 
     def _settings_update(self, payload: dict[str, Any]) -> dict[str, Any]:
         from cyrene.learning.skills import build_skills, set_skill_enabled
         from cyrene.runtime.settings_store import (
-            get_enabled_tool_packs,
-            get_enabled_tools,
-            save_enabled_tool_packs,
-            save_enabled_tools,
+            get_enabled_plugin_packs,
+            get_enabled_plugins,
+            save_enabled_plugin_packs,
+            save_enabled_plugins,
         )
-        from cyrene.tooling.packs import PACK_BY_WIRE_NAME
 
         payload = dict(payload)
         model_payload = payload.pop("models", None)
         field_by_key = {field["key"]: field for field in _REMOTE_SETTING_FIELDS}
-        current_tools = get_enabled_tools()
-        current_packs = get_enabled_tool_packs()
+        current_plugins = get_enabled_plugins()
+        current_packs = get_enabled_plugin_packs()
         current_skill_ids = {
             str(skill.get("id") or "")
             for skill in build_skills()
             if str(skill.get("id") or "")
         }
+        host = active_plugin_application_host()
+        if host is None:
+            raise RuntimeError("Plugin application host is unavailable")
+        plugin_pack_ids = {
+            str(pack.id)
+            for pack in host.registry.list_packs()
+            if not host.registry.pack_locked(str(pack.id))
+        }
+        standalone_plugin_ids = {
+            registered.plugin.name
+            for registered in host.registry.list_plugins()
+            if registered.pack_id is None
+            and not host.registry.plugin_locked(registered.plugin.name)
+        }
         allowed = set(field_by_key)
-        allowed.update(f"tool::{name}" for name in current_tools)
-        allowed.update(f"toolpack::{name}" for name in PACK_BY_WIRE_NAME)
+        allowed.update(f"plugin::{name}" for name in standalone_plugin_ids)
+        allowed.update(f"pluginpack::{name}" for name in plugin_pack_ids)
         allowed.update(f"skill::{skill_id}" for skill_id in current_skill_ids)
         unknown = sorted(set(payload) - allowed)
         if unknown:
@@ -1783,8 +1747,8 @@ class RemoteCommandExecutor:
         normalized: dict[str, Any] = {}
         for key, raw_value in payload.items():
             if (
-                key.startswith("tool::")
-                or key.startswith("toolpack::")
+                key.startswith("plugin::")
+                or key.startswith("pluginpack::")
                 or key.startswith("skill::")
             ):
                 if not isinstance(raw_value, bool):
@@ -1833,16 +1797,16 @@ class RemoteCommandExecutor:
             normalized[key] = value
 
         changed: list[str] = []
-        next_tools = dict(current_tools)
+        next_plugins = dict(current_plugins)
         next_packs = dict(current_packs)
-        tools_changed = False
+        plugins_changed = False
         packs_changed = False
         for key, value in normalized.items():
-            if key.startswith("tool::"):
-                next_tools[key.removeprefix("tool::")] = value
-                tools_changed = True
-            elif key.startswith("toolpack::"):
-                next_packs[key.removeprefix("toolpack::")] = value
+            if key.startswith("plugin::"):
+                next_plugins[key.removeprefix("plugin::")] = value
+                plugins_changed = True
+            elif key.startswith("pluginpack::"):
+                next_packs[key.removeprefix("pluginpack::")] = value
                 packs_changed = True
             elif key.startswith("skill::"):
                 if not set_skill_enabled(key.removeprefix("skill::"), value):
@@ -1850,10 +1814,15 @@ class RemoteCommandExecutor:
             else:
                 set_setting(key, value)
             changed.append(key)
-        if tools_changed:
-            save_enabled_tools(next_tools)
+        if plugins_changed:
+            save_enabled_plugins(next_plugins)
         if packs_changed:
-            save_enabled_tool_packs(next_packs)
+            save_enabled_plugin_packs(next_packs)
+        if plugins_changed or packs_changed:
+            host.registry.configure_activation(
+                plugins=next_plugins,
+                packs=next_packs,
+            )
 
         result = self._settings_read()
         result["changed"] = (["models"] if model_payload is not None else []) + changed
@@ -2000,28 +1969,31 @@ class RemoteCommandExecutor:
         chat_id, chat = await self._chat_for_project(project_id, payload)
         if chat is None or chat.get("ok") is False:
             return dict(chat or {"ok": False, "error": "chat not found"})
-        from cyrene.runtime.config_store import get_current_ctx_limit
+        from agent.plugin.model_catalog import configured_context_limit
 
         model_name = _remote_chat_model(chat)
-        context_limit = get_current_ctx_limit()
+        context_limit = configured_context_limit(chat_id)
+        change_sets_call = (
+            asyncio.to_thread(list_chat_change_sets, self.db_path, chat_id)
+            if self.db_path
+            else asyncio.sleep(0, result=[])
+        )
         (
-            context_metrics,
-            context_blocks,
-            subagents,
+            agent_context,
             change_sets,
             map_data,
         ) = await asyncio.gather(
             asyncio.to_thread(
-                chat_context_payload,
+                _remote_agent_context,
                 chat_id,
+                self.db_path,
                 model_name,
-                ctx_limit=context_limit,
+                context_limit,
             ),
-            asyncio.to_thread(_remote_context_blocks, chat_id),
-            asyncio.to_thread(workbench_subagent_payload, chat_id, ""),
-            asyncio.to_thread(list_chat_change_sets, self.db_path, chat_id),
+            change_sets_call,
             asyncio.to_thread(_remote_map_data, chat_id),
         )
+        context_metrics, context_blocks, subagents = agent_context
         changes = {
             "changeSets": change_sets,
             "fileCount": sum(
@@ -2046,8 +2018,13 @@ class RemoteCommandExecutor:
                     chat_id,
                     self.chat.run_manager,
                 ),
-                "used_tool_packages": _remote_used_tool_packages(chat),
-                "subagents": subagents,
+                "used_plugin_packs": list(
+                    context_blocks.get("usedPluginPacks") or []
+                ),
+                "used_standalone_plugins": list(
+                    context_blocks.get("usedStandalonePlugins") or []
+                ),
+            "subagents": subagents,
                 "changes": changes,
                 "map": map_data,
             }
@@ -2231,32 +2208,32 @@ class RemoteCommandExecutor:
         project_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        wire_name = _require_text(payload, "tool_pack", max_length=100)
-        if wire_name not in REMOTE_TOOL_PACK_WIRE_NAMES:
+        pack_id = _require_text(payload, "plugin_pack", max_length=100)
+        if pack_id not in REMOTE_PLUGIN_PACK_IDS:
             return {
                 "ok": False,
-                "code": "remote_tool_pack_unsupported",
-                "error": f"tool package is not remotely callable: {wire_name}",
+                "code": "remote_plugin_pack_unsupported",
+                "error": f"Plugin pack is not remotely callable: {pack_id}",
             }
         peer = self.store.get_peer(peer_device_id)
-        grant = REMOTE_TOOL_PACK_PREFIX + wire_name
+        grant = REMOTE_PLUGIN_PACK_PREFIX + pack_id
         if peer is None or grant not in (peer.get("granted_capabilities") or []):
             return {
                 "ok": False,
-                "code": "remote_tool_pack_denied",
-                "error": f"remote access to {wire_name} is not granted",
+                "code": "remote_plugin_pack_denied",
+                "error": f"remote access to {pack_id} is not granted",
             }
-        project = workbench_runtime._workbench_find_project_lightweight(project_id)
+        project = _remote_project(project_id)
         if project is None:
             return {
                 "ok": False,
                 "code": "remote_project_not_found",
                 "error": "authorized project no longer exists",
             }
-        workspace_dir = workbench_runtime._workbench_resolve_workspace_dir(project)
+        workspace_dir = _remote_project_workspace(project)
         operation = command.removeprefix("harness.")
         arguments: dict[str, Any] = {"operation": operation}
-        if operation == "discover":
+        if operation == "list":
             arguments.update({
                 "query": str(payload.get("query") or ""),
                 "limit": max(1, min(int(payload.get("limit") or 20), 50)),
@@ -2314,7 +2291,7 @@ class RemoteCommandExecutor:
         authorization_arguments = {
             "device_id": self.store.identity.device_id,
             "project_id": project_id,
-            "tool_pack": wire_name,
+            "plugin_pack": pack_id,
             "operation": operation,
             "capability_id": str(payload.get("capability_id") or ""),
             "arguments": dict(payload.get("arguments") or {}),
@@ -2352,64 +2329,184 @@ class RemoteCommandExecutor:
         # and external-delivery boundaries remain independently guarded.
         execution_mode = controller_mode
 
-        snapshot = build_catalog_snapshot("main")
-        context = ToolExecutionContext(
-            actor="main",
-            session_id=f"remote_harness:{peer_device_id}:{project_id}",
-            round_id=str(payload.get("call_id") or ""),
-            workspace=Path(workspace_dir) if workspace_dir else None,
-            bot=self.bot,
-            chat_id=0,
-            db_path=self.db_path,
-            permission_mode=execution_mode,
-            catalog_snapshot=snapshot,
-        )
-        binding = bind_run_context(
-            agent_id="main",
-            caller="remote_harness",
-            conversation_source="remote_harness",
-            round_id=context.round_id or f"remote-{peer_device_id}",
-            session_id=context.session_id,
-            workspace_dir=workspace_dir,
-            permission_mode=execution_mode,
-            temporary_full_access=False,
-            bounded_remote_authorization=authorized_invocation,
-            destructive_confirmation_allow_all=bool(
+        host = active_plugin_application_host()
+        if host is None:
+            return {
+                "ok": False,
+                "code": "plugin_host_unavailable",
+                "error": "the Plugin application host is unavailable",
+            }
+        if operation == "list":
+            toolbox_arguments: dict[str, Any] = {
+                "operation": "list",
+            }
+        elif operation == "describe":
+            toolbox_arguments = {
+                "operation": "describe",
+                "names": list(arguments.get("capability_ids") or []),
+            }
+        else:
+            capability_id = str(arguments.get("capability_id") or "")
+            registered = next(
+                (
+                    item
+                    for item in host.registry.list_plugins()
+                    if item.plugin.name == capability_id
+                ),
+                None,
+            )
+            if registered is None or registered.pack_id != pack_id:
+                return {
+                    "ok": False,
+                    "code": "remote_plugin_not_in_pack",
+                    "error": (
+                        f"Plugin {capability_id!r} is not available through {pack_id}"
+                    ),
+                }
+            toolbox_arguments = {
+                "operation": "invoke",
+                "name": capability_id,
+                "arguments": dict(arguments.get("arguments") or {}),
+            }
+
+        session_id = f"remote_harness:{peer_device_id}:{project_id}"
+        round_id = str(payload.get("call_id") or f"remote-{peer_device_id}")
+        run_context = {
+            "agent_id": "main",
+            "caller": "remote_harness",
+            "conversation_source": "remote_harness",
+            "round_id": round_id,
+            "session_id": session_id,
+            "workspace_dir": workspace_dir,
+            "permission_mode": execution_mode,
+            "temporary_full_access": False,
+            "bounded_remote_authorization": authorized_invocation,
+            "destructive_confirmation_allow_all": bool(
                 authorized_invocation
                 and authorization.get("destructive_approved") is True
             ),
+        }
+        context = PluginContext(
+            workspace=Path(workspace_dir),
+            data={
+                "bot": self.bot,
+                "chat_id": 0,
+                "db_path": self.db_path,
+                "session_id": session_id,
+                "run_context": run_context,
+            },
+            services=dict(host.services),
         )
-        try:
-            timeout = max(
-                1.0, min(float(payload.get("timeout_seconds") or 120), 300.0)
-            )
-            raw = await asyncio.wait_for(
-                execute_wire_tool_in_context(wire_name, arguments, context),
+        timeout = max(
+            1.0, min(float(payload.get("timeout_seconds") or 120), 300.0)
+        )
+        called = await asyncio.wait_for(
+            host.runtime.call(
+                TOOLBOX_PLUGIN_NAME,
+                toolbox_arguments,
+                context,
+                call_id=round_id,
+            ),
+            timeout=timeout,
+        )
+        if not called.success:
+            return {
+                "ok": False,
+                "status": "error",
+                "code": "remote_plugin_call_failed",
+                "error": str(called.error or "Plugin invocation failed"),
+                "plugin_pack": pack_id,
+                "operation": operation,
+            }
+        if operation == "list":
+            listed = called.value if isinstance(called.value, Mapping) else {}
+            if pack_id not in (listed.get("packs") or []):
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "code": "remote_plugin_pack_unavailable",
+                    "error": f"Plugin pack {pack_id!r} is unavailable",
+                    "plugin_pack": pack_id,
+                    "operation": operation,
+                }
+            called = await asyncio.wait_for(
+                host.runtime.call(
+                    TOOLBOX_PLUGIN_NAME,
+                    {"operation": "describe", "name": pack_id},
+                    context,
+                    call_id=f"{round_id}:describe",
+                ),
                 timeout=timeout,
             )
-        finally:
-            binding.reset()
-        try:
-            result: Any = json.loads(raw)
-        except (TypeError, json.JSONDecodeError):
-            result = raw
-        result_status = (
-            str(result.get("status") or "").lower()
-            if isinstance(result, dict)
-            else ""
+            if not called.success:
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "code": "remote_plugin_call_failed",
+                    "error": str(called.error or "Plugin description failed"),
+                    "plugin_pack": pack_id,
+                    "operation": operation,
+                }
+        result: Any = called.value
+        if isinstance(result, dict) and operation in {"list", "describe"}:
+            plugins = [
+                dict(item)
+                for item in result.get("plugins") or []
+                if isinstance(item, dict) and str(item.get("pack") or "") == pack_id
+            ]
+            if operation == "list":
+                query = str(arguments.get("query") or "").strip().casefold()
+                if query:
+                    plugins = [
+                        item
+                        for item in plugins
+                        if query in (
+                            str(item.get("name") or "")
+                            + " "
+                            + str(item.get("description") or "")
+                        ).casefold()
+                    ]
+                plugins = plugins[: int(arguments.get("limit") or 20)]
+            result = {
+                "operation": operation,
+                "pack": pack_id,
+                "plugins": plugins,
+            }
+        effective_result: Mapping[str, Any] = (
+            result if isinstance(result, Mapping) else {}
         )
+        if operation == "invoke" and isinstance(result, Mapping):
+            nested_result = result.get("result")
+            if isinstance(nested_result, str):
+                try:
+                    decoded_result = json.loads(nested_result)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    decoded_result = None
+                if isinstance(decoded_result, Mapping):
+                    nested_result = decoded_result
+            if isinstance(nested_result, Mapping):
+                effective_result = nested_result
+        result_status = str(effective_result.get("status") or "").lower()
         awaiting = result_status == "awaiting_user"
-        failed = result_status in {"error", "denied", "cancelled"} or awaiting
+        failed = (
+            effective_result.get("ok") is False
+            or result_status in {"error", "denied", "cancelled"}
+            or awaiting
+        )
         return {
             "ok": not failed,
-            "status": "approval_required" if awaiting else (result_status or "completed"),
+            "status": (
+                "approval_required"
+                if awaiting
+                else (result_status or ("error" if failed else "completed"))
+            ),
             **({
                 "code": "remote_target_approval_required",
                 "error": "the target requires a non-delegable local or OS approval",
                 "error_origin": "target",
                 "delegable": False,
             } if awaiting else {}),
-            "tool_pack": wire_name,
+            "plugin_pack": pack_id,
             "operation": operation,
             "authorization": {
                 "mode": controller_mode,
@@ -2716,9 +2813,9 @@ class RemoteCommandExecutor:
             "tasks.cancel": "cancelled",
         }[command]
         if command in {"tasks.pause", "tasks.cancel"}:
-            from cyrene.agent import interrupt_active_run
+            from cyrene.workbench.task_runs import interrupt_task_run
 
-            interrupt_active_run(session_id=task_id)
+            interrupt_task_run(self.db_path, task_id)
         result = await self.tasks.update(task_id, {"status": next_status})
         if result.get("ok") is False:
             return result

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import importlib
 import ipaddress
 import json
 import logging
@@ -190,21 +189,47 @@ def _register_document_routes(app: FastAPI, material: OfficeGatewayFiles) -> Non
         except (json.JSONDecodeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="invalid JSON payload") from exc
         method = str(payload.get("method") or "") if isinstance(payload, dict) else ""
-        allowed = {
-            "ppt.get_context", "ppt.create_slide", "ppt.list_shapes",
-            "ppt.apply_batch", "ppt.read_text", "ppt.delete_slide",
+        plugins = {
+            "ppt.get_context": "PowerPointGetContext",
+            "ppt.create_slide": "PowerPointCreateSlide",
+            "ppt.list_shapes": "PowerPointListShapes",
+            "ppt.apply_batch": "PowerPointApplyBatch",
+            "ppt.read_text": "PowerPointReadText",
+            "ppt.delete_slide": "PowerPointDeleteSlide",
         }
-        if method not in allowed:
+        plugin_name = plugins.get(method)
+        if plugin_name is None:
             raise HTTPException(status_code=400, detail="method is not part of the PowerPoint benchmark workload")
         args = payload.get("arguments") if isinstance(payload, dict) else None
         if not isinstance(args, dict):
             raise HTTPException(status_code=400, detail="arguments must be an object")
-        kit = importlib.import_module("cyrene.tool_impl.office.kit")
-        raw = await kit._method_handler(method, args)
-        try:
-            result = json.loads(raw)
-        except (TypeError, json.JSONDecodeError) as exc:
-            raise HTTPException(status_code=500, detail="benchmark tool returned invalid JSON") from exc
+        from agent.plugin import (
+            PluginContext,
+            active_plugin_application_host,
+        )
+
+        host = active_plugin_application_host()
+        if host is None:
+            raise HTTPException(status_code=503, detail="Plugin application host is unavailable")
+        call = await host.runtime.call(
+            plugin_name,
+            args,
+            PluginContext(
+                workspace=Path.cwd(),
+                services=host.services,
+                data={"source": "powerpoint_benchmark", "db_path": host.db_path},
+            ),
+        )
+        if not call.success:
+            raise HTTPException(status_code=422, detail=str(call.error or f"{plugin_name} failed"))
+        result = call.value
+        if isinstance(result, str):
+            try:
+                result = json.loads(result)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=500, detail="benchmark Plugin returned invalid JSON") from exc
+        if not isinstance(result, dict):
+            raise HTTPException(status_code=500, detail="benchmark Plugin returned a non-object result")
         return result
 
     @app.get("/taskpane.html")

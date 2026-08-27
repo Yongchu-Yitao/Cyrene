@@ -1,4 +1,4 @@
-"""Extension Center aggregate state, search, installation, and recovery.
+"""Plugin-managed environment state, search, installation, and recovery.
 
 The service deliberately keeps declarations separate from downloaded runtimes.
 Declarations live in the encrypted settings store and are portable; binaries,
@@ -320,7 +320,7 @@ def extension_environment() -> dict[str, str]:
         "MISE_YES": "1",
         # mise's embedded aube npm backend gates low-download packages behind
         # an interactive typosquat prompt that aborts ("user aborted `mise add
-        # ...`") when stdin is not a TTY. Extension Center installs are
+        # ...`") when stdin is not a TTY. Managed environment installs are
         # explicitly user-requested, so disable the weekly-download gate.
         "AUBE_LOW_DOWNLOAD_THRESHOLD": "0",
         "UV_PYTHON_INSTALL_DIR": str(_UV_PYTHON_DIR),
@@ -802,7 +802,7 @@ class ExtensionService:
         return {"ok": True, "version": version}
 
     def agent_listing(self) -> dict[str, Any]:
-        """Recommended and installed Agent lists for the Extension Center."""
+        """Recommended and installed external Agent environment records."""
         agent_runtime = importlib.import_module("cyrene.extensions.agent_runtime")
 
         return {
@@ -824,11 +824,14 @@ class ExtensionService:
                 "entrypoint_name": skill.get("entrypoint_name", "SKILL.md"), "preview": skill.get("preview", ""),
             })
 
-        from cyrene.tooling.backends.mcp_manager import get_manager, get_mcp_servers, redact_mcp_servers
-        statuses = {str(item.get("name")): item for item in get_manager().get_server_status()}
+        from agent.plugin.mcp_service import get_mcp_service
+
+        mcp_service = get_mcp_service()
+        statuses = {
+            str(item.get("name")): item for item in mcp_service.status()
+        }
         mcp_cards = []
-        raw_mcp_configs = get_mcp_servers()
-        safe_mcp_configs = redact_mcp_servers(raw_mcp_configs)
+        safe_mcp_configs = mcp_service.configs(redacted=True)
         for config in safe_mcp_configs:
             name = str(config.get("name") or "")
             live = statuses.get(name, {})
@@ -908,21 +911,11 @@ class ExtensionService:
         return result
 
     async def set_mcp_enabled(self, extension_id: str, enabled: bool, *, actor: str = "user") -> dict[str, Any]:
-        from cyrene.tooling.backends.mcp_manager import get_mcp_servers, restart_mcp, save_mcp_servers
+        from agent.plugin.mcp_service import get_mcp_service
 
-        servers = get_mcp_servers()
-        found = False
-        for server in servers:
-            if str(server.get("name") or "") == extension_id:
-                server["enabled"] = bool(enabled)
-                found = True
-                break
-        if not found:
-            raise ValueError("MCP server not found")
-        save_mcp_servers(servers)
-        await restart_mcp()
+        status = await get_mcp_service().set_enabled(extension_id, enabled)
         _audit(actor, "mcp.enable" if enabled else "mcp.disable", f"mcp:{extension_id}", {})
-        return {"ok": True, "enabled": bool(enabled)}
+        return {"ok": True, "enabled": bool(enabled), "server": status}
 
     async def set_extension_enabled(self, kind: str, extension_id: str, enabled: bool, *, actor: str = "user") -> dict[str, Any]:
         """Activate or deactivate an installed extension without uninstalling it."""
@@ -1816,16 +1809,6 @@ class ExtensionService:
         set_setting(setting_key, [item for item in records if str(item.get("id")) != extension_id] + [record])
         _save_extension_enabled(kind, extension_id, True)
         _audit(actor, "install.finish", f"{kind}:{extension_id}", {"version": exact, "source": record["source"], "path": install_path})
-        if kind == "cli":
-            # Installation is already durable at this point. Hook assessment is
-            # intentionally detached so downloads never wait for a model call
-            # or an approval decision.
-            from cyrene.hooks.config_agent import schedule_cli_configuration
-
-            schedule_cli_configuration(
-                {**record, "key": f"cli:{extension_id}"},
-                trigger="install",
-            )
         return record
 
     async def _install_python(self, task_id: str, request: dict[str, Any], actor: str) -> dict[str, Any]:
@@ -2071,23 +2054,23 @@ class ExtensionService:
                 if not resolved:
                     raise ValueError("Local MCP command must resolve to an installed deterministic executable")
                 config["command"] = str(Path(resolved).resolve())
-        from cyrene.tooling.backends.mcp_manager import get_manager, get_mcp_servers, restart_mcp, save_mcp_servers
-        previous_servers = get_mcp_servers()
+        from agent.plugin.mcp_service import get_mcp_service
+
+        mcp_service = get_mcp_service()
+        previous_servers = mcp_service.configs()
         servers = [server for server in previous_servers if str(server.get("name")) != config["name"]]
-        save_mcp_servers([*servers, config])
         self.tasks.update(task_id, progress=75, message="Connecting MCP server")
         try:
-            await restart_mcp()
+            await mcp_service.replace_configs([*servers, config])
             if config.get("enabled", True):
-                status = next((item for item in get_manager().get_server_status() if str(item.get("name")) == config["name"]), None)
+                status = mcp_service.server_status(config["name"])
                 if not status or status.get("status") != "connected":
                     raise RuntimeError("MCP server could not be connected; its configuration was not saved")
         except BaseException:
             # Installation is transactional: a failed or cancelled connection
             # attempt must not leave a registered but unusable server behind.
-            save_mcp_servers(previous_servers)
             try:
-                await restart_mcp()
+                await mcp_service.replace_configs(previous_servers)
             except BaseException:
                 logger.exception("Failed to restore MCP connections after installation rollback")
             if installed_pypi_identifier:
@@ -2110,14 +2093,11 @@ class ExtensionService:
             _audit(actor, "uninstall", f"skill:{extension_id}", {}, "ok" if ok else "missing")
             return {"ok": ok}
         if kind == "mcp":
-            from cyrene.tooling.backends.mcp_manager import get_mcp_servers, restart_mcp, save_mcp_servers
-            servers = get_mcp_servers()
-            existing = next((server for server in servers if str(server.get("name")) == extension_id), None)
-            remaining = [server for server in servers if str(server.get("name")) != extension_id]
-            if len(remaining) == len(servers):
+            from agent.plugin.mcp_service import get_mcp_service
+
+            existing = await get_mcp_service().remove(extension_id)
+            if existing is None:
                 return {"ok": False, "error": "MCP server not found"}
-            save_mcp_servers(remaining)
-            await restart_mcp()
             source = (existing or {}).get("source") or {}
             managed_ref = str(source.get("managed_ref") or "")
             managed_version = str(source.get("version") or "")

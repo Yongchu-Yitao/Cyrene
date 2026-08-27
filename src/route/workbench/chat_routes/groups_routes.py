@@ -24,7 +24,6 @@ async def _replace_chat_groups(context: ChatRouteContext, body: dict[str, Any]):
             body.get("groups") if isinstance(body.get("groups"), list) else [],
             base_groups=(body.get("baseGroups") if isinstance(body.get("baseGroups"), list) else None),
             mutation_intent=(body.get("intent") if isinstance(body.get("intent"), dict) else None),
-            mark_migrated=True,
         )
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
@@ -48,16 +47,6 @@ def _register_group_write_routes(router: APIRouter, context: ChatRouteContext) -
     @router.put("/api/workbench/chat-groups")
     async def api_workbench_replace_chat_groups(body_model: api_models.ChatGroupsReplaceBody):
         return await _replace_chat_groups(context, api_models.body_dict(body_model))
-
-    @router.post("/api/workbench/chat-groups/migrate")
-    async def api_workbench_migrate_chat_groups(body_model: api_models.ChatGroupsReplaceBody):
-        """Idempotently import the legacy browser-owned projection."""
-        body = api_models.body_dict(body_model)
-        project_id = str(body.get("projectId") or "").strip()
-        existing = await asyncio.to_thread(chat_groups.get_project_groups, project_id)
-        if not existing.get("migrationRequired"):
-            return existing
-        return await _replace_chat_groups(context, body)
 
 
 def _register_group_metadata_route(router: APIRouter, context: ChatRouteContext) -> None:

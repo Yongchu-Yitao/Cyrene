@@ -13,7 +13,7 @@ async def generate_session_title(
     candidate: dict[str, Any] | None = None,
 ) -> str:
     """Generate one compact UI title from a session's opening user message."""
-    from cyrene.agent.model_service import call_agent_model
+    from agent.plugin import active_plugin_service
     from cyrene.model_runtime.messages import assistant_text
 
     prompt = str(user_message or "").strip()
@@ -23,7 +23,10 @@ async def generate_session_title(
         f"Use no more than {max(1, int(limit))} characters. "
         "Prefer no more than 12 words or 24 Chinese characters."
     )
-    response = await call_agent_model(
+    gateway = active_plugin_service("model")
+    if gateway is None:
+        raise RuntimeError("Model Provider Plugins are not available")
+    response = await gateway.complete(
         [
             {
                 "role": "system",
@@ -36,11 +39,10 @@ async def generate_session_title(
             },
             {"role": "user", "content": prompt},
         ],
-        tools=None,
-        max_tokens=None,
+        route="secondary",
         caller="workbench_session_namer",
-        candidates=[candidate] if candidate is not None else None,
-        thinking="low",
+        session_id="workbench-session-naming",
+        model_identity=candidate,
     )
     raw = assistant_text(response).strip()
     title = re.sub(r"\s+", " ", raw).strip()

@@ -75,12 +75,13 @@ def _conversation_summary(item: dict[str, Any]) -> dict[str, Any]:
     if not chat_id:
         return {"conversationId": "", "availability": "missing"}
     try:
-        from cyrene.workbench import chat as chat_store
+        from cyrene.workbench.chat_application import public_chat_light
+        from cyrene.workbench.chat_repository import ChatRepository
 
-        chat = chat_store.get_workbench_chat(chat_id)
+        chat = ChatRepository(_DB_PATH).get(chat_id)
         if not chat:
             return {"conversationId": chat_id, "availability": "missing"}
-        public = chat_store._public_chat_light(chat)
+        public = public_chat_light(chat)
     except Exception:
         return {"conversationId": chat_id, "availability": "unavailable"}
 
@@ -159,14 +160,14 @@ def upsert_resource(raw: dict[str, Any]) -> dict[str, Any]:
             "title": display_name,
             "name": display_name,
             "path": str(stored_path),
-            "url": f"/api/chat/export/{stored_name}",
+            "url": f"/api/workbench/exports/{stored_name}",
             "content_type": "text/markdown",
             "size": stored_path.stat().st_size,
             "stableRef": str(raw.get("stableRef") or stored_name),
             "file": {
                 "id": stored_name,
                 "name": display_name,
-                "url": f"/api/chat/export/{stored_name}",
+                "url": f"/api/workbench/exports/{stored_name}",
                 "content_type": "text/markdown",
                 "kind": "file",
                 "size": stored_path.stat().st_size,

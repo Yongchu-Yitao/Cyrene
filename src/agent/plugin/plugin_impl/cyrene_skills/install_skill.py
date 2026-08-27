@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
+from agent.plugin import PluginContext
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import (
-    install_skill_from_path,
-    request_scope_elevation,
-    resolve_tool_path,
-    json,
-)
+from agent.plugin.native_runtime import resolve_tool_path
+from cyrene.learning.skills import install_skill_from_path
 
 TOOL_NAME = 'InstallSkill'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
-async def _tool_install_skill(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+async def _tool_install_skill(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     path_str = str(args.get("path", "")).strip()
     if not path_str:
         return json.dumps({"ok": False, "error": "path is required"}, ensure_ascii=False)
@@ -27,15 +28,6 @@ async def _tool_install_skill(args: dict[str, Any], _bot: Any, _chat_id: int, _d
     source = source.resolve()
     if not source.exists():
         return json.dumps({"ok": False, "error": f"path does not exist: {source}"}, ensure_ascii=False)
-    reviewed = await request_scope_elevation(
-        tool_name=TOOL_NAME,
-        path_hint=f"extension:skill:{source}",
-        operation=f"安装全局 Skill：{source.name}",
-        reason="Installing a Skill changes Cyrene's persistent global capabilities.",
-        permission_kind="extension_change",
-    )
-    if reviewed is not None:
-        return reviewed
     result = install_skill_from_path(source)
     if result.get("ok"):
         skill = result.get("skill", {})

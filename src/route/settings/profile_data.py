@@ -70,33 +70,33 @@ def register_budget_routes(
 def register_mcp_routes(router: APIRouter) -> None:
     @router.get("/api/settings/mcp")
     async def api_get_mcp_servers():
-        from cyrene.tooling.backends.mcp_manager import (
-            get_manager,
-            get_mcp_servers,
-            redact_mcp_servers,
-        )
+        from agent.plugin.mcp_service import get_mcp_service
 
+        service = get_mcp_service()
         return {
-            "servers": get_manager().get_server_status(),
-            "configs": redact_mcp_servers(get_mcp_servers()),
+            "servers": service.status(),
+            "configs": service.configs(redacted=True),
         }
 
     @router.put("/api/settings/mcp")
     async def api_update_mcp_servers(request: Request):
-        from cyrene.tooling.backends.mcp_manager import (
-            get_mcp_servers,
-            merge_redacted_mcp_servers,
-            restart_mcp,
-            save_mcp_servers,
-        )
+        from agent.plugin.mcp_service import get_mcp_service
 
-        servers = (await request.json()).get("servers", [])
+        payload = await request.json()
+        servers = payload.get("servers", []) if isinstance(payload, dict) else []
+        service = get_mcp_service()
         try:
-            save_mcp_servers(merge_redacted_mcp_servers(get_mcp_servers(), servers))
+            status = await service.replace_configs(
+                servers,
+                merge_redacted=True,
+            )
         except ValueError as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
-        await restart_mcp()
-        return {"ok": True}
+        return {
+            "ok": True,
+            "servers": status,
+            "configs": service.configs(redacted=True),
+        }
 
 
 def register_profile_data_routes(

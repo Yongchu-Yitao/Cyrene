@@ -6,68 +6,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 
-def test_workspace_watcher_stop_joins_native_thread(tmp_path):
-    from cyrene.workbench import chat as chat_service
-
-    watcher = chat_service._WorkspacePathWatcher(str(tmp_path))
-    try:
-        assert watcher.wait_ready()
-    finally:
-        watcher.stop()
-
-    assert not watcher._thread.is_alive()
-
-
-def test_opened_workspace_prewarm_is_reused_by_the_first_run(monkeypatch, tmp_path):
-    from cyrene.workbench import chat as chat_service
-    from cyrene.workbench.workspace_changes import WorkspaceSnapshot
-
-    workspace_key = str(tmp_path.resolve())
-    captures = []
-
-    class FakeWatcher:
-        healthy = True
-
-        def wait_ready(self, timeout=0.5):
-            return True
-
-        def drain_settled(self, timeout=0.1):
-            return set()
-
-    def capture(workspace_root, *, previous=None, changed_paths=None):
-        snapshot = WorkspaceSnapshot(
-            root=Path(workspace_root),
-            files={},
-            captured_at=f"snapshot-{len(captures) + 1}",
-        )
-        captures.append((previous, changed_paths, snapshot))
-        return snapshot
-
-    monkeypatch.setattr(chat_service, "_workspace_watcher", lambda _key: FakeWatcher())
-    monkeypatch.setattr(chat_service, "capture_workspace_snapshot", capture)
-
-    async def exercise():
-        chat_service.prewarm_workspace_changes(tmp_path)
-        task = chat_service._WORKSPACE_SNAPSHOT_PREWARM_TASKS[workspace_key]
-        await task
-        baseline = await chat_service._capture_workspace_changes_baseline(
-            tmp_path, "run_first"
-        )
-        assert baseline.snapshot is captures[1][2]
-
-    try:
-        asyncio.run(exercise())
-        assert len(captures) == 2
-        assert captures[0][0] is None
-        assert captures[0][1] == set()
-        assert captures[1][0] is captures[0][2]
-        assert captures[1][1] == set()
-    finally:
-        chat_service._WORKSPACE_SNAPSHOT_PREWARM_TASKS.pop(workspace_key, None)
-        chat_service._WORKSPACE_SNAPSHOT_CACHE.pop(workspace_key, None)
-        chat_service._WORKSPACE_CHANGES_LOCKS.pop(workspace_key, None)
-
-
 async def test_chat_detail_starts_workspace_snapshot_prewarm(tmp_path):
     from fastapi import APIRouter
 
@@ -119,42 +57,6 @@ async def test_chat_detail_starts_workspace_snapshot_prewarm(tmp_path):
         runtime.resolve_workspace_dir,
     )
     service.prewarm_workspace_changes.assert_called_once_with(workspace_dir)
-
-
-def test_chat_generated_file_index_includes_nested_output_and_removes_deleted(monkeypatch):
-    from cyrene.workbench import chat as chat_service
-
-    store = {
-        "chats": [{"id": "chat_1", "projectId": "project_1", "messages": []}]
-    }
-    historical = [{
-        "id": "run_old",
-        "files": [
-            {"id": "old_file", "path": "reports/old.md", "changeType": "created", "afterSize": 12},
-            {"id": "keep_file", "path": "exports/data.csv", "changeType": "created", "afterSize": 42},
-        ],
-    }]
-    monkeypatch.setattr(chat_service, "_read_chats_store", lambda: store)
-    monkeypatch.setattr(chat_service, "_write_chats_store", lambda payload: None)
-    monkeypatch.setattr(chat_service, "_STORE_DB_PATH", "")
-    monkeypatch.setattr(chat_service, "_CONFIGURED_CHATS_STORE", None)
-    monkeypatch.setattr(chat_service, "list_chat_change_sets", lambda _db, _chat: historical)
-
-    chat_service._sync_chat_generated_files("chat_1", {
-        "id": "run_new",
-        "files": [
-            {"id": "delete_old", "path": "reports/old.md", "changeType": "deleted", "afterSize": 0},
-            {"id": "new_file", "path": "other/place/result.pdf", "changeType": "created", "afterSize": 99},
-        ],
-    })
-
-    files = store["chats"][0]["generatedFiles"]
-    assert [item["path"] for item in files] == [
-        "exports/data.csv",
-        "other/place/result.pdf",
-    ]
-    assert files[1]["content_type"] == "application/pdf"
-    assert chat_service._public_chat_full(store["chats"][0])["files"] == files
 
 
 def test_workspace_snapshot_records_created_modified_deleted_and_binary(tmp_path):
@@ -240,28 +142,6 @@ def test_workspace_snapshot_ignores_cyrene_managed_run_state(tmp_path):
     assert [item["path"] for item in compare_workspace_snapshots(before, after)] == [
         "docs/conversations/notes.md"
     ]
-
-
-def test_legacy_signature_root_dirs_are_filtered_when_migration_failed(tmp_path):
-    from cyrene.workbench.workspace_changes import is_cyrene_managed_workspace_path
-
-    (tmp_path / "conversations").mkdir()
-    (tmp_path / "conversations" / "2026-01-01.md").write_text(
-        "# Conversations - 2026-01-01\narchived", encoding="utf-8"
-    )
-    (tmp_path / "plan").mkdir()
-    (tmp_path / "plan" / "plan_deadbeef01.md").write_text(
-        "# Persisted plan", encoding="utf-8"
-    )
-
-    assert (
-        is_cyrene_managed_workspace_path("conversations/2026-01-01.md", tmp_path)
-        is True
-    )
-    assert (
-        is_cyrene_managed_workspace_path("plan/plan_deadbeef01.md", tmp_path)
-        is True
-    )
 
 
 def test_user_owned_same_name_folders_are_kept_without_signature(tmp_path):
@@ -471,40 +351,6 @@ def test_change_store_never_persists_new_cyrene_managed_records(tmp_path):
     assert stored["additions"] == 2
     assert stored["deletions"] == 1
     assert [item["path"] for item in stored["files"]] == ["src/app.py"]
-
-
-def test_workspace_change_baselines_allow_overlapping_runs_in_same_workspace(tmp_path):
-    from cyrene.workbench import chat as chat_routes
-
-    async def exercise_overlap():
-        first = await chat_routes._capture_workspace_changes_baseline(
-            tmp_path, "run_first"
-        )
-        second = await asyncio.wait_for(
-            chat_routes._capture_workspace_changes_baseline(
-                tmp_path, "run_second"
-            ),
-            timeout=1,
-        )
-        assert first.overlapping_run_ids == {"run_second"}
-        assert second.overlapping_run_ids == {"run_first"}
-
-        (tmp_path / "shared.txt").write_text("changed\n", encoding="utf-8")
-        first_after = await chat_routes._complete_workspace_changes_baseline(
-            first, tmp_path
-        )
-        assert first_after is not None
-        workspace_key = str(tmp_path.resolve())
-        assert set(chat_routes._WORKSPACE_CHANGES_LOCKS[workspace_key].active) == {
-            "run_second"
-        }
-        second_after = await chat_routes._complete_workspace_changes_baseline(
-            second, tmp_path
-        )
-        assert second_after is not None
-
-    asyncio.run(exercise_overlap())
-    assert str(tmp_path.resolve()) not in chat_routes._WORKSPACE_CHANGES_LOCKS
 
 
 def test_overlapping_change_set_reports_nonexclusive_attribution(tmp_path):

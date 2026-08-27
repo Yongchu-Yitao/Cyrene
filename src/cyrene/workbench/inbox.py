@@ -1131,8 +1131,8 @@ class WorkbenchAgentInbox:
     async def wait_for_active_tools(self) -> None:
         """Wait for already-submitted tool work without cancelling or starting work.
 
-        A terminal ``quit`` prevents new submissions, but it must not discard a
-        tool that is already queued or running. Batch tasks remain active until
+        A terminal model response must not discard a tool that is already queued
+        or running. Batch tasks remain active until
         all of their child tool runners finish, so waiting on this set covers
         both single calls and concurrent batches.
         """

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
 from typing import Any
 
-from cyrene.agent.state import has_response_capability
+from agent.plugin import Plugin, PluginContext
 
 TOOL_NAME = "LoadRendererContract"
 _FORMATS = ("details", "card", "chart", "button", "layout")
@@ -113,12 +114,19 @@ _GLOBAL_RULES = """### Global rules
 
 async def handler(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
-    if not has_response_capability("interactive_blocks"):
+    run_context = context.data.get("run_context")
+    capabilities = context.data.get("response_capabilities")
+    if capabilities is None and isinstance(run_context, Mapping):
+        capabilities = run_context.get("response_capabilities")
+    supported = (
+        capabilities
+        if isinstance(capabilities, Collection)
+        and not isinstance(capabilities, (str, bytes, bytearray))
+        else ()
+    )
+    if "interactive_blocks" not in supported:
         return "Tool unavailable: the current client does not support interactive response blocks."
     requested = args.get("formats")
     if not isinstance(requested, list):
@@ -137,4 +145,16 @@ async def handler(
     ])
 
 
-__all__ = ["TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler"]
+_FUNCTION = TOOL_DEF["function"]
+plugin = Plugin(
+    name=TOOL_NAME,
+    description=str(_FUNCTION["description"]),
+    input_schema=dict(_FUNCTION["parameters"]),
+    handler=handler,
+    allow_parallel=True,
+    timeout_seconds=30.0,
+    metadata={**TOOL_METADATA, "main_only": True},
+)
+
+
+__all__ = ["TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler", "plugin"]

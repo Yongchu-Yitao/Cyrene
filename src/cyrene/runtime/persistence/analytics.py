@@ -731,22 +731,15 @@ async def _backfill_runtime_logs(db_path: str) -> None:
 
 
 async def _backfill_conversation_archives(db_path: str) -> None:
-    from cyrene.runtime.memory.archive_format import parse_archive_sections
-    from cyrene.runtime.paths import WORKSPACE_DIR, cyrene_dir
+    from agent.plugin import active_plugin_service
 
-    conversations_dir = cyrene_dir(WORKSPACE_DIR) / "conversations"
-    if not conversations_dir.exists():
+    memory_service = active_plugin_service("memory")
+    if memory_service is None:
         return
     async with aiosqlite.connect(db_path) as db:
-        for filepath in sorted(conversations_dir.glob("*.md")):
-            date_str = filepath.stem
-            try:
-                sections = parse_archive_sections(
-                    filepath.read_text(encoding="utf-8"),
-                    date_str,
-                )
-            except Exception:
-                continue
+        for document in reversed(memory_service.list_archive_documents()):
+            date_str = str(document.get("date") or "")
+            sections = document.get("sections") or []
             for section in sections:
                 day = str(section.get("date") or date_str).strip()[:10]
                 await db.execute("INSERT OR IGNORE INTO daily_stats (day) VALUES (?)", (day,))

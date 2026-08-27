@@ -48,6 +48,17 @@ def register_run_stream_routes(
             headers={"Cache-Control": "no-cache"},
         )
 
+    @router.post("/api/workbench/chats/{chat_id}/interrupt")
+    async def api_workbench_chat_interrupt(chat_id: str):
+        """Cancel only this conversation's active Plugin-kernel run."""
+
+        interrupted = run_manager.interrupt(str(chat_id))
+        return {
+            "ok": True,
+            "interrupted": bool(interrupted),
+            "chatId": str(chat_id),
+        }
+
     @router.post("/api/workbench/chats/{chat_id}/guidance")
     async def api_workbench_chat_guidance(
         chat_id: str,

@@ -145,9 +145,9 @@ def configured_user_price(model: str) -> Pricing | None:
     if not model_key:
         return None
     try:
-        from cyrene.runtime.config_store import get_models, get_vision_models
+        from cyrene.runtime.model_configuration import get_model_configuration
 
-        configured = (get_models() or []) + (get_vision_models() or [])
+        configured = get_model_configuration().get("profiles") or []
     except Exception:
         return None
     for item in configured:

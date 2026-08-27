@@ -9,9 +9,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from agent.plugin import PluginContext
+from ._native import create_tool
 from .definitions import get_native_tool_def
-from cyrene.runtime.memory import short_term
-from cyrene.tooling.runtime_api import json_result
+from .short_term import entry_id, load_entries
+from agent.plugin.native_runtime import json_result
 
 TOOL_NAME = 'RecallMemory'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -33,7 +35,7 @@ def _split_memory_query(query: str) -> tuple[str, list[str]]:
     return needle, [term for term in re.split(r"\s+", needle) if term]
 
 
-async def _tool_recall_memory(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+async def _tool_recall_memory(args: dict[str, Any], _context: PluginContext) -> str:
     """Return recent short-term memories, optionally filtered by keyword/type."""
     query = str(args.get("query", "") or "").strip()
     needle, terms = _split_memory_query(query)
@@ -41,7 +43,7 @@ async def _tool_recall_memory(args: dict[str, Any], _bot: Any, _chat_id: int, _d
     limit = max(1, min(int(args.get("limit", 10) or 10), 20))
 
     entries = [
-        entry for entry in short_term.load_entries()
+        entry for entry in load_entries()
         if isinstance(entry, dict)
         and not entry.get("stale")
         and (not memory_type or str(entry.get("type") or "").strip().lower() == memory_type)
@@ -71,7 +73,7 @@ async def _tool_recall_memory(args: dict[str, Any], _bot: Any, _chat_id: int, _d
             content = content[:_MAX_RESULT_CONTENT_CHARS] + "…"
             was_truncated = True
         memory = {
-            "memory_id": short_term.entry_id(item),
+            "memory_id": entry_id(item),
             "content": content,
             "type": item.get("type", ""),
             "first_seen": item.get("first_seen", ""),
@@ -98,5 +100,6 @@ async def _tool_recall_memory(args: dict[str, Any], _bot: Any, _chat_id: int, _d
 
 
 handler = _tool_recall_memory
+plugin = create_tool(TOOL_DEF, handler, allow_parallel=True)
 
-__all__ = ["TOOL_NAME", "TOOL_DEF", "handler", "_tool_recall_memory"]
+__all__ = ["TOOL_NAME", "TOOL_DEF", "handler", "plugin", "_tool_recall_memory"]

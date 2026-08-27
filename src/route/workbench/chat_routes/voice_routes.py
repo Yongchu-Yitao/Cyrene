@@ -76,9 +76,7 @@ def register_voice_routes(
                 status_code=404,
             )
 
-        from cyrene.workbench.project_memory_prompt import current_snapshot
-
-        memory_snapshot = await asyncio.to_thread(current_snapshot, project_id)
+        memory_snapshot = await context.project_memory_snapshot(project_id)
 
         def create_and_persist() -> dict[str, Any]:
             payload = service.repository.read()

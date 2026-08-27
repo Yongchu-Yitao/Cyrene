@@ -23,6 +23,7 @@ _MAX_CLOCK_SKEW_SECONDS = 300
 _MAX_ENVELOPE_BYTES = 24 * 1024 * 1024
 _MAX_CONNECTIONS_PER_IP = 20
 _MAX_MESSAGES_PER_SECOND = 60
+_REMOTE_PROTOCOL_VERSION = 2
 
 
 def _json_dumps(value: Any) -> str:
@@ -141,7 +142,8 @@ class CyreneRelayServer:
         if (
             not isinstance(registration, dict)
             or registration.get("type") != "register"
-            or int(registration.get("protocol_version") or 0) != 1
+            or int(registration.get("protocol_version") or 0)
+            != _REMOTE_PROTOCOL_VERSION
         ):
             return None
         device_id = str(registration.get("device_id") or "").strip()
@@ -208,7 +210,7 @@ class CyreneRelayServer:
             return
         envelope = dict(message["envelope"])
         if (
-            int(envelope.get("version") or 0) != 1
+            int(envelope.get("version") or 0) != _REMOTE_PROTOCOL_VERSION
             or str(envelope.get("sender_device_id") or "") != device_id
             or abs(int(time.time()) - int(envelope.get("timestamp") or 0))
             > _MAX_CLOCK_SKEW_SECONDS

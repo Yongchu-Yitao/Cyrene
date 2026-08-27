@@ -1,31 +1,38 @@
-"""Tool implementation for query_entities."""
+"""Search durable entities in the current project scope."""
 
 from __future__ import annotations
 
-from .definitions import get_native_tool_def
+from typing import Any
 
-TOOL_NAME = 'query_entities'
-TOOL_DEF = get_native_tool_def(TOOL_NAME)
+from agent.plugin import PluginContext
+
+from ._plugin import create_tool_plugin
+from ._service import current_project_id, entity_service
+
+TOOL_NAME = "entity.query"
 
 
-async def _tool_query_entities(args, bot, chat_id, db_path, notify_state):
-    from .store import query_entities
-    entities = await query_entities(
-        db_path,
-        q=args.get("q", ""),
-        type=args.get("type"),
-        due_before=args.get("due_before"),
+async def query_entities(
+    arguments: dict[str, Any],
+    context: PluginContext,
+) -> dict[str, Any]:
+    entities = await entity_service(context).query(
+        arguments.get("q", ""),
+        type=arguments.get("type"),
+        status=arguments.get("status"),
+        due_before=arguments.get("due_before"),
+        project_id=current_project_id(context),
+        limit=arguments.get("limit", 50),
     )
-    if not entities:
-        return "没有找到匹配的事务。"
-    lines = [
-        f"- [{e['type']}] {e['title']}（ID: {e['id']}）"
-        + (f"：{e['content']}" if e.get('content') else "")
-        for e in entities
-    ]
-    return f"找到 {len(entities)} 条事务：\n" + "\n".join(lines)
+    return {
+        "ok": True,
+        "count": len(entities),
+        "entities": entities,
+        "message": f"找到 {len(entities)} 条事务。",
+    }
 
 
-handler = _tool_query_entities
+plugin = create_tool_plugin(TOOL_NAME, query_entities, allow_parallel=True)
+handler = query_entities
 
-__all__ = ["TOOL_NAME", "TOOL_DEF", "handler", "_tool_query_entities"]
+__all__ = ["TOOL_NAME", "handler", "plugin", "query_entities"]

@@ -1,1 +1,0 @@
-"""Extension Center tool implementations."""

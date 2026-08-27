@@ -333,7 +333,7 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   width: min(100%, 920px);
 }
 
-.settings-overlay .settings-overlay-content[data-settings-active-tab="extensions"] .settings-panel {
+.settings-overlay .settings-overlay-content[data-settings-active-tab="mcp-providers"] .settings-panel {
   width: min(100%, 1120px);
 }
 

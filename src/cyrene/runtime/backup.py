@@ -39,7 +39,6 @@ _BACKUP_DIR = BASE_DIR / "backups"
 # Backups created before a collection was removed (e.g. workspace/deliverables)
 # carry a replace root no longer accepted and are rejected by _inspect_archive.
 _MANAGED_DIRECTORIES: list[tuple[Path, str]] = [
-    (cyrene_dir(WORKSPACE_DIR) / "conversations", "workspace/conversations"),
     (cyrene_dir(WORKSPACE_DIR) / "patterns", "workspace/patterns"),
     # Plan records persist markdownPath values into chat state. Keep the
     # generated markdown mirrors so those stored paths remain valid.
@@ -69,7 +68,6 @@ _EXCLUDED_DATA_ROOT_NAMES = {
     "config.enc", ".config_key", "code_index.db",
     # MCP declarations are migrated into the encrypted portable config
     # snapshot. Never copy a legacy plaintext declaration file into backups.
-    "mcp_servers.json",
 }
 _EXCLUDED_DATA_DIRECTORIES = {
     "attachment_cache", "browser_profile", "generated_reports",
@@ -225,19 +223,74 @@ def _iter_directory_sources(root: Path, arc_root: str) -> list[_Source]:
     return result
 
 
+def _plugin_backup_descriptors(
+    *,
+    include_sources: bool = True,
+) -> tuple[list[_Source], list[str]]:
+    """Collect backup contributions through the generic Plugin service API."""
+
+    from agent.plugin import active_plugin_application_host
+
+    host = active_plugin_application_host()
+    if host is None:
+        return [], []
+    sources: list[_Source] = []
+    replace_roots: list[str] = []
+    for service_name, service in sorted(host.services.items()):
+        provider = getattr(service, "backup_sources", None)
+        if not callable(provider):
+            continue
+        contribution = provider()
+        if not isinstance(contribution, dict):
+            raise TypeError(
+                f"Plugin service {service_name!r} returned invalid backup sources"
+            )
+        for raw_path, raw_arcname in contribution.get("files", ()):
+            path = Path(raw_path).expanduser()
+            arcname = str(raw_arcname or "").strip()
+            _validate_archive_name(arcname, allow_legacy_workspace=False)
+            if not _is_within_allowed_root(path):
+                raise ValueError(
+                    f"Plugin service {service_name!r} exposed a backup path "
+                    f"outside Cyrene state: {path}"
+                )
+            if include_sources and path.is_file() and not path.is_symlink():
+                sources.append(_Source(path=path, arcname=arcname))
+        for raw_path, raw_arc_root in contribution.get("directories", ()):
+            path = Path(raw_path).expanduser()
+            arc_root = str(raw_arc_root or "").strip()
+            _validate_archive_name(arc_root, allow_legacy_workspace=False)
+            if not _is_within_allowed_root(path):
+                raise ValueError(
+                    f"Plugin service {service_name!r} exposed a backup directory "
+                    f"outside Cyrene state: {path}"
+                )
+            replace_roots.append(arc_root)
+            if include_sources:
+                sources.extend(_iter_directory_sources(path, arc_root))
+    return sources, replace_roots
+
+
+def _restorable_replace_roots() -> set[str]:
+    """Return core and currently installed Plugin collection roots."""
+
+    _sources, plugin_roots = _plugin_backup_descriptors(include_sources=False)
+    return {*_RESTORABLE_REPLACE_ROOTS, *plugin_roots}
+
+
 def _iter_export_sources() -> tuple[list[_Source], list[str]]:
     sources: list[_Source] = [
         _Source(path=None, arcname=_PORTABLE_CONFIG_ENTRY, data=_config_snapshot_bytes())
     ]
     replace_roots: list[str] = []
 
-    soul = cyrene_dir(WORKSPACE_DIR) / "SOUL.md"
-    if soul.is_file() and not soul.is_symlink():
-        sources.append(_Source(path=soul, arcname="workspace/SOUL.md"))
-
     for root, arc_root in _MANAGED_DIRECTORIES:
         replace_roots.append(arc_root)
         sources.extend(_iter_directory_sources(root, arc_root))
+
+    plugin_sources, plugin_replace_roots = _plugin_backup_descriptors()
+    sources.extend(plugin_sources)
+    replace_roots.extend(plugin_replace_roots)
 
     if DATA_DIR.is_dir():
         for path in sorted(DATA_DIR.iterdir()):
@@ -262,9 +315,12 @@ def _iter_export_sources() -> tuple[list[_Source], list[str]]:
     unique: dict[str, _Source] = {}
     for source in sources:
         if source.arcname in unique:
+            previous = unique[source.arcname]
+            if previous.path == source.path and previous.data == source.data:
+                continue
             raise ValueError(f"duplicate export entry: {source.arcname}")
         unique[source.arcname] = source
-    return list(unique.values()), replace_roots
+    return list(unique.values()), list(dict.fromkeys(replace_roots))
 
 
 def _stream_into_zip(zf: ZipFile, arcname: str, source: BinaryIO) -> tuple[int, str]:
@@ -470,7 +526,8 @@ def _inspect_archive(zf: ZipFile) -> tuple[list[ZipInfo], dict[str, dict[str, An
     roots = manifest.get("replace_roots", []) if modern else []
     if not isinstance(roots, list) or not all(isinstance(root, str) for root in roots):
         raise ValueError("backup replace_roots is invalid")
-    if len(roots) != len(set(roots)) or any(root not in _RESTORABLE_REPLACE_ROOTS for root in roots):
+    allowed_replace_roots = _restorable_replace_roots()
+    if len(roots) != len(set(roots)) or any(root not in allowed_replace_roots for root in roots):
         raise ValueError("backup requests an unsupported replace root")
 
     return payload, metadata, roots, version, modern
@@ -704,19 +761,21 @@ async def _restore_with_locks(path: Path) -> dict[str, Any]:
         scheduler = None
         scheduler_was_running = False
 
-    try:
-        from cyrene.agent.context import default_agent_lock
-        agent_lock = default_agent_lock()
-    except Exception:
-        agent_lock = None
+    from cyrene.config import DB_PATH
+    from cyrene.runtime.run_coordinator import run_coordinator_for
+
+    active_runs = run_coordinator_for(str(DB_PATH)).active_leases()
+    if active_runs:
+        return _failure(
+            "backup restore requires all conversation and task runs to be idle",
+            restored=[],
+            errors=["active Agent runs must finish or be cancelled before restore"],
+        )
 
     if scheduler_was_running:
         scheduler.pause()
         logger.info("Scheduler paused for restore")
     try:
-        if agent_lock is not None:
-            async with agent_lock:
-                return await asyncio.to_thread(_restore_archive_sync, path, dry_run=False)
         return await asyncio.to_thread(_restore_archive_sync, path, dry_run=False)
     finally:
         if scheduler_was_running:

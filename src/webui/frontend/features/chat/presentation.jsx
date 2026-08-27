@@ -40,7 +40,7 @@ function wbcCurrentModel(chat, project, runtime, liveData) {
     if (messageModel) return messageModel;
   }
   return String(
-    (chat && (chat.lastModel || chat.model))
+    (chat && chat.model)
     || (project && project.model)
     || ""
   ).trim();

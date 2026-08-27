@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cyrene.agent.prompts import conversation_identity_block
-from cyrene.runtime.memory.conversations import (
+from agent.plugin.plugin_impl.cyrene_memory.archive import (
     archive_session_exchange,
     session_conversation_file,
     session_conversations_dir,
@@ -52,8 +51,25 @@ def test_archive_requires_session_id(tmp_path: Path) -> None:
     assert archive_session_exchange("", "x", "y", workspace_dir=str(tmp_path)) is None
 
 
-def test_identity_block_only_for_session_scoped_runs() -> None:
-    assert conversation_identity_block("") == ""
-    block = conversation_identity_block("wbchat_xyz")
-    assert "wbchat_xyz" in block
-    assert ".cyrene/conversations/wbchat_xyz.md" in block
+def test_archive_is_idempotent_for_one_round(tmp_path: Path) -> None:
+    path = archive_session_exchange(
+        "chat-round",
+        "first",
+        "answer",
+        workspace_dir=tmp_path,
+        round_id="run-1",
+    )
+    duplicate = archive_session_exchange(
+        "chat-round",
+        "duplicate",
+        "must not append",
+        workspace_dir=tmp_path,
+        round_id="run-1",
+    )
+
+    assert duplicate == path
+    assert path is not None
+    content = path.read_text(encoding="utf-8")
+    assert content.count("<!-- round_id: run-1 -->") == 1
+    assert "first" in content
+    assert "duplicate" not in content

@@ -4,7 +4,8 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-from agent.plugin import PluginContext
+from agent.plugin import Plugin, PluginContext, PluginRegistry, PluginRuntime
+from agent.plugin import model_router
 from agent.workbench import chat_runtime
 
 
@@ -12,46 +13,89 @@ def run(coroutine):
     return asyncio.run(coroutine)
 
 
-def test_workbench_model_uses_selected_session_route_and_normalizes_tools(monkeypatch):
-    from cyrene.model_runtime import client as model_client
-
+def test_model_router_invokes_selected_provider_plugin_and_normalizes_tools(monkeypatch):
     captured = {}
 
-    async def fake_call_llm(messages, **kwargs):
-        captured["messages"] = messages
-        captured.update(kwargs)
+    async def provider(arguments, context):
+        captured["arguments"] = arguments
+        captured["candidate_context"] = dict(context.data["model_candidate"])
         return {
-            "role": "assistant",
             "content": "",
-            "reasoning_content": "inspect first",
+            "reasoning": "inspect first",
             "reasoning_details": [{"type": "reasoning.text", "text": "inspect first"}],
-            "tool_calls": [
-                {
-                    "id": "call-read",
-                    "type": "function",
-                    "function": {
-                        "name": "Read",
-                        "arguments": json.dumps({"path": "README.md"}),
-                    },
-                }
-            ],
-            "usage": {"prompt_tokens": 12},
+            "tool_calls": [{
+                "id": "call-read",
+                "type": "function",
+                "function": {
+                    "name": "Read",
+                    "arguments": json.dumps({"path": "README.md"}),
+                },
+            }],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 4},
             "model": "selected-model",
+            "response_id": "response-selected",
+            "latency_ms": 2000,
+            "endpoint": "https://provider.example/v1/chat/completions",
         }
 
-    monkeypatch.setattr(model_client, "call_llm", fake_call_llm)
+    candidate = {
+        "id": "candidate-selected",
+        "profile_id": "candidate-selected",
+        "connection_id": "connection-selected",
+        "provider": "openai",
+        "adapter": "openai",
+        "model": "selected-model",
+        "base_url": "https://provider.example/v1",
+        "api_key": "must-not-enter-runtime-context",
+        "options": {"provider_preset": "test_provider"},
+        "context_limit": 64_000,
+    }
+    def configured(session_id, *, route="primary"):
+        captured["session_id"] = session_id
+        captured["route"] = route
+        return [candidate]
+
+    monkeypatch.setattr(model_router, "configured_model_candidates", configured)
+
+    async def ignore_event(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(model_router, "_publish_llm_event", ignore_event)
+    monkeypatch.setattr(
+        model_router,
+        "remember_model_success",
+        lambda session_id, used, endpoint, **_kwargs: captured.update({
+            "remembered": (session_id, used["id"], endpoint),
+        }),
+    )
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(
+        Plugin(
+            name="TestProvider",
+            description="test provider",
+            input_schema={"type": "object"},
+            handler=provider,
+            kind="model",
+            metadata={"provider": {"id": "test_provider", "name": "Test"}},
+        ),
+        source="test",
+    )
+    registry.register_plugin(model_router.create_model_router_plugin(), source="test")
+    runtime = PluginRuntime(registry)
     stored_messages = [
         {"role": "system", "content": "base system"},
         {"role": "user", "content": "inspect"},
     ]
-    result = run(
-        chat_runtime.workbench_chat_model(
+    call_result = run(
+        runtime.call(
+            model_router.MODEL_ROUTER_PLUGIN,
             {
                 "messages": stored_messages,
                 "tools": [],
             },
             PluginContext(
                 tree_id="chat-selected",
+                node_id="node-selected",
                 data={
                     "session_id": "chat-selected",
                     "run_id": "run-selected",
@@ -61,16 +105,12 @@ def test_workbench_model_uses_selected_session_route_and_normalizes_tools(monkey
             ),
         )
     )
-
-    assert captured["candidates"] is None
+    assert call_result.success is True
+    result = call_result.value
     assert captured["session_id"] == "chat-selected"
-    assert captured["round_id"] == "run-selected"
-    assert captured["caller"] == "main_agent"
-    assert captured["phase"] == "agent"
-    assert captured["messages"][0]["content"] == (
-        "base system\n\nturn-only context"
-    )
+    assert captured["arguments"]["messages"][0]["content"] == "base system\n\nturn-only context"
     assert stored_messages[0]["content"] == "base system"
+    assert "api_key" not in captured["candidate_context"]
     assert result["tool_calls"] == [
         {
             "id": "call-read",
@@ -80,23 +120,163 @@ def test_workbench_model_uses_selected_session_route_and_normalizes_tools(monkey
     ]
     assert result["reasoning"] == "inspect first"
     assert result["model"] == "selected-model"
+    assert result["model_identity"]["candidateId"] == "candidate-selected"
+    assert result["model_identity"]["provider"] == "test_provider"
+    assert result["output_tokens_per_second"] == 2.0
+    assert captured["remembered"][0:2] == ("chat-selected", "candidate-selected")
 
 
-def test_workbench_chat_kernel_is_default_with_explicit_legacy_rollback(monkeypatch):
-    monkeypatch.delenv(chat_runtime.WORKBENCH_CHAT_KERNEL_ENV, raising=False)
-    assert chat_runtime.workbench_chat_kernel_enabled() is True
+def test_model_gateway_routes_one_exact_identity_without_route_fallback(monkeypatch):
+    from agent.plugin.model_gateway import PluginModelGateway
 
-    monkeypatch.setenv(chat_runtime.WORKBENCH_CHAT_KERNEL_ENV, "legacy")
-    assert chat_runtime.workbench_chat_kernel_enabled() is False
+    captured = {}
+    identity = {
+        "candidateId": "candidate-exact",
+        "provider": "openai",
+        "model": "exact-model",
+        "baseUrl": "https://provider.example/v1",
+    }
+    candidate = {
+        "id": "candidate-exact",
+        "provider": "openai",
+        "adapter": "openai",
+        "model": "exact-model",
+        "base_url": "https://provider.example/v1",
+        "api_key": "must-not-enter-runtime-context",
+        "options": {"provider_preset": "test_provider"},
+    }
 
-    monkeypatch.setenv(chat_runtime.WORKBENCH_CHAT_KERNEL_ENV, "new")
-    assert chat_runtime.workbench_chat_kernel_enabled() is True
+    monkeypatch.setattr(
+        "agent.plugin.model_catalog.resolve_exact_model_candidate",
+        lambda requested: candidate if requested == identity else None,
+    )
+    monkeypatch.setattr(
+        model_router,
+        "configured_model_candidates",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("exact model calls must not use a configured route")
+        ),
+    )
+    monkeypatch.setattr(model_router, "remember_model_success", lambda *_args, **_kwargs: None)
+
+    async def ignore_event(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(model_router, "_publish_llm_event", ignore_event)
+
+    async def provider(arguments, context):
+        captured["arguments"] = arguments
+        captured["candidate_context"] = dict(context.data["model_candidate"])
+        return {"content": "learned", "model": "exact-model", "usage": {}}
+
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(
+        Plugin(
+            name="ExactProvider",
+            description="exact provider",
+            input_schema={"type": "object"},
+            handler=provider,
+            kind="model",
+            metadata={"provider": {"id": "test_provider", "name": "Test"}},
+        ),
+        source="test",
+    )
+    gateway = PluginModelGateway(registry)
+    result = run(
+        gateway.complete(
+            [{"role": "user", "content": "learn this"}],
+            model_identity=identity,
+            session_id="memory:project-a",
+            caller="project_memory_agent",
+        )
+    )
+
+    assert result["content"] == "learned"
+    assert captured["arguments"]["model"] == "exact-model"
+    assert captured["candidate_context"]["id"] == "candidate-exact"
+    assert "api_key" not in captured["candidate_context"]
+
+
+def test_model_router_falls_back_through_provider_plugins(monkeypatch):
+    calls = []
+    fallbacks = []
+
+    async def failed(_arguments, _context):
+        calls.append("failed")
+        raise RuntimeError("offline")
+
+    async def succeeded(_arguments, _context):
+        calls.append("succeeded")
+        return {"content": "done", "model": "fallback", "usage": {}}
+
+    candidates = [
+        {
+            "id": "primary",
+            "provider": "openai",
+            "adapter": "openai",
+            "model": "primary",
+            "options": {"provider_preset": "provider_one"},
+        },
+        {
+            "id": "fallback",
+            "provider": "openai",
+            "adapter": "openai",
+            "model": "fallback",
+            "options": {"provider_preset": "provider_two"},
+        },
+    ]
+    monkeypatch.setattr(
+        model_router,
+        "configured_model_candidates",
+        lambda _session, **_kwargs: candidates,
+    )
+    monkeypatch.setattr(model_router, "remember_model_success", lambda *_args, **_kwargs: None)
+
+    async def ignore_event(*_args, **_kwargs):
+        return None
+
+    async def capture_fallback(_context, failed_candidate, fallback_candidate):
+        fallbacks.append((failed_candidate["id"], fallback_candidate["id"]))
+
+    monkeypatch.setattr(model_router, "_publish_llm_event", ignore_event)
+    monkeypatch.setattr(model_router, "_publish_fallback", capture_fallback)
+    registry = PluginRegistry(include_core=False)
+    for name, provider_id, handler in (
+        ("ProviderOne", "provider_one", failed),
+        ("ProviderTwo", "provider_two", succeeded),
+    ):
+        registry.register_plugin(
+            Plugin(
+                name=name,
+                description=name,
+                input_schema={"type": "object"},
+                handler=handler,
+                kind="model",
+                metadata={"provider": {"id": provider_id, "name": name}},
+            ),
+            source="test",
+        )
+    registry.register_plugin(model_router.create_model_router_plugin(), source="test")
+
+    result = run(
+        PluginRuntime(registry).call(
+            model_router.MODEL_ROUTER_PLUGIN,
+            {"messages": [{"role": "user", "content": "hello"}]},
+            PluginContext(data={"session_id": "chat-fallback"}),
+        )
+    )
+
+    assert result.success is True
+    assert result.value["content"] == "done"
+    assert result.value["provider_plugin"] == "ProviderTwo"
+    assert calls == ["failed", "succeeded"]
+    assert fallbacks == [("primary", "fallback")]
 
 
 def test_workbench_system_extra_is_not_added_to_permission_prompt():
     messages = [{"role": "system", "content": "permission system"}]
 
-    projected = chat_runtime._model_messages(
+    projected = model_router.project_model_messages(
         messages,
         phase="permission",
         system_extra="turn-only project context",
@@ -104,6 +284,45 @@ def test_workbench_system_extra_is_not_added_to_permission_prompt():
 
     assert projected == messages
     assert projected is not messages
+
+
+def test_permission_model_usage_does_not_report_agent_context():
+    from agent.plugin.plugin_impl.cyrene_model._shared import (
+        ModelProvider,
+        _normalized_result,
+    )
+
+    reported = []
+
+    class Tree:
+        def mount(self, _tree_id, _node_id, _value, *, node_id):
+            return SimpleNamespace(id=node_id)
+
+        def report_context_used(self, *args, **kwargs):
+            reported.append((args, kwargs))
+
+    result = _normalized_result(
+        {"content": "allowed", "usage": {"prompt_tokens": 42}},
+        ModelProvider(
+            id="test",
+            name="Test",
+            plugin_name="Test",
+            adapter="openai",
+            default_base_url="https://example.test/v1",
+        ),
+        PluginContext(
+            tree=Tree(),
+            tree_id="chat-permission",
+            node_id="node-permission",
+            data={"model_call_kind": "permission"},
+        ),
+        response_id="permission-response",
+        model="permission-model",
+        latency_ms=100,
+    )
+
+    assert result["content"] == "allowed"
+    assert reported == []
 
 
 def test_production_runtime_seeds_forwards_context_and_leaves_final_reply_to_lifecycle(
@@ -123,7 +342,7 @@ def test_production_runtime_seeds_forwards_context_and_leaves_final_reply_to_lif
         def snapshot(self):
             return {"status": "idle", "run_id": ""}
 
-        async def submit(self, text, *, run_id, metadata, publish):
+        async def submit_result(self, text, *, run_id, metadata, publish):
             opened["text"] = text
             opened["run_id"] = run_id
             opened["metadata"] = metadata
@@ -137,10 +356,18 @@ def test_production_runtime_seeds_forwards_context_and_leaves_final_reply_to_lif
             ]
 
             def worker_publish():
-                asyncio.run(writer({"type": "legacy-runtime-event"}))
+                asyncio.run(writer({"type": "runtime-event"}))
 
             await asyncio.to_thread(worker_publish)
-            return "done"
+            return SimpleNamespace(
+                text="done",
+                usage={"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+                model="test-model",
+                model_identity={"provider": "test"},
+                generation_duration_ms=200.0,
+                output_tokens_per_second=20.0,
+                activity_messages=(),
+            )
 
         async def resume(self, *, publish):
             raise AssertionError("a new idle session must submit")
@@ -170,7 +397,7 @@ def test_production_runtime_seeds_forwards_context_and_leaves_final_reply_to_lif
             run=Run(),
             user_message="inspect it",
             bot=object(),
-            legacy_chat_id="legacy-chat",
+            host_chat_id="host-chat",
             db_path=str(tmp_path / "workbench.sqlite3"),
             session_id="chat-production",
             workspace_dir=str(tmp_path / "workspace"),
@@ -180,54 +407,77 @@ def test_production_runtime_seeds_forwards_context_and_leaves_final_reply_to_lif
             public_user_message="inspect it",
             attachment_paths={"report.txt": "/tmp/report.txt"},
             system_extra="project context",
+            project_id="project-production",
             response_capabilities=("interactive_blocks",),
             plugin_directory=tmp_path / "plugins",
             data_directory=tmp_path / "agent-data",
         )
     )
 
-    assert result == "done"
+    assert result.text == "done"
     assert seeded == [(tmp_path / "plugins").resolve()]
-    assert opened["model_plugin"] == chat_runtime.WORKBENCH_CHAT_MODEL_PLUGIN
+    assert opened["model_plugin"] == chat_runtime.MODEL_ROUTER_PLUGIN
     assert opened["chat_id"] == "chat-production"
-    assert opened["host_context"]["chat_id"] == "legacy-chat"
+    assert opened["host_context"]["chat_id"] == "host-chat"
     assert opened["host_context"]["notify_state"] is None
     assert opened["plugin_context_data"]["system_extra"] == "project context"
+    assert opened["plugin_context_data"]["project_id"] == "project-production"
     assert opened["text"] == "inspect it"
+    assert "context_mounts" not in opened["metadata"]
     context = opened["plugin_context_data"]["run_context"]
     assert context["session_id"] == "chat-production"
     assert context["round_id"] == "run-production"
     assert context["client_request_id"] == "request-1"
     assert context["attachment_paths"] == {"report.txt": "/tmp/report.txt"}
     assert context["response_capabilities"] == frozenset({"interactive_blocks"})
+    assert "project_id" not in context
     assert [event["type"] for event in published] == [
         "tool.started",
-        "legacy-runtime-event",
+        "runtime-event",
     ]
     assert opened["closed"] is True
 
 
-def test_builtin_workbench_route_uses_new_runtime_without_touching_external_path(
+def test_builtin_workbench_route_always_uses_new_runtime(
     tmp_path,
     monkeypatch,
 ):
     from cyrene.runtime import host_bridge
-    from cyrene.workbench import composer_context, project_memory_prompt
+    from cyrene.workbench import composer_context
     from route.workbench.chat_routes.run_send_routes import _SendOperation
 
     captured = {}
 
-    async def fake_runtime(**kwargs):
-        captured.update(kwargs)
-        return "new-kernel-reply"
+    async def fake_runtime(config, text, *, run_id, metadata, publish):
+        captured.update(
+            config=config,
+            text=text,
+            run_id=run_id,
+            metadata=metadata,
+            publish=publish,
+        )
+        return SimpleNamespace(
+            text="new-kernel-reply",
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            model="provider/model",
+            model_identity={"provider": "provider"},
+            generation_duration_ms=250.0,
+            output_tokens_per_second=20.0,
+            active_plan=None,
+            activity_messages=(
+                {
+                    "id": "activity-1",
+                    "role": "assistant",
+                    "activityCard": True,
+                    "trace": [{"kind": "tool", "text": "Read"}],
+                },
+            ),
+        )
 
     async def fake_source(_ui_instance_id):
         return "desktop_local"
 
-    monkeypatch.delenv(chat_runtime.WORKBENCH_CHAT_KERNEL_ENV, raising=False)
-    monkeypatch.setattr(chat_runtime, "run_workbench_chat", fake_runtime)
     monkeypatch.setattr(host_bridge, "resolve_conversation_source", fake_source)
-    monkeypatch.setattr(project_memory_prompt, "build_main_agent_suffix", lambda *_args, **_kwargs: "memory")
     monkeypatch.setattr(composer_context, "build_context_activation_prompt", lambda _value: "context")
 
     operation = object.__new__(_SendOperation)
@@ -243,27 +493,52 @@ def test_builtin_workbench_route_uses_new_runtime_without_touching_external_path
     operation.mode = "default"
     operation.workspace_dir = str(tmp_path / "workspace")
     operation.ui_instance_id = "ui-route"
+    operation.conversation_source = ""
     operation.context_activations = {}
     operation.dynamic_command_prompt = ""
-    operation.chat = {"projectMemorySnapshot": {}}
+    operation.project_id = "project-route"
+    operation.retry = False
+    operation.fork_replay = False
+    operation.completed_turn_count_before = 2
+    operation.chat = {"projectMemorySnapshot": {}, "title": "Route chat"}
     operation.context = SimpleNamespace(bot=object(), db_path=str(tmp_path / "db.sqlite3"))
-    operation.routes = SimpleNamespace(chat_id="legacy-route")
+    operation.routes = SimpleNamespace(chat_id="host-route")
     operation.service = SimpleNamespace(
         chat_soul_active=lambda _chat: True,
         chat_workspace_active=lambda _chat: False,
+        run_manager=SimpleNamespace(
+            conversation_runtime=SimpleNamespace(send=fake_runtime),
+        ),
     )
+    from cyrene.workbench.chat_external_turn_service import ExternalTurnProjection
 
-    async def legacy_run(**_kwargs):
-        raise AssertionError("built-in Chat must default to the new kernel")
+    operation.external = ExternalTurnProjection()
 
-    operation.run_agent = legacy_run
-    workbench_run = SimpleNamespace(run_id="run-route", publish=lambda _event: None)
+    workbench_run = SimpleNamespace(
+        run_id="run-route",
+        publish=lambda _event: None,
+        events=[],
+    )
 
     result = run(operation._run_turn(workbench_run))
 
-    assert result == "new-kernel-reply"
-    assert captured["run"] is workbench_run
-    assert captured["session_id"] == "chat-route"
-    assert captured["legacy_chat_id"] == "legacy-route"
-    assert captured["conversation_source"] == "desktop_local"
-    assert captured["system_extra"] == "memory\n\ncontext"
+    assert result.text == "new-kernel-reply"
+    assert operation.external.usage["total_tokens"] == 15
+    assert operation.external.model == "provider/model"
+    assert operation.external.output_tokens_per_second == 20.0
+    assert operation.external.activity_messages[0]["id"] == "activity-1"
+    assert captured["run_id"] == "run-route"
+    assert captured["publish"] is workbench_run.publish
+    assert captured["text"] == "hello"
+    config = captured["config"]
+    assert config.session_id == "chat-route"
+    assert config.host_chat_id == "host-route"
+    assert config.conversation_source == "desktop_local"
+    assert config.system_extra == "context"
+    assert config.project_id == "project-route"
+    assert config.project_memory_snapshot == {}
+    assert config.session_title == "Route chat"
+    assert config.memory_write_enabled is True
+    assert config.memory_trigger_enabled is True
+    assert config.memory_archive_enabled is True
+    assert config.completed_turn_count == 3

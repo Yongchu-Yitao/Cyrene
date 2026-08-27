@@ -30,7 +30,7 @@ function WorkbenchSearchPortal({
         if (id === "toggle-theme") { onToggleTheme(); return; }
         if (id === "toggle-sidebar") { onToggleSidebar(); return; }
         var tab = id === "open-shortcuts" ? "shortcuts"
-          : id === "open-extensions" ? "extensions"
+          : id === "open-plugin-registry" ? "plugin-registry"
           : id === "open-budget" ? "budget"
           : id === "open-about" ? "about" : "";
         onOpenSettings(tab, null);

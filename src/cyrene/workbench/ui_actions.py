@@ -48,7 +48,7 @@ UI_ACTIONS: tuple[UIActionSpec, ...] = (
     UIActionSpec("toggle", "renderer.form", "toggle", "press", "ui_surface", "R1"),
     UIActionSpec("accessible_invoke", "renderer.accessibility", "invoke", "bounded_semantic_event", "ui_surface", "R1"),
     UIActionSpec("accessible_context_menu", "renderer.accessibility", "open_menu", "bounded_semantic_event", "ui_surface", "R1"),
-    UIActionSpec("browser_page_input", "browser", "invoke", "pointer_keyboard", "existing_capability", "R1", "browser_tools"),
+    UIActionSpec("browser_page_input", "browser", "invoke", "pointer_keyboard", "existing_capability", "R1", "cyrene_browser"),
     UIActionSpec("hover_style", "renderer", "invoke", "hover", "presentation_only", "R0"),
     UIActionSpec("raw_pointer", "security", "invoke", "raw_coordinate", "forbidden", "R4"),
     UIActionSpec("arbitrary_synthetic_event", "security", "invoke", "synthetic_event", "forbidden", "R4"),

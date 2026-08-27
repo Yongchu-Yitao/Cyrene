@@ -10,21 +10,19 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
-from cyrene.agent.context import current_run_context
+from agent.plugin import PluginContext
 from cyrene.config import DATA_DIR
-from cyrene.runtime.attachments import safe_attachment_filename
+from cyrene.runtime.attachments import register_generated_attachment, safe_attachment_filename
 from .common import (
     remote_tool_error,
     request_remote_command,
     resolve_selected_remote_device,
 )
 from agent.plugin.execution import publish_plugin_progress as publish_tool_progress
-from cyrene.tooling.runtime_api import (
+from agent.plugin.native_runtime import (
     json_result,
-    register_generated_attachment,
-    request_destructive_confirmation,
-    request_scope_elevation,
     resolve_tool_path,
+    run_context_value,
 )
 
 TOOL_NAME = "RemoteCyreneFiles"
@@ -70,20 +68,17 @@ TOOL_DEF = {
     },
 }
 TOOL_METADATA = {
-    "read_only": True,
+    "read_only": False,
     "resource_keys": ("remote:{device_id}",),
     "requires_order": True,
 }
 
-_READ_OPERATIONS = {"stat", "list", "manifest", "download"}
-_DESTRUCTIVE_OPERATIONS = {"delete", "delete_tree"}
 _CHUNK_BYTES = 512 * 1024
 
 
 async def _request(
     args: dict[str, Any],
-    db_path: str,
-    chat_id: object,
+    context: PluginContext,
     *,
     command: str,
     payload: dict[str, Any],
@@ -108,7 +103,10 @@ async def _request(
     wire_payload["_authorization"] = {
         "version": 1,
         "approved": True,
-        "permission_mode": current_run_context().permission_mode,
+        "permission_mode": str(
+            run_context_value(context, "permission_mode", "default")
+            or "default"
+        ),
         "scope": "single_operation",
         "outside_workspace": bool(args.get("_remote_allow_outside")),
         "arguments_sha256": authorization_hash,
@@ -122,8 +120,7 @@ async def _request(
             "idempotency_key": key or ("remote-file-" + uuid4().hex),
             "timeout_seconds": args.get("timeout_seconds"),
         },
-        db_path,
-        fallback_chat_id=chat_id,
+        context,
     )
 
 
@@ -147,13 +144,10 @@ def _operation_uses_absolute_path(args: dict[str, Any]) -> bool:
 
 async def handler(
     args: dict[str, Any],
-    _bot: Any,
-    chat_id: int,
-    db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
     try:
-        _chat, device = resolve_selected_remote_device(args, db_path, fallback_chat_id=chat_id)
+        _chat, device = resolve_selected_remote_device(args, context)
         operation = str(args.get("operation") or "")
         project_id = str(args.get("project_id") or "").strip()
         if not project_id:
@@ -178,112 +172,28 @@ async def handler(
         if required not in (device.get("received_capabilities") or []):
             raise PermissionError(f"remote device did not grant {required}")
 
-        payload_options = dict(args.get("payload") or {})
         remote_outside = _operation_uses_absolute_path(args)
-        exact_operation = json_result({
-            "device_id": str(device["device_id"]),
-            "project_id": project_id,
-            "operation": operation,
-            "local_path": str(args.get("local_path") or ""),
-            "remote_path": str(args.get("remote_path") or ""),
-            "source": str(args.get("source") or ""),
-            "destination": str(args.get("destination") or ""),
-            "conflict_policy": str(args.get("conflict_policy") or ""),
-            "delete_extraneous": bool(args.get("delete_extraneous")),
-            "payload": payload_options,
-        })
-        approval_reason = (
-            str(args.get("reason") or "执行用户请求的远程文件操作")
-            + "\n精确操作："
-            + exact_operation[:8000]
-            + "\nSHA-256："
-            + hashlib.sha256(exact_operation.encode()).hexdigest()
-        )
-        irreversible_overwrite = (
-            operation == "upload"
-            and str(args.get("conflict_policy") or "fail")
-            in {"overwrite", "overwrite_if_unchanged"}
-        ) or (
-            operation in {"copy", "move"}
-            and bool(payload_options.get("overwrite"))
-        )
-        if operation in _DESTRUCTIVE_OPERATIONS or operation == "sync" or irreversible_overwrite:
-            local_read_path = str(args.get("local_path") or "") if operation in {"upload", "sync"} else ""
-            permission = await request_destructive_confirmation(
-                tool_name=TOOL_NAME,
-                operation=(
-                    "同步远程目录（可能覆盖或删除已有内容）"
-                    if operation == "sync"
-                    else "覆盖远程项目已有内容"
-                    if irreversible_overwrite
-                    else f"删除远程项目内容：{operation}"
-                ),
-                detail=approval_reason,
-                path_hint=local_read_path or str(
-                    args.get("remote_path")
-                    or (args.get("payload") or {}).get("path")
-                    or ""
-                ),
-                destructive_kind="remote_file_delete",
-                meta_extra={
-                    "grant_read_path": bool(local_read_path),
-                    "remote_path": str(args.get("remote_path") or ""),
-                    "device_id": str(device["device_id"]),
-                    "project_id": project_id,
-                },
-            )
-            if permission is not None:
-                return permission
-        elif operation not in _READ_OPERATIONS or remote_outside:
-            local_read_path = str(args.get("local_path") or "") if operation in {"upload", "sync"} else ""
-            permission = await request_scope_elevation(
-                tool_name=TOOL_NAME,
-                path_hint=local_read_path or f"remote://{device['device_id']}/{str(args.get('remote_path') or payload_options.get('path') or '')}",
-                operation=(
-                    f"读取远程设备项目外路径：{operation}"
-                    if operation in _READ_OPERATIONS
-                    else f"写入远程设备文件：{operation}"
-                ),
-                reason=approval_reason,
-                permission_kind=(
-                    "read_elevation"
-                    if local_read_path
-                    else "remote_path_read"
-                    if operation in _READ_OPERATIONS
-                    else "remote_file_write"
-                ),
-                options=["允许执行这一次", "拒绝"],
-                scope_hint="远程项目中的 ",
-                meta_extra={
-                    "device_id": str(device["device_id"]),
-                    "project_id": project_id,
-                    "operation": operation,
-                },
-            )
-            if permission is not None:
-                return permission
-
         if operation == "upload":
             request_args = {
                 **args,
                 "device_id": str(device["device_id"]),
                 "_remote_allow_outside": remote_outside,
             }
-            return json_result(await _upload(request_args, db_path, chat_id))
+            return json_result(await _upload(request_args, context))
         if operation == "download":
             request_args = {
                 **args,
                 "device_id": str(device["device_id"]),
                 "_remote_allow_outside": remote_outside,
             }
-            return json_result(await _download(request_args, db_path, chat_id))
+            return json_result(await _download(request_args, context))
         if operation == "sync":
             request_args = {
                 **args,
                 "device_id": str(device["device_id"]),
                 "_remote_allow_outside": remote_outside,
             }
-            return json_result(await _sync(request_args, db_path, chat_id))
+            return json_result(await _sync(request_args, context))
 
         payload = dict(args.get("payload") or {})
         if args.get("remote_path") and "path" not in payload:
@@ -298,15 +208,21 @@ async def handler(
             "device_id": str(device["device_id"]),
             "_remote_allow_outside": remote_outside,
         }
-        return json_result(await _request(request_args, db_path, chat_id, command=command, payload=payload))
+        return json_result(
+            await _request(
+                request_args,
+                context,
+                command=command,
+                payload=payload,
+            )
+        )
     except Exception as exc:
         return json_result(remote_tool_error(exc))
 
 
 async def _upload_file(
     args: dict[str, Any],
-    db_path: str,
-    chat_id: object,
+    context: PluginContext,
     local_path: Path,
     remote_path: str,
     *,
@@ -332,8 +248,7 @@ async def _upload_file(
     transfer_id = "transfer_" + hashlib.sha256(transfer_identity.encode()).hexdigest()[:40]
     begin = await _request(
         args,
-        db_path,
-        chat_id,
+        context,
         command="files.upload.begin",
         payload={
             "transfer_id": transfer_id,
@@ -364,8 +279,7 @@ async def _upload_file(
                     raise RuntimeError("local file ended before declared size")
                 result = await _request(
                     args,
-                    db_path,
-                    chat_id,
+                    context,
                     command="files.upload.chunk",
                     payload={
                         "transfer_id": transfer_id,
@@ -381,8 +295,7 @@ async def _upload_file(
                 await publish_tool_progress(current=offset, total=size, label=local_path.name)
         return await _request(
             args,
-            db_path,
-            chat_id,
+            context,
             command="files.upload.commit",
             payload={"transfer_id": transfer_id},
             key=f"{transfer_id}:commit",
@@ -393,29 +306,33 @@ async def _upload_file(
         raise
 
 
-async def _upload(args: dict[str, Any], db_path: str, chat_id: object) -> dict[str, Any]:
+async def _upload(
+    args: dict[str, Any],
+    context: PluginContext,
+) -> dict[str, Any]:
     local = resolve_tool_path(str(args.get("local_path") or ""))
     if not local.is_file():
         raise ValueError("local_path must be a regular file; use sync for directories")
     remote = str(args.get("remote_path") or local.name).replace("\\", "/")
     return await _upload_file(
         args,
-        db_path,
-        chat_id,
+        context,
         local,
         remote,
         conflict_policy=str(args.get("conflict_policy") or "fail"),
     )
 
 
-async def _download(args: dict[str, Any], db_path: str, chat_id: object) -> dict[str, Any]:
+async def _download(
+    args: dict[str, Any],
+    context: PluginContext,
+) -> dict[str, Any]:
     remote_path = str(args.get("remote_path") or "")
     if not remote_path:
         raise ValueError("remote_path is required")
     metadata = await _request(
         args,
-        db_path,
-        chat_id,
+        context,
         command="files.stat",
         payload={"path": remote_path, "include_hash": True},
     )
@@ -449,8 +366,7 @@ async def _download(args: dict[str, Any], db_path: str, chat_id: object) -> dict
             while True:
                 result = await _request(
                     args,
-                    db_path,
-                    chat_id,
+                    context,
                     command="files.download",
                     payload={"path": remote_path, "offset": offset, "limit": _CHUNK_BYTES},
                     key=f"{transfer_id}:chunk:{offset}",
@@ -487,7 +403,10 @@ async def _download(args: dict[str, Any], db_path: str, chat_id: object) -> dict
         raise
 
 
-async def _sync(args: dict[str, Any], db_path: str, chat_id: object) -> dict[str, Any]:
+async def _sync(
+    args: dict[str, Any],
+    context: PluginContext,
+) -> dict[str, Any]:
     local_root = resolve_tool_path(str(args.get("local_path") or ""))
     if not local_root.is_dir():
         raise ValueError("local_path must be a directory for sync")
@@ -517,8 +436,7 @@ async def _sync(args: dict[str, Any], db_path: str, chat_id: object) -> dict[str
     sync_id = "sync_" + uuid4().hex
     diff = await _request(
         args,
-        db_path,
-        chat_id,
+        context,
         command="files.sync.prepare",
         payload={"sync_id": sync_id, "path": remote_root, "entries": entries},
         key=f"{sync_id}:prepare",
@@ -527,8 +445,7 @@ async def _sync(args: dict[str, Any], db_path: str, chat_id: object) -> dict[str
         return diff
     apply_result = await _request(
         args,
-        db_path,
-        chat_id,
+        context,
         command="files.sync.apply",
         payload={
             "sync_id": sync_id,
@@ -548,8 +465,7 @@ async def _sync(args: dict[str, Any], db_path: str, chat_id: object) -> dict[str
         known_sha256, known_identity = local_hashes[str(remote)]
         result = await _upload_file(
             args,
-            db_path,
-            chat_id,
+            context,
             local,
             str(remote),
             conflict_policy="overwrite",
@@ -561,8 +477,7 @@ async def _sync(args: dict[str, Any], db_path: str, chat_id: object) -> dict[str
         uploaded.append(str(remote))
     committed = await _request(
         args,
-        db_path,
-        chat_id,
+        context,
         command="files.sync.commit",
         payload={"sync_id": sync_id, "path": remote_root, "include_hash": True},
         key=f"{sync_id}:commit",

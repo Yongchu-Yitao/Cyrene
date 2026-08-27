@@ -1,13 +1,10 @@
-from cyrene.runtime.onboarding_context_service import ProjectResolver, SoulRepository
+from cyrene.runtime.onboarding_context_service import (
+    OnboardingContextApplicationService,
+    ProjectResolver,
+)
 
 
-def test_soul_repository_and_active_project_resolver(tmp_path):
-    soul_path = tmp_path / "SOUL.md"
-    soul = SoulRepository(soul_path)
-    assert soul.read() == ""
-    soul.write("# Persona\n")
-    assert soul.read() == "# Persona\n"
-
+def test_active_project_resolver(tmp_path):
     resolver = ProjectResolver(
         lambda: {
             "activeProjectId": "project-a",
@@ -19,3 +16,5 @@ def test_soul_repository_and_active_project_resolver(tmp_path):
         tmp_path,
     )
     assert resolver.active_workspace() == "/workspace/active"
+    service = OnboardingContextApplicationService(resolver)
+    assert service.context_state()["workspace_dir"] == "/workspace/active"

@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-import cyrene.agent.budget as budget_module
+import cyrene.runtime.budget as budget_module
 
-from cyrene.agent.adaptive_budget import (
+from cyrene.runtime.adaptive_budget import (
     DEFAULT_ACTIVITY_DENSITY,
     AdaptiveBudgetController,
     BudgetState,

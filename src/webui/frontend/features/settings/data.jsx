@@ -2,6 +2,7 @@ import {
   workbenchServices,
   useStateSt,
   useEffectSt,
+  readSettingsResponse,
   settingsFetch,
   showSettingsToast,
   SectionTitle,
@@ -135,7 +136,7 @@ function SessionExportIcon() {
 }
 
 function DataPanel(p) {
-  var { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, workbenchExportSessions, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate } = p;
+  var { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate } = p;
 
   var [storage, setStorage] = useStateSt(dataPanelStorageCache);
   var [storageError, setStorageError] = useStateSt("");
@@ -157,17 +158,27 @@ function DataPanel(p) {
   var storageNonEmpty = storageList.filter(function (c) { return c.bytes > 0; });
 
   var dataStore = workbenchServices.data();
+  dataStore.useVersion();
   var dataState = dataStore.state;
-  var seenExportSessions = {};
-  var exportSessions = (workbenchExportSessions || []).concat(dataState.sessions || []).filter(function (session) {
-    var id = String(session && session.id || "");
-    if (!id || seenExportSessions[id]) return false;
-    seenExportSessions[id] = true;
-    return true;
+  useEffectSt(function () {
+    dataStore.refreshSessions();
+  }, []);
+  var exportSessions = (dataState.sessions || []).filter(function (session) {
+    return !!String(session && session.id || "");
   });
 
   function clearSession() {
-    settingsFetch("/api/chat/clear", { method: "POST" }).then(function () { dataStore.refreshSessions(); }).catch(function () {});
+    var session = exportSessions[0];
+    if (!session) return;
+    settingsFetch("/api/workbench/sessions/" + encodeURIComponent(session.id) + "/clear", { method: "POST" })
+      .then(readSettingsResponse)
+      .then(function () {
+        setExportSids(exportSids.filter(function (id) { return id !== session.id; }));
+        return dataStore.refreshSessions();
+      })
+      .catch(function (error) {
+        showSettingsToast(t("settings.error") + ": " + (error.message || String(error)), "error");
+      });
   }
 
   function resetData() {
@@ -258,7 +269,7 @@ function DataPanel(p) {
   function exportSelectedSessions() {
     if (!exportSids.length) return;
     exportSids.forEach(function (sessionId) {
-      var url = "/api/sessions/" + encodeURIComponent(sessionId) + "/export?format=" + exportFmt;
+      var url = "/api/workbench/sessions/" + encodeURIComponent(sessionId) + "/export?format=" + exportFmt;
       var a = document.createElement("a");
       a.href = url;
       document.body.appendChild(a);
@@ -307,7 +318,7 @@ function DataPanel(p) {
     FieldRow(t("settings.redactSecrets"), t("settings.redactSecretsHint"), Toggle(redactSecrets, function () { saveRedactSecrets(!redactSecrets); }),
       undefined, "setting-redact-secrets"),
     FieldRow(t("settings.clearSession"), t("settings.clearSessionHint"),
-      React.createElement("button", { className: "wb-btn muted", onClick: clearSession }, t("settings.clearSessionBtn")),
+      React.createElement("button", { className: "wb-btn muted", onClick: clearSession, disabled: !exportSessions.length }, t("settings.clearSessionBtn")),
       undefined, "setting-clear-session",
     ),
     React.createElement("div", { className: "wb-field wb-field-stack wb-field-danger", id: "setting-reset-app-data" },
@@ -357,7 +368,7 @@ function DataPanel(p) {
         React.createElement("div", { className: "wb-export-session-list", role: "group", "aria-label": t("settings.sessionExportSelectLabel") },
           exportSessions.map(function (s) {
             var selected = exportSids.indexOf(s.id) >= 0;
-            var sessionDate = s.updated_at || s.created_at;
+            var sessionDate = s.updatedAt || s.createdAt;
             return React.createElement("label", { className: "wb-export-session-option" + (selected ? " selected" : ""), key: s.id },
               React.createElement("input", { type: "checkbox", checked: selected, onChange: function () { toggleExportSession(s.id); } }),
               React.createElement("span", { className: "wb-export-session-copy" },

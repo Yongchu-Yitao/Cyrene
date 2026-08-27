@@ -14,8 +14,7 @@ the conversation path:
 
 * The agent runs as a **background task owned by the registry**, not the
   request. When the HTTP request ends, the task is *not* cancelled.
-* The run **always finalizes** (persists the assistant reply to
-  ``workbench_chats.json``) when the agent completes, whether or not a client
+* The run **always finalizes** (persists the assistant reply to SQLite) when the agent completes, whether or not a client
   is still attached.
 * Each run keeps an **append-only event log / ring buffer** so a reconnecting
   client can replay the events it missed while disconnected (``ack`` /
@@ -23,11 +22,10 @@ the conversation path:
   ``reply_delta`` / ``reply_done`` / ``run_finalizing`` / ``awaiting_user`` /
   ``saved`` / ``error``) and then join the live stream.
 
-Unlike the goal loop, the model-run checkpoint and replay buffer remain
-in-memory for this single bounded exchange. The *result* is made durable by the
-finalize callback (``workbench_chats.json``). Run-scoped inbox events are stored
-in SQLite, however, so accepted guidance is session-isolated, idempotent, and
-recoverable if the process stops before the agent applies it.
+The Agent ContextTree is the durable model-run checkpoint. The transport replay
+buffer is additionally projected to SQLite, while the public result is written
+to the Workbench chat document. Run-scoped inbox events are also stored in
+SQLite, so accepted guidance remains session-isolated and idempotent.
 """
 
 from __future__ import annotations
@@ -44,7 +42,11 @@ from uuid import uuid4
 
 from cyrene.observability.trace import trace_span
 from cyrene.runtime.run_coordinator import RunCoordinator, RunLease, run_coordinator_for
-from cyrene.workbench.compat import chat_service
+from cyrene.workbench.chat_application import (
+    merge_chat_messages_chronologically,
+    utc_now_iso,
+)
+from cyrene.workbench.chat_repository import ChatRepository
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,7 @@ _DURABLE_RETENTION_DAYS = 7
 # events continue to force an immediate flush.
 _DURABLE_EVENT_BATCH_INTERVAL_SECONDS = 1.0
 _DURABLE_EVENT_BATCH_MAX = 512
+_DURABLE_EVENT_BUSY_TIMEOUT_SECONDS = 1.0
 _COMPRESSED_EVENT_PREFIX = b"CYE1"
 _COMPRESS_EVENT_MIN_BYTES = 512
 _BATCHABLE_DURABLE_EVENT_TYPES = frozenset({
@@ -161,12 +164,18 @@ class ChatRunEventStore:
             self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
-        # Same busy_timeout as cyrene.workbench.store: the event store shares
-        # the main SQLite file with document writers, so a shorter timeout
-        # here turned lock contention into hard event loss during finalize.
-        conn = sqlite3.connect(self.db_path, timeout=30)
+        # Run events are a replay projection, not part of the Agent result.
+        # Keep lock waits bounded so an unrelated runtime writer cannot stall
+        # an otherwise completed conversation. Failed batches remain queued in
+        # memory and are retried at the next flush/finalize boundary.
+        conn = sqlite3.connect(
+            self.db_path,
+            timeout=_DURABLE_EVENT_BUSY_TIMEOUT_SECONDS,
+        )
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute(
+            f"PRAGMA busy_timeout = {int(_DURABLE_EVENT_BUSY_TIMEOUT_SECONDS * 1000)}"
+        )
         return conn
 
     def _initialize(self) -> None:
@@ -459,7 +468,15 @@ class ChatRunEventStore:
 class ChatRun:
     """One in-flight conversation exchange and its replayable event buffer."""
 
-    def __init__(self, chat_id: str, ack_event: dict[str, Any], *, max_buffer: int = _MAX_BUFFER_EVENTS, db_path: str = "") -> None:
+    def __init__(
+        self,
+        chat_id: str,
+        ack_event: dict[str, Any],
+        *,
+        max_buffer: int = _MAX_BUFFER_EVENTS,
+        db_path: str = "",
+        persist_live_message: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> None:
         from cyrene.workbench.inbox import WorkbenchAgentInbox
 
         self.chat_id = str(chat_id)
@@ -469,6 +486,7 @@ class ChatRun:
         self._event_store_pending: list[dict[str, Any]] = []
         self._event_store_flush_lock = asyncio.Lock()
         self._event_store_flush_task: asyncio.Task[None] | None = None
+        self._persist_live_message = persist_live_message
         self.inbox = WorkbenchAgentInbox(
             self.chat_id, db_path=db_path, run_id=self.run_id
         )
@@ -516,6 +534,7 @@ class ChatRun:
         run._event_store_pending = []
         run._event_store_flush_lock = asyncio.Lock()
         run._event_store_flush_task = None
+        run._persist_live_message = None
         run.inbox = None
         run.max_buffer = max(_MAX_BUFFER_EVENTS, len(events))
         run.seq = int(last_seq)
@@ -538,14 +557,23 @@ class ChatRun:
         return run
 
     async def configure_event_store(self, store: ChatRunEventStore) -> None:
-        self._event_store = store
         await asyncio.to_thread(store.create, self)
+        # Attach only after the initial write succeeds. If setup fails, the
+        # manager can continue with the in-memory replay buffer without later
+        # publishes repeatedly hitting the unavailable projection.
+        self._event_store = store
 
-    def _schedule_event_store_flush(self) -> None:
+    def _schedule_event_store_flush(self, *, immediate: bool = False) -> None:
         task = self._event_store_flush_task
         if task is not None and not task.done():
-            return
-        task = asyncio.create_task(self._flush_event_store_after_delay())
+            if not immediate:
+                return
+            # A terminal/non-batchable event should not sit behind the normal
+            # batching delay. Cancellation is safe because failed/in-flight
+            # batches are re-queued idempotently by sequence number.
+            task.cancel()
+        delay = 0.0 if immediate else _DURABLE_EVENT_BATCH_INTERVAL_SECONDS
+        task = asyncio.create_task(self._flush_event_store_after_delay(delay))
         self._event_store_flush_task = task
 
         def _settled(done: asyncio.Task[None]) -> None:
@@ -563,8 +591,9 @@ class ChatRun:
 
         task.add_done_callback(_settled)
 
-    async def _flush_event_store_after_delay(self) -> None:
-        await asyncio.sleep(_DURABLE_EVENT_BATCH_INTERVAL_SECONDS)
+    async def _flush_event_store_after_delay(self, delay: float) -> None:
+        if delay > 0:
+            await asyncio.sleep(delay)
         await self._flush_event_store_now()
 
     async def _flush_event_store_now(self) -> None:
@@ -607,12 +636,18 @@ class ChatRun:
 
         Used both as the agent's ``_reply_stream_writer`` (so the agent's own
         ``reply_*`` / ``intermediate_message`` events are captured) and directly
-        by the runner for terminal events. Awaitable but never blocks.
+        by the runner for terminal events. Event fanout is authoritative for
+        the live exchange; durable replay flushes in the background so SQLite
+        contention cannot delay or fail the Agent result.
         """
-        if str(event.get("type") or "") == "intermediate_message" and isinstance(event.get("message"), dict):
+        if (
+            self._persist_live_message is not None
+            and str(event.get("type") or "") == "intermediate_message"
+            and isinstance(event.get("message"), dict)
+        ):
             try:
                 await asyncio.to_thread(
-                    chat_service()._persist_live_public_message,
+                    self._persist_live_message,
                     self.chat_id,
                     event["message"],
                 )
@@ -624,13 +659,11 @@ class ChatRun:
         if self._event_store is not None:
             self._event_store_pending.append(stored)
             event_type = str(event.get("type") or "")
-            if (
+            flush_immediately = (
                 event_type not in _BATCHABLE_DURABLE_EVENT_TYPES
                 or len(self._event_store_pending) >= _DURABLE_EVENT_BATCH_MAX
-            ):
-                await self.flush_event_store()
-            else:
-                self._schedule_event_store_flush()
+            )
+            self._schedule_event_store_flush(immediate=flush_immediately)
         if len(self.events) > self.max_buffer:
             # Keep the ack (events[0]); drop the oldest events after it.
             overflow = len(self.events) - self.max_buffer
@@ -662,17 +695,24 @@ class ChatRunManager:
         self._cleanup_tasks: set[asyncio.Task[Any]] = set()
         self._db_path = ""
         self._event_store: ChatRunEventStore | None = None
+        self._repository = ChatRepository()
         # Unconfigured managers (mostly isolated tests) get a private control
         # plane. ``configure`` switches production to the DB-scoped coordinator
         # also used by task sessions.
         self._coordinator = RunCoordinator(f"chat-manager:{id(self)}")
         self._leases: dict[str, RunLease] = {}
+        from agent.workbench.conversation_runtime import ConversationRuntime
+
+        self.conversation_runtime = ConversationRuntime()
 
     def configure(self, db_path: str) -> None:
         """Configure durable inbox and run-event storage before runs start."""
         if self._coordinator.active_leases(owner_type="conversation"):
             raise RuntimeError("cannot reconfigure ChatRunManager while runs are active")
         self._db_path = str(db_path or "")
+        if self._db_path:
+            self._repository.configure(self._db_path)
+        self.conversation_runtime.configure(self._db_path)
         if self._db_path:
             from cyrene.workbench.persistence.schema import ensure_schema
 
@@ -682,9 +722,25 @@ class ChatRunManager:
             if self._db_path
             else RunCoordinator(f"chat-manager:{id(self)}")
         )
-        self._event_store = (
-            ChatRunEventStore(self._db_path) if self._db_path else None
-        )
+        try:
+            self._event_store = (
+                ChatRunEventStore(self._db_path) if self._db_path else None
+            )
+        except Exception:
+            # Durable run replay is an optional projection. A locked or
+            # unavailable event store must not prevent Workbench Chat itself
+            # from starting; the live in-memory buffer remains usable.
+            self._event_store = None
+            logger.exception(
+                "Chat durable event store is unavailable; continuing with in-memory replay"
+            )
+
+    @property
+    def configured_db_path(self) -> str:
+        return self._db_path
+
+    def settle_chat_running_status(self, chat_id: str) -> None:
+        self._settle_chat_running_status(chat_id)
 
     def get(self, chat_id: str) -> ChatRun | None:
         """Return only an actively running exchange."""
@@ -730,6 +786,7 @@ class ChatRunManager:
         run = self.get(chat_id)
         if run is None:
             return False
+        self.conversation_runtime.request_cancel(chat_id, "user_interrupted")
         run.status = "cancelled"
         run.termination_reason = "user_interrupted"
         run.outcome = {"kind": "interrupted"}
@@ -761,6 +818,7 @@ class ChatRunManager:
             run.status = "cancelled"
             run.termination_reason = str(termination_reason or "chat_deleted")
             run.outcome = {"kind": "deleted"}
+            self.conversation_runtime.request_cancel(target, run.termination_reason)
             task = run.task
             self._coordinator.interrupt(
                 "conversation",
@@ -823,12 +881,9 @@ class ChatRunManager:
         returned with ``is_new=False`` so the caller attaches to it instead of
         starting a competing agent — keeping one agent per conversation.
 
-        ``stream`` controls whether the agent's internal reply is streamed: when
-        ``True`` the run's :meth:`ChatRun.publish` is installed as the agent's
-        ``_reply_stream_writer`` (captured by the background task's context), so
-        the agent emits ``reply_*`` / ``intermediate_message`` events into the
-        buffer. Non-streaming callers pass ``False`` to preserve the legacy
-        single-shot reply behavior; they read :attr:`ChatRun.outcome` instead.
+        ``stream`` remains part of the route contract, but native Agent and
+        external-Agent adapters both receive :meth:`ChatRun.publish` explicitly;
+        no legacy reply-writer ContextVar is installed by the manager.
 
         ``settler`` runs after the manager has persisted the terminal outcome
         and before :attr:`ChatRun.done` is exposed. Route-specific projections
@@ -842,7 +897,13 @@ class ChatRunManager:
 
         # Do not open SQLite while handling the HTTP request.  The driver
         # attaches storage from a worker thread before invoking the runner.
-        run = ChatRun(chat_id, ack_event, max_buffer=self._max_buffer, db_path="")
+        run = ChatRun(
+            chat_id,
+            ack_event,
+            max_buffer=self._max_buffer,
+            db_path="",
+            persist_live_message=self._persist_live_public_message,
+        )
         run.settler = settler
         lease = self._coordinator.try_acquire(
             "conversation",
@@ -866,33 +927,17 @@ class ChatRunManager:
         self._leases[run.run_id] = lease
 
         try:
-            if stream:
-                # The background task copies the current context at create_task time,
-                # so set the writer immediately before and reset right after — the
-                # task keeps its own captured copy (same pattern the legacy generator
-                # used). Other request-scoped ContextVars (attachment map, etc.) ride
-                # along because start_or_get is called synchronously from the handler.
-                from cyrene.agent.context import bind_run_context
-                from cyrene.workbench.inbox import _workbench_agent_inbox
+            # The native ConversationRuntime receives its publisher explicitly.
+            # Keep only the Workbench guidance inbox binding for the route-level
+            # admission API; no legacy Agent ContextVars are installed here.
+            del stream
+            from cyrene.workbench.inbox import _workbench_agent_inbox
 
-                binding = bind_run_context(
-                    reply_stream_writer=run.publish,
-                    runtime_event_writer=run.publish,
-                )
-                inbox_token = _workbench_agent_inbox.set(run.inbox)
-                try:
-                    run.task = asyncio.create_task(self._drive(run, runner))
-                finally:
-                    _workbench_agent_inbox.reset(inbox_token)
-                    binding.reset()
-            else:
-                from cyrene.workbench.inbox import _workbench_agent_inbox
-
-                inbox_token = _workbench_agent_inbox.set(run.inbox)
-                try:
-                    run.task = asyncio.create_task(self._drive(run, runner))
-                finally:
-                    _workbench_agent_inbox.reset(inbox_token)
+            inbox_token = _workbench_agent_inbox.set(run.inbox)
+            try:
+                run.task = asyncio.create_task(self._drive(run, runner))
+            finally:
+                _workbench_agent_inbox.reset(inbox_token)
             if run.task is None or not self._coordinator.attach_task(lease, run.task):
                 raise RuntimeError(f"conversation run lost ownership: {chat_id}")
         except Exception:
@@ -919,7 +964,14 @@ class ChatRunManager:
         ).start()
         try:
             if self._event_store is not None:
-                await run.configure_event_store(self._event_store)
+                try:
+                    await run.configure_event_store(self._event_store)
+                except Exception:
+                    logger.exception(
+                        "Failed to attach durable event log for run %s; "
+                        "continuing with in-memory replay",
+                        run.run_id,
+                    )
             if self._db_path:
                 await asyncio.to_thread(run.inbox.configure_storage, self._db_path)
             run.ready.set()
@@ -956,10 +1008,7 @@ class ChatRunManager:
                 except Exception:
                     logger.exception("Failed to publish chat driver error for %s", run.chat_id)
                 try:
-                    await asyncio.to_thread(
-                        chat_service()._settle_chat_running_status,
-                        run.chat_id,
-                    )
+                    await asyncio.to_thread(self._settle_chat_running_status, run.chat_id)
                 except Exception:
                     logger.exception("Failed to settle crashed chat %s", run.chat_id)
         finally:
@@ -992,7 +1041,7 @@ class ChatRunManager:
             if self._db_path:
                 try:
                     await asyncio.to_thread(
-                        chat_service()._record_chat_run_outcome,
+                        self._record_chat_run_outcome,
                         run.chat_id,
                         run_id=run.run_id,
                         status=run.status,
@@ -1002,15 +1051,15 @@ class ChatRunManager:
                     )
                 except Exception:
                     logger.exception("Failed to persist chat run outcome for %s", run.chat_id)
-            if self._event_store is not None:
+            if run._event_store is not None:
                 try:
                     await run.flush_event_store()
-                    await asyncio.to_thread(self._event_store.finalize, run)
+                    await asyncio.to_thread(run._event_store.finalize, run)
                 except Exception:
                     # ``_flush_event_store_now`` re-queued the failed batch, so
                     # the pending count is exactly what never reached SQLite.
-                    # Log it loudly: with a 30s busy_timeout the lock-contention
-                    # tradeoff (stall vs. silent event loss) stays observable.
+                    # Log it loudly so the lock-contention tradeoff (bounded
+                    # wait vs. event loss on restart) stays observable.
                     logger.exception(
                         "Failed to finalize durable event log for run %s; "
                         "%d event(s) not persisted (in-memory only, lost on restart)",
@@ -1120,40 +1169,209 @@ class ChatRunManager:
         finally:
             run.subscribers.discard(queue)
 
-    def startup(self) -> None:
-        """Recover from a hard crash: a chat left ``status="running"`` in the
-        store has no live task in this fresh process, so reset it to ``idle`` and
-        clear any stale pending question that can no longer be resumed."""
-        self.closed = False
-        chat_mod = chat_service()
+    def _persist_live_public_message(
+        self,
+        chat_id: str,
+        message: dict[str, Any],
+    ) -> None:
+        """Checkpoint one already-visible intermediate message exactly once."""
 
+        if not isinstance(message, dict) or not str(message.get("id") or "").strip():
+            return
+        entry = dict(message)
+        entry["intermediate"] = True
+        entry.pop("trace", None)
+        entry.pop("opensActivity", None)
+
+        def persist(chat: dict[str, Any]) -> None:
+            merge_chat_messages_chronologically(chat, [entry])
+            model_status = (
+                entry.get("modelStatus")
+                if isinstance(entry.get("modelStatus"), dict)
+                else {}
+            )
+            if str(model_status.get("status") or "") == "switched":
+                actual_model = str(model_status.get("model") or "").strip()
+                if actual_model:
+                    chat["lastModel"] = actual_model
+            chat["updatedAt"] = str(
+                entry.get("createdAt") or chat.get("updatedAt") or utc_now_iso()
+            )
+
+        self._repository.mutate_one(str(chat_id or ""), persist)
+
+    def _settle_chat_running_status(self, chat_id: str) -> None:
+        def settle(chat: dict[str, Any]) -> bool:
+            if chat.get("status") != "running":
+                return False
+            chat["status"] = "idle"
+            chat.pop("pendingQuestion", None)
+            chat["updatedAt"] = utc_now_iso()
+            return True
+
+        self._repository.mutate_one(str(chat_id or ""), settle)
+
+    def _record_chat_run_outcome(
+        self,
+        chat_id: str,
+        *,
+        run_id: str,
+        status: str,
+        termination_reason: str = "",
+        outcome_kind: str = "",
+        created_at: str = "",
+    ) -> None:
+        def record(chat: dict[str, Any]) -> bool:
+            previous = (
+                chat.get("lastRun")
+                if isinstance(chat.get("lastRun"), dict)
+                else {}
+            )
+            previous_created = str(previous.get("createdAt") or "")
+            if previous_created and created_at and previous_created > created_at:
+                return False
+            completed_at = utc_now_iso()
+            chat["lastRun"] = {
+                "id": str(run_id or ""),
+                "status": str(status or "idle"),
+                "terminationReason": str(termination_reason or ""),
+                "outcome": str(outcome_kind or ""),
+                "createdAt": str(created_at or ""),
+                "completedAt": completed_at,
+            }
+            if chat.get("status") == "running":
+                chat["status"] = "idle"
+            chat["updatedAt"] = completed_at
+            return True
+
+        self._repository.mutate_one(str(chat_id or ""), record)
+
+    def _reconcile_inbox_guidance_messages(self) -> int:
+        """Repair the inbox/transcript crash window from durable inbox rows."""
+
+        if not self._db_path:
+            return 0
+        from cyrene.workbench.inbox import read_workbench_guidance_records
+
+        records = read_workbench_guidance_records(self._db_path)
+        if not records:
+            return 0
+        payload = self._repository.read()
+        chats = {
+            str(chat.get("id") or ""): chat
+            for chat in payload.get("chats", [])
+            if isinstance(chat, dict)
+        }
+        repaired = 0
+        for record in records:
+            chat = chats.get(str(record.get("sessionId") or ""))
+            if chat is None:
+                continue
+            messages = chat.setdefault("messages", [])
+            event_id = str(record.get("eventId") or "")
+            message_id = str(record.get("messageId") or "")
+            if any(
+                isinstance(item, dict)
+                and (
+                    str(item.get("id") or "") == message_id
+                    or (
+                        event_id
+                        and str(item.get("guidanceEventId") or "") == event_id
+                    )
+                )
+                for item in messages
+            ):
+                continue
+            entry = {
+                "id": message_id,
+                "role": "user",
+                "content": str(record.get("content") or ""),
+                "createdAt": str(record.get("createdAt") or utc_now_iso()),
+                "guidance": True,
+                "guidanceEventId": event_id,
+                "runId": str(record.get("runId") or ""),
+            }
+            client_request_id = str(record.get("clientRequestId") or "")
+            if client_request_id:
+                entry["clientRequestId"] = client_request_id
+            merge_chat_messages_chronologically(chat, [entry])
+            chat["updatedAt"] = max(
+                str(chat.get("updatedAt") or ""),
+                str(entry["createdAt"]),
+            )
+            repaired += 1
+        if repaired:
+            self._repository.write(payload)
+        return repaired
+
+    def startup(self) -> None:
+        """Reconcile Chat projections while preserving durable ContextTree runs."""
+        self.closed = False
         try:
-            payload = chat_mod._read_chats_store()
+            if not self._db_path:
+                return
+            payload = self._repository.read()
             changed = False
             for chat in payload.get("chats", []) or []:
                 if str(chat.get("status") or "") == "running":
+                    checkpoint = (
+                        self.conversation_runtime.context_checkpoint(
+                            str(chat.get("id") or "")
+                        )
+                        if self._db_path
+                        else None
+                    )
                     chat["status"] = "idle"
-                    # A question left on a record that was subsequently marked
-                    # running belongs to the crashed exchange. There is no live
-                    # agent state in this process that can resume it safely.
-                    chat.pop("pendingQuestion", None)
-                    chat["lastRun"] = {
-                        "id": "",
-                        "status": "error",
-                        "terminationReason": "process_restarted",
-                        "outcome": "error",
-                        "createdAt": str(chat.get("updatedAt") or ""),
-                        "completedAt": datetime.now(timezone.utc).isoformat(),
-                    }
-                    chat["updatedAt"] = chat["lastRun"]["completedAt"]
+                    if checkpoint and checkpoint.get("status") == "awaiting_user":
+                        pending = checkpoint.get("pending_question")
+                        chat["pendingQuestion"] = (
+                            pending.as_dict()
+                            if hasattr(pending, "as_dict")
+                            else None
+                        )
+                        plan = checkpoint.get("active_plan")
+                        if plan is not None:
+                            chat["activePlan"] = plan
+                        chat["lastRun"] = {
+                            "id": str(checkpoint.get("run_id") or ""),
+                            "status": "awaiting_user",
+                            "terminationReason": "awaiting_user",
+                            "outcome": "awaiting",
+                            "createdAt": str(chat.get("updatedAt") or ""),
+                            "completedAt": datetime.now(timezone.utc).isoformat(),
+                        }
+                    elif checkpoint and checkpoint.get("status") == "running":
+                        # The Agent tree remains resumable under its original
+                        # run id. Do not synthesize a cancellation marker.
+                        chat["lastRun"] = {
+                            "id": str(checkpoint.get("run_id") or ""),
+                            "status": "recoverable",
+                            "terminationReason": "process_restarted",
+                            "outcome": "recoverable",
+                            "createdAt": str(chat.get("updatedAt") or ""),
+                            "completedAt": "",
+                        }
+                    else:
+                        chat.pop("pendingQuestion", None)
+                        chat["lastRun"] = {
+                            "id": "",
+                            "status": "error",
+                            "terminationReason": "process_restarted",
+                            "outcome": "error",
+                            "createdAt": str(chat.get("updatedAt") or ""),
+                            "completedAt": datetime.now(timezone.utc).isoformat(),
+                        }
+                    completed_at = str(chat["lastRun"].get("completedAt") or "")
+                    if completed_at:
+                        chat["updatedAt"] = completed_at
                     changed = True
             if changed:
-                chat_mod._write_chats_store(payload)
+                self._repository.write(payload)
         except Exception:
             logger.exception("Chat run startup recovery failed")
         try:
             if self._db_path:
-                chat_mod._reconcile_inbox_guidance_messages(self._db_path)
+                self._reconcile_inbox_guidance_messages()
         except Exception:
             logger.exception("Chat guidance transcript reconciliation failed")
         try:
@@ -1251,9 +1469,33 @@ def schedule_post_reply_bookkeeping(coro: Any, *, error_context: str) -> None:
     task.add_done_callback(_done)
 
 
+# One process-wide owner for ordinary Workbench conversation runs.  Keeping
+# the singleton here makes the lifecycle independent from the retired route
+# composition module and gives WebUI startup/shutdown one explicit boundary.
+_CHAT_RUN_MANAGER = ChatRunManager()
+
+
+def get_chat_run_manager() -> ChatRunManager:
+    return _CHAT_RUN_MANAGER
+
+
+def startup_chat_runs(db_path: str = "") -> None:
+    if str(db_path or "").strip() and _CHAT_RUN_MANAGER._db_path != str(db_path):
+        _CHAT_RUN_MANAGER.configure(str(db_path))
+    _CHAT_RUN_MANAGER.startup()
+
+
+async def shutdown_chat_runs() -> None:
+    await _CHAT_RUN_MANAGER.shutdown()
+    await drain_post_reply_bookkeeping_tasks()
+
+
 __all__ = [
     "ChatRun",
     "ChatRunManager",
     "drain_post_reply_bookkeeping_tasks",
+    "get_chat_run_manager",
     "schedule_post_reply_bookkeeping",
+    "shutdown_chat_runs",
+    "startup_chat_runs",
 ]

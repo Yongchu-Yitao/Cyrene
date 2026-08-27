@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+from agent.plugin.native_runtime import run_context_value
+
 TOOL_NAME = "browser_snapshot"
 TOOL_DEF = {
     "type": "function",
@@ -52,7 +55,7 @@ def _format_element(el: dict[str, Any]) -> str:
     return " ".join(bits)
 
 
-async def _tool_browser_snapshot(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+async def _tool_browser_snapshot(args: dict[str, Any], context: PluginContext) -> str:
     from cyrene.browser import inspect_page
 
     try:
@@ -61,10 +64,12 @@ async def _tool_browser_snapshot(args: dict[str, Any], _bot: Any, _chat_id: int,
         max_elements = 80
     resource_id = str(args.get("resource_id") or "").strip()
     if resource_id:
-        from cyrene.agent.context import current_session_id
         from cyrene.workbench.pinned_resources import browser_snapshot_target
         try:
-            target = browser_snapshot_target(resource_id, current_session_id())
+            target = browser_snapshot_target(
+                resource_id,
+                str(run_context_value(context, "session_id") or ""),
+            )
         except ValueError as exc:
             return f"Browser snapshot failed: {exc}"
         result = await inspect_page(

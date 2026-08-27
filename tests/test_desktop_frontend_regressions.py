@@ -70,33 +70,33 @@ def test_schedule_frontend_persists_local_iana_timezone():
     assert "startDate.getUTCMinutes()" not in source
 
 
-def test_scheduled_task_timezone_round_trips_through_database(tmp_path):
-    from cyrene.runtime import database
+def test_scheduled_task_timezone_round_trips_through_plugin_repository(tmp_path):
+    from cyrene.runtime.schedule_runtime import ScheduleRuntimeService
 
     db_path = str(tmp_path / "cyrene.sqlite3")
 
     async def exercise() -> None:
-        await database.init_db(db_path)
-        task_id = await database.create_task(
-            db_path,
-            -1,
-            "morning reminder",
-            "cron",
-            "0 9 * * *",
-            "2026-03-08T13:00:00+00:00",
+        service = ScheduleRuntimeService(db_path)
+        await service.ensure_ready()
+        task_id = await service.repository.create(
+            chat_id=-1,
+            prompt="morning reminder",
+            schedule_type="cron",
+            schedule_value="0 9 * * *",
+            next_run="2026-03-08T13:00:00+00:00",
             schedule_timezone="America/New_York",
         )
-        tasks = await database.get_all_tasks(db_path)
-        task = next(item for item in tasks if item["id"] == task_id)
-        assert task["schedule_timezone"] == "America/New_York"
-        assert task["origin_session_id"] == ""
-        assert task["action_type"] == "agent_task"
+        task = await service.repository.get(task_id)
+        assert task is not None
+        assert task.schedule_timezone == "America/New_York"
+        assert task.origin_session_id == ""
+        assert task.action_type == "agent_task"
 
     asyncio.run(exercise())
 
 
-def test_calendar_expansion_uses_the_same_timezone_across_dst():
-    from cyrene.workbench.schedule_domain import expand_task
+def test_calendar_expansion_uses_the_editable_plugin_timezone_rule_across_dst():
+    from agent.plugin.plugin_impl.cyrene_schedule.schedule_spec import expand_task
 
     task = {
         "schedule_type": "cron",

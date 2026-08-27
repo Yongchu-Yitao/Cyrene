@@ -1,7 +1,5 @@
-// Progressive tool calls use stable, model-facing capability IDs in runtime
-// events, while the existing translations are keyed by their concrete
-// compatibility names. Keep the protocol IDs visible to telemetry and route
-// them to the established localized labels only at the presentation boundary.
+// Permission operations use namespaced IDs while runtime activity uses Plugin
+// names. Map the two current identifiers only at the presentation boundary.
 var WORKBENCH_TOOL_NAME_ALIASES = {
   "Ask User": "ask_user",
   "AskUser": "ask_user",
@@ -66,12 +64,6 @@ var WORKBENCH_TOOL_NAME_ALIASES = {
   "knowledge.library.list": "ListLibraryItems",
   "knowledge.library.search": "SearchLibrary",
   "knowledge.library.update_metadata": "UpdateLibraryMetadata",
-  "task.schedule": "schedule_task",
-  "task.list": "list_tasks",
-  "task.edit": "edit_task",
-  "task.pause": "pause_task",
-  "task.resume": "resume_task",
-  "task.cancel": "cancel_task",
   "task.goal.set": "set_task_goal",
   "task.plan.update": "update_task_plan",
   "entity.track": "track_entity",
@@ -100,7 +92,6 @@ var WORKBENCH_TOOL_NAME_ALIASES = {
   "skill.load": "LoadSkill",
   "skill.read_resource": "ReadSkillResource",
   "skill.manage_extensions": "ManageExtensions",
-  "skill.manage_agent_hooks": "ManageAgentHooks",
   "skill.get_learned": "GetLearnedSkill",
   "skill.run_learned": "RunLearnedSkill",
   "remote.devices.list": "ListRemoteDevices",

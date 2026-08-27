@@ -45,7 +45,6 @@ def register_settings_routes(router: APIRouter, service: RemoteControlApplicatio
         return await _invoke(service.update_settings({
             "enabled": request.enabled, "relay_url": request.relay_url,
             "device_name": request.device_name,
-            "default_tool_packs": request.default_tool_packs,
         }))
 
 

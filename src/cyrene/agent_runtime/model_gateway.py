@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 
 from cyrene.config import CACHE_DIR, WEB_PORT
-from cyrene.model_runtime.client import call_llm
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +121,7 @@ def issue_model_gateway_binding(_model_access: Any, context: dict[str, Any]) -> 
     expires after an idle window.
     """
     from cyrene.agent_runtime.errors import AgentRuntimeError
-    from cyrene.model_runtime.client import (
+    from agent.plugin.model_catalog import (
         resolve_model_profile_candidate,
         resolve_session_model_candidate,
     )
@@ -351,7 +350,7 @@ async def call_model_gateway(body: dict[str, Any], scope: dict[str, Any]) -> dic
     except (TypeError, ValueError):
         max_tokens = None
     from cyrene.agent_runtime.errors import AgentRuntimeError
-    from cyrene.model_runtime.client import resolve_exact_model_candidate
+    from agent.plugin.model_catalog import resolve_exact_model_candidate
 
     identity = scope.get("modelIdentity") if isinstance(scope.get("modelIdentity"), dict) else {}
     candidate = resolve_exact_model_candidate(identity)
@@ -360,21 +359,59 @@ async def call_model_gateway(body: dict[str, Any], scope: dict[str, Any]) -> dic
             "model_binding_unsupported",
             "The Cyrene model selected for this Agent is no longer available",
         )
-    logger.info("gateway call_model_gateway calling call_llm [candidate=%s model=%s]", candidate.get("id"), candidate.get("model"))
-    result = await call_llm(
+    from agent.plugin import active_plugin_service
+
+    gateway = active_plugin_service("model")
+    if gateway is None:
+        raise AgentRuntimeError(
+            "model_gateway_unavailable",
+            "Model Provider Plugins are not available",
+        )
+    logger.info(
+        "gateway call_model_gateway calling Provider Plugin "
+        "[candidate=%s model=%s]",
+        candidate.get("id"),
+        candidate.get("model"),
+    )
+    result = await gateway.complete(
         messages,
         tools=tools,
-        candidates=[candidate],
+        tool_choice=body.get("tool_choice"),
         max_tokens=max_tokens,
-        stream=False,
         caller="external_agent_model_gateway",
-        phase="agent_gateway",
         session_id=str(scope.get("chatId") or ""),
-        publish_events=False,
-        record_usage=True,
+        model_identity=identity,
     )
-    logger.info("gateway call_model_gateway call_llm returned [kind=%s]", type(result).__name__)
-    return result
+    logger.info(
+        "gateway call_model_gateway Provider Plugin returned [kind=%s]",
+        type(result).__name__,
+    )
+    message = dict(result)
+    message.setdefault("role", "assistant")
+    normalized_calls: list[dict[str, Any]] = []
+    for raw in message.get("tool_calls") or ():
+        if not isinstance(raw, dict):
+            continue
+        function = raw.get("function")
+        source = function if isinstance(function, dict) else raw
+        arguments = source.get("arguments", {})
+        normalized_calls.append(
+            {
+                "id": str(raw.get("id") or ""),
+                "type": "function",
+                "function": {
+                    "name": str(source.get("name") or ""),
+                    "arguments": (
+                        arguments
+                        if isinstance(arguments, str)
+                        else json.dumps(arguments, ensure_ascii=False)
+                    ),
+                },
+            }
+        )
+    if normalized_calls:
+        message["tool_calls"] = normalized_calls
+    return message
 
 
 __all__ = [

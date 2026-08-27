@@ -25,14 +25,14 @@ _TOOLBOX_INPUT_SCHEMA = {
         "name": {
             "type": "string",
             "minLength": 1,
-            "description": "Plugin name to describe or invoke.",
+            "description": "Plugin or pack name to describe; Plugin name to invoke.",
         },
         "names": {
             "type": "array",
             "items": {"type": "string", "minLength": 1},
             "maxItems": 20,
             "uniqueItems": True,
-            "description": "Plugin names to describe in one call.",
+            "description": "Plugin or pack names to describe in one call.",
         },
         "arguments": {
             "type": "object",
@@ -55,13 +55,32 @@ class _ToolboxHandler:
             for failure in failures
         ]
 
+    @staticmethod
+    def _agent_id(context: PluginContext) -> str:
+        direct = str(context.data.get("agent_id") or "").strip()
+        if direct:
+            return direct
+        run_context = context.data.get("run_context")
+        if isinstance(run_context, Mapping):
+            nested = str(run_context.get("agent_id") or "").strip()
+            if nested:
+                return nested
+        return "main"
+
     def _deferred(
         self,
         name: str,
         failures: tuple[PluginLoadFailure, ...] = (),
+        *,
+        agent_id: str = "main",
     ) -> RegisteredPlugin:
         registered = self._registry.registered(name)
-        if registered.plugin.kind != "tool" or registered.source == "core":
+        if (
+            registered.plugin.kind != "tool"
+            or not registered.plugin.model_visible
+            or registered.source == "core"
+            or not self._registry.plugin_accessible(name, agent_id=agent_id)
+        ):
             raise ValueError(f"Plugin is not available through toolbox: {name}")
         failed_source = next(
             (
@@ -78,48 +97,61 @@ class _ToolboxHandler:
             )
         return registered
 
-    @staticmethod
-    def _tool_summary(plugin: Plugin) -> dict[str, str]:
-        return {
-            "name": plugin.name,
-            "description": plugin.description,
-        }
-
-    def _list(self) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-        packs: list[dict[str, Any]] = []
+    def _list(self, *, agent_id: str) -> tuple[list[str], list[str]]:
+        packs: list[str] = []
         for pack in self._registry.list_packs():
             if self._registry.pack_source(pack.id) == "core":
                 continue
-            tools = [
-                self._tool_summary(plugin)
-                for plugin in pack.plugins
-                if plugin.kind == "tool"
-            ]
-            if tools:
-                packs.append(
-                    {
-                        "id": pack.id,
-                        "description": pack.description,
-                        "tools": tools,
-                    }
+            if any(
+                plugin.kind == "tool"
+                and plugin.model_visible
+                and self._registry.plugin_accessible(
+                    plugin.name,
+                    agent_id=agent_id,
                 )
+                for plugin in pack.plugins
+            ):
+                packs.append(pack.id)
 
-        standalone_tools: list[dict[str, str]] = []
+        standalone_tools: list[str] = []
         for registered in self._registry.list_plugins():
             plugin = registered.plugin
             if (
                 plugin.kind != "tool"
+                or not plugin.model_visible
                 or registered.pack_id is not None
                 or registered.source == "core"
+                or not self._registry.plugin_accessible(
+                    plugin.name,
+                    agent_id=agent_id,
+                )
             ):
                 continue
-            standalone_tools.append(self._tool_summary(plugin))
+            standalone_tools.append(plugin.name)
         return packs, standalone_tools
+
+    def _pack_plugins(self, name: str, *, agent_id: str) -> tuple[Plugin, ...]:
+        for pack in self._registry.list_packs():
+            if pack.id != name or self._registry.pack_source(pack.id) == "core":
+                continue
+            return tuple(
+                plugin
+                for plugin in pack.plugins
+                if plugin.kind == "tool"
+                and plugin.model_visible
+                and self._registry.plugin_accessible(
+                    plugin.name,
+                    agent_id=agent_id,
+                )
+            )
+        return ()
 
     def _describe(
         self,
         arguments: dict[str, Any],
         failures: tuple[PluginLoadFailure, ...],
+        *,
+        agent_id: str,
     ) -> list[dict[str, Any]]:
         requested: list[str] = []
         name = str(arguments.get("name") or "").strip()
@@ -133,17 +165,40 @@ class _ToolboxHandler:
             raise ValueError("toolbox describe requires name or names")
 
         descriptions: list[dict[str, Any]] = []
-        for plugin_name in requested:
-            registered = self._deferred(plugin_name, failures)
-            plugin = registered.plugin
-            descriptions.append(
-                {
-                    "name": plugin.name,
-                    "description": plugin.description,
-                    "input_schema": deepcopy(dict(plugin.input_schema)),
-                    "pack": registered.pack_id,
-                }
+        described: set[str] = set()
+        for requested_name in requested:
+            pack_plugins = self._pack_plugins(requested_name, agent_id=agent_id)
+            registered_plugins = (
+                tuple(
+                    self._deferred(
+                        plugin.name,
+                        failures,
+                        agent_id=agent_id,
+                    )
+                    for plugin in pack_plugins
+                )
+                if pack_plugins
+                else (
+                    self._deferred(
+                        requested_name,
+                        failures,
+                        agent_id=agent_id,
+                    ),
+                )
             )
+            for registered in registered_plugins:
+                plugin = registered.plugin
+                if plugin.name in described:
+                    continue
+                described.add(plugin.name)
+                descriptions.append(
+                    {
+                        "name": plugin.name,
+                        "description": plugin.description,
+                        "input_schema": deepcopy(dict(plugin.input_schema)),
+                        "pack": registered.pack_id,
+                    }
+                )
         return descriptions
 
     async def __call__(
@@ -154,9 +209,10 @@ class _ToolboxHandler:
         failures = self._registry.refresh()
         refresh_errors = self._failure_values(failures)
         operation = str(arguments.get("operation") or "")
+        agent_id = self._agent_id(context)
 
         if operation == "list":
-            packs, standalone_tools = self._list()
+            packs, standalone_tools = self._list(agent_id=agent_id)
             result: dict[str, Any] = {
                 "operation": "list",
                 "packs": packs,
@@ -165,13 +221,21 @@ class _ToolboxHandler:
         elif operation == "describe":
             result = {
                 "operation": "describe",
-                "plugins": self._describe(arguments, failures),
+                "plugins": self._describe(
+                    arguments,
+                    failures,
+                    agent_id=agent_id,
+                ),
             }
         elif operation == "invoke":
             name = str(arguments.get("name") or "").strip()
             if not name:
                 raise ValueError("toolbox invoke requires name")
-            self._deferred(name, failures)
+            registered = self._deferred(
+                name,
+                failures,
+                agent_id=agent_id,
+            )
             nested_arguments = arguments.get("arguments") or {}
             if not isinstance(nested_arguments, Mapping):
                 raise TypeError("toolbox invoke arguments must be an object")
@@ -184,6 +248,10 @@ class _ToolboxHandler:
             result = {
                 "operation": "invoke",
                 "name": name,
+                # Persist the discovery identity with the result. The Plugin
+                # directory is live and user-editable, so historical UI must
+                # not try to reconstruct package ownership from today's files.
+                "pack": registered.pack_id,
                 "result": nested_value,
             }
         else:  # The Runtime schema normally rejects this before execution.
@@ -200,7 +268,7 @@ def create_toolbox_plugin(registry: PluginRegistry) -> Plugin:
     return Plugin(
         name=TOOLBOX_PLUGIN_NAME,
         description=(
-            "Gateway to deferred Plugins. Use list to inspect every current tool pack "
+            "Gateway to deferred Plugins. Use list to inspect every current Plugin pack "
             "and standalone tool, describe to load current input schemas, and invoke "
             "to execute a Plugin."
         ),

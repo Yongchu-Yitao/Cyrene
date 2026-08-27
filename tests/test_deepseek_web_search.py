@@ -8,8 +8,10 @@ def _official_model(**overrides):
         "id": "deepseek-official",
         "model": "deepseek-v4-flash",
         "provider": "openai_compatible",
+        "adapter": "openai",
         "base_url": "https://api.deepseek.com/v1",
         "api_key": "sk-test-secret",
+        "options": {"provider_preset": "deepseek"},
     }
     model.update(overrides)
     return model
@@ -58,7 +60,7 @@ def _native_response():
 
 
 def test_candidate_requires_exact_official_endpoint_and_supported_v4_model():
-    from cyrene.tooling.backends import deepseek_web_search as dws
+    from agent.plugin.plugin_impl.cyrene_content import deepseek_web_search as dws
 
     rejected = [
         _official_model(base_url="http://api.deepseek.com/v1"),
@@ -66,7 +68,7 @@ def test_candidate_requires_exact_official_endpoint_and_supported_v4_model():
         _official_model(base_url="https://api.deepseek.com/anthropic"),
         _official_model(base_url="https://user@api.deepseek.com/v1"),
         _official_model(model="deepseek-chat"),
-        _official_model(provider="codex_oauth"),
+        _official_model(options={"provider_preset": "openai"}),
         _official_model(adapter="anthropic"),
         _official_model(api_key=""),
     ]
@@ -83,7 +85,7 @@ def test_candidate_requires_exact_official_endpoint_and_supported_v4_model():
 
 
 def test_candidate_accepts_model_graph_openai_adapter_projection():
-    from cyrene.tooling.backends import deepseek_web_search as dws
+    from agent.plugin.plugin_impl.cyrene_content import deepseek_web_search as dws
 
     selected = dws.find_official_deepseek_search_candidate([
         _official_model(provider="openai", adapter="openai")
@@ -94,8 +96,8 @@ def test_candidate_accepts_model_graph_openai_adapter_projection():
     assert selected.configured_model == "deepseek-v4-flash"
 
 
-def test_candidate_uses_flash_search_worker_for_official_pro_and_inherits_key():
-    from cyrene.tooling.backends import deepseek_web_search as dws
+def test_candidate_does_not_borrow_a_key_from_another_profile():
+    from agent.plugin.plugin_impl.cyrene_content import deepseek_web_search as dws
 
     selected = dws.find_official_deepseek_search_candidate(
         [
@@ -110,16 +112,26 @@ def test_candidate_uses_flash_search_worker_for_official_pro_and_inherits_key():
     )
 
     assert selected is not None
-    assert selected.candidate_id == "pro"
-    assert selected.configured_model == "deepseek-v4-pro"
+    assert selected.candidate_id == "flash"
+    assert selected.configured_model == "deepseek-v4-flash"
     assert selected.search_model == "deepseek-v4-flash"
     assert selected.api_key == "shared-key"
 
 
-def test_candidate_reads_preserved_custom_models(monkeypatch):
-    from cyrene.tooling.backends import deepseek_web_search as dws
+def test_candidate_reads_the_canonical_model_graph(monkeypatch):
+    from agent.plugin.plugin_impl.cyrene_content import deepseek_web_search as dws
 
-    monkeypatch.setattr(dws, "get_custom_models", lambda: [_official_model()])
+    monkeypatch.setattr(dws, "model_plugin_catalog", lambda: [{"id": "deepseek"}])
+    monkeypatch.setattr(
+        dws,
+        "get_model_configuration",
+        lambda: {"profiles": [{"id": "profile-deepseek"}]},
+    )
+    monkeypatch.setattr(
+        dws,
+        "candidate_for_profile",
+        lambda _profile_id, _configuration: _official_model(),
+    )
 
     selected = dws.find_official_deepseek_search_candidate()
     assert selected is not None
@@ -127,7 +139,7 @@ def test_candidate_reads_preserved_custom_models(monkeypatch):
 
 
 async def test_native_search_sends_forced_web_search_and_parses_sources(monkeypatch):
-    from cyrene.tooling.backends import deepseek_web_search as dws
+    from agent.plugin.plugin_impl.cyrene_content import deepseek_web_search as dws
 
     requests = []
 
@@ -179,7 +191,7 @@ async def test_native_search_sends_forced_web_search_and_parses_sources(monkeypa
 
 
 async def test_native_search_errors_are_safe_and_do_not_include_api_key(monkeypatch):
-    from cyrene.tooling.backends import deepseek_web_search as dws
+    from agent.plugin.plugin_impl.cyrene_content import deepseek_web_search as dws
 
     class FakeResponse:
         status_code = 401
@@ -211,7 +223,7 @@ async def test_native_search_errors_are_safe_and_do_not_include_api_key(monkeypa
 
 
 async def test_deep_search_rejects_disabled_search(monkeypatch):
-    from cyrene.tooling.backends import search
+    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
     from cyrene.runtime.search_settings import SearchRuntimeSettings
 
     monkeypatch.setattr(search, "runtime_settings", lambda: SearchRuntimeSettings(False, ()))
@@ -225,7 +237,7 @@ async def test_deep_search_rejects_disabled_search(monkeypatch):
 
 
 async def test_deep_search_uses_first_enabled_provider(monkeypatch):
-    from cyrene.tooling.backends import search
+    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
     from cyrene.runtime.search_settings import SearchRuntimeSettings
 
     calls = []
@@ -248,7 +260,7 @@ async def test_deep_search_uses_first_enabled_provider(monkeypatch):
 
 
 async def test_deep_search_falls_back_after_empty_or_unusable_provider(monkeypatch):
-    from cyrene.tooling.backends import search
+    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
     from cyrene.runtime.search_settings import SearchRuntimeSettings
 
     calls = []
@@ -273,7 +285,7 @@ async def test_deep_search_falls_back_after_empty_or_unusable_provider(monkeypat
 
 
 async def test_deep_search_reports_all_provider_failures(monkeypatch):
-    from cyrene.tooling.backends import search
+    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
     from cyrene.runtime.search_settings import SearchRuntimeSettings
 
     async def run(provider, _topic, **_kwargs):
@@ -296,7 +308,7 @@ async def test_deep_search_reports_all_provider_failures(monkeypatch):
 
 
 async def test_provider_boundary_converts_unexpected_failure_for_fallback(monkeypatch):
-    from cyrene.tooling.backends import search
+    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
 
     async def broken_simplexng(_topic, **_kwargs):
         raise ValueError("bad provider response")
@@ -313,8 +325,8 @@ async def test_provider_boundary_converts_unexpected_failure_for_fallback(monkey
 
 
 async def test_tool_passes_run_context_to_search(monkeypatch):
-    from cyrene.agent.context import bind_run_context
-    from cyrene.tool_impl.core import web_search
+    from agent.plugin import PluginContext
+    from agent.plugin.plugin_impl.cyrene_content import web_search
 
     captured = []
 
@@ -323,14 +335,16 @@ async def test_tool_passes_run_context_to_search(monkeypatch):
         return "ok"
 
     monkeypatch.setattr(web_search, "deep_search", fake_search)
-    with bind_run_context(session_id="session-context", round_id="round-context"):
-        result = await web_search._tool_websearch(
-            {"query": "facts", "detail": "preview", "max_results": 3},
-            None,
-            123,
-            "runtime.db",
-            None,
-        )
+    result = await web_search._tool_websearch(
+        {"query": "facts", "detail": "preview", "max_results": 3},
+        PluginContext(data={
+            "db_path": "runtime.db",
+            "run_context": {
+                "session_id": "session-context",
+                "round_id": "round-context",
+            },
+        }),
+    )
 
     assert result == "ok"
     assert captured == [

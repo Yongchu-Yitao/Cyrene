@@ -3,7 +3,7 @@
 Normal task requests remain bounded operations, but their ownership and audit
 record must exist before the Agent can produce tool side effects.  This module
 provides the common control-plane contract used by ``/runs``, ``/dispatch`` and
-the compatibility ``/chat`` endpoint:
+the direct ``/chat`` endpoint:
 
 * one explicit in-process owner per task session;
 * a durable ``running`` record before model/tool work starts;
@@ -18,18 +18,25 @@ import asyncio
 import contextvars
 import copy
 import json
+import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi.responses import JSONResponse
+
 from cyrene.runtime.run_coordinator import RunCoordinator, RunLease, run_coordinator_for
+from cyrene.workbench import project_repository, project_runtime
+
+
+logger = logging.getLogger(__name__)
+ResumeTaskRun = Callable[[str, str, dict[str, Any]], Awaitable[Any]]
 
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-TaskRunLease = RunLease
 _CURRENT_TASK_RUN_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
     "workbench_task_run_id", default=""
 )
@@ -104,10 +111,10 @@ def begin_task_run(
     body: dict[str, Any],
 ) -> bool:
     """Persist admission before any task model or tool work can start."""
-    from cyrene.workbench import runtime as R
-
-    payload = R._read_workbench_store()
-    project, session = R._workbench_find_session(payload, str(session_id or ""))
+    payload = project_repository._read_workbench_store()
+    project, session = project_repository._workbench_find_session(
+        payload, str(session_id or "")
+    )
     if not session or not project:
         return False
     now = _utc_now_iso()
@@ -120,7 +127,7 @@ def begin_task_run(
     ).strip()
     attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
     accepted_event = {
-        "id": R._short_id("event"),
+        "id": project_runtime._short_id("event"),
         "type": "RunAcceptedEvent",
         "runId": str(run_id),
         "createdAt": now,
@@ -161,6 +168,10 @@ def begin_task_run(
             if body.get(key) is not None
         },
         "previousTaskStatus": str(session.get("status") or "idle"),
+        # ``body`` is already an API DTO projection and therefore JSON-safe.
+        # Keeping it intact is what lets a new process replay the route-domain
+        # work around the same durable Agent run instead of guessing from UI text.
+        "resumeBody": copy.deepcopy(body),
         "error": None,
     }
     upsert_task_run(session, run)
@@ -168,7 +179,7 @@ def begin_task_run(
     session["activeRunId"] = str(run_id)
     session["updatedAt"] = now
     project["updatedAt"] = now
-    R._write_workbench_store(payload)
+    project_repository._write_workbench_store(payload)
     return True
 
 
@@ -185,6 +196,14 @@ def _response_error(result: Any) -> tuple[int, str, str]:
         )
     if isinstance(result, dict):
         return 200, str(result.get("error") or ""), str(result.get("code") or "")
+    status_code = getattr(result, "status_code", None)
+    payload = getattr(result, "payload", None)
+    if isinstance(status_code, int) and isinstance(payload, dict):
+        return (
+            status_code,
+            str(payload.get("error") or ""),
+            str(payload.get("code") or ""),
+        )
     return 200, "", ""
 
 
@@ -198,17 +217,17 @@ def finish_task_run_if_open(
     termination_reason: str = "",
 ) -> bool:
     """Settle a provisional audit unless the domain route already finalized it."""
-    from cyrene.workbench import runtime as R
-
-    payload = R._read_workbench_store()
-    project, session = R._workbench_find_session(payload, str(session_id or ""))
+    payload = project_repository._read_workbench_store()
+    project, session = project_repository._workbench_find_session(
+        payload, str(session_id or "")
+    )
     if not session or not project:
         return False
     run = _find_run(session, str(run_id or ""))
     if run is None:
         if str(session.get("activeRunId") or "") == str(run_id or ""):
             session.pop("activeRunId", None)
-            R._write_workbench_store(payload)
+            project_repository._write_workbench_store(payload)
         return False
     if str(run.get("status") or "") != "running":
         if str(session.get("activeRunId") or "") != str(run_id or ""):
@@ -227,7 +246,7 @@ def finish_task_run_if_open(
             for event in run.get("events") or []
         ):
             terminal_event = {
-                "id": R._short_id("event"),
+                "id": project_runtime._short_id("event"),
                 "type": terminal_type,
                 "runId": str(run_id),
                 "createdAt": now,
@@ -238,7 +257,7 @@ def finish_task_run_if_open(
         session.pop("activeRunId", None)
         session["updatedAt"] = now
         project["updatedAt"] = now
-        R._write_workbench_store(payload)
+        project_repository._write_workbench_store(payload)
         return True
 
     response_status, response_error, response_code = _response_error(result)
@@ -256,7 +275,7 @@ def finish_task_run_if_open(
     if isinstance(result, dict) and result.get("replyKind"):
         run["replyKind"] = str(result.get("replyKind") or "")
     terminal_event = {
-        "id": R._short_id("event"),
+        "id": project_runtime._short_id("event"),
         "type": {
             "completed": "RunCompletedEvent",
             "cancelled": "RunCancelledEvent",
@@ -272,64 +291,135 @@ def finish_task_run_if_open(
         session.pop("activeRunId", None)
     session["updatedAt"] = now
     project["updatedAt"] = now
-    R._write_workbench_store(payload)
+    project_repository._write_workbench_store(payload)
     return True
 
 
-def recover_interrupted_task_runs() -> int:
-    """Mark request-owned runs left open by a prior process as interrupted."""
-    from cyrene.workbench import runtime as R
+def _resume_body(run: dict[str, Any]) -> dict[str, Any]:
+    stored = run.get("resumeBody")
+    if isinstance(stored, dict):
+        return copy.deepcopy(stored)
+    raise ValueError("Task run is missing its durable resumeBody request")
 
-    payload = R._read_workbench_store()
-    changed = 0
-    now = _utc_now_iso()
+
+async def _resume_one_task_run(
+    *,
+    coordinator: RunCoordinator,
+    lease: RunLease,
+    session_id: str,
+    run_id: str,
+    run_type: str,
+    body: dict[str, Any],
+    resume_run: ResumeTaskRun,
+) -> None:
+    # Let the caller attach this task to the lease before cancellation can race
+    # with the first await inside the route-domain handler.
+    await asyncio.sleep(0)
+    token = bind_task_run_id(run_id)
+    try:
+        result = await resume_run(session_id, run_type, body)
+        finish_task_run_if_open(session_id, run_id, result=result)
+    except asyncio.CancelledError:
+        if str(lease.termination_reason or "") != "server_shutdown":
+            finish_task_run_if_open(
+                session_id,
+                run_id,
+                status="cancelled",
+                error="任务运行已被中断。",
+                termination_reason=str(
+                    lease.termination_reason or "user_interrupted"
+                ),
+            )
+        raise
+    except Exception as exc:
+        logger.exception(
+            "Failed to resume Workbench Task run [session=%s run=%s]",
+            session_id,
+            run_id,
+        )
+        finish_task_run_if_open(
+            session_id,
+            run_id,
+            status="failed",
+            error=str(exc),
+            termination_reason="process_resume_failed",
+        )
+    finally:
+        reset_task_run_id(token)
+        coordinator.release(lease)
+
+
+async def recover_interrupted_task_runs(
+    db_path: str,
+    resume_run: ResumeTaskRun,
+) -> int:
+    """Rebind durable runs to their original ids and resume their ContextTrees."""
+
+    project_repository._configure_workbench_store(str(db_path or ""))
+    payload = project_repository._read_workbench_store()
+    coordinator = coordinator_for(db_path)
+    scheduled = 0
     for project in payload.get("projects") or []:
         if not isinstance(project, dict):
             continue
         for session in project.get("sessions") or []:
             if not isinstance(session, dict):
                 continue
-            session_interrupted = False
+            session_id = str(session.get("id") or "")
+            if not session_id:
+                continue
             for run in session.get("runs") or []:
-                if not isinstance(run, dict) or str(run.get("status") or "") != "running":
+                if (
+                    not isinstance(run, dict)
+                    or str(run.get("status") or "") != "running"
+                    or str(run.get("runType") or "") == "goal_loop"
+                ):
                     continue
-                if str(run.get("runType") or "") == "goal_loop":
+                run_id = str(run.get("id") or "")
+                run_type = str(run.get("runType") or "execution")
+                if not run_id:
                     continue
-                run["status"] = "interrupted"
-                run["endedAt"] = now
-                run["terminationReason"] = "process_restarted"
-                event = {
-                    "id": R._short_id("event"),
-                    "type": "RunInterruptedEvent",
-                    "runId": str(run.get("id") or ""),
-                    "createdAt": now,
-                    "body": "后端重启时该次运行尚未完成。",
-                }
-                run.setdefault("events", []).append(event)
-                session.setdefault("events", []).append(event)
-                binding = run.get("binding") if isinstance(run.get("binding"), dict) else {}
-                step_id = str(binding.get("stepId") or "")
-                for step in session.get("plan") or []:
-                    if (
-                        step_id
-                        and isinstance(step, dict)
-                        and str(step.get("id") or "") == step_id
-                        and str(step.get("status") or "") == "running"
-                    ):
-                        step["status"] = "pending"
-                        step.pop("startedAt", None)
-                        step.pop("currentAction", None)
-                changed += 1
-                session_interrupted = True
-            if session_interrupted:
-                session.pop("activeRunId", None)
-                if str(session.get("status") or "") == "running":
-                    session["status"] = "paused"
-                session["updatedAt"] = now
-                project["updatedAt"] = now
-    if changed:
-        R._write_workbench_store(payload)
-    return changed
+                try:
+                    resume_body = _resume_body(run)
+                except ValueError as exc:
+                    finish_task_run_if_open(
+                        session_id,
+                        run_id,
+                        status="failed",
+                        error=str(exc),
+                        termination_reason="process_resume_request_missing",
+                    )
+                    continue
+                lease = coordinator.try_acquire(
+                    "task",
+                    session_id,
+                    run_id,
+                    request_id=str(run.get("clientRequestId") or ""),
+                    run_type=run_type,
+                    bind_current_task=False,
+                    payload=copy.deepcopy(run),
+                    metadata={"recovered": True},
+                )
+                if lease is None:
+                    continue
+                task = asyncio.create_task(
+                    _resume_one_task_run(
+                        coordinator=coordinator,
+                        lease=lease,
+                        session_id=session_id,
+                        run_id=run_id,
+                        run_type=run_type,
+                        body=resume_body,
+                        resume_run=resume_run,
+                    ),
+                    name=f"workbench-task-resume:{session_id}:{run_id}",
+                )
+                if not coordinator.attach_task(lease, task):
+                    task.cancel()
+                    coordinator.release(lease)
+                    continue
+                scheduled += 1
+    return scheduled
 
 
 async def shutdown_task_runs(db_path: str) -> None:

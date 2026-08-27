@@ -7,7 +7,7 @@ import { useWbcComposerAgentFlow } from "./composer-flow.jsx"
 import { useWbcComposerAgentCatalog, useWbcComposerAgentConfig, useWbcComposerConfiguredModels } from "./composer-model-state.jsx"
 import { useWbcComposerVoice } from "./composer-voice.jsx"
 
-var WBC_CONTEXT_ACTIVATION_KEYS = ["mcpServers", "skills", "toolPackages", "customTools"];
+var WBC_CONTEXT_ACTIVATION_KEYS = ["mcpServers", "skills", "pluginPacks"];
 
 function wbcNormalizeContextActivations(value) {
   var source = value && typeof value === "object" ? value : {};
@@ -82,7 +82,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var [contextActivations, setContextActivations] = useWbcState(function () {
     return wbcNormalizeContextActivations(chat && chat.contextActivations);
   });
-  var [contextCatalog, setContextCatalog] = useWbcState({ mcpServers: [], skills: [], toolPackages: [], customTools: [] });
+  var [contextCatalog, setContextCatalog] = useWbcState({ mcpServers: [], skills: [], pluginPacks: [] });
   var [contextCatalogLoading, setContextCatalogLoading] = useWbcState(false);
   var [contextCatalogLoaded, setContextCatalogLoaded] = useWbcState(false);
   var [contextCatalogPanel, setContextCatalogPanel] = useWbcState("");
@@ -216,8 +216,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       setContextCatalog({
         mcpServers: Array.isArray(payload && payload.mcpServers) ? payload.mcpServers : [],
         skills: Array.isArray(payload && payload.skills) ? payload.skills : [],
-        toolPackages: Array.isArray(payload && payload.toolPackages) ? payload.toolPackages : [],
-        customTools: Array.isArray(payload && payload.customTools) ? payload.customTools : [],
+        pluginPacks: Array.isArray(payload && payload.pluginPacks) ? payload.pluginPacks : [],
       });
       setContextCatalogLoaded(true);
     }).catch(function (err) {
@@ -430,7 +429,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           var device = nextDevices.find(function (item) { return item.device_id === deviceId; });
           return !!(device && device.eligible && !device.revoked_at);
         });
-        if (nextIds.length !== current.length && chatId && String(chatId).indexOf("legacy:") !== 0) {
+        if (nextIds.length !== current.length && chatId) {
           remoteDeviceIdsRef.current = nextIds;
           wbcSaveRemoteContext(chatId, nextIds).catch(function () {});
         }
@@ -440,7 +439,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }, [chatId]);
 
   useWbcEffect(function () {
-    if (!chatId || String(chatId).indexOf("legacy:") === 0) {
+    if (!chatId) {
       setRemoteDeviceIds([]);
       return undefined;
     }
@@ -610,15 +609,15 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     if (builtin) return { ...builtin, ...declared, label: builtin.label, desc: builtin.desc, group: declared.group || "workflow" };
     var label = String(declared.label || declared.id || "");
     var desc = String(declared.description || "");
-    if (declared.group === "toolPackage" && declared.activation) {
+    if (declared.group === "pluginPack" && declared.activation) {
       label = wbcT("toolName." + declared.activation.id, label);
-      desc = wbcT("toolPackageDesc." + declared.activation.id, desc);
+      desc = wbcT("pluginPackDesc." + declared.activation.id, desc);
     }
     return { ...declared, label: label, desc: desc };
   }).filter(function (item) { return !!item.id; });
   var translatedModes = WBC_MODES.map(function (m) { return wbcModeMeta(m.id); });
   // Slash commands come from the Agent's declared command list when a
-  // capability snapshot exists; the built-in command set stays legacy-only.
+  // capability snapshot exists; the built-in Agent keeps its native set.
   var slashPool = slashCommandsCapabilityDriven
     ? agentSlashCommands.map(function (declared) {
         var builtin = translatedCommands.find(function (item) { return item.id === declared.id; });
@@ -632,7 +631,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     if (WBC_COMMAND_ICONS[item.id]) return WBC_COMMAND_ICONS[item.id];
     if (item.group === "skill") return WBC_ICONS.book;
     if (item.group === "mcp") return WBC_ICONS.layers;
-    if (item.group === "toolPackage") return WBC_ICONS.tool;
+    if (item.group === "pluginPack") return WBC_ICONS.tool;
     if (item.group === "customTool") return WBC_ICONS.code;
     if (item.group === "plugin") return WBC_ICONS.phase;
     return WBC_ICONS.slash;
@@ -650,8 +649,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var contextCapabilityCategories = [
     { key: "mcpServers", label: wbcT("workbenchChat.contextMcp", "MCP servers"), icon: WBC_ICONS.layers, items: contextCatalog.mcpServers },
     { key: "skills", label: wbcT("workbenchChat.contextSkills", "Skills"), icon: WBC_ICONS.book, items: contextCatalog.skills },
-    { key: "toolPackages", label: wbcT("workbenchChat.contextToolPackages", "Tool packages"), icon: WBC_ICONS.tool, items: contextCatalog.toolPackages },
-    { key: "customTools", label: wbcT("workbenchChat.contextCustomTools", "Custom tools"), icon: WBC_ICONS.code, items: contextCatalog.customTools },
+    { key: "pluginPacks", label: wbcT("workbenchChat.contextPluginPacks", "Plugin packs"), icon: WBC_ICONS.tool, items: contextCatalog.pluginPacks },
   ];
 
   useWbcEffect(function () {
@@ -728,7 +726,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     var previous = personaOn;
     var next = !previous;
     setSoulActive(next);
-    if (!chatId || String(chatId).indexOf("legacy:") === 0) return;
+    if (!chatId) return;
     model.updateChatPreferences(chatId, { soulActive: next }).then(function (nextChat) {
       if (chat && nextChat) Object.assign(chat, nextChat);
     }, function (err) {
@@ -751,7 +749,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       }
       return { ...prev, workspace_active: true, workspace_dir: selectedPath || prev.workspace_dir, workspace_history: history };
     });
-    if (!chatId || String(chatId).indexOf("legacy:") === 0) return;
+    if (!chatId) return;
     model.updateChatPreferences(chatId, {
       workspaceActive: true,
       workspaceOverride: selectedPath && selectedPath !== projectWorkspacePath ? selectedPath : "",
@@ -767,7 +765,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   function wbcRemoveWorkspace() {
     var previous = workspaceOn;
     setWorkspaceActive(false);
-    if (!chatId || String(chatId).indexOf("legacy:") === 0) return;
+    if (!chatId) return;
     model.updateChatPreferences(chatId, { workspaceActive: false })
       .then(function (nextChat) {
         if (chat && nextChat) Object.assign(chat, nextChat);
@@ -800,7 +798,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   function wbcSaveRemoteContext(targetChatId, nextDeviceIds) {
     var normalized = Array.from(new Set(nextDeviceIds || []));
     setRemoteDeviceIds(normalized);
-    if (!targetChatId || String(targetChatId).indexOf("legacy:") === 0) {
+    if (!targetChatId) {
       return Promise.resolve();
     }
     return workbenchServices.api().fetch(
@@ -845,7 +843,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       : next[kind].concat([identity]);
     contextActivationsRef.current = next;
     setContextActivations(next);
-    if (!chatId || String(chatId).indexOf("legacy:") === 0) return;
+    if (!chatId) return;
     model.updateChatPreferences(chatId, { contextActivations: next }).then(function (nextChat) {
       if (chat && nextChat) Object.assign(chat, nextChat);
     }, function (err) {
@@ -867,8 +865,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var sendDisabled = awaitingAnswer || (running
     ? waitingForAgent
     : (!draft.trim() && attachments.length === 0 && !command) || (!!draft.trim() && !capText));
-  var isLegacy = !!(chat && chat.legacy);
-
   // Self-management may prepare text in the current visible composer. Submit
   // is an explicit stable R2 action, so it is never inherited from the generic
   // DOM projection and always passes exact local-user delegation review.
@@ -883,7 +879,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       get_element: function () { return taRef.current; },
       get_highlight_element: function () { return composerBoxRef.current; },
       get_node: function () {
-        if (isLegacy || (compact && running) || (chat && chat.pendingQuestion)) return null;
+        if ((compact && running) || (chat && chat.pendingQuestion)) return null;
         var currentDraft = String(draftRef.current || "");
         return {
           role: "textbox",
@@ -943,7 +939,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       scope: "main",
       get_element: function () { return sendButtonRef.current; },
       get_node: function () {
-        if (isLegacy || (compact && running) || (chat && chat.pendingQuestion)) return null;
+        if ((compact && running) || (chat && chat.pendingQuestion)) return null;
         return {
           role: "button",
           name: submitMode === "interrupt"
@@ -984,18 +980,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       },
     }));
     return function () { unregister.forEach(function (remove) { remove(); }); };
-  }, [chatId, compact, running, isLegacy, chat && chat.pendingQuestion, hasRuntimeGuidance, sendDisabled]);
-
-  if (isLegacy) {
-    return (
-      <div className={"wbc-composer" + (compact ? " compact" : "")}>
-        <div className="wbc-composer-box wbc-composer-readonly">
-          {topOverlay}
-          {wbcT("workbenchChat.legacyReadonly", "This is an archived legacy session — read-only. Start a new chat to continue the topic.")}
-        </div>
-      </div>
-    );
-  }
+  }, [chatId, compact, running, chat && chat.pendingQuestion, hasRuntimeGuidance, sendDisabled]);
 
   return (
     <div className={"wbc-composer" + (compact ? " compact" : "")} data-tour="chat_composer">
@@ -1191,11 +1176,11 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                                   {category.items.length ? category.items.map(function (item) {
                                     var identity = String(item.id || "");
                                     var selected = contextActivations[category.key].indexOf(identity) >= 0;
-                                    var itemLabel = category.key === "toolPackages"
+                                    var itemLabel = category.key === "pluginPacks"
                                       ? wbcT("toolName." + identity, item.name || identity)
                                       : String(item.name || identity);
-                                    var itemDescription = category.key === "toolPackages"
-                                      ? wbcT("toolPackageDesc." + identity, item.description || "")
+                                    var itemDescription = category.key === "pluginPacks"
+                                      ? wbcT("pluginPackDesc." + identity, item.description || "")
                                       : String(item.description || item.status || "");
                                     return (
                                       <button key={identity} type="button" disabled={!item.enabled && !selected} className={"wbc-tools-enabled-row wbc-tools-context-option" + (selected ? " active" : "")} role="menuitemcheckbox" aria-checked={selected} title={itemDescription} onClick={function () { wbcToggleContextActivation(category.key, identity); }}>
@@ -1401,7 +1386,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                               var nextEffort = wbcReasoningEffortForModel(item, "");
                               setReasoningEffort(nextEffort);
                               wbcPublishChatModelChanged(chatId, item, { refresh: false });
-                              if (chatId && String(chatId).indexOf("legacy:") !== 0) {
+                              if (chatId) {
                                 model.updateChatPreferences(chatId, { model: id, reasoningEffort: nextEffort }).then(function (nextChat) {
                                   if (chat && nextChat) Object.assign(chat, nextChat);
                                   wbcPublishChatModelChanged(chatId, Object.assign({}, item, {
@@ -1446,7 +1431,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                               });
                             } else {
                               setReasoningEffort(effort);
-                              if (chatId && String(chatId).indexOf("legacy:") !== 0) {
+                              if (chatId) {
                                 model.updateChatPreferences(chatId, { reasoningEffort: effort }).then(function (nextChat) {
                                   if (chat && nextChat) Object.assign(chat, nextChat);
                                 }).catch(function () {});

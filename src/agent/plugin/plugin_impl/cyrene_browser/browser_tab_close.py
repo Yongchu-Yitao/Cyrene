@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from agent.plugin import PluginContext
 
 TOOL_NAME = "browser_tab_close"
 TOOL_DEF = {
@@ -20,7 +21,7 @@ TOOL_DEF = {
 }
 
 
-async def _tool_browser_tab_close(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+async def _tool_browser_tab_close(args: dict[str, Any], _context: PluginContext) -> str:
     from cyrene.browser import close_tab
 
     tab_id = str(args.get("tab_id") or args.get("tabId") or "").strip()

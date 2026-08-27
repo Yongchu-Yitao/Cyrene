@@ -469,11 +469,9 @@ function TaskWorkArea(props) {
   useWorkbenchEffect(function () {
     var cancelled = false;
     function loadConfiguredModels() {
-      return workbenchServices.api().json("/api/settings/models", { toast: false })
+      return workbenchServices.api().json("/api/settings/model-config", { toast: false })
       .then(function (payload) {
-        var options = Array.isArray(payload.selectable_models)
-          ? payload.selectable_models
-          : (Array.isArray(payload.models) ? payload.models : []);
+        var options = Array.isArray(payload.selectable_models) ? payload.selectable_models : [];
         function applyInitialModels(items) {
           if (cancelled) return;
           setConfiguredModels(items);
@@ -533,9 +531,11 @@ function TaskWorkArea(props) {
     function onModelConfigurationChanged() { loadConfiguredModels(); }
     loadConfiguredModels();
     window.addEventListener("cyrene:model-configuration-changed", onModelConfigurationChanged);
+    window.addEventListener("cyrene:plugins-changed", onModelConfigurationChanged);
     return function () {
       cancelled = true;
       window.removeEventListener("cyrene:model-configuration-changed", onModelConfigurationChanged);
+      window.removeEventListener("cyrene:plugins-changed", onModelConfigurationChanged);
     };
   }, [sid]);
   // Match the conversation surface: the fixed glass header and composer float

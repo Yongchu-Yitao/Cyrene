@@ -8,7 +8,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_initialize_runtime_owns_shared_host_setup(monkeypatch, tmp_path):
-    import cyrene.learning as learning
+    from cyrene.learning import orchestrator as learning_orchestrator
     from cyrene.observability import debug
     from cyrene.runtime import bootstrap
 
@@ -28,19 +28,15 @@ async def test_initialize_runtime_owns_shared_host_setup(monkeypatch, tmp_path):
         monkeypatch.setattr(bootstrap, name, value)
 
     init_db = AsyncMock()
-    ensure_soul = Mock()
     ensure_inbox = Mock()
-    init_short_term = Mock()
     clean_temp = Mock()
     enable_events = Mock()
     init_learning = AsyncMock()
     monkeypatch.setattr(bootstrap, "init_db", init_db)
-    monkeypatch.setattr(bootstrap, "ensure_soul", ensure_soul)
     monkeypatch.setattr(bootstrap, "ensure_inbox", ensure_inbox)
-    monkeypatch.setattr(bootstrap, "init_short_term", init_short_term)
     monkeypatch.setattr(bootstrap, "cleanup_temporary_artifacts", clean_temp)
     monkeypatch.setattr(debug, "enable_event_bus", enable_events)
-    monkeypatch.setattr(learning, "init", init_learning)
+    monkeypatch.setattr(learning_orchestrator, "init", init_learning)
 
     await bootstrap.initialize_runtime(
         events=True,
@@ -51,9 +47,7 @@ async def test_initialize_runtime_owns_shared_host_setup(monkeypatch, tmp_path):
 
     assert all(path.is_dir() for path in (workspace, store, data, inbox, temp))
     init_db.assert_awaited_once_with(str(store / "cyrene.db"))
-    ensure_soul.assert_called_once_with()
     ensure_inbox.assert_called_once_with("cyrene")
-    init_short_term.assert_called_once_with(data)
     clean_temp.assert_called_once_with(temp)
     enable_events.assert_called_once_with()
     init_learning.assert_awaited_once_with(data, workspace)
@@ -61,26 +55,32 @@ async def test_initialize_runtime_owns_shared_host_setup(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_external_services_share_one_startup_policy(monkeypatch):
-    import cyrene.custom_tools as custom_tools
+    import agent.plugin
     from cyrene.runtime import bootstrap
-    from cyrene.tooling.backends import mcp_manager, searxng_manager
 
-    start_search = AsyncMock(return_value="http://127.0.0.1:8888")
-    start_mcp = AsyncMock()
-    start_custom = AsyncMock()
+    class SearchService:
+        startup = AsyncMock(return_value="http://127.0.0.1:8888")
+
+    class MCPService:
+        startup = AsyncMock()
+
+    search_service = SearchService()
+    mcp_service = MCPService()
     monkeypatch.setattr(bootstrap, "SEARXNG_AUTO_START", True)
-    monkeypatch.setattr(searxng_manager, "start_searxng", start_search)
-    monkeypatch.setattr(mcp_manager, "start_mcp", start_mcp)
-    monkeypatch.setattr(custom_tools, "start_custom_tools", start_custom)
+    monkeypatch.setattr(
+        agent.plugin,
+        "active_plugin_service",
+        lambda name: search_service if name == "web_search" else None,
+    )
+    monkeypatch.setattr(bootstrap, "_native_mcp_service", lambda: mcp_service)
 
     await bootstrap.start_external_services()
 
-    start_search.assert_awaited_once_with(
+    search_service.startup.assert_awaited_once_with(
         bootstrap.SEARXNG_PORT,
         bootstrap.SEARXNG_HOST,
     )
-    start_mcp.assert_awaited_once_with()
-    start_custom.assert_awaited_once_with()
+    mcp_service.startup.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio
@@ -102,13 +102,9 @@ async def test_initialize_runtime_is_idempotent_for_one_context(monkeypatch, tmp
     context.inbox_path = tmp_path / "data" / "inbox"
 
     init_db = AsyncMock()
-    ensure_soul = Mock()
     ensure_inbox = Mock()
-    init_short_term = Mock()
     monkeypatch.setattr(bootstrap, "init_db", init_db)
-    monkeypatch.setattr(bootstrap, "ensure_soul", ensure_soul)
     monkeypatch.setattr(bootstrap, "ensure_inbox", ensure_inbox)
-    monkeypatch.setattr(bootstrap, "init_short_term", init_short_term)
 
     first = await bootstrap.initialize_runtime(context=context)
     second = await bootstrap.initialize_runtime(context=context)
@@ -117,9 +113,7 @@ async def test_initialize_runtime_is_idempotent_for_one_context(monkeypatch, tmp
     assert second is context
     assert context.initialized_components == {"core"}
     init_db.assert_awaited_once_with(str(context.database_path))
-    ensure_soul.assert_called_once_with()
     ensure_inbox.assert_called_once_with("cyrene")
-    init_short_term.assert_called_once_with(context.paths.data)
 
 
 @pytest.mark.asyncio

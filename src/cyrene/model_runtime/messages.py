@@ -9,6 +9,7 @@ import json
 import logging
 import re
 from typing import Any
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,19 @@ _JSON_FENCE_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _TRAILING_JSON_COMMA_RE = re.compile(r",(?=\s*[}\]])")
+
+
+def ensure_message_identity(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Assign stable identities to provider-neutral persisted messages."""
+
+    for message in messages:
+        if isinstance(message, dict) and not str(
+            message.get("message_id") or ""
+        ).strip():
+            message["message_id"] = f"msg_{uuid4().hex}"
+    return messages
 
 
 def _configured_tool_output_limit() -> int:
@@ -119,8 +133,8 @@ def _assistant_text(message: dict[str, Any]) -> str:
             return text
     # Fallback: some models (Qwen-style) put a final, user-facing answer in
     # ``reasoning_content`` instead of ``content``. Only honor that fallback on
-    # *terminal* turns. When the message also carries ``tool_calls`` (e.g.
-    # ``quit``), the reasoning is internal scratch work — the model's
+    # *terminal* turns. When the message also carries ``tool_calls``, the
+    # reasoning is internal scratch work — the model's
     # deliberation about whether/what to act — NOT a reply, and must never be
     # surfaced to the user (this is what leaked chain-of-thought into proactive
     # messages). Return "" so callers reconstruct a proper final reply or, for
@@ -141,6 +155,7 @@ def assistant_text(message: dict[str, Any]) -> str:
 __all__ = [
     "assistant_text",
     "canonical_tool_arguments",
+    "ensure_message_identity",
     "parse_tool_arguments",
     "truncate",
 ]

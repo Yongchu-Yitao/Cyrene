@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from cyrene.runtime.memory import short_term
+from agent.plugin import PluginContext
+from .short_term import entry_id, load_entries
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import json_result
+from ._native import create_tool, service as memory_service
+from agent.plugin.native_runtime import json_result
 
 TOOL_NAME = "ListMemories"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -23,7 +25,7 @@ def _bounded_content(value: Any) -> tuple[str, bool]:
 def _short_term_payload(entry: dict[str, Any]) -> dict[str, Any]:
     content, content_truncated = _bounded_content(entry.get("content", ""))
     memory = {
-        "memory_id": short_term.entry_id(entry),
+        "memory_id": entry_id(entry),
         "scope": "short_term",
         "content": content,
         "type": entry.get("type", ""),
@@ -64,10 +66,7 @@ def _project_payload(entry: dict[str, Any]) -> dict[str, Any]:
 
 async def _tool_list_memories(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
     """List filtered memories and report exact totals for every available store."""
     scope = str(args.get("scope", "all") or "all").strip().lower()
@@ -86,26 +85,17 @@ async def _tool_list_memories(
     if scope in {"all", "short_term"}:
         memories.extend(
             _short_term_payload(entry)
-            for entry in short_term.load_entries()
+            for entry in load_entries()
             if isinstance(entry, dict)
         )
 
     if scope in {"all", "project"}:
-        from cyrene.agent.context import get_current_session_id
-        from cyrene.workbench.context import (
-            resolve_workbench_project_id_for_session,
-        )
-
-        project_id = resolve_workbench_project_id_for_session(
-            get_current_session_id()
-        )
+        memory = memory_service(context)
+        project_id = memory.project_id
         if project_id is not None:
-            from cyrene.workbench.memory import (
-                _build_payload,
-                configure_store,
-            )
+            from .structured import _build_payload
 
-            configure_store(_db_path)
+            memory.configure_stores()
             project_available = True
             memories.extend(
                 _project_payload(entry)
@@ -169,5 +159,6 @@ async def _tool_list_memories(
 
 
 handler = _tool_list_memories
+plugin = create_tool(TOOL_DEF, handler, allow_parallel=True)
 
-__all__ = ["TOOL_NAME", "TOOL_DEF", "handler", "_tool_list_memories"]
+__all__ = ["TOOL_NAME", "TOOL_DEF", "handler", "plugin", "_tool_list_memories"]

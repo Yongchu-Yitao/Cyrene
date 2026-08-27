@@ -16,12 +16,11 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "model-usage", labelKey: "settings.modelUsage" },
     { id: "agents", labelKey: "settings.agents" },
     { id: "voice", labelKey: "settings.voiceTab" },
-    { id: "tools", labelKey: "settings.toolsTab" },
+    { id: "plugins", labelKey: "settings.pluginsTab" },
     { id: "channels", labelKey: "settings.channels" },
     { id: "remote", labelKey: "settings.remoteTab" },
-    { id: "extensions", labelKey: "settings.extensionCenter" },
-    { id: "custom-plugins", labelKey: "settings.customPlugins" },
-    { id: "custom-tools", labelKey: "settings.customTools" },
+    { id: "mcp-providers", labelKey: "settings.mcpProviders" },
+    { id: "plugin-registry", labelKey: "settings.pluginRegistry" },
     { id: "integrations", labelKey: "settings.integrations" },
     { id: "budget", labelKey: "settings.budget" },
     { id: "usage", labelKey: "settings.usage" },
@@ -73,13 +72,13 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "setting-workbench-background", tab: "appearance", labelKey: "settings.workbenchBackground", hintKey: "settings.workbenchBackgroundHint", keywords: ["背景", "background", "壁纸"] },
     { id: "setting-performance-mode", tab: "appearance", labelKey: "settings.performanceMode", hintKey: "settings.performanceModeHint", keywords: ["性能", "performance"] },
     { id: "setting-pulse-animation", tab: "appearance", labelKey: "settings.pulseAnimation", hintKey: "settings.pulseAnimationHint", keywords: ["动画", "animation", "pulse", "呼吸"] },
-    // ── Voice & tools ──
-    { id: "setting-tool-packages", tab: "tools", labelKey: "settings.toolPackages", hintKey: "settings.toolPackagesHint", keywords: ["工具包", "tool", "工具", "package"] },
-    { id: "setting-custom-tools", tab: "custom-tools", labelKey: "settings.customTools", hintKey: "settings.customToolsHint", keywords: ["自定义工具", "custom tool", "文件", "Python", "TOOL_DEF"] },
+    // ── Voice & Plugins ──
+    { id: "setting-plugin-packs", tab: "plugins", labelKey: "settings.pluginPacks", hintKey: "settings.pluginPacksHint", keywords: ["插件包", "plugin pack", "插件", "工具"] },
+    { id: "setting-standalone-plugins", tab: "plugins", labelKey: "settings.pluginStandalone", hintKey: "settings.pluginStandaloneHint", keywords: ["独立插件", "standalone plugin", "plugin", "Python"] },
     { id: "setting-voice", tab: "voice", labelKey: "settings.voiceCapability", hintKey: "settings.voiceCapabilityHint", keywords: ["语音", "voice", "tts", "asr", "声音"] },
-    // ── Extensions ──
-    { id: "setting-extensions", tab: "extensions", labelKey: "settings.extensionCenter", keywords: ["扩展", "extension", "插件", "market", "mcp", "hooks", "钩子", "hook", "技能", "skill"] },
-    { id: "setting-custom-plugins", tab: "custom-plugins", labelKey: "settings.customPlugins", hintKey: "settings.customPluginsHint", keywords: ["自定义插件", "custom plugin", "插件", "plugin", "模型", "model", "UI"] },
+    // ── Plugin framework ──
+    { id: "setting-mcp-providers", tab: "mcp-providers", labelKey: "settings.mcpProviders", hintKey: "settings.mcpProvidersHint", keywords: ["MCP", "provider", "服务器", "插件包"] },
+    { id: "setting-plugin-registry", tab: "plugin-registry", labelKey: "settings.pluginRegistry", hintKey: "settings.pluginRegistryHint", keywords: ["插件注册表", "plugin registry", "插件包", "standalone plugin", "模型", "model"] },
     // ── Data ──
     { id: "setting-storage", tab: "data", labelKey: "settings.storageUsage", keywords: ["存储", "storage", "空间", "占用", "缓存"] },
     { id: "setting-paths", tab: "data", labelKey: "settings.pathInfo", keywords: ["路径", "path", "目录", "目录位置"] },

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from cyrene import learning
+import cyrene.learning.orchestrator as learning
 
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
@@ -28,7 +28,7 @@ class LearningApplicationError(RuntimeError):
 
 
 class ProjectResolver:
-    """Resolve project ids and preserve legacy storage identifiers."""
+    """Resolve the canonical project id used by learning storage."""
 
     def __init__(self, resolve: Callable[[str], str | None]):
         self._resolve = resolve
@@ -46,7 +46,7 @@ class ProjectResolver:
         if not raw:
             return []
         resolved = self.project_id(raw)
-        return [resolved, raw] if raw != resolved else [resolved]
+        return [resolved]
 
 
 class MediaRepository:
@@ -270,10 +270,10 @@ class LearningApplicationService:
         return await learning.reject_skill_patch(skill_id, patch_id)
 
     async def activate(self, skill_id: str) -> bool:
-        return await learning.activate_learned_skill(skill_id)
+        return await learning.manual_activate_skill(skill_id)
 
     async def deprecate(self, skill_id: str) -> bool:
-        return await learning.deprecate_learned_skill(skill_id)
+        return await learning.manual_deprecate_skill(skill_id)
 
     async def delete(self, skill_id: str) -> bool:
         return await learning.delete_learned_skill(skill_id)

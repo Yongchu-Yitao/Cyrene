@@ -30,13 +30,7 @@ DATA_DIR = BASE_DIR / "data"                # 运行时数据，状态文件、�
 CACHE_DIR = app_paths.CACHE_DIR             # 平台特定缓存目录
 TEMP_DIR = app_paths.TEMP_DIR               # 应用临时产物目录（启动时按 TTL 清理）
 DB_PATH = STORE_DIR / "cyrene.runtime.database"           # SQLite 数据库路径
-STATE_FILE = DATA_DIR / "state.json"        # 运行时状态持久化
-LOTTERY_FILE = DATA_DIR / "lottery_state.json"  # 抽奖状态持久化
 INBOX_DIR = DATA_DIR / "inbox"              # 收件箱目录，存放外部消息
-SOUL_PATH = cyrene_dir(WORKSPACE_DIR) / "SOUL.md"   # 人格/身份文件
-
-# Pattern (automatic script learning)
-PATTERNS_DIR = cyrene_dir(WORKSPACE_DIR) / "patterns"
 
 # —— 从加密配置加载环境变量并注入 os.environ ——
 _env = _store.get_all_env()
@@ -55,41 +49,12 @@ WECHAT_OWNER_ID = _store.get_env("WECHAT_OWNER_ID", "")
 # === 高德地图 ===
 AMAP_API_KEY = _store.get_env("AMAP_API_KEY", "")
 
-# === LLM 配置 ===
-DEFAULT_OPENAI_BASE_URL = "https://api.deepseek.com/v1"
-DEFAULT_OPENAI_MODEL = "deepseek-v4-flash"
-
-OPENAI_API_KEY = _strip_wrapping_quotes(_store.get_env("OPENAI_API_KEY", ""))
-OPENAI_BASE_URL = _strip_wrapping_quotes(_store.get_env("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL))
-OPENAI_MODEL = _strip_wrapping_quotes(_store.get_env("OPENAI_MODEL", DEFAULT_OPENAI_MODEL))
-# 禁止使用 pro 型号（消耗太快）
-if "pro" in OPENAI_MODEL.lower():
-    import logging
-    logging.getLogger(__name__).warning("Refusing to use Pro model: %s. Falling back to deepseek-v4-flash", OPENAI_MODEL)
-    OPENAI_MODEL = "deepseek-v4-flash"
-
-# === Embedding 配置 ===
-EMBEDDING_BASE_URL = _strip_wrapping_quotes(_store.get_env("EMBEDDING_BASE_URL", ""))
-EMBEDDING_API_KEY = _strip_wrapping_quotes(_store.get_env("EMBEDDING_API_KEY", ""))
-EMBEDDING_MODEL = _strip_wrapping_quotes(_store.get_env("EMBEDDING_MODEL", ""))
-
 # === Agent 配置 ===
 ASSISTANT_NAME = _store.get_env("ASSISTANT_NAME", "Cyrene")
-MAX_HISTORY_MESSAGES = int(_store.get_env("MAX_HISTORY_MESSAGES", "40"))
 MAX_TOOL_OUTPUT_CHARS = int(_store.get_env("MAX_TOOL_OUTPUT_CHARS", "0"))
 
 # === Scheduler 配置 ===
-HEARTBEAT_INTERVAL = int(_store.get_env("HEARTBEAT_INTERVAL", "300"))
-HEARTBEAT_LOTTERY_INTERVAL = int(_store.get_env("HEARTBEAT_LOTTERY_INTERVAL", "1800"))
 SCHEDULER_INTERVAL = int(_store.get_env("SCHEDULER_INTERVAL", "60"))
-
-# === Daytime 配置 ===
-DAYTIME_START = int(_store.get_env("DAYTIME_START", "6"))
-DAYTIME_END = int(_store.get_env("DAYTIME_END", "22"))
-
-# === Lottery 配置 ===
-LOTTERY_DELTA = float(_store.get_env("LOTTERY_DELTA", "0.15"))
-LOTTERY_MAX = float(_store.get_env("LOTTERY_MAX", "0.85"))
 
 # === 搜索配置 ===
 SEARCH_PROXY = _store.get_env("SEARCH_PROXY", "")
@@ -99,8 +64,7 @@ SEARXNG_PORT = int(_store.get_env("SEARXNG_PORT", "8888"))
 SEARXNG_HOST = _store.get_env("SEARXNG_HOST", "127.0.0.1")
 
 # === Steward 配置 ===
-# Steward runs are model-backed maintenance. Keep a one-hour floor so a stale
-# legacy default cannot wake the model twice per hour on an otherwise idle app.
+# Steward runs are model-backed maintenance. Keep a one-hour floor.
 STEWARD_INTERVAL = max(3600, int(_store.get_env("STEWARD_INTERVAL", "3600")))
 
 PATTERN_DETECTION_INTERVAL = int(_store.get_env("PATTERN_DETECTION_INTERVAL", "600"))
@@ -111,15 +75,9 @@ WEB_PORT = int(os.environ.get("WEB_PORT") or _store.get_env("WEB_PORT", "4242"))
 
 # 可在 Web UI 中编辑的 key 白名单
 _EDITABLE_KEYS = {
-    "OPENAI_API_KEY":    {"label": "LLM API Key",   "masked": True},
-    "OPENAI_BASE_URL":   {"label": "LLM Endpoint",  "masked": False},
-    "OPENAI_MODEL":      {"label": "Model Name",    "masked": False},
     "TELEGRAM_BOT_TOKEN": {"label": "Telegram Token","masked": True},
     "WECHAT_BOT_TOKEN":  {"label": "WeChat Token",  "masked": True},
     "AMAP_API_KEY":      {"label": "高德地图 Key",  "masked": True},
-    "EMBEDDING_BASE_URL": {"label": "Embedding Endpoint", "masked": False},
-    "EMBEDDING_API_KEY": {"label": "Embedding API Key", "masked": True},
-    "EMBEDDING_MODEL":   {"label": "Embedding Model", "masked": False},
 }
 
 
@@ -150,13 +108,7 @@ def _apply_env_updates(updates: dict[str, str]) -> None:
     import sys as _sys
     _mod = _sys.modules[__name__]
     for key, value in updates.items():
-        if key == "OPENAI_API_KEY":
-            _mod.OPENAI_API_KEY = value
-        elif key == "OPENAI_BASE_URL":
-            _mod.OPENAI_BASE_URL = value
-        elif key == "OPENAI_MODEL":
-            _mod.OPENAI_MODEL = value
-        elif key == "TELEGRAM_BOT_TOKEN":
+        if key == "TELEGRAM_BOT_TOKEN":
             _mod.TELEGRAM_BOT_TOKEN = value
         elif key == "WECHAT_BOT_TOKEN":
             _mod.WECHAT_BOT_TOKEN = value
@@ -164,12 +116,6 @@ def _apply_env_updates(updates: dict[str, str]) -> None:
             _mod.WECHAT_OWNER_ID = value
         elif key == "AMAP_API_KEY":
             _mod.AMAP_API_KEY = value
-        elif key == "EMBEDDING_BASE_URL":
-            _mod.EMBEDDING_BASE_URL = value
-        elif key == "EMBEDDING_API_KEY":
-            _mod.EMBEDDING_API_KEY = value
-        elif key == "EMBEDDING_MODEL":
-            _mod.EMBEDDING_MODEL = value
 
 
 def get_env_keys_meta() -> list[dict]:
@@ -212,89 +158,3 @@ def get_chat_workspace(chat_id: int) -> Path:
     # chat_dir = WORKSPACE_DIR / "chats" / str(chat_id)
     # chat_dir.mkdir(parents=True, exist_ok=True)
     # return chat_dir
-
-
-_kb_db_path_override: str | None = None
-
-
-def set_knowledge_db_path_override(path: str | Path | None) -> None:
-    """Override the knowledge db path (for testing). Pass None to clear."""
-    global _kb_db_path_override
-    _kb_db_path_override = str(path) if path else None
-
-
-def get_knowledge_db_path(workspace_id: str = "default") -> Path:
-    """Get the knowledge base database path for a workspace.
-
-    Each workspace has its own knowledge base database file for isolation.
-    Future: When multi-workspace is implemented, pass the actual workspace_id.
-    """
-    if _kb_db_path_override:
-        return Path(_kb_db_path_override)
-    return STORE_DIR / f"kb_{workspace_id}.db"
-
-
-async def migrate_knowledge_to_workspace_db(workspace_id: str = "default") -> dict:
-    """One-time migration: copy knowledge tables from the global runtime database to a workspace-specific db.
-
-    Returns {"migrated": True/False, "documents": N, "reason": "..."}.
-    No-op if the target db already exists or the source has no data.
-    """
-    import aiosqlite
-
-    old_path = DB_PATH
-    new_path = get_knowledge_db_path(workspace_id)
-
-    if new_path.exists():
-        return {"migrated": False, "documents": 0, "reason": "target_db_exists"}
-
-    # Check if old db has any knowledge data
-    if not old_path.exists():
-        return {"migrated": False, "documents": 0, "reason": "no_source_db"}
-
-    async with aiosqlite.connect(str(old_path)) as old_db:
-        cursor = await old_db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='kb_documents'"
-        )
-        if not await cursor.fetchone():
-            return {"migrated": False, "documents": 0, "reason": "no_kb_tables_in_source"}
-
-        cursor = await old_db.execute("SELECT COUNT(*) FROM kb_documents")
-        doc_count = (await cursor.fetchone())[0]
-        if doc_count == 0:
-            return {"migrated": False, "documents": 0, "reason": "source_empty"}
-
-    # Initialize the new db with tables
-    from cyrene.runtime.database import init_knowledge_db
-    await init_knowledge_db(str(new_path))
-
-    # Copy data via ATTACH
-    async with aiosqlite.connect(str(new_path)) as new_db:
-        await new_db.execute(f"ATTACH DATABASE '{old_path}' AS old")
-        try:
-            # Copy documents
-            await new_db.execute("INSERT INTO kb_documents SELECT * FROM old.kb_documents")
-            documents_migrated = (await new_db.execute("SELECT changes()")).fetchone()[0]
-
-            # Copy chunks
-            await new_db.execute("INSERT INTO kb_chunks SELECT * FROM old.kb_chunks")
-            chunks_migrated = (await new_db.execute("SELECT changes()")).fetchone()[0]
-
-            # Copy relations
-            await new_db.execute("INSERT INTO kb_relations SELECT * FROM old.kb_relations")
-
-            # Populate FTS from chunks
-            await new_db.execute(
-                "INSERT INTO kb_chunks_fts(content, chunk_id, document_id) "
-                "SELECT content, id, document_id FROM kb_chunks"
-            )
-        finally:
-            await new_db.execute("DETACH DATABASE old")
-
-        await new_db.commit()
-
-    return {
-        "migrated": True,
-        "documents": documents_migrated,
-        "reason": f"migrated {documents_migrated} documents and {chunks_migrated} chunks",
-    }

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from cyrene.agent import interrupt_active_run
-from cyrene.runtime.remote_commands import referenced_chat_attachment_target
+from cyrene.workbench.chat_attachment_service import (
+    referenced_chat_attachment_target,
+)
 from cyrene.workbench.control_services import (
     ControlArtifactQueryService,
     ControlProjectQueryService,
@@ -39,6 +40,16 @@ def register_control_routes(
     artifact_service: ArtifactApplicationService,
 ) -> None:
     """Compose typed Control services and install focused HTTP registrars."""
+    def interrupt_task(*, session_id: str = "") -> bool:
+        """Interrupt the Task coordinator that owns the Plugin Agent turn."""
+
+        return bool(
+            task.context.task_runs.interrupt_task_run(
+                task.context.db_path,
+                session_id,
+            )
+        )
+
     projects = ControlProjectQueryService(
         projects=project_service,
         chat=chat,
@@ -48,7 +59,7 @@ def register_control_routes(
     tasks = ControlTaskCommandService(
         task=task,
         goals=goals,
-        interrupt_task=interrupt_active_run,
+        interrupt_task=interrupt_task,
     )
     artifacts = ControlArtifactQueryService(
         artifacts=artifact_service,

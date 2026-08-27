@@ -1,4 +1,4 @@
-"""Independent media provider tool pack."""
+"""Independent media provider collection."""
 
 from cyrene.media.providers.base import MediaProvider, ProgressCallback
 from cyrene.media.providers.registry import PROVIDERS, available_providers, resolve_provider

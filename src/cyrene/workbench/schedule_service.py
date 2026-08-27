@@ -1,17 +1,25 @@
-"""Application operations for the Workbench schedule/calendar API."""
+"""Workbench HTTP application adapter over the schedule Plugin pack."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
-from cyrene.runtime.schedule_spec import compute_next_run, resolve_schedule_timezone
-from cyrene.workbench.schedule_domain import entity_events, occurrence_window, task_events
-from cyrene.workbench.schedule_repository import ScheduleRepositoryPort, WorkspaceProjectResolver
+from agent.plugin import (
+    PluginContext,
+    PluginRegistry,
+    PluginRuntime,
+    default_plugin_impl_directory,
+)
+from agent.plugin.native_tools import seed_builtin_plugin_directory
 
-DEFAULT_CHAT_ID = -1
+from cyrene.runtime.schedule_runtime import get_schedule_runtime
+from cyrene.workbench.schedule_domain import entity_events, occurrence_window
+from cyrene.workbench.schedule_repository import WorkspaceProjectResolver
 
 
 class ScheduleApplicationError(Exception):
@@ -35,42 +43,196 @@ class UpdateScheduleCommand:
     values: dict[str, Any]
 
 
+class SchedulePluginGateway:
+    """Invoke the installed editable pack through the normal Plugin Runtime."""
+
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        bot: Any = None,
+        plugin_directory: str | Path | None = None,
+    ) -> None:
+        self.plugin_directory = Path(
+            plugin_directory or default_plugin_impl_directory()
+        ).expanduser().resolve()
+        seed_builtin_plugin_directory(self.plugin_directory)
+        self.registry = PluginRegistry()
+        failures = self.registry.load_directory(self.plugin_directory)
+        self._raise_schedule_load_failure(failures)
+        self.runtime = PluginRuntime(self.registry)
+        self.service = get_schedule_runtime(
+            db_path,
+            bot=bot,
+            plugin_directory=self.plugin_directory,
+        )
+
+    @staticmethod
+    def _raise_schedule_load_failure(failures: Any) -> None:
+        failure = next(
+            (
+                item
+                for item in failures
+                if getattr(getattr(item, "path", None), "name", "")
+                == "cyrene_schedule"
+            ),
+            None,
+        )
+        if failure is not None:
+            raise RuntimeError(
+                "cyrene_schedule Plugin failed to load: " + str(failure.error)
+            )
+
+    async def call(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        project_id: str,
+    ) -> dict[str, Any]:
+        failures = self.registry.refresh()
+        self._raise_schedule_load_failure(failures)
+        result = await self.runtime.call(
+            name,
+            dict(arguments),
+            PluginContext(
+                workspace=self.service.workspace_for_project(project_id),
+                data={
+                    "source": "workbench",
+                    "project_id": project_id,
+                    "session_id": "",
+                    "chat_id": -1,
+                },
+                services={"schedules": self.service},
+            ),
+            call_id=f"workbench:schedule:{uuid4().hex}",
+        )
+        if not result.success:
+            message = str(result.error or f"{name} failed")
+            status = 404 if "not found" in message.lower() else 400
+            raise ScheduleApplicationError(
+                message,
+                status,
+                code="schedule_plugin_failed",
+            )
+        if not isinstance(result.value, dict):
+            raise ScheduleApplicationError(
+                f"{name} returned an invalid result",
+                500,
+                code="schedule_plugin_result_invalid",
+            )
+        return dict(result.value)
+
+
 class ScheduleApplicationService:
     def __init__(
         self,
-        repository: ScheduleRepositoryPort,
+        db_path: str,
         workspace_resolver: WorkspaceProjectResolver,
         notify: Callable[..., Any],
+        *,
+        entities: Any,
+        bot: Any = None,
+        plugin_directory: str | Path | None = None,
     ) -> None:
-        self.repository = repository
         self.workspace_resolver = workspace_resolver
         self.notify = notify
+        self.gateway = SchedulePluginGateway(
+            db_path,
+            bot=bot,
+            plugin_directory=plugin_directory,
+        )
+        if entities is None:
+            raise RuntimeError("The cyrene_entity application Plugin is required")
+        self.entities = entities
+
+    async def tasks_for_project(self, project_id: str) -> list[dict[str, Any]]:
+        result = await self.gateway.call(
+            "schedule.list", {}, project_id=project_id
+        )
+        tasks = result.get("tasks")
+        return (
+            [dict(item) for item in tasks if isinstance(item, dict)]
+            if isinstance(tasks, list)
+            else []
+        )
 
     async def list_tasks(self, workspace: str) -> dict[str, Any]:
         resolved = self.workspace_resolver.resolve(workspace)
-        return {"tasks": await self.repository.list_tasks(resolved), "workspace": resolved}
+        return {
+            "tasks": await self.tasks_for_project(resolved),
+            "workspace": resolved,
+        }
 
-    async def list_occurrences(self, workspace: str, start: str, end: str) -> dict[str, Any]:
-        start_at, end_at = occurrence_window(start, end)
-        resolved = self.workspace_resolver.resolve(workspace)
-        tasks, entities = await asyncio.gather(
-            self.repository.list_tasks(resolved),
-            self.repository.list_deadline_entities(resolved),
+    async def list_all_tasks(self) -> list[dict[str, Any]]:
+        groups = await asyncio.gather(
+            *(
+                self.tasks_for_project(project_id)
+                for project_id in self.workspace_resolver.scopes()
+            )
         )
-        events: list[dict[str, Any]] = []
-        for task in tasks:
-            events.extend(task_events(task, start_at, end_at))
+        return [task for group in groups for task in group]
+
+    async def list_occurrences(
+        self, workspace: str, start: str, end: str
+    ) -> dict[str, Any]:
+        resolved = self.workspace_resolver.resolve(workspace)
+        schedule_result, entities = await asyncio.gather(
+            self.gateway.call(
+                "schedule.occurrences",
+                {"start": str(start or ""), "end": str(end or "")},
+                project_id=resolved,
+            ),
+            self.entities.list(
+                has_due_date=True,
+                project_id=resolved,
+                limit=500,
+            ),
+        )
+        start_at, end_at = occurrence_window(
+            str(schedule_result.get("start") or ""),
+            str(schedule_result.get("end") or ""),
+        )
+        raw_events = schedule_result.get("events")
+        events = (
+            [dict(item) for item in raw_events if isinstance(item, dict)]
+            if isinstance(raw_events, list)
+            else []
+        )
         events.extend(entity_events(entities, start_at, end_at))
         events.sort(key=lambda event: str(event.get("start") or ""))
-        return {"events": events, "start": start_at.isoformat(), "end": end_at.isoformat(), "workspace": resolved}
+        return {
+            "events": events,
+            "start": start_at.isoformat(),
+            "end": end_at.isoformat(),
+            "workspace": resolved,
+        }
 
     async def create(self, command: CreateScheduleCommand) -> dict[str, Any]:
-        values = _create_values(command.values)
         resolved = self.workspace_resolver.resolve(command.workspace)
-        task_id = await self.repository.create({**values, "project_id": resolved})
+        arguments = {
+            key: value
+            for key, value in command.values.items()
+            if key
+            in {
+                "prompt",
+                "schedule_type",
+                "schedule_value",
+                "schedule_timezone",
+                "action_type",
+            }
+            and value is not None
+        }
+        arguments["permission_mode"] = "workspace_only"
+        created = await self.gateway.call(
+            "schedule.create",
+            arguments,
+            project_id=resolved,
+        )
+        task_id = str(created.get("id") or "")
         self.notify(
             title="日程提醒已创建",
-            body=f"已添加提醒：{values['prompt'][:80]}",
+            body=f"已添加提醒：{str(arguments.get('prompt') or '')[:80]}",
             tab="system",
             project_ref=resolved,
             source="schedule_created",
@@ -78,15 +240,39 @@ class ScheduleApplicationService:
             link_label="日程",
             meta={"taskId": task_id},
         )
-        return {"ok": True, "id": task_id, "tasks": await self.repository.list_tasks(resolved), "workspace": resolved}
+        return {
+            "ok": True,
+            "id": task_id,
+            "tasks": await self.tasks_for_project(resolved),
+            "workspace": resolved,
+        }
 
     async def update(self, command: UpdateScheduleCommand) -> dict[str, Any]:
-        values = _update_values(command.values)
         resolved = self.workspace_resolver.resolve(command.workspace)
-        await self.repository.update(command.task_id, resolved, values)
+        arguments = {
+            key: value
+            for key, value in command.values.items()
+            if key
+            in {
+                "prompt",
+                "schedule_type",
+                "schedule_value",
+                "schedule_timezone",
+                "action_type",
+                "status",
+            }
+            and value is not None
+        }
+        arguments["task_id"] = command.task_id
+        await self.gateway.call(
+            "schedule.edit", arguments, project_id=resolved
+        )
         self.notify(
             title="日程提醒已更新",
-            body=f"提醒任务已更新：{str(values.get('prompt') or command.task_id)[:80]}",
+            body=(
+                "提醒任务已更新："
+                + str(arguments.get("prompt") or command.task_id)[:80]
+            ),
             tab="system",
             project_ref=resolved,
             source="schedule_updated",
@@ -94,77 +280,39 @@ class ScheduleApplicationService:
             link_label="日程",
             meta={"taskId": command.task_id},
         )
-        return {"ok": True, "tasks": await self.repository.list_tasks(resolved), "workspace": resolved}
+        return {
+            "ok": True,
+            "tasks": await self.tasks_for_project(resolved),
+            "workspace": resolved,
+        }
 
     async def delete(self, task_id: str, workspace: str) -> dict[str, Any]:
         resolved = self.workspace_resolver.resolve(workspace)
-        if not await self.repository.delete(task_id, resolved):
-            raise ScheduleApplicationError("task not found", 404)
-        return {"ok": True, "tasks": await self.repository.list_tasks(resolved), "workspace": resolved}
-
-    async def list_runs(self, task_id: str, workspace: str, limit: int) -> dict[str, Any]:
-        resolved = self.workspace_resolver.resolve(workspace)
-        bounded_limit = max(1, min(int(limit), 100))
-        return {"runs": await self.repository.list_runs(task_id, resolved, bounded_limit)}
-
-
-def _create_values(body: dict[str, Any]) -> dict[str, Any]:
-    prompt = str(body.get("prompt") or "").strip()
-    schedule_type = str(body.get("schedule_type") or "").strip()
-    schedule_value = str(body.get("schedule_value") or "").strip()
-    schedule_timezone = str(body.get("schedule_timezone") or "UTC").strip() or "UTC"
-    if not prompt:
-        raise ScheduleApplicationError("prompt is required", 400)
-    if not schedule_type or not schedule_value:
-        raise ScheduleApplicationError("schedule_type and schedule_value are required", 400)
-    if schedule_type == "cron":
-        _validate_timezone(schedule_timezone)
-    next_run = str(body.get("next_run") or "").strip()
-    if not next_run:
-        next_run = _compute_next_run(schedule_type, schedule_value, schedule_timezone)
-    return {
-        "chat_id": int(body.get("chat_id", DEFAULT_CHAT_ID)), "prompt": prompt,
-        "schedule_type": schedule_type, "schedule_value": schedule_value, "next_run": next_run,
-        "permission_mode": "workspace_only", "schedule_timezone": schedule_timezone,
-        "origin_session_id": str(body.get("origin_session_id") or "").strip(),
-        "action_type": str(body.get("action_type") or "agent_task"),
-    }
-
-
-def _update_values(body: dict[str, Any]) -> dict[str, Any]:
-    values = dict(body)
-    schedule_type = values.get("schedule_type")
-    schedule_value = values.get("schedule_value")
-    schedule_timezone = values.get("schedule_timezone") or "UTC"
-    if values.get("schedule_timezone") is not None:
-        _validate_timezone(str(schedule_timezone))
-    if schedule_type and schedule_value and "next_run" not in values:
-        values["next_run"] = _compute_next_run(str(schedule_type), str(schedule_value), str(schedule_timezone))
-    editable = {
-        field: values[field]
-        for field in (
-            "prompt", "action_type", "schedule_type", "schedule_value",
-            "schedule_timezone", "next_run", "status",
+        await self.gateway.call(
+            "schedule.cancel", {"task_id": task_id}, project_id=resolved
         )
-        if field in values
-    }
-    if not editable:
-        raise ScheduleApplicationError("no updatable fields provided", 400)
-    return editable
+        return {
+            "ok": True,
+            "tasks": await self.tasks_for_project(resolved),
+            "workspace": resolved,
+        }
+
+    async def list_runs(
+        self, task_id: str, workspace: str, limit: int
+    ) -> dict[str, Any]:
+        resolved = self.workspace_resolver.resolve(workspace)
+        result = await self.gateway.call(
+            "schedule.runs",
+            {"task_id": task_id, "limit": max(1, min(int(limit), 100))},
+            project_id=resolved,
+        )
+        return {"runs": result.get("runs") or []}
 
 
-def _validate_timezone(timezone_name: str) -> None:
-    try:
-        resolve_schedule_timezone(timezone_name)
-    except ValueError as exc:
-        raise ScheduleApplicationError(str(exc), 400) from exc
-
-
-def _compute_next_run(schedule_type: str, schedule_value: str, timezone_name: str) -> str:
-    try:
-        return compute_next_run(schedule_type, schedule_value, timezone_name=timezone_name)
-    except ValueError as exc:
-        raise ScheduleApplicationError(str(exc), 400) from exc
-
-
-__all__ = ["CreateScheduleCommand", "ScheduleApplicationError", "ScheduleApplicationService", "UpdateScheduleCommand"]
+__all__ = [
+    "CreateScheduleCommand",
+    "ScheduleApplicationError",
+    "ScheduleApplicationService",
+    "SchedulePluginGateway",
+    "UpdateScheduleCommand",
+]

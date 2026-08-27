@@ -2,14 +2,12 @@ import { useWorkbenchI18n } from "./workbench-i18n.jsx"
 import {
   workbenchServices, WbcVoice, wbcStartVoiceRecorder, wbcTranscribeVoiceBlob,
   useStateSt, useEffectSt, useRefSt, useMemoSt,
-  readTweak, readCapability, createEmptyModel, normalizeModel,
-  DEFAULT_MODEL_BASE_URL, readSettingsResponse, settingsFetch, showSettingsToast,
-  SectionTitle,
+  readTweak, readCapability, readSettingsResponse, settingsFetch, showSettingsToast,
 } from "./features/settings/shared.jsx"
 import {
-  RemotePanel, GeneralPanel, SearchPanel, EmbeddingSettingsSection, ChannelsPanel, AgentsPanel,
-  AppearancePanel, CustomToolsPanel, CapabilitiesPanel, DataPanel, requestDataPanelStorage, AboutPanel,
-  ExtensionsPanel, CustomPluginsPanel, ShortcutsPanel, BudgetPanel, MediaPanel,
+  RemotePanel, GeneralPanel, SearchPanel, ChannelsPanel, AgentsPanel,
+  AppearancePanel, CapabilitiesPanel, DataPanel, requestDataPanelStorage, AboutPanel,
+  McpProvidersPanel, PluginRegistryPanel, ShortcutsPanel, BudgetPanel, MediaPanel,
 } from "./features/settings/index.jsx"
 
 // ── Tab definitions ──
@@ -24,12 +22,11 @@ var TABS = [
   { id: "media", labelKey: "settings.mediaGeneration", icon: "photo-video" },
   { id: "agents", labelKey: "settings.agents", icon: "robot" },
   { id: "voice", labelKey: "settings.voiceTab", icon: "microphone" },
-  { id: "tools", labelKey: "settings.toolsTab", icon: "tools" },
+  { id: "plugins", labelKey: "settings.pluginsTab", icon: "tools" },
   { id: "channels", labelKey: "settings.channels", icon: "messages" },
   { id: "remote", labelKey: "settings.remoteTab", icon: "device-desktop-up" },
-  { id: "extensions", labelKey: "settings.extensionCenter", icon: "puzzle" },
-  { id: "custom-plugins", labelKey: "settings.customPlugins", icon: "package" },
-  { id: "custom-tools", labelKey: "settings.customTools", icon: "code" },
+  { id: "mcp-providers", labelKey: "settings.mcpProviders", icon: "puzzle" },
+  { id: "plugin-registry", labelKey: "settings.pluginRegistry", icon: "package" },
   { id: "integrations", labelKey: "settings.integrations", icon: "plug-connected" },
   { id: "budget", labelKey: "settings.budget", icon: "wallet" },
   { id: "usage", labelKey: "settings.usage", icon: "chart-bar" },
@@ -39,9 +36,9 @@ var TABS = [
 
 var SETTINGS_TAB_GROUPS = [
   { labelKey: "settings.group.general", ids: ["profile", "general", "search", "appearance", "shortcuts"] },
-  { labelKey: "settings.group.intelligence", ids: ["model-usage", "models", "media", "agents", "voice", "tools"] },
+  { labelKey: "settings.group.intelligence", ids: ["model-usage", "models", "media", "agents", "voice", "plugins"] },
   { labelKey: "settings.group.connections", ids: ["channels", "remote"] },
-  { labelKey: "settings.group.extensionsSystem", ids: ["extensions", "custom-plugins", "custom-tools", "integrations"] },
+  { labelKey: "settings.group.extensionsSystem", ids: ["mcp-providers", "plugin-registry", "integrations"] },
   { labelKey: "settings.group.data", ids: ["budget", "usage", "data"] },
   { labelKey: "settings.group.other", ids: ["about"] },
 ];
@@ -109,8 +106,6 @@ function SettingsPage({
 }) {
   var { t, lang, setLang } = useWorkbenchI18n();
   function normalizeSettingsTab(value) {
-    if (value === "skills") return "extensions";
-    if (value === "capabilities") return "voice";
     return TABS_BY_ID[value] ? value : "general";
   }
   var [tab, setTab] = useStateSt(normalizeSettingsTab(initialTab));
@@ -185,17 +180,6 @@ function SettingsPage({
   var [amapKey, setAmapKey] = useStateSt("");
   var [amapKeySaved, setAmapKeySaved] = useStateSt("");
 
-  // ── Models state ──
-  var [models, setModels] = useStateSt(function () { return [createEmptyModel()]; });
-  var [modelSource, setModelSource] = useStateSt("custom");
-  var [codexCandidate, setCodexCandidate] = useStateSt(null);
-  var [draftModel, setDraftModel] = useStateSt(createEmptyModel());
-  var [visionModels, setVisionModels] = useStateSt(function () { return [createEmptyModel()]; });
-  var [draftVision, setDraftVision] = useStateSt(createEmptyModel());
-  var [secondaryModel, setSecondaryModel] = useStateSt(null);
-  var [modelsSaved, setModelsSaved] = useStateSt("");
-  var [modelsSaving, setModelsSaving] = useStateSt(false);
-
   // ── Config state ──
   var [config, setConfig] = useStateSt({
     model: "—", base_url: "—", assistant_name: "—",
@@ -231,12 +215,10 @@ function SettingsPage({
 
   // ── Capabilities state ──
   var [redactSecrets, setRedactSecrets] = useStateSt(function () { return readCapability("redactSecrets", true); });
-  var [mcpConfigs, setMcpConfigs] = useStateSt([]);
-  var [mcpServers, setMcpServers] = useStateSt([]);
-  var [mcpSaved, setMcpSaved] = useStateSt("");
-  var [newMcpServer, setNewMcpServer] = useStateSt({ name: "", transport: "stdio", command: "", args: "", url: "", enabled: true });
-  var [toolGroups, setToolGroups] = useStateSt([]);
-  var [toolsSaved, setToolsSaved] = useStateSt("");
+  var [pluginPacks, setPluginPacks] = useStateSt([]);
+  var [standalonePlugins, setStandalonePlugins] = useStateSt([]);
+  var [pluginSaved, setPluginSaved] = useStateSt("");
+  var [pluginSettingBusy, setPluginSettingBusy] = useStateSt("");
   var [voiceStatus, setVoiceStatus] = useStateSt({
     asr_ready: false,
     tts_model_ready: false,
@@ -378,22 +360,8 @@ function SettingsPage({
   var [backupList, setBackupList] = useStateSt([]);
   var [backupMsg, setBackupMsg] = useStateSt("");
   var [exportSids, setExportSids] = useStateSt([]);
-  var [workbenchExportSessions, setWorkbenchExportSessions] = useStateSt([]);
   var [exportFmt, setExportFmt] = useStateSt("markdown");
   var [exportMsg, setExportMsg] = useStateSt("");
-
-  useEffectSt(function () {
-    var cancelled = false;
-    settingsFetch("/api/workbench/chats").then(function (response) {
-      if (!response.ok) throw new Error("failed to load conversations");
-      return response.json();
-    }).then(function (payload) {
-      if (!cancelled) setWorkbenchExportSessions(Array.isArray(payload.chats) ? payload.chats : []);
-    }).catch(function () {
-      if (!cancelled) setWorkbenchExportSessions([]);
-    });
-    return function () { cancelled = true; };
-  }, []);
 
   // ── Tweak helpers ──
   var [tweaks, setTweaks] = useStateSt(function () {
@@ -518,35 +486,7 @@ function SettingsPage({
       });
     }).catch(function () {});
 
-    settingsFetch("/api/settings/models").then(readSettingsResponse).then(function (p) {
-      var fb = p.base_url || DEFAULT_MODEL_BASE_URL;
-      var norm = function (raw, i) { return normalizeModel(raw, i, fb, ""); };
-      var ms = (p.custom_models || p.models || p.primary_candidates || [])
-        .filter(function (model) { return model.provider !== "codex_oauth"; })
-        .map(norm);
-      var vs = (p.vision_models || p.vision_candidates || []).map(norm);
-      if (!ms.length) ms = [norm({}, 0)];
-      if (!vs.length) vs = [norm({}, 0)];
-      setModels(ms);
-      setModelSource(p.primary_source === "codex" ? "codex" : "custom");
-      setCodexCandidate(p.codex_model ? norm(p.codex_model, 0) : null);
-      setVisionModels(vs);
-      setSecondaryModel({
-        id: "secondary", model: (p.secondary_model && p.secondary_model.model) || "",
-        api_key: (p.secondary_model && p.secondary_model.api_key) || "",
-        base_url: (p.secondary_model && p.secondary_model.base_url) || fb,
-        name: (p.secondary_model && (p.secondary_model.name || p.secondary_model.model)) || "",
-        ctx_limit: (p.secondary_model && Number(p.secondary_model.ctx_limit)) || 0,
-        max_concurrency: (p.secondary_model && Number(p.secondary_model.max_concurrency)) || 0,
-      });
-    }).catch(function (e) {
-      setModelsSaved(t("settings.error") + ": " + (e.message || ""));
-    });
-
-    settingsFetch("/api/settings/tools").then(function (r) { return r.json(); }).then(function (p) {
-      setToolGroups(p.tool_groups || []);
-    }).catch(function () {});
-    settingsFetch("/api/settings/mcp").then(function (r) { return r.json(); }).then(function (p) { setMcpServers(p.servers || []); setMcpConfigs(p.configs || []); }).catch(function () {});
+    refreshPluginSettings().catch(function () {});
     refreshVoiceStatus();
     settingsFetch("/api/settings/keys").then(function (r) { return r.json(); }).then(function (p) {
       var tk = (p.keys || []).find(function (item) { return item.key === "TELEGRAM_BOT_TOKEN"; });
@@ -581,73 +521,6 @@ function SettingsPage({
       .catch(function (error) { showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error"); });
   }
 
-  function saveModels() {
-    var embeddingDraft = arguments[0];
-    var onEmbeddingSaved = arguments[1];
-    var norm = models.map(function (m, i) { return normalizeModel(m, i, config.base_url || DEFAULT_MODEL_BASE_URL, ""); }).filter(function (m) { return m.model; });
-    var normalizedCodex = codexCandidate && codexCandidate.model
-      ? normalizeModel(codexCandidate, 0, "", "")
-      : null;
-    var vNorm = visionModels.map(function (m, i) { return normalizeModel(m, i, config.base_url || DEFAULT_MODEL_BASE_URL, ""); }).filter(function (m) { return m.model; });
-    if (!norm.length || !vNorm.length) { setModelsSaved(t("settings.modelCandidateRequired")); return; }
-    if (modelSource === "codex" && !normalizedCodex) { setModelsSaved(t("settings.openaiOAuthModelRequired")); return; }
-    if (modelsSaving) return;
-    setModelsSaving(true);
-    setModelsSaved(t("settings.saving"));
-    var modelRequest = settingsFetch("/api/settings/models", {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        models: modelSource === "codex" ? [normalizedCodex] : norm,
-        custom_models: norm,
-        codex_model: normalizedCodex,
-        primary_source: modelSource,
-        vision_models: vNorm,
-        secondary_model: secondaryModel ? {
-          model: secondaryModel.model, name: secondaryModel.name,
-          api_key: secondaryModel.api_key, base_url: secondaryModel.base_url,
-          ctx_limit: Number(secondaryModel.ctx_limit) || 0,
-          max_concurrency: Number(secondaryModel.max_concurrency) || 0,
-        } : null,
-      }),
-    }).then(readSettingsResponse).then(function (p) { return p; });
-    var embeddingRequest = settingsFetch("/api/settings/integrations", {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ embedding: embeddingDraft }),
-    }).then(readSettingsResponse);
-    return Promise.all([modelRequest, embeddingRequest]).then(function (responses) {
-      var p = responses[0];
-      var integrationPayload = responses[1];
-      var fb = p.base_url || config.base_url || DEFAULT_MODEL_BASE_URL;
-      setModels(((p.custom_models || norm)).map(function (m, i) { return normalizeModel(m, i, fb, ""); }));
-      setModelSource(p.primary_source === "codex" ? "codex" : "custom");
-      setCodexCandidate(p.codex_model ? normalizeModel(p.codex_model, 0, "", "") : null);
-      setVisionModels(((p.vision_models || p.vision_candidates || vNorm)).map(function (m, i) { return normalizeModel(m, i, fb, ""); }));
-      setSecondaryModel({
-        id: "secondary", model: (p.secondary_model && p.secondary_model.model) || "",
-        api_key: (p.secondary_model && p.secondary_model.api_key) || "",
-        base_url: (p.secondary_model && p.secondary_model.base_url) || fb,
-        name: (p.secondary_model && (p.secondary_model.name || p.secondary_model.model)) || "",
-        ctx_limit: (p.secondary_model && Number(p.secondary_model.ctx_limit)) || 0,
-        max_concurrency: (p.secondary_model && Number(p.secondary_model.max_concurrency)) || 0,
-      });
-      setConfig(function (previous) {
-        return {
-          ...previous,
-          model: p.active_model_name || previous.model,
-          base_url: p.base_url || previous.base_url,
-        };
-      });
-      if (onEmbeddingSaved) onEmbeddingSaved(integrationPayload.embedding);
-      setModelsSaved("");
-      showSettingsToast(t("settings.saved"), "success");
-    }).catch(function (e) {
-      setModelsSaved("");
-      showSettingsToast(t("settings.error") + ": " + (e.message || ""), "error");
-    }).finally(function () {
-      setModelsSaving(false);
-    });
-  }
-
   function saveAgents() {
     settingsFetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(agentSettingsPayload(config, agentProactive)),
@@ -658,31 +531,51 @@ function SettingsPage({
     });
   }
 
-  function saveToolGroup(groupId, nextEnabled) {
-    var previousGroups = toolGroups;
-    var nextGroups = toolGroups.map(function (group) {
-      return group.id === groupId
-        ? { ...group, enabled: nextEnabled }
-        : group;
+  function refreshPluginSettings() {
+    return settingsFetch("/api/settings/plugins").then(readSettingsResponse).then(function (payload) {
+      setPluginPacks(Array.isArray(payload.packs) ? payload.packs : []);
+      setStandalonePlugins(Array.isArray(payload.standalone_plugins) ? payload.standalone_plugins : []);
+      return payload;
     });
-    var payload = { packages: {} };
-    payload.packages[groupId] = nextEnabled;
-    setToolGroups(nextGroups);
-    setToolsSaved(t("settings.saving"));
-    settingsFetch("/api/settings/tools", {
+  }
+
+  function persistPluginActivation(kind, id, nextEnabled) {
+    id = String(id || "");
+    if (!id || pluginSettingBusy) return;
+    var payload = kind === "pack" ? { packs: {} } : { plugins: {} };
+    payload[kind === "pack" ? "packs" : "plugins"][id] = nextEnabled;
+    setPluginSettingBusy(kind + ":" + id);
+    setPluginSaved(t("settings.saving"));
+    settingsFetch("/api/settings/plugins", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-    }).then(function (response) {
-      if (!response.ok) return Promise.reject();
-      setToolsSaved("");
+    }).then(readSettingsResponse).then(function () {
+      return Promise.all([
+        refreshPluginSettings(),
+        workbenchServices.plugins().refresh(),
+      ]);
+    }).then(function () {
+      setPluginSaved("");
       showSettingsToast(t("settings.saved"), "success");
-      window.dispatchEvent(new Event("cyrene-tool-packages-change"));
-    }).catch(function () {
-      setToolGroups(previousGroups);
-      setToolsSaved("");
-      showSettingsToast(t("settings.error"), "error");
+    }).catch(function (error) {
+      setPluginSaved("");
+      showSettingsToast(t("settings.error") + ": " + (error && error.message || ""), "error");
+    }).finally(function () {
+      setPluginSettingBusy("");
     });
+  }
+
+  function savePluginPack(packId, nextEnabled) {
+    var pack = pluginPacks.find(function (item) { return String(item.id || "") === String(packId || ""); });
+    if (!pack || pack.locked === true) return;
+    persistPluginActivation("pack", packId, nextEnabled);
+  }
+
+  function saveStandalonePlugin(pluginName, nextEnabled) {
+    var plugin = standalonePlugins.find(function (item) { return String(item.name || item.id || "") === String(pluginName || ""); });
+    if (!plugin || plugin.locked === true) return;
+    persistPluginActivation("plugin", pluginName, nextEnabled);
   }
 
   function publishVoiceStatus(next) {
@@ -810,16 +703,6 @@ function SettingsPage({
     });
   }
 
-  function saveMcp() {
-    setMcpSaved(t("settings.saving"));
-    settingsFetch("/api/settings/mcp", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ servers: mcpConfigs }) })
-      .then(function () {
-        setMcpSaved("");
-        showSettingsToast(t("settings.saved"), "success");
-        settingsFetch("/api/settings/mcp").then(function (r) { return r.json(); }).then(function (p) { setMcpServers(p.servers || []); setMcpConfigs(p.configs || []); }).catch(function () {});
-      }).catch(function () { setMcpSaved(""); showSettingsToast(t("settings.error"), "error"); });
-  }
-
   function toggleDesktopNotifications() {
     if (typeof Notification === "undefined") return;
     if (desktopNotifications) { setDesktopNotifications(false); return; }
@@ -918,28 +801,21 @@ function SettingsPage({
           tab === "remote" && React.createElement(RemotePanel, { t }),
           tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents }),
           tab === "appearance" && React.createElement(AppearancePanel, { t, tweaks, setTweak, actualTheme, theme: initialTheme }),
-          (tab === "voice" || tab === "tools") && CapabilitiesPanel({
+          (tab === "voice" || tab === "plugins") && CapabilitiesPanel({
             mode: tab,
-            t, mcpConfigs, setMcpConfigs, mcpServers, toolGroups, toolsSaved,
-            saveToolGroup, newMcpServer, setNewMcpServer, mcpSaved, saveMcp,
+            t, pluginPacks, standalonePlugins, pluginSaved, pluginSettingBusy,
+            savePluginPack, saveStandalonePlugin,
             voiceStatus, voiceReferenceText, setVoiceReferenceText,
             voiceReferenceFile, setVoiceReferenceFile, voiceReferencePhase, voiceReferenceElapsed,
             startVoiceReferenceRecording, finishVoiceReferenceRecording,
             voiceBusy, voiceNotice,
             saveVoiceBooleanSetting, saveVoiceMode, saveVoicePreset, saveVoiceTtsModel, saveVoiceProfile, deleteVoiceProfile,
           }),
-          tab === "extensions" && React.createElement(ExtensionsPanel, { t: t }),
-          tab === "custom-plugins" && React.createElement(CustomPluginsPanel, { t: t, project: project }),
-          tab === "custom-tools" && React.createElement("div", {
-            className: "settings-panel wb-custom-tools-page",
-            id: "setting-custom-tools",
-          },
-            SectionTitle(t("settings.customTools"), t("settings.customToolsHint")),
-            React.createElement(CustomToolsPanel, { t: t }),
-          ),
+          tab === "mcp-providers" && React.createElement(McpProvidersPanel, { t: t }),
+          tab === "plugin-registry" && React.createElement(PluginRegistryPanel, { t: t }),
           tab === "integrations" && React.createElement(GeneralPanel, { integrationsOnly: true, t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project }),
           tab === "shortcuts" && React.createElement(ShortcutsPanel, { t }),
-          tab === "data" && React.createElement(DataPanel, { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, workbenchExportSessions, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
+          tab === "data" && React.createElement(DataPanel, { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
           (tab === "budget" || tab === "usage") && React.createElement(BudgetPanel, { t, config, mode: tab }),
           tab === "about" && AboutPanel({ t, config }),
         ),

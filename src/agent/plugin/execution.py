@@ -152,12 +152,13 @@ async def publish_plugin_progress(
             "Plugin progress requires an active PluginRuntime handler"
         )
 
-    from cyrene.agent.context import current_run_context, publish_runtime_event
+    from .native_runtime import publish_runtime_event, run_context_value
 
-    run_context = current_run_context()
+    context = execution.context
     safe_total = max(0, int(total))
     safe_current = max(0, min(int(current), safe_total)) if safe_total else 0
     await publish_runtime_event(
+        context,
         {
             "type": "tool_call_progress",
             "tool_call_id": execution.call.id,
@@ -169,8 +170,11 @@ async def publish_plugin_progress(
                 else min(1.0, safe_current / safe_total)
             ),
             "label": str(label or "")[:160],
-            "round_id": run_context.round_id,
-            "session_id": run_context.session_id,
+            "round_id": str(
+                run_context_value(context, "round_id")
+                or run_context_value(context, "run_id")
+            ),
+            "session_id": str(run_context_value(context, "session_id")),
         }
     )
 

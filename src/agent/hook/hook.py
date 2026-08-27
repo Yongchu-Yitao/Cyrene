@@ -45,9 +45,9 @@ class ContextUsed:
 class HookEvent:
     """One invocation delivered to a Hook Plugin.
 
-    ``payload`` stays opaque to the Hook system.  Context events carry a
-    ``ContextChange`` or ``ContextUsed`` instance; compatibility events carry
-    small dictionaries matching their legacy semantics.
+    ``payload`` stays opaque to the Hook system. Context events carry a
+    ``ContextChange`` or ``ContextUsed`` instance; lifecycle events carry
+    small dictionaries defined by the current Agent session protocol.
     """
 
     name: str

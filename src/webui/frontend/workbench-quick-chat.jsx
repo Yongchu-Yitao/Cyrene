@@ -468,7 +468,6 @@ function QuickChatApp() {
       : null;
     return {
       id: selected.chatId,
-      legacy: false,
       model: selected.model,
       agent: snapshot && snapshot.agent ? snapshot.agent : undefined,
       modelAccess: snapshot && snapshot.modelAccess ? snapshot.modelAccess : undefined,

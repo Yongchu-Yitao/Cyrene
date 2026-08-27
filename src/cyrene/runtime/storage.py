@@ -5,6 +5,9 @@ The category paths intentionally parallel ``_MANAGED_DIRECTORIES``
 Grouping differs (one storage chip may cover several backup roots), but when
 directories are added or removed all three lists must be updated together.
 
+Plugin-owned roots are supplied at runtime by the corresponding application
+service. Core deliberately does not know where memory files are stored.
+
 A category tuple may carry a third element: a name filter. When present only
 entries whose name matches the filter are counted (a matching directory is
 walked recursively). This keeps store/ file families (knowledge bases, memory
@@ -15,6 +18,7 @@ import fnmatch
 import os
 import stat
 from pathlib import Path
+from collections.abc import Iterable, Mapping
 from typing import Callable
 
 from cyrene.config import BASE_DIR, CACHE_DIR, DATA_DIR, STORE_DIR, WORKSPACE_DIR, cyrene_dir
@@ -34,22 +38,21 @@ def _name_excludes(*patterns: str) -> _NameFilter:
 
 
 # store/ families: the core database and its remote-control satellites vs the
-# per-workspace knowledge bases vs the workbench memory snapshots.
+# per-workspace knowledge bases. Memory documents now live in the shared
+# database; standalone memory files are reported by the memory Plugin.
 _KB_FILES = _name_matches("kb_*.db*")
-_MEMORY_FILES = _name_matches("wb_memory_*.json", "project_memory_*.json")
-_DATABASE_FILES = _name_excludes("kb_*.db*", "wb_memory_*.json", "project_memory_*.json")
+_DATABASE_FILES = _name_excludes("kb_*.db*")
 _STORE_FAMILIES: list[tuple[str, _NameFilter]] = [
     ("database", _DATABASE_FILES),
     ("knowledge", _KB_FILES),
-    ("memory", _MEMORY_FILES),
 ]
 _STORE_FAMILY_KEYS = {key for key, _ in _STORE_FAMILIES}
 
 STORAGE_CATEGORIES: list[tuple[str, tuple[Path, ...], _NameFilter | None]] = [
     ("database", (STORE_DIR,), _DATABASE_FILES),
     ("knowledge", (STORE_DIR,), _KB_FILES),
-    ("memory", (STORE_DIR,), _MEMORY_FILES),
-    ("conversations", (cyrene_dir(WORKSPACE_DIR) / "conversations",), None),
+    ("memory", (), None),
+    ("conversations", (), None),
     ("plans", (cyrene_dir(WORKSPACE_DIR) / "plan",), None),
     ("projects", (cyrene_dir(WORKSPACE_DIR) / "projects",), None),
     ("sessions", (DATA_DIR / "sessions",), None),
@@ -67,7 +70,21 @@ STORAGE_CATEGORIES: list[tuple[str, tuple[Path, ...], _NameFilter | None]] = [
 ]
 
 
-def scan_storage() -> dict:
+def _active_plugin_storage_paths() -> Mapping[str, Iterable[Path]]:
+    try:
+        from agent.plugin import active_plugin_service
+
+        service = active_plugin_service("memory")
+        provider = getattr(service, "storage_paths", None)
+        value = provider() if callable(provider) else {}
+        return value if isinstance(value, Mapping) else {}
+    except Exception:
+        return {}
+
+
+def scan_storage(
+    plugin_storage: Mapping[str, Iterable[Path]] | None = None,
+) -> dict:
     """Walk every category and return byte totals without blocking the loop."""
     remaining = _MAX_SCAN_ENTRIES
     totals: dict[str, list[int]] = {key: [0, 0] for key, _, _ in STORAGE_CATEGORIES}
@@ -98,6 +115,21 @@ def scan_storage() -> dict:
         except OSError:
             pass
         return total, files
+
+    def measure(path: Path, name_filter: _NameFilter | None) -> tuple[int, int]:
+        nonlocal remaining
+        try:
+            st = path.stat(follow_symlinks=False)
+        except OSError:
+            return 0, 0
+        if stat.S_ISDIR(st.st_mode):
+            return walk(path, name_filter)
+        if stat.S_ISREG(st.st_mode):
+            if remaining <= 0 or (name_filter is not None and not name_filter(path.name)):
+                return 0, 0
+            remaining -= 1
+            return st.st_size, 1
+        return 0, 0
 
     def walk_store(root: Path) -> None:
         # The three store/ families share one tree; walk it once and dispatch
@@ -140,10 +172,32 @@ def scan_storage() -> dict:
         if key in _STORE_FAMILY_KEYS:
             continue
         for path in paths:
-            if path.is_dir():
-                size, count = walk(path, name_filter)
-                totals[key][0] += size
-                totals[key][1] += count
+            size, count = measure(path, name_filter)
+            totals[key][0] += size
+            totals[key][1] += count
+
+    dynamic_paths = (
+        _active_plugin_storage_paths()
+        if plugin_storage is None
+        else plugin_storage
+    )
+    for raw_key, paths in dynamic_paths.items():
+        key = str(raw_key or "").strip()
+        if key not in totals:
+            continue
+        seen: set[Path] = set()
+        for raw_path in paths:
+            path = Path(raw_path).expanduser()
+            try:
+                identity = path.resolve(strict=False)
+            except OSError:
+                identity = path.absolute()
+            if identity in seen:
+                continue
+            seen.add(identity)
+            size, count = measure(path, None)
+            totals[key][0] += size
+            totals[key][1] += count
 
     return {
         "total": sum(size for size, _ in totals.values()),

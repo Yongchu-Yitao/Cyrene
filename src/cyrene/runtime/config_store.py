@@ -1,11 +1,7 @@
-"""Encrypted unified config store — replaces .env + web_settings.json.
+"""Encrypted unified runtime configuration store.
 
 All sensitive and user-editable configuration lives in a single
 Fernet-encrypted JSON blob under DATA_DIR / "config.enc".
-
-On first access the store migrates data from the legacy files
-(.env and web_settings.json), then writes the encrypted store.
-The legacy files are renamed to .bak for safety.
 """
 
 from __future__ import annotations
@@ -29,40 +25,24 @@ logger = logging.getLogger(__name__)
 
 
 _PATHS = app_paths.resolve_app_paths()
-_SOURCE_ROOT = _PATHS.install_resources
 _BASE_DIR = _PATHS.runtime_base
 
 DATA_DIR = _BASE_DIR / "data"
 _ENCRYPTED_PATH = DATA_DIR / "config.enc"
 _KEY_PATH = DATA_DIR / ".config_key"
-_LEGACY_ENV_PATH = _BASE_DIR / ".env"
-_LEGACY_SETTINGS_PATH = DATA_DIR / "web_settings.json"
 
 # ---------------------------------------------------------------------------
 # Default values
 # ---------------------------------------------------------------------------
 
 _DEFAULT_ENV: dict[str, str] = {
-    "OPENAI_API_KEY": "",
-    "OPENAI_BASE_URL": "https://api.deepseek.com/v1",
-    "OPENAI_MODEL": "deepseek-v4-flash",
     "TELEGRAM_BOT_TOKEN": "",
     "WECHAT_BOT_TOKEN": "",
     "WECHAT_OWNER_ID": "",
     "AMAP_API_KEY": "",
-    "EMBEDDING_BASE_URL": "",
-    "EMBEDDING_API_KEY": "",
-    "EMBEDDING_MODEL": "",
     "ASSISTANT_NAME": "Cyrene",
-    "MAX_HISTORY_MESSAGES": "40",
     "MAX_TOOL_OUTPUT_CHARS": "0",
-    "HEARTBEAT_INTERVAL": "300",
-    "HEARTBEAT_LOTTERY_INTERVAL": "1800",
     "SCHEDULER_INTERVAL": "60",
-    "DAYTIME_START": "6",
-    "DAYTIME_END": "22",
-    "LOTTERY_DELTA": "0.15",
-    "LOTTERY_MAX": "0.85",
     "SEARCH_PROXY": "",
     "TAVILY_API_KEY": "",
     "BRAVE_SEARCH_API_KEY": "",
@@ -75,24 +55,32 @@ _DEFAULT_ENV: dict[str, str] = {
     "WEB_PORT": "4242",
 }
 
-_REMOVED_ENV_KEYS = frozenset({"MAX_TOOL_ROUNDS"})
-_REMOVED_SETTING_KEYS = frozenset({"budget_mode"})
+_REMOVED_ENV_KEYS = frozenset({
+    "MAX_TOOL_ROUNDS",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
+    "EMBEDDING_BASE_URL",
+    "EMBEDDING_API_KEY",
+    "EMBEDDING_MODEL",
+})
+_REMOVED_SETTING_KEYS = frozenset({
+    "budget_mode",
+    "models",
+    "custom_models",
+    "codex_model",
+    "model_source",
+    "vision_models",
+    "secondary_model",
+    "embedding",
+})
 
-# Older installs persisted the former 12k global tool-output default into the
-# encrypted store.  Changing _DEFAULT_ENV to zero did not affect those stores,
-# so large structured results such as Cyrene UI snapshots were still cut off.
-# This key was never user-editable in Settings; treat the old default as legacy
-# state while preserving any other explicitly supplied value.
-_LEGACY_MAX_TOOL_OUTPUT_CHARS = "12000"
-
-_DEFAULT_ENABLED_TOOLS: dict[str, bool] = {
+_DEFAULT_ENABLED_PLUGINS: dict[str, bool] = {
     "Read": True, "Write": True, "Edit": True, "Glob": True, "Grep": True,
     "Bash": True, "StartShell": True, "SendShell": True, "ListShells": True,
     "ReadShell": True, "InterruptShell": True, "ShowShell": True, "DeleteShell": True,
     "WebFetch": True, "WebSearch": True,
     "spawn_subagent": True, "send_agent_message": True,
-    "schedule_task": True, "list_tasks": True, "edit_task": True, "pause_task": True,
-    "resume_task": True, "cancel_task": True,
     "send_message": True, "send_file": True, "send_wechat_file": True,
     "ask_user": True,
     "send_telegram": False, "query_round": True,
@@ -115,16 +103,11 @@ _DEFAULT_SETTINGS: dict = {
     "heartbeat_interval": 1800,
     "background_skill_learning": True,
     "write_permission_mode": "workspace_only",
-    # Adapter definitions live in code; user-owned connections, model profiles,
-    # and their independent role routes live in this encrypted document.
-    "model_configuration": {
-        "version": 1,
-        "connections": [],
-        "profiles": [],
-        "routes": {"primary": [], "secondary": [], "vision": [], "embedding": []},
-    },
-    "enabled_tools": _DEFAULT_ENABLED_TOOLS,
-    "enabled_tool_packs": {},
+    # ``model_configuration`` is intentionally absent until first access. The
+    # canonical model service seeds Model Plugin connections exactly once; a
+    # subsequently saved empty graph must remain empty.
+    "enabled_plugins": _DEFAULT_ENABLED_PLUGINS,
+    "enabled_plugin_packs": {},
     "workspace_history": [],
     "workspace_active": True,
     "soul_active": True,
@@ -137,7 +120,6 @@ _DEFAULT_SETTINGS: dict = {
     # Explicit opt-in proxy for Cyrene-launched external Agent processes.
     # Disabled means proxy variables are not inherited from the parent app.
     "external_agent_proxy_enabled": False,
-    # Empty preserves the legacy localhost + port setting on existing installs.
     "external_agent_proxy_url": "",
     "external_agent_proxy_port": 7897,
     "proxy_search_enabled": False,
@@ -174,33 +156,22 @@ _DEFAULT_SETTINGS: dict = {
     "notify_telegram": True,
     "notify_wechat": True,
     "shortcut_bindings": {},
-    # Portable Extension Center declarations. Downloaded runtimes and caches
+    # Portable Plugin-managed environment declarations. Downloaded runtimes and caches
     # deliberately live outside this encrypted snapshot.
     "extension_sources": {},
     "extension_clis": [],
     "extension_toolchains": [],
     "extension_system_bindings": {},
-    # None distinguishes a pre-migration installation from a deliberately
-    # empty encrypted MCP declaration list.
-    "mcp_servers": None,
+    "mcp_servers": [],
     "zotero": {
         "base_url": "http://127.0.0.1:23119/api",
         "auto_sync": False,
         "copy_attachments": True,
     },
-    "embedding": {
-        "provider": "openai_compatible",
-        "base_url": "",
-        "api_key": "",
-        "model": "",
-        "dimensions": 0,
-    },
 }
 
 _EDITABLE_ENV_KEYS = {
-    "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
     "TELEGRAM_BOT_TOKEN", "WECHAT_BOT_TOKEN", "AMAP_API_KEY",
-    "EMBEDDING_BASE_URL", "EMBEDDING_API_KEY", "EMBEDDING_MODEL",
 }
 
 # ---------------------------------------------------------------------------
@@ -286,7 +257,7 @@ def _next_recovery_path(reason: str) -> Path:
 
 def _recover_config_without_key() -> dict:
     """Preserve an undecryptable store and start with a fresh local key."""
-    global _fernet, _migrated
+    global _fernet, _initialized
 
     backup_path = _next_recovery_path("missing-key")
     _ENCRYPTED_PATH.replace(backup_path)
@@ -304,7 +275,7 @@ def _recover_config_without_key() -> dict:
         "settings_revision": 0,
     }
     _persist(config)
-    _migrated = True
+    _initialized = True
     return config
 
 
@@ -313,86 +284,32 @@ def _recover_config_without_key() -> dict:
 # ---------------------------------------------------------------------------
 
 _cache: dict | None = None
-_migrated: bool = False
+_initialized: bool = False
 
 
 # ---------------------------------------------------------------------------
-# Migration
+# Initialization
 # ---------------------------------------------------------------------------
 
 
-def _parse_legacy_env(path: Path) -> dict[str, str]:
-    result: dict[str, str] = {}
-    if not path.exists():
-        return result
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        key = key.strip()
-        val = val.strip().strip("'\"").strip()
-        if key in _DEFAULT_ENV:
-            result[key] = val
-    return result
-
-
-def _parse_legacy_settings(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        logger.warning("Corrupted web_settings.json, skipping migration for settings")
-        return {}
-
-
-def _migrate_if_needed() -> dict:
-    global _migrated
-    if _migrated:
+def _initialize_if_needed() -> dict:
+    global _initialized
+    if _initialized:
         return _cache or {
             "env": dict(_DEFAULT_ENV),
             "settings": dict(_DEFAULT_SETTINGS),
             "settings_revision": 0,
         }
 
-    env_from_legacy: dict[str, str] = {}
-    settings_from_legacy: dict = {}
-
-    for env_path in (_LEGACY_ENV_PATH, _LEGACY_ENV_PATH.with_suffix(".env.bak")):
-        if env_path.exists():
-            env_from_legacy = _parse_legacy_env(env_path)
-            break
-    for settings_path in (_LEGACY_SETTINGS_PATH, _LEGACY_SETTINGS_PATH.with_suffix(".json.bak")):
-        if settings_path.exists():
-            settings_from_legacy = _parse_legacy_settings(settings_path)
-            break
-
-    merged_env = dict(_DEFAULT_ENV)
-    merged_env.update(env_from_legacy)
-    merged_settings = dict(_DEFAULT_SETTINGS)
-    if settings_from_legacy:
-        for key, val in settings_from_legacy.items():
-            if key in _REMOVED_SETTING_KEYS:
-                continue
-            if key in merged_settings and isinstance(merged_settings[key], dict) and isinstance(val, dict):
-                merged_settings[key] = {**merged_settings[key], **val}
-            else:
-                merged_settings[key] = val
-
-    config = {"env": merged_env, "settings": merged_settings, "settings_revision": 0}
+    config = {
+        "env": deepcopy(_DEFAULT_ENV),
+        "settings": deepcopy(_DEFAULT_SETTINGS),
+        "settings_revision": 0,
+    }
     _generate_key_if_missing()
     _persist(config)
-
-    for legacy_path in (_LEGACY_ENV_PATH, _LEGACY_SETTINGS_PATH):
-        if legacy_path.exists():
-            try:
-                legacy_path.rename(legacy_path.with_suffix(legacy_path.suffix + ".bak"))
-            except OSError:
-                logger.warning("Failed to archive legacy plaintext config %s", legacy_path, exc_info=True)
-
-    _migrated = True
-    logger.info("Migrated legacy config to encrypted store at %s", _ENCRYPTED_PATH)
+    _initialized = True
+    logger.info("Initialized encrypted config store at %s", _ENCRYPTED_PATH)
     return config
 
 
@@ -438,14 +355,14 @@ def _persist(config: dict) -> None:
 
 def _read_config() -> dict:
     if not _ENCRYPTED_PATH.exists():
-        return _migrate_if_needed()
+        return _initialize_if_needed()
     if not _KEY_PATH.exists():
         return _recover_config_without_key()
     try:
         encrypted = _ENCRYPTED_PATH.read_bytes()
         plain = _cipher().decrypt(encrypted)
         config = json.loads(plain.decode("utf-8"))
-        return _apply_settings_migrations(config)
+        return _sanitize_loaded_config(config)
     except InvalidToken as exc:
         raise RuntimeError(
             f"Cannot decrypt config with local key {_KEY_PATH}; "
@@ -453,17 +370,14 @@ def _read_config() -> dict:
         ) from exc
 
 
-_SETTINGS_MIGRATIONS_DONE: bool = False
-
-
-def _apply_settings_migrations(config: dict) -> dict:
-    """One-time migrations for renamed/deprecated settings keys."""
-    global _SETTINGS_MIGRATIONS_DONE
-    if _SETTINGS_MIGRATIONS_DONE:
-        return config
-
+def _sanitize_loaded_config(config: dict) -> dict:
+    """Validate the encrypted document and discard retired namespaces."""
+    if not isinstance(config, dict):
+        raise RuntimeError("Encrypted config must contain a JSON object")
     env = config.setdefault("env", {})
     settings = config.setdefault("settings", {})
+    if not isinstance(env, dict) or not isinstance(settings, dict):
+        raise RuntimeError("Encrypted config env and settings must be objects")
     changed = False
 
     revision = config.get("settings_revision", 0)
@@ -487,53 +401,10 @@ def _apply_settings_migrations(config: dict) -> dict:
             settings.pop(key)
             changed = True
 
-    if str(env.get("MAX_TOOL_OUTPUT_CHARS", "")).strip() == _LEGACY_MAX_TOOL_OUTPUT_CHARS:
-        env["MAX_TOOL_OUTPUT_CHARS"] = "0"
-        os.environ.pop("MAX_TOOL_OUTPUT_CHARS", None)
-        changed = True
-
-    # v1 → v2: wechat_notify_scheduled merged into notify_wechat
-    if "wechat_notify_scheduled" in settings and "notify_wechat" not in settings:
-        settings["notify_wechat"] = settings.pop("wechat_notify_scheduled")
-        changed = True
-
-    # Fix model entries created by older onboarding that lacked model/base_url/api_key.
-    env_base_url = config.get("env", {}).get("OPENAI_BASE_URL", _DEFAULT_ENV.get("OPENAI_BASE_URL", "https://api.deepseek.com/v1"))
-    env_api_key = config.get("env", {}).get("OPENAI_API_KEY", _DEFAULT_ENV.get("OPENAI_API_KEY", ""))
-    for model_key in ("models", "vision_models"):
-        items = settings.get(model_key)
-        if not isinstance(items, list):
-            continue
-        fixed = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            model_id = str(item.get("model") or item.get("name") or item.get("id") or "").strip()
-            if not model_id:
-                continue
-            if not item.get("model"):
-                item["model"] = model_id
-                changed = True
-            if not item.get("name"):
-                item["name"] = model_id
-                changed = True
-            if not item.get("base_url"):
-                item["base_url"] = env_base_url
-                changed = True
-            if "api_key" not in item:
-                # Only backfill the active env key when the model uses the same endpoint.
-                item["api_key"] = env_api_key if str(item.get("base_url") or "").rstrip("/") == env_base_url.rstrip("/") else ""
-                changed = True
-            fixed.append(item)
-        if len(fixed) != len(items):
-            settings[model_key] = fixed
-            changed = True
-
     if changed:
         _persist(config)
-        logger.info("Applied settings migration")
+        logger.info("Removed retired fields from encrypted config")
 
-    _SETTINGS_MIGRATIONS_DONE = True
     return config
 
 
@@ -630,11 +501,11 @@ def prepare_restored_snapshot(snapshot: dict) -> tuple[dict, bytes]:
 def activate_restored_snapshot(snapshot: dict) -> None:
     """Make an already-persisted restored snapshot active in this process."""
     normalized = _normalize_restored_snapshot(snapshot)
-    global _cache, _migrated
+    global _cache, _initialized
     with _PERSIST_LOCK:
         previous_env = set((_cache or {}).get("env", {}))
         _cache = normalized
-        _migrated = True
+        _initialized = True
     restored_env = normalized["env"]
     for key in previous_env - set(restored_env):
         os.environ.pop(key, None)
@@ -651,6 +522,8 @@ def activate_restored_snapshot(snapshot: dict) -> None:
 
 
 def get_env(key: str, default: str = "") -> str:
+    if key in _REMOVED_ENV_KEYS:
+        raise ValueError(f"Environment setting `{key}` has been removed.")
     config = _ensure_loaded()
     return config.get("env", {}).get(key, _DEFAULT_ENV.get(key, default))
 
@@ -693,15 +566,9 @@ def get_editable_env_meta() -> list[dict]:
     config = _ensure_loaded()
     env = config.get("env", {})
     meta = [
-        {"key": "OPENAI_API_KEY", "label": "LLM API Key", "masked": True},
-        {"key": "OPENAI_BASE_URL", "label": "LLM Endpoint", "masked": False},
-        {"key": "OPENAI_MODEL", "label": "Model Name", "masked": False},
         {"key": "TELEGRAM_BOT_TOKEN", "label": "Telegram Token", "masked": True},
         {"key": "WECHAT_BOT_TOKEN", "label": "WeChat Token", "masked": True},
         {"key": "AMAP_API_KEY", "label": "高德地图 Key", "masked": True},
-        {"key": "EMBEDDING_BASE_URL", "label": "Embedding Endpoint", "masked": False},
-        {"key": "EMBEDDING_API_KEY", "label": "Embedding API Key", "masked": True},
-        {"key": "EMBEDDING_MODEL", "label": "Embedding Model", "masked": False},
     ]
     result = []
     for m in meta:
@@ -725,6 +592,8 @@ def _mask_value(value: str, show: int = 4) -> str:
 
 
 def get_setting(key: str, default=None):
+    if key in _REMOVED_SETTING_KEYS:
+        raise ValueError(f"Setting `{key}` has been removed.")
     config = _ensure_loaded()
     return config.get("settings", {}).get(key, _DEFAULT_SETTINGS.get(key, default))
 
@@ -776,14 +645,7 @@ def update_settings_and_env_atomic(
     expected_revision: int | None = None,
     remove_setting_keys: frozenset[str] = frozenset(),
 ) -> tuple[int, dict[str, object]]:
-    """Atomically replace settings and their legacy environment mirrors.
-
-    Model configuration needs both namespaces to cross the persistence boundary
-    together: older runtime code still reads ``OPENAI_*`` and ``EMBEDDING_*``
-    while the normalized source of truth is stored under settings.  Validation
-    belongs to the caller; this helper performs one encrypted-file replacement
-    and only then updates the live process environment.
-    """
+    """Atomically replace settings and process-environment configuration."""
 
     if not isinstance(settings_updates, dict) or not settings_updates:
         raise ValueError("settings patch must be a non-empty object")
@@ -926,77 +788,6 @@ def reset_all() -> None:
 # ---------------------------------------------------------------------------
 
 
-def get_models() -> list[dict]:
-    """Return the primary route as a compatibility view, never stored state."""
-    model_configuration = importlib.import_module(
-        "cyrene.runtime.model_configuration"
-    )
-    return model_configuration.candidates_for_route("primary")
-
-
-def save_models(models: list[dict]) -> None:
-    """Accept a legacy flat write and immediately normalize it into the graph."""
-    model_configuration = importlib.import_module(
-        "cyrene.runtime.model_configuration"
-    )
-    model_configuration.save_primary_model_candidates(list(models))
-
-
-def get_custom_models() -> list[dict]:
-    """Return non-Codex chat profiles derived from the model graph."""
-    return [
-        model
-        for model in importlib.import_module(
-            "cyrene.runtime.model_configuration"
-        ).selectable_model_candidates()
-        if str(model.get("provider") or "") != "codex_oauth"
-        and "chat" in (model.get("capabilities") or [])
-    ]
-
-
-def save_custom_models(models: list[dict]) -> None:
-    set_setting("custom_models", list(models))
-
-
-def get_codex_model() -> dict:
-    return next(
-        (
-            model
-            for model in importlib.import_module(
-                "cyrene.runtime.model_configuration"
-            ).selectable_model_candidates()
-            if str(model.get("provider") or "") == "codex_oauth"
-        ),
-        {},
-    )
-
-
-def save_codex_model(model: dict) -> None:
-    set_setting("codex_model", dict(model))
-
-
-def get_model_source() -> str:
-    models = get_models() or []
-    return (
-        "codex"
-        if models and str(models[0].get("provider") or "") == "codex_oauth"
-        else "custom"
-    )
-
-
-def save_model_source(source: str) -> None:
-    normalized = str(source or "").strip().lower()
-    if normalized not in {"custom", "codex"}:
-        raise ValueError("model source must be custom or codex")
-    set_setting("model_source", normalized)
-
-
-def get_vision_models() -> list[dict]:
-    return importlib.import_module(
-        "cyrene.runtime.model_configuration"
-    ).candidates_for_route("vision")
-
-
 def _parse_ctx_str(ctx_str: str) -> int:
     """Parse '128K' / '1M' / '200000' into an int token count. 0 if unknown."""
     s = str(ctx_str or "").strip().upper()
@@ -1053,6 +844,24 @@ def _profile_ctx_limit(profile_id: str) -> int:
     return result or _parse_ctx_str(str(profile.get("ctx") or ""))
 
 
+def _configured_model_profiles() -> list[dict]:
+    model_configuration = importlib.import_module(
+        "cyrene.runtime.model_configuration"
+    )
+    configuration = model_configuration.get_model_configuration()
+    result: list[dict] = []
+    for profile in configuration.get("profiles") or []:
+        if not isinstance(profile, dict):
+            continue
+        candidate = model_configuration.candidate_for_profile(
+            str(profile.get("id") or ""),
+            configuration,
+        )
+        if candidate is not None:
+            result.append(candidate)
+    return result
+
+
 def ctx_limit_for_model(model_name: str) -> int:
     """Context-window size (in tokens) for a specific model name. 0 if unknown.
 
@@ -1063,7 +872,7 @@ def ctx_limit_for_model(model_name: str) -> int:
     model_name = str(model_name or "").strip()
     if not model_name:
         return 0
-    for model in (get_models() or []):
+    for model in _configured_model_profiles():
         if model_name in {
             str(model.get("model") or ""),
             str(model.get("name") or ""),
@@ -1075,20 +884,8 @@ def ctx_limit_for_model(model_name: str) -> int:
                 limit = _parse_ctx_str(model.get("ctx", ""))
             if limit:
                 return limit
-    for model in (get_vision_models() or []):
-        if model_name in {
-            str(model.get("model") or ""),
-            str(model.get("name") or ""),
-            str(model.get("id") or ""),
-            str(model.get("profile_id") or ""),
-        }:
-            limit = int(model.get("context_limit") or model.get("ctx_limit") or 0)
-            if not limit:
-                limit = _parse_ctx_str(model.get("ctx", ""))
-            if limit:
-                return limit
-    # Profiles outside the primary/vision routes remain addressable by Agent
-    # bindings and future chat selectors without expanding the legacy lists.
+    # Profiles outside automatic routes remain addressable by explicit profile
+    # bindings and chat selectors.
     profile_limit = _profile_ctx_limit(model_name)
     if profile_limit > 0:
         return profile_limit
@@ -1127,7 +924,7 @@ def configured_ctx_limit_for_model(
     target = str(model_name or "").strip()
     if not target:
         return 0
-    configured = get_models() if models is None else models
+    configured = _configured_model_profiles() if models is None else models
     for item in configured or []:
         if not isinstance(item, dict):
             continue
@@ -1153,7 +950,7 @@ def effective_ctx_limit_for_model(
     known window among configured candidates, so known models are never reduced
     by an unrelated backup model.
     """
-    configured = get_models() if models is None else models
+    configured = _configured_model_profiles() if models is None else models
     explicit = configured_ctx_limit_for_model(model_name, configured)
     if explicit > 0:
         return explicit
@@ -1188,7 +985,10 @@ def effective_ctx_limit_for_model(
 
 def get_current_ctx_limit() -> int:
     """Context window for the first profile in the primary route."""
-    models = get_models() or []
+    model_configuration = importlib.import_module(
+        "cyrene.runtime.model_configuration"
+    )
+    models = model_configuration.candidates_for_route("primary")
     if not models:
         return 0
     return effective_ctx_limit_for_model(
@@ -1197,59 +997,33 @@ def get_current_ctx_limit() -> int:
     )
 
 
-def save_vision_models(models: list[dict]) -> None:
-    set_setting("vision_models", list(models))
+def get_enabled_plugins() -> dict[str, bool]:
+    return dict(get_setting("enabled_plugins", _DEFAULT_ENABLED_PLUGINS))
 
 
-def get_secondary_model() -> dict:
-    candidates = importlib.import_module(
-        "cyrene.runtime.model_configuration"
-    ).candidates_for_route("secondary")
-    return dict(candidates[0]) if candidates else {}
+def save_enabled_plugins(plugins: dict[str, bool]) -> None:
+    set_setting("enabled_plugins", dict(plugins))
 
 
-def save_secondary_model(model: dict) -> None:
-    set_setting("secondary_model", {
-        "model": str(model.get("model") or "").strip(),
-        "name": str(model.get("name") or str(model.get("model") or "")).strip(),
-        "api_key": str(model.get("api_key") or "").strip(),
-        "base_url": str(model.get("base_url") or "").strip(),
-        "ctx_limit": int(model.get("ctx_limit") or 0),
-        "max_concurrency": int(model.get("max_concurrency") or 0),
-    })
+def is_plugin_enabled(name: str) -> bool:
+    return get_enabled_plugins().get(name, True)
 
 
-def get_enabled_tools() -> dict[str, bool]:
-    return dict(get_setting("enabled_tools", _DEFAULT_ENABLED_TOOLS))
+def get_enabled_plugin_packs() -> dict[str, bool]:
+    return dict(get_setting("enabled_plugin_packs", {}))
 
 
-def save_enabled_tools(tools: dict[str, bool]) -> None:
-    protected = {"quit"}
-    clean = {k: v for k, v in tools.items() if k not in protected}
-    set_setting("enabled_tools", clean)
-
-
-def is_tool_enabled(name: str) -> bool:
-    if name == "quit":
-        return True
-    return get_enabled_tools().get(name, True)
-
-
-def get_enabled_tool_packs() -> dict[str, bool]:
-    return dict(get_setting("enabled_tool_packs", {}))
-
-
-def save_enabled_tool_packs(packs: dict[str, bool]) -> None:
+def save_enabled_plugin_packs(packs: dict[str, bool]) -> None:
     clean = {
         str(name): bool(enabled)
         for name, enabled in packs.items()
         if str(name).strip()
     }
-    set_setting("enabled_tool_packs", clean)
+    set_setting("enabled_plugin_packs", clean)
 
 
-def is_tool_pack_enabled(wire_name: str) -> bool:
-    return get_enabled_tool_packs().get(str(wire_name or ""), True)
+def is_plugin_pack_enabled(pack_id: str) -> bool:
+    return get_enabled_plugin_packs().get(str(pack_id or ""), True)
 
 
 def get_spawn_policy() -> str:

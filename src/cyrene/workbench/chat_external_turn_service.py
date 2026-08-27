@@ -21,6 +21,11 @@ from cyrene.workbench.chat_runs import ChatRun
 @dataclass(slots=True)
 class ExternalTurnProjection:
     usage: dict[str, int] = field(default_factory=dict)
+    model: str = ""
+    model_identity: dict[str, Any] = field(default_factory=dict)
+    generation_duration_ms: float | None = None
+    output_tokens_per_second: float | None = None
+    activity_messages: list[dict[str, Any]] = field(default_factory=list)
     context_report: dict[str, Any] = field(default_factory=dict)
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     commands: list[Any] | None = None

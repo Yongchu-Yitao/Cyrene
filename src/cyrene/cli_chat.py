@@ -18,7 +18,6 @@ import shutil
 import subprocess
 import sys
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
@@ -180,14 +179,13 @@ class StreamResult:
 
 
 class ChatTransport:
-    """Async transport for Workbench conversations and legacy ``run_live``."""
+    """Async transport for Workbench conversations."""
 
     def __init__(
         self,
         *,
         base_url: str = DEFAULT_DAEMON_URL,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
-        legacy: bool = False,
         chat_id: str = "",
         project_id: str = "",
         title: str = "",
@@ -196,7 +194,6 @@ class ChatTransport:
     ) -> None:
         self.base_url = str(base_url).rstrip("/")
         self.timeout = float(timeout)
-        self.legacy = bool(legacy)
         self.chat_id = str(chat_id or "").strip()
         self.project_id = str(project_id or "").strip()
         self.title = str(title or "").strip()
@@ -225,7 +222,7 @@ class ChatTransport:
 
     @property
     def session_label(self) -> str:
-        return "run_live" if self.legacy else (self.chat_id or "new conversation")
+        return self.chat_id or "new conversation"
 
     def _require_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -267,15 +264,11 @@ class ChatTransport:
         chat = payload.get("chat") if isinstance(payload, dict) else None
         if not isinstance(chat, dict):
             raise ChatClientError(f"Conversation {target!r} was not found.")
-        if str(chat.get("id") or "").startswith("legacy:"):
-            raise ChatClientError("Legacy archived conversations are read-only.")
-        self.legacy = False
         self.chat_id = target
         self.project_id = str(chat.get("projectId") or self.project_id)
         return chat
 
     async def new_chat(self, *, project_id: str = "", title: str = "") -> dict[str, Any]:
-        self.legacy = False
         target_project = str(project_id or self.project_id).strip()
         if not target_project:
             targets = await self._json("GET", "/api/workbench/quick-chat/targets")
@@ -300,7 +293,7 @@ class ChatTransport:
         return chat
 
     async def ensure_chat(self) -> None:
-        if not self.legacy and not self.chat_id:
+        if not self.chat_id:
             await self.new_chat()
 
     async def send(
@@ -314,34 +307,18 @@ class ChatTransport:
         on_event: EventHandler,
     ) -> StreamResult:
         await self.ensure_chat()
-        client_request_id = f"cli_{uuid.uuid4().hex}"
-        if self.legacy:
-            path = "/api/chat"
-            payload = {
-                "message": message,
-                "session_id": "run_live",
-                "stream": True,
-                "mode": mode,
-                "lang": lang,
-                "client_request_id": client_request_id,
-                "attachments": attachments,
-                "command": command,
-            }
-        else:
-            path = f"/api/workbench/chats/{self.chat_id}/messages"
-            payload = {
-                "message": message,
-                "stream": True,
-                "mode": mode,
-                "lang": lang,
-                "attachments": attachments,
-                "command": command,
-            }
+        path = f"/api/workbench/chats/{self.chat_id}/messages"
+        payload = {
+            "message": message,
+            "stream": True,
+            "mode": mode,
+            "lang": lang,
+            "attachments": attachments,
+            "command": command,
+        }
         return await self._stream("POST", path, payload, on_event)
 
     async def context(self) -> dict[str, Any]:
-        if self.legacy:
-            return await self._json("GET", "/api/context/state")
         await self.ensure_chat()
         return await self._json(
             "GET",
@@ -349,8 +326,6 @@ class ChatTransport:
         )
 
     async def context_blocks(self) -> dict[str, Any]:
-        if self.legacy:
-            return {"layers": [], "totalTokensEst": 0, "messageTokens": 0}
         await self.ensure_chat()
         return await self._json(
             "GET",
@@ -380,19 +355,6 @@ class ChatTransport:
         question_id = str(question.get("id") or question.get("question_id") or "").strip()
         if not question_id:
             raise ChatClientError("Pending question has no ID.")
-        if self.legacy:
-            return await self._stream(
-                "POST",
-                "/api/chat/answer-question",
-                {
-                    "question_id": question_id,
-                    "answer": answer,
-                    "stream": True,
-                    "client_request_id": f"cli_{uuid.uuid4().hex}",
-                },
-                on_event,
-            )
-
         return await self._stream(
             "POST",
             f"/api/workbench/chats/{self.chat_id}/answer",
@@ -406,8 +368,6 @@ class ChatTransport:
         )
 
     async def resume(self, *, on_event: EventHandler, cursor: int = 0) -> StreamResult:
-        if self.legacy:
-            raise ChatClientError("Legacy run_live does not provide a reconnectable run stream.")
         if not self.chat_id:
             raise ChatClientError("Use --chat CHAT_ID or /use CHAT_ID before resuming.")
         return await self._stream(
@@ -419,15 +379,16 @@ class ChatTransport:
         )
 
     async def interrupt(self) -> bool:
-        params = {"session_id": self.session_label}
-        payload = await self._json("POST", "/api/chat/interrupt", params=params)
+        if not self.chat_id:
+            return False
+        payload = await self._json(
+            "POST",
+            f"/api/workbench/chats/{self.chat_id}/interrupt",
+        )
         return bool(payload.get("interrupted")) if isinstance(payload, dict) else False
 
     async def clear(self) -> None:
-        if self.legacy:
-            await self._json("POST", "/api/chat/clear")
-        else:
-            self.chat_id = ""
+        self.chat_id = ""
 
     async def upload(self, paths: Iterable[Path]) -> list[dict[str, Any]]:
         client = self._require_client()
@@ -442,7 +403,7 @@ class ChatTransport:
                 opened.append(handle)
                 content_type = mimetypes.guess_type(resolved.name)[0] or "application/octet-stream"
                 files.append(("files", (resolved.name, handle, content_type)))
-            response = await client.post("/api/chat/upload", files=files)
+            response = await client.post("/api/workbench/uploads", files=files)
             await self._raise_for_status(response)
             payload = response.json()
         finally:
@@ -1325,10 +1286,7 @@ class InteractiveChat:
         return str(number)
 
     async def _refresh_status_context(self) -> None:
-        if (
-            getattr(self.transport, "legacy", False)
-            or not str(getattr(self.transport, "chat_id", "") or "")
-        ):
+        if not str(getattr(self.transport, "chat_id", "") or ""):
             return
         try:
             payload = await self.transport.context()
@@ -1933,7 +1891,7 @@ class InteractiveChat:
         labels = {
             "general_tab": ("常规", "General"),
             "models_tab": ("模型", "Models"),
-            "tools_tab": ("工具", "Tools"),
+            "plugins_tab": ("插件", "Plugins"),
             "connections_tab": ("连接", "Connections"),
             "data_tab": ("数据", "Data"),
             "about_tab": ("关于", "About"),
@@ -1944,9 +1902,8 @@ class InteractiveChat:
             "models": ("模型设置", "Model Settings"),
             "keys": ("API 密钥", "API Keys"),
             "budget": ("预算用量", "Budget Usage"),
-            "tools": ("工具与能力包", "Tools & Capability Packages"),
+            "plugins": ("插件与插件包", "Plugins & Plugin Packs"),
             "mcp": ("MCP 服务器", "MCP Servers"),
-            "skills": ("技能", "Skills"),
             "search": ("搜索", "Search"),
             "integrations": ("集成", "Integrations"),
             "remote": ("远程控制", "Remote Control"),
@@ -1981,12 +1938,11 @@ class InteractiveChat:
                 ],
             },
             {
-                "id": "tools",
-                "label": text("tools_tab"),
+                "id": "plugins",
+                "label": text("plugins_tab"),
                 "items": [
-                    item("tools"),
+                    item("plugins"),
                     item("mcp"),
-                    item("skills"),
                     item("search"),
                 ],
             },
@@ -2196,8 +2152,8 @@ class InteractiveChat:
     async def _run_config_action(self, section: str) -> None:
         if section == "general":
             await self._config_general()
-        elif section == "tools":
-            await self._config_tools()
+        elif section == "plugins":
+            await self._config_plugins()
         elif section == "keys":
             await self._config_keys()
         elif section == "soul":
@@ -2220,8 +2176,6 @@ class InteractiveChat:
             self._print_json(
                 await self.transport.get_setting("/api/settings/budget/stats")
             )
-        elif section == "skills":
-            await self._config_skills()
         elif section == "remote":
             await self._config_json(
                 "/api/remote/settings",
@@ -2309,31 +2263,31 @@ class InteractiveChat:
             return float(text)
         return text
 
-    async def _config_tools(self) -> None:
-        payload = await self.transport.get_setting("/api/settings/tools")
+    async def _config_plugins(self) -> None:
+        payload = await self.transport.get_setting("/api/settings/plugins")
         items = [
             {
                 "id": str(item.get("id") or ""),
                 "name": str(item.get("id") or ""),
-                "enabled": bool(item.get("enabled")),
-                "kind": "package",
+                "enabled": bool(item.get("configured_enabled")),
+                "kind": "pack",
             }
-            for item in payload.get("packages") or []
+            for item in payload.get("packs") or []
             if isinstance(item, dict)
         ] + [
             {
                 "id": str(item.get("name") or ""),
                 "name": str(item.get("name") or ""),
-                "enabled": bool(item.get("enabled")),
-                "kind": "tool",
+                "enabled": bool(item.get("configured_enabled")),
+                "kind": "plugin",
             }
-            for item in payload.get("tools") or []
+            for item in payload.get("standalone_plugins") or []
             if isinstance(item, dict) and not bool(item.get("locked"))
         ]
         selected = await self._choose(
             self._config_t(
-                "选择要切换的能力包或工具",
-                "Select a capability package or tool",
+                "选择要切换的插件包或独立插件",
+                "Select a Plugin pack or standalone Plugin",
             ),
             items,
             label=lambda item: (
@@ -2343,9 +2297,9 @@ class InteractiveChat:
         )
         if selected is None:
             return
-        key = "packages" if selected["kind"] == "package" else "tools"
+        key = "packs" if selected["kind"] == "pack" else "plugins"
         await self.transport.update_setting(
-            "/api/settings/tools",
+            "/api/settings/plugins",
             {key: {selected["id"]: not selected["enabled"]}},
         )
         enabled = not selected["enabled"]
@@ -2393,54 +2347,6 @@ class InteractiveChat:
             {"content": content},
         )
         self.renderer.info(self._config_t("SOUL 已更新。", "SOUL updated."))
-
-    async def _config_skills(self) -> None:
-        payload = await self.transport.get_setting("/api/extensions")
-        skills = [
-            dict(item)
-            for item in payload.get("skills") or []
-            if isinstance(item, dict)
-        ]
-        selected = await self._choose(
-            self._config_t(
-                "选择要启用或停用的技能",
-                "Select a skill to enable or disable",
-            ),
-            skills,
-            label=lambda item: (
-                f"{'●' if item.get('enabled', True) else '○'} "
-                f"{item.get('name') or item.get('id') or 'Skill'}"
-            ),
-        )
-        if selected is None:
-            install_path = await self._prompt_text(
-                self._config_t(
-                    "安装技能的路径（留空返回）› ",
-                    "Skill path to install (blank to return) › ",
-                )
-            )
-            if install_path:
-                await self.transport.update_setting(
-                    "/api/extensions/skills/install",
-                    {"path": install_path},
-                    method="POST",
-                )
-                self.renderer.info(
-                    self._config_t("技能已安装。", "Skill installed.")
-                )
-            return
-        skill_id = str(selected.get("id") or "")
-        enabled = not bool(selected.get("enabled", True))
-        await self.transport.update_setting(
-            f"/api/extensions/skill/{skill_id}/enabled",
-            {"enabled": enabled},
-            method="POST",
-        )
-        name = selected.get("name") or skill_id
-        self.renderer.info(self._config_t(
-            f"{name} 的状态已切换。",
-            f"{name} status toggled.",
-        ))
 
     async def _config_data(self) -> None:
         payload = await self.transport.get_setting("/api/backup/list")
@@ -2593,14 +2499,14 @@ class InteractiveChat:
         return merged
 
     async def _show_context(self) -> None:
-        if not self.transport.legacy and not self.transport.chat_id:
+        if not self.transport.chat_id:
             self.renderer.info("当前尚无 Session；输入消息后会在默认 Project 新建对话。")
             return
         payload = await self.transport.context()
         if "ctxUsed" not in payload:
             self._print_json(payload)
             return
-        if isinstance(self.renderer, RichRenderer) and not self.transport.legacy:
+        if isinstance(self.renderer, RichRenderer):
             blocks = await self.transport.context_blocks()
             if isinstance(blocks.get("layers"), list) and blocks["layers"]:
                 self._render_context_blocks(payload, blocks)
@@ -2858,7 +2764,6 @@ async def run_chat(args: Any) -> int:
     transport = ChatTransport(
         base_url=str(getattr(args, "url", DEFAULT_DAEMON_URL) or DEFAULT_DAEMON_URL),
         timeout=float(getattr(args, "timeout", DEFAULT_TIMEOUT_SECONDS)),
-        legacy=bool(getattr(args, "legacy", False)),
         chat_id=str(getattr(args, "chat_id", "") or ""),
         project_id=str(getattr(args, "project", "") or ""),
         title=str(getattr(args, "title", "") or ""),

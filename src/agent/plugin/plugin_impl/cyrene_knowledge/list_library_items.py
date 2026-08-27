@@ -1,91 +1,56 @@
-"""Tool implementation for listing the current project's literature library."""
+"""Native Plugin for listing project-library items."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import Plugin, PluginContext
+
+from ._service import knowledge_service
+from .definitions import get_native_tool_def, get_plugin_spec
+from .service import creator_label
 
 TOOL_NAME = "ListLibraryItems"
-TOOL_DEF = {
-    "type": "function",
-    "function": {
-        "name": TOOL_NAME,
-        "description": (
-            "List structured literature items in the current Workbench project. "
-            "Returns stable paper IDs, bibliographic metadata, reading state, and citekeys. "
-            "Use SearchLibrary when looking for papers about a topic or supporting evidence."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Optional title, author, DOI, venue, or abstract filter."},
-                "status": {"type": "string", "description": "Optional reading status: unread, reading, read, or archived."},
-                "collection_id": {"type": "string", "description": "Optional project-library collection ID."},
-                "tag": {"type": "string", "description": "Optional exact tag filter."},
-                "limit": {"type": "integer", "description": "Maximum results (default 50, maximum 200)."},
-            },
-            "required": [],
-        },
-    },
-}
+TOOL_DEF = get_native_tool_def(TOOL_NAME)
 TOOL_METADATA = {
     "read_only": True,
     "resource_keys": ("library:project",),
-    "requires_order": False,
 }
 
 
-def _creator_label(creators: list[dict[str, Any]]) -> str:
-    names: list[str] = []
-    for creator in creators:
-        literal = str(creator.get("name") or "").strip()
-        first = str(creator.get("first_name") or "").strip()
-        last = str(creator.get("last_name") or "").strip()
-        label = literal or " ".join(value for value in (first, last) if value)
-        if label:
-            names.append(label)
-    return ", ".join(names)
-
-
-async def _tool_list_library_items(
-    args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict[str, bool] | None,
-) -> str:
-    try:
-        from cyrene.agent.context import get_current_session_id
-        from cyrene.knowledge import library
-        from cyrene.workbench.context import ensure_knowledge_db_for_session
-
-        db_path = await ensure_knowledge_db_for_session(get_current_session_id())
-        limit = max(1, min(int(args.get("limit") or 50), 200))
-        items, total = await library.list_items(
-            db_path,
-            q=str(args.get("query") or "").strip(),
-            collection=str(args.get("collection_id") or "").strip(),
-            status=str(args.get("status") or "").strip(),
-            tag=str(args.get("tag") or "").strip(),
-            limit=limit,
+async def handler(arguments: dict[str, Any], context: PluginContext) -> str:
+    result = await knowledge_service(context).list_library_items(
+        context,
+        query=str(arguments.get("query") or ""),
+        status=str(arguments.get("status") or ""),
+        collection_id=str(arguments.get("collection_id") or ""),
+        tag=str(arguments.get("tag") or ""),
+        limit=int(arguments.get("limit") or 50),
+    )
+    items = list(result.get("items") or [])
+    if not items:
+        return "The current project literature library contains no matching items."
+    lines = [f"Project literature library: {len(items)} returned of {int(result.get('total') or 0)} matching item(s)."]
+    for index, item in enumerate(items, start=1):
+        authors = creator_label(item.get("creators") or []) or "Unknown author"
+        lines.append(
+            f"[{index}] {item.get('title') or 'Untitled'} | authors={authors} | "
+            f"year={item.get('year') or ''} | venue={item.get('venue') or ''} | "
+            f"doi={item.get('doi') or ''} | citekey={item.get('citekey') or ''} | "
+            f"status={item.get('reading_status') or 'unread'} | paper_id={item.get('id')}"
         )
-        if not items:
-            return "The current project literature library contains no matching items."
-
-        lines = [f"Project literature library: {len(items)} returned of {total} matching item(s)."]
-        for index, item in enumerate(items, start=1):
-            authors = _creator_label(item.get("creators") or []) or "Unknown author"
-            lines.append(
-                f"[{index}] {item.get('title') or 'Untitled'} | authors={authors} | "
-                f"year={item.get('year') or ''} | venue={item.get('venue') or ''} | "
-                f"doi={item.get('doi') or ''} | citekey={item.get('citekey') or ''} | "
-                f"status={item.get('reading_status') or 'unread'} | paper_id={item.get('id')}"
-            )
-        return "\n".join(lines)
-    except Exception as exc:
-        return f"Error listing the project literature library: {exc}"
+    return "\n".join(lines)
 
 
-handler = _tool_list_library_items
+_spec = get_plugin_spec(TOOL_NAME)
+plugin = Plugin(
+    name=TOOL_NAME,
+    description=_spec["description"],
+    input_schema=_spec["input_schema"],
+    handler=handler,
+    allow_parallel=True,
+    timeout_seconds=180,
+    metadata=TOOL_METADATA,
+)
 
-__all__ = ["TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler", "_tool_list_library_items"]
+__all__ = ["TOOL_DEF", "TOOL_METADATA", "TOOL_NAME", "handler", "plugin"]

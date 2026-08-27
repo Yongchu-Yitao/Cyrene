@@ -215,7 +215,13 @@ def test_woa_core_excludes_x64_only_features_and_packages_sidecars():
     spec = (ROOT / "build" / "cyrene.spec").read_text(encoding="utf-8")
     package = (ROOT / "electron" / "package.json").read_text(encoding="utf-8")
     manager = (
-        ROOT / "src" / "cyrene" / "tooling" / "backends" / "searxng_manager.py"
+        ROOT
+        / "src"
+        / "agent"
+        / "plugin"
+        / "plugin_impl"
+        / "cyrene_content"
+        / "search_service.py"
     ).read_text(encoding="utf-8")
 
     assert '"simplexng", "rapidocr", "pyclipper", "cv2", "brotli", "fasttext"' in spec

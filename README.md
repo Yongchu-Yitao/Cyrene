@@ -69,7 +69,7 @@ npm install
 npm run build
 cd ../..
 
-uv run python -m cyrene
+uv run cyrene
 ```
 
 Open `http://localhost:4242`. First run guides you through model and personality
@@ -83,16 +83,16 @@ npm install
 npm run dev
 ```
 
-Background service commands:
+Workbench backend and terminal client commands:
 
 ```bash
 uv run cyrene
+uv run cyrene chat
 uv run cyrene status
-uv run cyrene stop
 ```
 
-Bare `cyrene` starts the background service when needed and enters interactive
-chat directly. `cyrene chat` provides streaming replies, tool and plan progress, permission
+Bare `cyrene` starts the Workbench backend with the new agent runtime.
+`cyrene chat` provides streaming replies, tool and plan progress, permission
 prompts, attachments, conversation switching, interruption, and run resume.
 For scripts, use `cyrene chat --json "your task"`.
 

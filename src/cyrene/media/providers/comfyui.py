@@ -122,28 +122,24 @@ def _mcp_retryable(exc: Exception) -> bool:
 
 
 async def _execute(server: str, tool: str, arguments: dict[str, Any]) -> Any:
-    from cyrene.tooling.backends.mcp_manager import get_manager
+    from agent.plugin.mcp_service import get_mcp_service
 
-    manager = get_manager()
-    execute_raw = getattr(manager, "execute_tool_raw_on", None)
-    execute = getattr(manager, "execute_tool_on", None)
-    if not callable(execute_raw) and not callable(execute):
-        raise MediaProviderError(
-            "Cyrene's MCP manager does not support server-scoped tool calls.",
-            code="comfyui_mcp_scope_unavailable",
-        )
     try:
-        if callable(execute_raw):
-            result = await execute_raw(server, tool, arguments)
-            if bool(result.get("is_error")):
-                text = "\n".join(str(item.get("text") or "") for item in result.get("content") or [] if isinstance(item, dict) and item.get("type") == "text")
-                raise RuntimeError(text or f"ComfyUI MCP tool {tool} returned an error")
-            return {
-                "_cyrene_mcp_raw": True,
-                "content": list(result.get("content") or []),
-                "structured_content": result.get("structured_content") or {},
-            }
-        return await execute(server, tool, arguments)
+        result = await get_mcp_service().invoke_raw(server, tool, arguments)
+        if bool(result.get("is_error")):
+            text = "\n".join(
+                str(item.get("text") or "")
+                for item in result.get("content") or []
+                if isinstance(item, dict) and item.get("type") == "text"
+            )
+            raise RuntimeError(
+                text or f"ComfyUI MCP tool {tool} returned an error"
+            )
+        return {
+            "_cyrene_mcp_raw": True,
+            "content": list(result.get("content") or []),
+            "structured_content": result.get("structured_content") or {},
+        }
     except MediaProviderError:
         raise
     except Exception as exc:

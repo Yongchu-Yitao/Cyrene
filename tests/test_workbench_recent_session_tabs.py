@@ -579,7 +579,7 @@ def test_overflow_count_uses_the_i18n_parameter_position():
 
 
 def test_task_summary_exposes_compact_plan_progress_for_the_topbar():
-    from cyrene.workbench.runtime import _workbench_session_summary
+    from cyrene.workbench.project_repository import _workbench_session_summary
 
     summary = _workbench_session_summary(
         {
@@ -602,7 +602,7 @@ def test_task_summary_exposes_compact_plan_progress_for_the_topbar():
 
 
 def test_chat_summary_exposes_live_run_status_without_stale_running_state():
-    from cyrene.workbench.chat import _public_chat_light
+    from cyrene.workbench.chat_application import public_chat_light as _public_chat_light
 
     summary = _public_chat_light(
         {
@@ -618,7 +618,7 @@ def test_chat_summary_exposes_live_run_status_without_stale_running_state():
 
 
 def test_chat_summary_preserves_failed_cancelled_and_awaiting_run_outcomes():
-    from cyrene.workbench.chat import _public_chat_light
+    from cyrene.workbench.chat_application import public_chat_light as _public_chat_light
 
     base = {
         "projectId": "project-1",
@@ -651,39 +651,6 @@ def test_chat_summary_preserves_failed_cancelled_and_awaiting_run_outcomes():
     assert cancelled["runStatus"] == "cancelled"
     assert awaiting["runStatus"] == "awaiting_user"
     assert answered["runStatus"] == "completed"
-
-
-def test_chat_run_outcome_projection_is_persisted_for_list_and_topbar(monkeypatch):
-    from cyrene.workbench import chat as chat_mod
-
-    payload = {
-        "chats": [{
-            "id": "chat-outcome-projection",
-            "status": "running",
-            "updatedAt": "2026-08-08T09:00:00+00:00",
-            "messages": [],
-        }]
-    }
-    written = []
-    monkeypatch.setattr(chat_mod, "_STORE_DB_PATH", "")
-    monkeypatch.setattr(chat_mod, "_read_chats_store", lambda: payload)
-    monkeypatch.setattr(chat_mod, "_write_chats_store", lambda value: written.append(value))
-
-    chat_mod._record_chat_run_outcome(
-        "chat-outcome-projection",
-        run_id="run-1",
-        status="error",
-        termination_reason="driver_error",
-        outcome_kind="error",
-        created_at="2026-08-08T10:00:00+00:00",
-    )
-
-    chat = payload["chats"][0]
-    assert chat["status"] == "idle"
-    assert chat["lastRun"]["id"] == "run-1"
-    assert chat["lastRun"]["status"] == "error"
-    assert chat["lastRun"]["outcome"] == "error"
-    assert written == [payload]
 
 
 def test_session_activity_reducer_tracks_parallel_work_and_resets_between_runs():

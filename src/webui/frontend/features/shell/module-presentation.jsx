@@ -64,11 +64,18 @@ function useWorkbenchModulePresentation(
   chatRuntimes,
   sessionActivityLive,
   dataState,
-  t
+  t,
+  enabledModules
 ) {
-  var isKnowledge = fullPage === "knowledge";
-  var isSchedule = fullPage === "schedule";
-  var isMemory = fullPage === "memory";
+  var knowledgeEnabled = !Array.isArray(enabledModules)
+    || enabledModules.indexOf("knowledge") >= 0;
+  var scheduleEnabled = !Array.isArray(enabledModules)
+    || enabledModules.indexOf("schedule") >= 0;
+  var memoryEnabled = !Array.isArray(enabledModules)
+    || enabledModules.indexOf("memory") >= 0;
+  var isKnowledge = knowledgeEnabled && fullPage === "knowledge";
+  var isSchedule = scheduleEnabled && fullPage === "schedule";
+  var isMemory = memoryEnabled && fullPage === "memory";
   var isChat = fullPage === "chat";
   var isSettings = fullPage === "settings";
   var isModulePage = isKnowledge || isSchedule || isMemory || isChat || isSettings;
@@ -105,9 +112,9 @@ function useWorkbenchModulePresentation(
     isModulePage: isModulePage,
     fullPageConfig: fullPageConfig,
     showChatPage: isChat || mountedPages.chat,
-    showKnowledgePage: isKnowledge || mountedPages.knowledge,
-    showSchedulePage: isSchedule || mountedPages.schedule,
-    showMemoryPage: isMemory || mountedPages.memory,
+    showKnowledgePage: knowledgeEnabled && (isKnowledge || mountedPages.knowledge),
+    showSchedulePage: scheduleEnabled && (isSchedule || mountedPages.schedule),
+    showMemoryPage: memoryEnabled && (isMemory || mountedPages.memory),
     showSettingsPage: isSettings || mountedPages.settings,
     activeDestination: activeDestination,
     activeSessionKey: activeSessionKey,

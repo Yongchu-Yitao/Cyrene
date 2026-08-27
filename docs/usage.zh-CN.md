@@ -36,7 +36,8 @@ cd electron
 npm run dev
 ```
 
-Electron Window 会通过物理 `src/cyrene/local_cli.py` 启动 Python Backend。
+Electron Window 会通过 `uv run cyrene --workbench --electron-mode` 启动
+Python Backend。
 
 ## Workbench
 
@@ -165,12 +166,11 @@ cyrene do "你的任务" --session run_live
 
 ### 交互式流 CLI
 
-裸命令 `cyrene` 是推荐的终端交互入口：若 Daemon 尚未运行，它会自动后台启动，
-随后进入交互界面。`cyrene chat` 是等价的显式入口。两者连接后台 Daemon，并复用与 Workbench
+`cyrene chat` 是推荐的终端交互入口：若 Daemon 尚未运行，它会自动后台启动，
+随后进入交互界面。它连接后台 Daemon，并复用与 Workbench
 相同的持久 Conversation 和 Run：
 
 ```bash
-cyrene
 cyrene chat --chat CHAT_ID
 cyrene chat --mode plan
 ```

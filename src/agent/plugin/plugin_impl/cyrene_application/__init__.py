@@ -1,21 +1,85 @@
 """Editable Cyrene application Plugin pack."""
 
-from ._runtime import create_plugin_pack
+from __future__ import annotations
 
-plugin_pack = create_plugin_pack(
-    package_name=__name__,
-    pack_id="cyrene_application",
-    description="Inspect and control the local Cyrene application.",
-    native_module_names=(
-        "status", "window", "ui_snapshot", "ui_inspect", "ui_click",
-        "ui_double_click", "ui_type", "ui_scroll", "ui_drag",
-        "session_message", "settings_describe", "settings_read",
-        "settings_update", "projects", "chats", "data", "updates",
-        "lifecycle",
-    ),
-    registration_providers=(),
+from types import ModuleType
+from typing import Any
+
+from agent.plugin import Plugin, PluginPack
+
+from . import (
+    chats,
+    data,
+    lifecycle,
+    projects,
+    session_message,
+    settings_describe,
+    settings_read,
+    settings_update,
+    status,
+    ui_click,
+    ui_double_click,
+    ui_drag,
+    ui_inspect,
+    ui_scroll,
+    ui_snapshot,
+    ui_type,
+    updates,
+    window,
 )
-if len(plugin_pack.plugins) != 18:
-    raise RuntimeError("application pack must contain exactly 18 Plugins")
+
+_INTERNAL_PLUGIN_NAMES = frozenset({
+    "CyreneSessionMessage",
+    "CyreneProjectControl",
+    "CyreneChatControl",
+    "CyreneDataControl",
+    "CyreneUpdateControl",
+    "CyreneLifecycleControl",
+})
+
+def _plugin(module: ModuleType) -> Plugin:
+    function = module.TOOL_DEF["function"]
+    name = str(function["name"])
+    metadata: dict[str, Any] = {
+        **dict(getattr(module, "TOOL_METADATA", {})),
+        "main_only": True,
+    }
+    if name in _INTERNAL_PLUGIN_NAMES:
+        metadata["model_visible"] = False
+    return Plugin(
+        name=name,
+        description=str(function.get("description") or ""),
+        input_schema=dict(function.get("parameters") or {"type": "object", "properties": {}}),
+        handler=module.handler,
+        allow_parallel=bool(metadata.get("allow_parallel", not metadata.get("requires_order", True))),
+        timeout_seconds=float(metadata.get("timeout_seconds", 180.0)),
+        metadata=metadata,
+    )
+
+
+plugin_pack = PluginPack(
+    id="cyrene_application",
+    description="Inspect and control the local Cyrene application.",
+    plugins=tuple(_plugin(module) for module in (
+        status,
+        window,
+        ui_snapshot,
+        ui_inspect,
+        ui_click,
+        ui_double_click,
+        ui_type,
+        ui_scroll,
+        ui_drag,
+        session_message,
+        settings_describe,
+        settings_read,
+        settings_update,
+        projects,
+        chats,
+        data,
+        updates,
+        lifecycle,
+    )),
+)
 
 __all__ = ["plugin_pack"]

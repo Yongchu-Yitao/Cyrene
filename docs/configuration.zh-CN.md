@@ -4,11 +4,8 @@
 
 ## 加密配置存储
 
-Cyrene 将大部分配置保存在 Fernet 加密的 JSON Blob 中，源码模式默认位置是
-`data/config.enc`。正常使用不需要 `.env`。首次启动向导和 Web UI Settings
-可以写入并在运行时更新配置。
-
-`.env.example` 只用于历史兼容和参考，新安装应使用 Onboarding 或 Settings。
+Cyrene 将配置保存在 Fernet 加密的 JSON Blob 中，源码模式默认位置是
+`data/config.enc`。首次启动向导和 Web UI Settings 可以写入并在运行时更新配置。
 
 加密值位于 `data/config.enc`。其 Fernet Key 在可用时进入 OS Keyring；
 Headless/Portable 环境没有可用 Keyring 时，会回退到权限为 `0600` 的
@@ -33,32 +30,23 @@ Portable Backup ZIP 不由 Cyrene 加密。为了让 Restore 能用目标 Instal
 | `CYRENE_INSTALL_RESOURCES_DIR` | 打包/静态资源覆盖 |
 | `CYRENE_ALLOWED_WORKSPACE_ROOTS` | 额外允许的项目根目录 |
 
-主数据库是 `store/cyrene.runtime.database`。首次启动仅在新 Target 不存在或
-没有行数据时迁移旧 `store/cyrene.db`，并保留 Source 作为回滚副本。
+主数据库是 `store/cyrene.runtime.database`。
 
 ## 环境变量
 
 多数变量也可在 Web UI 中编辑。
 
-### LLM
+### 模型
 
-| 变量 | 说明 | 默认 |
-|---|---|---|
-| `OPENAI_API_KEY` | OpenAI/DeepSeek/兼容 API Key | — |
-| `OPENAI_BASE_URL` | API Endpoint | `https://api.deepseek.com/v1` |
-| `OPENAI_MODEL` | 模型名称 | `deepseek-v4-flash` |
-
-Settings → Models 内置 MiniMax、DeepSeek、Kimi、GLM、OpenCode Go、Gemini、
-OpenRouter、AMD GPU Cloud、Codex OAuth 与 Local ONNX 服务预设；模型列表从
-各服务商动态获取，不固化在应用中。OpenCode Go 会依据所选模型自动使用 Chat
-Completions、Responses 或 Anthropic Messages 协议。
+模型不再通过环境变量配置。Settings → Models 只保存一套 canonical graph：
+Provider Plugin 连接、模型 Profile，以及独立的 primary、secondary、vision、
+embedding 路由。模型目录与推理操作由可编辑的 Model Plugin 提供。
 
 ### Agent
 
 | 变量 | 说明 | 默认 |
 |---|---|---|
 | `ASSISTANT_NAME` | 显示名称 | `Cyrene` |
-| `MAX_HISTORY_MESSAGES` | Context Window 保留消息数 | `40` |
 | `MAX_TOOL_OUTPUT_CHARS` | 发送给 LLM 的 Tool Result 可选字符上限（`0` 表示不设全局限制） | `0` |
 
 ### Telegram（可选）
@@ -73,27 +61,18 @@ Completions、Responses 或 Anthropic Messages 协议。
 | 变量 | 说明 |
 |---|---|
 | `WECHAT_BOT_TOKEN` | WeChat Bot Token |
-| `WECHAT_OWNER_ID` | 历史 Owner ID 兼容字段；当前 QR Flow 自动发现 Sender |
+| `WECHAT_OWNER_ID` | 可选的 WeChat Owner ID |
 
 ### Embedding / Knowledge（可选）
 
-| 变量 | 说明 |
-|---|---|
-| `EMBEDDING_BASE_URL` | OpenAI-compatible Embedding Endpoint |
-| `EMBEDDING_API_KEY` | Embedding API Key |
-| `EMBEDDING_MODEL` | Embedding Model |
-
-未配置 Embedding 时，Knowledge 回退到 FTS/Text Search。
+在 Settings → Models 中配置支持 Embedding 的 Profile，并加入 embedding 路由。
+该路由为空时，Knowledge 回退到 FTS/Text Search。
 
 ### Scheduler
 
 | 变量 | 说明 | 默认 |
 |---|---|---|
 | `SCHEDULER_INTERVAL` | Scheduled-task Polling 间隔（秒） | `60` |
-| `HEARTBEAT_INTERVAL` | 历史兼容值；不是当前 Proactive Cadence | `300` |
-| `HEARTBEAT_LOTTERY_INTERVAL` | 历史兼容值；当前 Scheduler 不读取 | `1800` |
-| `DAYTIME_START` | 历史兼容值；当前 Proactive Window 固定从 06:00 开始 | `6` |
-| `DAYTIME_END` | 历史兼容值；当前 Proactive Window 固定在 22:00 结束 | `22` |
 
 ### Steward 与 Pattern Learning
 
@@ -101,13 +80,10 @@ Completions、Responses 或 Anthropic Messages 协议。
 |---|---|---|
 | `STEWARD_INTERVAL` | SOUL Steward 间隔 | `3600` |
 | `PATTERN_DETECTION_INTERVAL` | 行为 Pattern 扫描间隔 | `600` |
-| `LOTTERY_DELTA` | 历史兼容值；当前 Increment 固定为 `0.15` | `0.15` |
-| `LOTTERY_MAX` | 历史兼容值；当前 Cap 固定为 `0.85` | `0.85` |
 
 当前真正生效的 Proactive Cadence 是加密 Runtime Setting
 `heartbeat_interval`，可在 Settings 中修改，默认 `1800` 秒；Scheduler 在启动
-时读取它。上表中的历史 Environment Key 仍会被解析以保持兼容，但修改它们
-目前不会改变 Proactive Cadence、Daytime Window 或 Lottery Parameter。
+时读取它。
 
 ### Search
 
@@ -138,9 +114,9 @@ DDG/Bing/Baidu Scraper 仍已从主路径移除。
 
 Settings 页面可以不重启更新：
 
-- API Key、Endpoint、Model、Telegram、WeChat、Map、Embedding；
-- Model List；
-- 完整 Tool Package；Direct Tool 保持固定 Wire Contract；
+- Channel 与 Map Credential；
+- Provider Plugin Connection、Model Profile 与 Role Route；
+- Plugin Pack 与独立 Plugin；
 - Main Agent Tool Round 与 Execution Subagent Safety Fuse；
 - SimpleXNG；
 - MCP Server；
@@ -150,15 +126,14 @@ Settings 页面可以不重启更新：
 
 ### Agent 可见 Typed Settings
 
-Main Agent 只能通过 `cyrene_tools` 使用 `cyrene.settings.describe`、
-`cyrene.settings.read` 和 `cyrene.settings.update`。Registry 包含 52 个 Scalar
-Setting 和 31 个复杂 Control Coverage，覆盖全部非模型 Settings Tab；Namespace
-为 `runtime`、`desktop`、`appearance`、`profile`、`shortcuts`。
+Main Agent 只能通过 `cyrene_application` Plugin Pack 使用
+`CyreneSettingsDescribe`、`CyreneSettingsRead` 和 `CyreneSettingsUpdate`。
+Namespace 为 `runtime`、`desktop`、`appearance`、`profile`、`shortcuts`。
 
 Update 是原子 Compare-and-swap Patch，必须携带最新 `expected_revision`。旧 Revision
 返回冲突并保留用户较新的修改。Shortcut Patch 保留未指定 Action，只有明确命名
 Binding 的 `null` 才表示重置。Models、Secret、Secret Redaction 和
-`cyrene_tools` 自身可用性不能通过该控制面修改。
+Settings Plugin 自身可用性不能通过该控制面修改。
 
 ## Browser 配置
 

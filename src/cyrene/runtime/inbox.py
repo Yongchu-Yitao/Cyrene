@@ -19,9 +19,10 @@ Message format::
     }
 """
 
-import asyncio
+import heapq
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -31,7 +32,7 @@ from cyrene.config import DATA_DIR
 logger = logging.getLogger(__name__)
 
 INBOX_DIR = DATA_DIR / "inbox"
-_INBOX_LOCK = asyncio.Lock()
+_INBOX_LOCK = threading.RLock()
 _MAX_CONTEXT_MESSAGE_CHARS = 4000
 _MAX_CONTEXT_TOTAL_CHARS = 12000
 
@@ -79,14 +80,39 @@ def _read_unread(agent_name: str, session_id: str = "") -> int:
 
 def _write_unread(agent_name: str, count: int, session_id: str = "") -> None:
     """Write the unread counter."""
+    path = _unread_path(agent_name, session_id)
+    temporary = path.with_name(f"{path.name}.tmp")
     try:
-        _unread_path(agent_name, session_id).write_text(str(count), encoding="utf-8")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(str(count), encoding="utf-8")
+        temporary.replace(path)
     except Exception:
         logger.exception("Failed to write unread count for %s", agent_name)
+        raise
+
+
+def _write_message(path: Path, message: dict) -> None:
+    temporary = path.with_name(f"{path.name}.tmp")
+    temporary.write_text(
+        json.dumps(message, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _message_file_sort_key(path: Path) -> tuple[int, str]:
+    try:
+        sequence = int(path.stem.rsplit("_", 1)[1])
+    except (IndexError, ValueError):
+        sequence = -1
+    return sequence, path.name
 
 
 def _iter_message_files(agent_name: str, session_id: str = "") -> Iterable[Path]:
-    return sorted(_inbox_path(agent_name, session_id).glob("msg_*.json"))
+    return sorted(
+        _inbox_path(agent_name, session_id).glob("msg_*.json"),
+        key=_message_file_sort_key,
+    )
 
 
 def _load_messages_from_files(msg_files: Iterable[Path]) -> list[dict]:
@@ -101,14 +127,82 @@ def _load_messages_from_files(msg_files: Iterable[Path]) -> list[dict]:
     return messages
 
 
+def _message_records(
+    agent_name: str,
+    session_id: str = "",
+) -> list[tuple[Path, dict]]:
+    records: list[tuple[Path, dict]] = []
+    for path in _iter_message_files(agent_name, session_id):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                records.append((path, data))
+        except Exception:
+            logger.exception("Failed to read inbox message %s", path.name)
+    return records
+
+
+def _ensure_read_states(
+    agent_name: str,
+    session_id: str = "",
+) -> list[tuple[Path, dict]]:
+    """Migrate counter-only messages to durable per-message read state."""
+
+    records = _message_records(agent_name, session_id)
+    legacy_unread = max(0, _read_unread(agent_name, session_id))
+    legacy_unread_paths = {
+        path for path, _message in records[-legacy_unread:]
+    } if legacy_unread else set()
+    for path, message in records:
+        changed = False
+        if "read" not in message:
+            message["read"] = path not in legacy_unread_paths
+            changed = True
+        if "delivery_ready" not in message:
+            message["delivery_ready"] = True
+            changed = True
+        if changed:
+            _write_message(path, message)
+    return records
+
+
+def _sync_unread_counter(
+    agent_name: str,
+    records: Iterable[tuple[Path, dict]],
+    session_id: str = "",
+) -> None:
+    count = sum(1 for _path, message in records if message.get("read") is not True)
+    try:
+        _write_unread(agent_name, count, session_id)
+    except Exception:
+        # The counter is now only a compatibility cache. Per-message state is
+        # authoritative, so a failed cache write cannot hide a durable message.
+        pass
+
+
 def _read_unread_messages(agent_name: str, session_id: str = "") -> list[dict]:
-    unread_count = max(0, _read_unread(agent_name, session_id))
-    if unread_count == 0:
-        return []
-    msg_files = list(_iter_message_files(agent_name, session_id))
-    if not msg_files:
-        return []
-    return _load_messages_from_files(msg_files[-unread_count:])
+    records = _ensure_read_states(agent_name, session_id)
+    _sync_unread_counter(agent_name, records, session_id)
+    return [
+        message
+        for _path, message in records
+        if message.get("read") is not True
+    ]
+
+
+def _message_for_dedup_key(
+    agent_name: str,
+    dedup_key: str,
+    session_id: str = "",
+) -> dict | None:
+    if not dedup_key:
+        return None
+    for message in _load_messages_from_files(
+        _iter_message_files(agent_name, session_id)
+    ):
+        if str(message.get("dedup_key") or "") == dedup_key:
+            return message
+    return None
 
 
 def _truncate_for_context(text: str, limit: int = _MAX_CONTEXT_MESSAGE_CHARS) -> str:
@@ -137,6 +231,7 @@ async def send_message(
     priority: str = "normal",
     in_reply_to: str = "",
     session_id: str = "",
+    dedup_key: str = "",
 ) -> str:
     """Send a message to *to_agent*'s inbox.
 
@@ -147,11 +242,35 @@ async def send_message(
 
     *in_reply_to* is the message_id of the message being replied to (for threading).
 
+    *dedup_key*, when set, makes retrying the same logical delivery idempotent.
+
     Returns the generated ``message_id``.
     """
     try:
-        async with _INBOX_LOCK:
+        with _INBOX_LOCK:
             ensure_inbox(to_agent, session_id)
+            existing_records = _ensure_read_states(to_agent, session_id)
+            _sync_unread_counter(to_agent, existing_records, session_id)
+            existing = _message_for_dedup_key(
+                to_agent,
+                str(dedup_key or ""),
+                session_id,
+            )
+            if existing is not None:
+                existing_id = str(existing.get("message_id") or "")
+                if not existing_id:
+                    raise RuntimeError("deduplicated inbox message has no message_id")
+                if existing.get("delivery_ready") is False:
+                    existing["delivery_ready"] = True
+                    existing["read"] = False
+                    path = _inbox_path(to_agent, session_id) / f"{existing_id}.json"
+                    _write_message(path, existing)
+                    _sync_unread_counter(
+                        to_agent,
+                        _ensure_read_states(to_agent, session_id),
+                        session_id,
+                    )
+                return existing_id
             msg_id = _next_msg_id(to_agent, session_id)
             # Auto-generate a one-line summary for display in flow diagrams
             summary = content[:120].replace("\n", " ").strip()
@@ -166,18 +285,22 @@ async def send_message(
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "summary": summary,
                 "priority": priority,
+                "delivery_ready": True,
+                "read": False,
             }
             if round_id:
                 message["round_id"] = round_id
             if in_reply_to:
                 message["in_reply_to"] = in_reply_to
+            if dedup_key:
+                message["dedup_key"] = str(dedup_key)
             msg_path = _inbox_path(to_agent, session_id) / f"{msg_id}.json"
-            msg_path.write_text(
-                json.dumps(message, ensure_ascii=False, indent=2),
-                encoding="utf-8",
+            _write_message(msg_path, message)
+            _sync_unread_counter(
+                to_agent,
+                _ensure_read_states(to_agent, session_id),
+                session_id,
             )
-            current = _read_unread(to_agent, session_id)
-            _write_unread(to_agent, current + 1, session_id)
         logger.info(
             "Message %s sent from %s to %s (type=%s priority=%s)",
             msg_id, from_agent, to_agent, msg_type, priority,
@@ -192,7 +315,8 @@ async def send_message(
 
 def get_unread_count(agent_name: str, session_id: str = "") -> int:
     """Return the number of unread messages for *agent_name*."""
-    return _read_unread(agent_name, session_id)
+    with _INBOX_LOCK:
+        return len(_read_unread_messages(agent_name, session_id))
 
 
 async def mark_all_read(agent_name: str, session_id: str = "") -> None:
@@ -201,8 +325,13 @@ async def mark_all_read(agent_name: str, session_id: str = "") -> None:
     Messages on disk are kept as a permanent log; only the unread counter
     is reset so subsequent inbox injections show 0 new messages.
     """
-    async with _INBOX_LOCK:
-        _write_unread(agent_name, 0, session_id)
+    with _INBOX_LOCK:
+        records = _ensure_read_states(agent_name, session_id)
+        for path, message in records:
+            if message.get("read") is not True:
+                message["read"] = True
+                _write_message(path, message)
+        _sync_unread_counter(agent_name, records, session_id)
 
 
 async def mark_read_count(agent_name: str, count: int = 1, session_id: str = "") -> None:
@@ -214,14 +343,23 @@ async def mark_read_count(agent_name: str, count: int = 1, session_id: str = "")
     """
     if count <= 0:
         return
-    async with _INBOX_LOCK:
-        current = _read_unread(agent_name, session_id)
-        _write_unread(agent_name, max(0, current - count), session_id)
+    with _INBOX_LOCK:
+        records = _ensure_read_states(agent_name, session_id)
+        remaining = int(count)
+        for path, message in records:
+            if remaining <= 0:
+                break
+            if message.get("read") is True:
+                continue
+            message["read"] = True
+            _write_message(path, message)
+            remaining -= 1
+        _sync_unread_counter(agent_name, records, session_id)
 
 
 async def clear_inbox(agent_name: str, session_id: str = "") -> None:
     """Delete all message files and reset unread state for one inbox."""
-    async with _INBOX_LOCK:
+    with _INBOX_LOCK:
         ensure_inbox(agent_name, session_id)
         for msg_file in _iter_message_files(agent_name, session_id):
             try:
@@ -244,7 +382,7 @@ async def clear_all_inboxes(session_id: str = "") -> None:
     """
     import shutil
 
-    async with _INBOX_LOCK:
+    with _INBOX_LOCK:
         if session_id:
             session_dir = INBOX_DIR / session_id
             if session_dir.exists():
@@ -273,23 +411,82 @@ async def read_messages(agent_name: str, mark_read: bool = True, session_id: str
     When *mark_read* is ``True`` (the default) the unread counter is reset
     to zero after reading.
     """
-    async with _INBOX_LOCK:
+    with _INBOX_LOCK:
         ensure_inbox(agent_name, session_id)
-        try:
-            messages = _load_messages_from_files(_iter_message_files(agent_name, session_id))
-        except Exception:
-            logger.exception("Failed to list inbox for %s", agent_name)
-            messages = []
+        records = _ensure_read_states(agent_name, session_id)
+        messages = [message for _path, message in records]
 
         if mark_read:
-            _write_unread(agent_name, 0, session_id)
+            for path, message in records:
+                if message.get("read") is not True:
+                    message["read"] = True
+                    _write_message(path, message)
+            _sync_unread_counter(agent_name, records, session_id)
 
     return messages
 
 
+def peek_messages(
+    agent_name: str,
+    session_id: str = "",
+    *,
+    round_id: str = "",
+    limit: int = 100,
+) -> dict:
+    """Read a bounded, read-only window for the Workbench Agent inbox.
+
+    File writes are atomic, so the panel does not need to hold the global inbox
+    lock while it polls. Only the newest ``limit + 1`` files are parsed; the
+    extra record tells the caller that the visible window is truncated.
+    """
+
+    visible_limit = max(1, min(int(limit or 100), 500))
+    file_limit = visible_limit + 1
+    newest: list[tuple[int, str, Path]] = []
+    file_count = 0
+    for path in _inbox_path(agent_name, session_id).glob("msg_*.json"):
+        file_count += 1
+        sequence, name = _message_file_sort_key(path)
+        candidate = (sequence, name, path)
+        if len(newest) < file_limit:
+            heapq.heappush(newest, candidate)
+        else:
+            heapq.heappushpop(newest, candidate)
+
+    messages = _load_messages_from_files(
+        path for _sequence, _name, path in sorted(newest)
+    )
+    requested_round = str(round_id or "").strip()
+    resolved_round = requested_round or next(
+        (
+            str(message.get("round_id") or "").strip()
+            for message in reversed(messages)
+            if str(message.get("round_id") or "").strip()
+        ),
+        "",
+    )
+    if resolved_round:
+        messages = [
+            message
+            for message in messages
+            if str(message.get("round_id") or "").strip() == resolved_round
+        ]
+    else:
+        messages = []
+    matching_truncated = len(messages) > visible_limit
+    messages = messages[-visible_limit:]
+    return {
+        "messages": [dict(message) for message in messages],
+        "roundId": resolved_round,
+        "limit": visible_limit,
+        "eventsTruncated": matching_truncated,
+        "historyWindowTruncated": file_count > file_limit,
+    }
+
+
 async def read_unread_messages(agent_name: str, session_id: str = "") -> list[dict]:
     """Read unread messages in FIFO order without acknowledging them."""
-    async with _INBOX_LOCK:
+    with _INBOX_LOCK:
         ensure_inbox(agent_name, session_id)
         return _read_unread_messages(agent_name, session_id)
 
@@ -297,8 +494,9 @@ async def read_unread_messages(agent_name: str, session_id: str = "") -> list[di
 def get_unread_messages(agent_name: str, session_id: str = "") -> list[dict]:
     """Return unread messages in FIFO order without mutating inbox state."""
     try:
-        ensure_inbox(agent_name, session_id)
-        return _read_unread_messages(agent_name, session_id)
+        with _INBOX_LOCK:
+            ensure_inbox(agent_name, session_id)
+            return _read_unread_messages(agent_name, session_id)
     except Exception:
         logger.exception("Failed to read unread inbox messages for %s", agent_name)
         return []
@@ -310,7 +508,7 @@ def get_inbox_context(agent_name: str, session_id: str = "") -> str:
 
     Returns an empty string when there are no unread messages.
     """
-    unread_messages = get_unread_messages(agent_name)
+    unread_messages = get_unread_messages(agent_name, session_id=session_id)
     count = len(unread_messages)
     if count == 0:
         return ""

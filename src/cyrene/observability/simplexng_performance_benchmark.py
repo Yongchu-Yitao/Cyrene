@@ -53,7 +53,7 @@ DEFAULT_WORKLOAD = SearchBenchmarkWorkload()
 
 
 async def _run_once(workload: SearchBenchmarkWorkload) -> dict[str, Any]:
-    from cyrene.tooling.backends import search
+    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
 
     originals = {
         "_search_simplexng": search._search_simplexng,

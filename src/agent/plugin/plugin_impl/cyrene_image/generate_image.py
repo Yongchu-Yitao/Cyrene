@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import json
+import logging
+from collections.abc import Mapping
 from typing import Any
 
+from agent.plugin import Plugin, PluginContext
 from agent.plugin.execution import invoke_plugin
 from cyrene.model_runtime.image_generation import (
     ImageGenerationError,
     generate_image,
 )
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import json_result, logger
+from agent.plugin.native_runtime import json_result
+
+logger = logging.getLogger(__name__)
 
 TOOL_NAME = "GenerateImage"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -24,10 +29,7 @@ TOOL_METADATA = {
 
 async def _tool_generate_image(
     args: dict[str, Any],
-    bot: Any,
-    chat_id: int,
-    db_path: str,
-    notify_state: dict[str, bool] | None,
+    _context: PluginContext,
 ) -> str:
     prompt = str(args.get("prompt") or "").strip()
     if not prompt:
@@ -88,10 +90,32 @@ async def _tool_generate_image(
 
 handler = _tool_generate_image
 
+_FUNCTION = TOOL_DEF.get("function")
+if not isinstance(_FUNCTION, Mapping):
+    raise TypeError("GenerateImage definition must contain a function object")
+_INPUT_SCHEMA = _FUNCTION.get("parameters")
+if not isinstance(_INPUT_SCHEMA, Mapping):
+    raise TypeError("GenerateImage definition must contain an input schema")
+
+plugin = Plugin(
+    name=TOOL_NAME,
+    description=str(_FUNCTION.get("description") or ""),
+    input_schema=dict(_INPUT_SCHEMA),
+    handler=handler,
+    allow_parallel=False,
+    timeout_seconds=420.0,
+    metadata={
+        **TOOL_METADATA,
+        "main_only": True,
+        "model_visible": False,
+    },
+)
+
 __all__ = [
     "TOOL_NAME",
     "TOOL_DEF",
     "TOOL_METADATA",
     "handler",
+    "plugin",
     "_tool_generate_image",
 ]

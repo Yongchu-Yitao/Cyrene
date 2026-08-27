@@ -1,18 +1,15 @@
-"""Chat repository, summary projection, merge, and compatibility export."""
+"""Chat repository, summary projection, and merge."""
 
 from __future__ import annotations
 
 import json
-import logging
 import sqlite3
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from cyrene.runtime.io import atomic_write_json
 from cyrene.workbench.persistence.document_merge import (
     MISSING as _MISSING,
     TrackedDict,
@@ -20,14 +17,6 @@ from cyrene.workbench.persistence.document_merge import (
     three_way_merge as _three_way_merge,
 )
 from cyrene.workbench.persistence.schema import connect as _connect
-
-logger = logging.getLogger(__name__)
-
-_DEFERRED_CHAT_EXPORT_LOCK = threading.Lock()
-
-_DEFERRED_CHAT_EXPORT_PENDING: set[tuple[str, str]] = set()
-
-_DEFERRED_CHAT_EXPORT_RUNNING: set[tuple[str, str]] = set()
 
 _CHAT_USAGE_KEYS = (
     "prompt_tokens",
@@ -41,8 +30,6 @@ _CHAT_USAGE_KEYS = (
 @dataclass(frozen=True, slots=True)
 class ChatPorts:
     document_write_lock: Any
-    export_current_document: Any
-    initial_value: Any
     load_row: Any
     write_row: Any
 
@@ -160,38 +147,23 @@ class ChatRepository:
         shell.update({'normalizedVersion': 1, 'chatIds': list(ids)})
         return shell
 
-    def _load_chat_bundle_locked(self, conn: sqlite3.Connection, default_factory: Callable[[], dict[str, Any]], *, legacy_path: Path | None, migrate: bool) -> tuple[dict[str, Any], bool]:
+    def _load_chat_bundle_locked(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        write_shell: bool,
+    ) -> tuple[dict[str, Any], bool]:
         stored = self.ports.load_row(conn, 'chats')
         rows = self._load_chat_rows(conn)
-        migrated = False
-        source_metadata = stored if isinstance(stored, dict) else {}
-        legacy_chats = stored.get('chats') if isinstance(stored, dict) and isinstance(stored.get('chats'), list) else None
-        if legacy_chats is None and (not rows) and (stored is None):
-            initial = self.ports.initial_value(default_factory, legacy_path)
-            source_metadata = initial if isinstance(initial, dict) else {}
-            legacy_chats = initial.get('chats') if isinstance(initial, dict) and isinstance(initial.get('chats'), list) else []
-        if legacy_chats is not None:
-            ordered = [chat for chat in legacy_chats if isinstance(chat, dict) and self._chat_id(chat)]
-            metadata = source_metadata
-            if migrate:
-                for index, chat in enumerate(ordered):
-                    self._write_chat_row(conn, chat, index)
-                self.ports.write_row(conn, 'chats', self._chat_shell([self._chat_id(chat) for chat in ordered], metadata))
-                rows = {self._chat_id(chat): _plain(chat) for chat in ordered}
-            migrated = True
-            value = {str(key): _plain(item) for key, item in metadata.items() if key != 'chats'}
-            value['chats'] = [_plain(chat) for chat in ordered]
-            return (value, migrated)
         ids = [str(chat_id) for chat_id in (stored or {}).get('chatIds') or [] if str(chat_id) in rows]
         ids.extend((chat_id for chat_id in rows if chat_id not in ids))
         expected_shell = self._chat_shell(ids, stored if isinstance(stored, dict) else None)
-        if stored != expected_shell:
-            if migrate:
-                self.ports.write_row(conn, 'chats', expected_shell)
-            migrated = True
+        shell_update_required = stored != expected_shell
+        if shell_update_required and write_shell:
+            self.ports.write_row(conn, 'chats', expected_shell)
         value = {str(key): _plain(item) for key, item in expected_shell.items() if key not in {'chatIds', 'normalizedVersion'}}
         value['chats'] = [rows[chat_id] for chat_id in ids]
-        return (value, migrated)
+        return (value, shell_update_required)
 
     def _tracked_bundle(self, value: dict[str, Any], key: str, *, versions: dict[str, str] | None=None) -> TrackedDict:
         """Track a hydrated normalized bundle with one defensive baseline copy."""
@@ -202,40 +174,22 @@ class ChatRepository:
             out._workbench_versions = dict(versions)
         return out
 
-    def _schedule_chat_export(self, db_path: str | Path, export_path: Path) -> None:
-        """Coalesce large compatibility mirrors outside the request hot path."""
-        target = (str(Path(db_path).expanduser().resolve()), str(export_path.resolve()))
-        with _DEFERRED_CHAT_EXPORT_LOCK:
-            _DEFERRED_CHAT_EXPORT_PENDING.add(target)
-            if target in _DEFERRED_CHAT_EXPORT_RUNNING:
-                return
-            _DEFERRED_CHAT_EXPORT_RUNNING.add(target)
-    
-        def export_latest() -> None:
-            while True:
-                with _DEFERRED_CHAT_EXPORT_LOCK:
-                    _DEFERRED_CHAT_EXPORT_PENDING.discard(target)
-                try:
-                    self.ports.export_current_document(Path(target[0]), 'chats', Path(target[1]))
-                except Exception:
-                    logger.exception('Failed to export deferred Workbench chats mirror to %s', target[1])
-                with _DEFERRED_CHAT_EXPORT_LOCK:
-                    if target in _DEFERRED_CHAT_EXPORT_PENDING:
-                        continue
-                    _DEFERRED_CHAT_EXPORT_RUNNING.discard(target)
-                    return
-        threading.Thread(target=export_latest, name='workbench-chat-export', daemon=True).start()
-
-    def read_chat_bundle(self, db_path: str | Path, default_factory: Callable[[], dict[str, Any]], *, legacy_path: Path | None=None) -> dict[str, Any]:
-        """Hydrate the compatibility ``{"chats": [...]}`` shape from row storage."""
+    def read_chat_bundle(self, db_path: str | Path, default_factory: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        """Hydrate the public ``{"chats": [...]}`` shape from row storage."""
         conn = _connect(db_path)
         try:
             conn.execute('BEGIN')
-            value, migration_required = self._load_chat_bundle_locked(conn, default_factory, legacy_path=legacy_path, migrate=False)
+            value, shell_update_required = self._load_chat_bundle_locked(
+                conn,
+                write_shell=False,
+            )
             conn.commit()
-            if migration_required:
+            if shell_update_required:
                 conn.execute('BEGIN IMMEDIATE')
-                value, _ = self._load_chat_bundle_locked(conn, default_factory, legacy_path=legacy_path, migrate=True)
+                value, _ = self._load_chat_bundle_locked(
+                    conn,
+                    write_shell=True,
+                )
                 conn.commit()
             versions = self._chat_versions(conn)
             return self._tracked_bundle(value, 'chats', versions=versions)
@@ -245,7 +199,7 @@ class ChatRepository:
         finally:
             conn.close()
 
-    def read_chat(self, db_path: str | Path, chat_id: str, default_factory: Callable[[], dict[str, Any]], *, legacy_path: Path | None=None) -> dict[str, Any] | None:
+    def read_chat(self, db_path: str | Path, chat_id: str, default_factory: Callable[[], dict[str, Any]]) -> dict[str, Any] | None:
         """Read one normalized chat without decoding every conversation."""
         target = str(chat_id or '').strip()
         if not target:
@@ -253,19 +207,6 @@ class ChatRepository:
         conn = _connect(db_path)
         try:
             row = conn.execute('SELECT payload_json FROM workbench_chats WHERE chat_id = ?', (target,)).fetchone()
-            if row is None:
-                state_row = conn.execute("SELECT payload_json FROM workbench_state WHERE key = 'chats'").fetchone()
-                needs_migration = state_row is None
-                if state_row is not None:
-                    try:
-                        stored = json.loads(str(state_row[0]))
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        stored = None
-                    needs_migration = isinstance(stored, dict) and isinstance(stored.get('chats'), list)
-                if needs_migration:
-                    conn.close()
-                    self.read_chat_bundle(db_path, default_factory, legacy_path=legacy_path)
-                    return self.read_chat(db_path, target, default_factory, legacy_path=legacy_path)
             if row is None:
                 return None
             chat = json.loads(str(row[0]))
@@ -282,17 +223,11 @@ class ChatRepository:
         finally:
             conn.close()
 
-    def read_chat_summaries(self, db_path: str | Path, default_factory: Callable[[], dict[str, Any]], *, legacy_path: Path | None=None) -> list[dict[str, Any]]:
+    def read_chat_summaries(self, db_path: str | Path, default_factory: Callable[[], dict[str, Any]]) -> list[dict[str, Any]]:
         """Read chat-list projections without decoding transcript rows."""
         conn = _connect(db_path)
         try:
             rows = conn.execute('\n            SELECT chat_id, payload_json, summary_json\n            FROM workbench_chats ORDER BY ordinal, chat_id\n            ').fetchall()
-            if not rows:
-                state = self.ports.load_row(conn, 'chats')
-                if not isinstance(state, dict) or isinstance(state.get('chats'), list):
-                    conn.close()
-                    self.read_chat_bundle(db_path, default_factory, legacy_path=legacy_path)
-                    return self.read_chat_summaries(db_path, default_factory, legacy_path=legacy_path)
             result: list[dict[str, Any]] = []
             missing: list[tuple[str, dict[str, Any]]] = []
             for chat_id, payload_json, summary_json in rows:
@@ -321,27 +256,19 @@ class ChatRepository:
         finally:
             conn.close()
 
-    def mutate_chat(self, db_path: str | Path, chat_id: str, mutation: Callable[[dict[str, Any]], Any], default_factory: Callable[[], dict[str, Any]], *, legacy_path: Path | None=None, export_path: Path | None=None) -> dict[str, Any] | None:
+    def mutate_chat(self, db_path: str | Path, chat_id: str, mutation: Callable[[dict[str, Any]], Any], default_factory: Callable[[], dict[str, Any]]) -> dict[str, Any] | None:
         """Mutate one chat atomically without hydrating sibling transcripts."""
         target = str(chat_id or '').strip()
         if not target:
             return None
-        total_message_count = 0
         with self.ports.document_write_lock:
             conn = _connect(db_path)
             try:
                 conn.execute('BEGIN IMMEDIATE')
                 row = conn.execute('SELECT ordinal FROM workbench_chats WHERE chat_id = ?', (target,)).fetchone()
                 if row is None:
-                    state = self.ports.load_row(conn, 'chats')
-                    needs_migration = state is None or (isinstance(state, dict) and isinstance(state.get('chats'), list))
-                    if not needs_migration:
-                        conn.rollback()
-                        return None
                     conn.rollback()
-                    conn.close()
-                    self.read_chat_bundle(db_path, default_factory, legacy_path=legacy_path)
-                    return self.mutate_chat(db_path, target, mutation, default_factory, legacy_path=legacy_path, export_path=export_path)
+                    return None
                 current = self._load_chat_row(conn, target)
                 if current is None:
                     conn.rollback()
@@ -355,22 +282,22 @@ class ChatRepository:
                     raise ValueError('Workbench chat mutation cannot change id')
                 self._write_chat_row(conn, current, int(row[0]), write_messages=before_messages != current.get('messages'), previous_messages=before_messages)
                 stored = self.ports.load_row(conn, 'chats') or {}
-                self.ports.write_row(conn, 'chats', stored)
-                total_message_count = int(conn.execute('SELECT COUNT(*) FROM workbench_chat_messages').fetchone()[0])
+                ids = [
+                    str(item[0])
+                    for item in conn.execute(
+                        'SELECT chat_id FROM workbench_chats ORDER BY ordinal, chat_id'
+                    ).fetchall()
+                ]
+                self.ports.write_row(conn, 'chats', self._chat_shell(ids, stored))
                 conn.commit()
             except Exception:
                 conn.rollback()
                 raise
             finally:
                 conn.close()
-        if export_path is not None:
-            if total_message_count >= 256:
-                self._schedule_chat_export(db_path, export_path)
-            else:
-                atomic_write_json(export_path, self.read_chat_bundle(db_path, lambda: {'chats': []}))
         return current
 
-    def write_chat(self, db_path: str | Path, chat: dict[str, Any], default_factory: Callable[[], dict[str, Any]], *, base_chat: dict[str, Any] | None=None, legacy_path: Path | None=None, export_path: Path | None=None) -> dict[str, Any] | None:
+    def write_chat(self, db_path: str | Path, chat: dict[str, Any], default_factory: Callable[[], dict[str, Any]], *, base_chat: dict[str, Any] | None=None) -> dict[str, Any] | None:
         """Three-way merge and persist one chat without loading its siblings."""
         target = self._chat_id(chat)
         if not target:
@@ -384,7 +311,7 @@ class ChatRepository:
                 raise ValueError('Workbench chat merge produced an invalid value')
             current.clear()
             current.update(merged)
-        return self.mutate_chat(db_path, target, merge_into, default_factory, legacy_path=legacy_path, export_path=export_path)
+        return self.mutate_chat(db_path, target, merge_into, default_factory)
 
     def _merge_chat_lists(self, base: list[Any], local: list[Any], remote: list[Any]) -> list[dict[str, Any]]:
         base_by = {self._chat_id(chat): chat for chat in base if self._chat_id(chat)}
@@ -406,7 +333,7 @@ class ChatRepository:
                 merged.append(value)
         return merged
 
-    def write_chat_bundle(self, db_path: str | Path, value: dict[str, Any], default_factory: Callable[[], dict[str, Any]], *, legacy_path: Path | None=None, export_path: Path | None=None, base_value: dict[str, Any] | None=None) -> dict[str, Any]:
+    def write_chat_bundle(self, db_path: str | Path, value: dict[str, Any], default_factory: Callable[[], dict[str, Any]], *, base_value: dict[str, Any] | None=None) -> dict[str, Any]:
         """Merge chats by id and persist only rows whose content or order changed."""
         local = value if isinstance(value, dict) else default_factory()
         inherited_base = getattr(value, '_workbench_base', None)
@@ -434,7 +361,10 @@ class ChatRepository:
                     remote = {str(key): _plain(item) for key, item in (stored or {}).items() if key not in {'chatIds', 'normalizedVersion'}}
                     remote['chats'] = remote_chats
                 else:
-                    remote, _ = self._load_chat_bundle_locked(conn, default_factory, legacy_path=legacy_path, migrate=True)
+                    remote, _ = self._load_chat_bundle_locked(
+                        conn,
+                        write_shell=True,
+                    )
                 if not isinstance(base, dict):
                     merged = {'chats': [_plain(chat) for chat in local.get('chats') or []]}
                 else:
@@ -465,10 +395,4 @@ class ChatRepository:
                 raise
             finally:
                 conn.close()
-        if export_path is not None:
-            message_count = sum((len(chat.get('messages') or []) for chat in merged.get('chats') or [] if isinstance(chat, dict) and isinstance(chat.get('messages'), list)))
-            if message_count >= 256:
-                self._schedule_chat_export(db_path, export_path)
-            else:
-                atomic_write_json(export_path, merged)
         return self._tracked_bundle(merged, 'chats', versions=committed_versions)

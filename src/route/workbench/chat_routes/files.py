@@ -30,8 +30,6 @@ def register_file_routes(router: APIRouter, context: ChatRouteContext) -> None:
     @router.get("/api/workbench/chats/{chat_id}/changes")
     async def api_workbench_chat_changes(chat_id: str):
         """Return durable run-scoped workspace changes without consulting Git."""
-        if chat_id.startswith("legacy:"):
-            return {"changeSets": [], "fileCount": 0, "additions": 0, "deletions": 0}
         payload = await asyncio.to_thread(_read_chats_store)
         if not _find_chat(payload, chat_id):
             return JSONResponse({"error": "chat not found"}, status_code=404)
@@ -46,8 +44,6 @@ def register_file_routes(router: APIRouter, context: ChatRouteContext) -> None:
     @router.get("/api/workbench/chats/{chat_id}/changes/{change_set_id}/files/{file_path:path}")
     async def api_workbench_chat_change_diff(chat_id: str, change_set_id: str, file_path: str):
         """Return the immutable diff recorded for one file in one agent run."""
-        if chat_id.startswith("legacy:"):
-            return JSONResponse({"error": "file change not found"}, status_code=404)
         payload = await asyncio.to_thread(_read_chats_store)
         if not _find_chat(payload, chat_id):
             return JSONResponse({"error": "chat not found"}, status_code=404)
@@ -65,8 +61,6 @@ def register_file_routes(router: APIRouter, context: ChatRouteContext) -> None:
     @router.get("/api/workbench/chats/{chat_id}/files/{file_path:path}")
     async def api_workbench_chat_file(chat_id: str, file_path: str):
         """Preview/download a tracked agent file inside the chat's workspace."""
-        if chat_id.startswith("legacy:"):
-            return JSONResponse({"error": "file not found"}, status_code=404)
         payload = await asyncio.to_thread(_read_chats_store)
         chat = _find_chat(payload, chat_id)
         if not chat:

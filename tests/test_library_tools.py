@@ -8,42 +8,44 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
 @pytest.mark.asyncio
-async def test_init_knowledge_db_creates_missing_parent_directory(tmp_path):
-    from cyrene.runtime import database as db
+async def test_knowledge_store_creates_missing_parent_directory(tmp_path):
+    from agent.plugin.plugin_impl.cyrene_knowledge.store import KnowledgeStore
 
     db_path = tmp_path / "fresh-profile" / "store" / "knowledge.db"
 
-    await db.init_knowledge_db(str(db_path))
+    store = KnowledgeStore(db_path.parent)
 
-    assert db_path.is_file()
+    assert store.db_path.is_file()
 
 
 @pytest.fixture
-async def library_db(tmp_path, monkeypatch):
-    from cyrene.runtime import database as db
-    from cyrene.workbench import context as workbench_context
+async def library_plugin(tmp_path):
+    from agent.plugin import PluginContext
+    from agent.plugin.plugin_impl.cyrene_knowledge.service import create_knowledge_service
 
-    db_path = str(tmp_path / "kb_project-a.db")
-    await db.init_knowledge_db(db_path)
-
-    async def resolve_current_project(_session_id):
-        return db_path
-
-    monkeypatch.setattr(
-        workbench_context,
-        "ensure_knowledge_db_for_session",
-        resolve_current_project,
+    service = create_knowledge_service(
+        tmp_path / "knowledge",
+        workspace_resolver=lambda workspace: workspace,
+        zotero_settings=lambda: {},
     )
-    return db_path
+    await service.startup()
+    context = PluginContext(
+        data={"project_id": "project-a"},
+        services={"knowledge": service},
+    )
+    try:
+        yield service, context
+    finally:
+        await service.shutdown()
 
 
 @pytest.mark.asyncio
-async def test_list_library_items_reports_real_project_metadata(library_db):
-    from cyrene.knowledge import library
-    from cyrene.tool_impl.knowledge.list_library_items import _tool_list_library_items
+async def test_list_library_items_reports_real_project_metadata(library_plugin):
+    from agent.plugin.plugin_impl.cyrene_knowledge.list_library_items import handler
 
-    item = await library.create_item(
-        library_db,
+    service, context = library_plugin
+    item = await service.create_item(
+        "project-a",
         {
             "title": "Project-scoped retrieval systems",
             "year": 2025,
@@ -56,9 +58,7 @@ async def test_list_library_items_reports_real_project_metadata(library_db):
         },
     )
 
-    result = await _tool_list_library_items(
-        {"query": "retrieval"}, None, -1, "ignored.db", None
-    )
+    result = await handler({"query": "retrieval"}, context)
 
     assert "Project-scoped retrieval systems" in result
     assert "Lin Chen" in result
@@ -67,12 +67,12 @@ async def test_list_library_items_reports_real_project_metadata(library_db):
 
 
 @pytest.mark.asyncio
-async def test_search_library_returns_stable_paper_id(library_db):
-    from cyrene.knowledge import library
-    from cyrene.tool_impl.knowledge.search_library import _tool_search_library
+async def test_search_library_returns_stable_paper_id(library_plugin):
+    from agent.plugin.plugin_impl.cyrene_knowledge.search_library import handler
 
-    item = await library.create_item(
-        library_db,
+    service, context = library_plugin
+    item = await service.create_item(
+        "project-a",
         {
             "title": "Evidence-grounded agent workflows",
             "abstract": "A study of agents that retrieve project evidence before answering.",
@@ -81,9 +81,7 @@ async def test_search_library_returns_stable_paper_id(library_db):
         },
     )
 
-    result = await _tool_search_library(
-        {"query": "project evidence", "k": 5}, None, -1, "ignored.db", None
-    )
+    result = await handler({"query": "project evidence", "k": 5}, context)
 
     assert "Evidence-grounded agent workflows" in result
     assert f"paper_id={item['id']}" in result
@@ -91,28 +89,21 @@ async def test_search_library_returns_stable_paper_id(library_db):
 
 
 def test_library_tools_are_registered_as_read_only():
-    from cyrene.tooling import catalog as registry_tools
+    from agent.plugin.plugin_impl.cyrene_knowledge import plugin_pack
 
-    registry_tools._initialize_registry()
-
-    assert "ListLibraryItems" in registry_tools.get_tool_names()
-    assert "SearchLibrary" in registry_tools.get_tool_names()
-    assert registry_tools.get_tool_execution_metadata("ListLibraryItems")["read_only"] is True
-    assert registry_tools.get_tool_execution_metadata("SearchLibrary")["read_only"] is True
-    assert "UpdateLibraryMetadata" in registry_tools.get_tool_names()
-    assert (
-        registry_tools.get_tool_execution_metadata("UpdateLibraryMetadata")["read_only"]
-        is False
-    )
+    plugins = {plugin.name: plugin for plugin in plugin_pack.plugins}
+    assert plugins["ListLibraryItems"].metadata["read_only"] is True
+    assert plugins["SearchLibrary"].metadata["read_only"] is True
+    assert plugins["UpdateLibraryMetadata"].metadata["read_only"] is False
 
 
 @pytest.mark.asyncio
-async def test_update_library_metadata_fills_only_missing_fields(library_db):
-    from cyrene.knowledge import library
-    from cyrene.tool_impl.knowledge import update_library_metadata as tool
+async def test_update_library_metadata_fills_only_missing_fields(library_plugin):
+    from agent.plugin.plugin_impl.cyrene_knowledge import update_library_metadata as tool
 
-    item = await library.create_item(
-        library_db,
+    service, context = library_plugin
+    item = await service.create_item(
+        "project-a",
         {
             "title": "paper.pdf",
             "venue": "User-maintained venue",
@@ -120,7 +111,7 @@ async def test_update_library_metadata_fills_only_missing_fields(library_db):
         },
     )
 
-    result = await tool._tool_update_library_metadata(
+    result = await tool.handler(
         {
             "paper_id": item["id"],
             "metadata": {
@@ -134,13 +125,10 @@ async def test_update_library_metadata_fills_only_missing_fields(library_db):
             },
             "sources": ["https://doi.org/10.1000/reliable"],
         },
-        None,
-        -1,
-        "ignored.db",
-        None,
+        context,
     )
 
-    updated = await library.get_item(library_db, item["id"])
+    updated = await service.get_item("project-a", item["id"])
     assert updated["title"] == "paper.pdf"
     assert updated["venue"] == "User-maintained venue"
     assert updated["doi"] == "10.1000/reliable"
@@ -154,28 +142,25 @@ async def test_update_library_metadata_fills_only_missing_fields(library_db):
 
 
 @pytest.mark.asyncio
-async def test_update_library_metadata_can_correct_verified_existing_fields(library_db):
-    from cyrene.knowledge import library
-    from cyrene.tool_impl.knowledge.update_library_metadata import _tool_update_library_metadata
+async def test_update_library_metadata_can_correct_verified_existing_fields(library_plugin):
+    from agent.plugin.plugin_impl.cyrene_knowledge.update_library_metadata import handler
 
-    item = await library.create_item(
-        library_db,
+    service, context = library_plugin
+    item = await service.create_item(
+        "project-a",
         {"title": "Incorrect title", "year": 2020},
     )
-    result = await _tool_update_library_metadata(
+    result = await handler(
         {
             "paper_id": item["id"],
             "metadata": {"title": "Correct title", "year": 2024},
             "overwrite": True,
             "sources": ["https://publisher.example/paper"],
         },
-        None,
-        -1,
-        "ignored.db",
-        None,
+        context,
     )
 
-    updated = await library.get_item(library_db, item["id"])
+    updated = await service.get_item("project-a", item["id"])
     assert updated["title"] == "Correct title"
     assert updated["year"] == 2024
     assert "Sources: https://publisher.example/paper" in result

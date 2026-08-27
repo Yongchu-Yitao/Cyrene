@@ -1,2 +1,0 @@
-"""Workbench renderer-contract tools."""
-

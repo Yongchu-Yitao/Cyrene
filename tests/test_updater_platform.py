@@ -237,10 +237,7 @@ def test_no_compatible_asset_does_not_fall_back(monkeypatch):
 def test_update_available_appends_workbench_notification_once(tmp_path, monkeypatch):
     from cyrene.workbench import notifications as notifications
 
-    store = tmp_path / "workbench_notifications.json"
-    monkeypatch.setattr(notifications, "_NOTIFICATIONS_STORE", store)
-    monkeypatch.setattr(notifications, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(notifications, "_STORE_DB_PATH", "")
+    notifications.configure_store(str(tmp_path / "workbench.sqlite3"))
     updater._notified_update_keys.clear()
 
     info = updater.UpdateInfo(

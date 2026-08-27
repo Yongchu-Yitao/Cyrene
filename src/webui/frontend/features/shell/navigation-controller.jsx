@@ -11,9 +11,17 @@ function createWorkbenchNavigationActions(
   setSettingsScrollTo,
   setRailCollapsed,
   sidebarModuleWheelRef,
-  activeDestination
+  activeDestination,
+  enabledModules
 ) {
+  var moduleOrder = Array.isArray(enabledModules) && enabledModules.length
+    ? enabledModules.slice()
+    : ["schedule", "board", "work", "knowledge", "memory"];
+
   function openPage(page) {
+    var destination = page === "task" ? "board" : page;
+    if (["schedule", "board", "work", "knowledge", "memory"].indexOf(destination) >= 0
+        && moduleOrder.indexOf(destination) < 0) return;
     if (page === "board" || page === "task") {
       if (!fullPage && taskView === "board") return;
       setTaskView("board");
@@ -58,8 +66,8 @@ function createWorkbenchNavigationActions(
     if (now < gesture.lockedUntil) return;
     gesture.delta += deltaX;
     if (Math.abs(gesture.delta) < 44) return;
-    var moduleOrder = ["schedule", "board", "work", "knowledge", "memory"];
     var activeIndex = moduleOrder.indexOf(activeDestination());
+    if (activeIndex < 0 || !moduleOrder.length) return;
     var nextIndex = (activeIndex + direction + moduleOrder.length) % moduleOrder.length;
     openPage(moduleOrder[nextIndex]);
     gesture.lockedUntil = now + 420;
@@ -88,7 +96,8 @@ function useWorkbenchNavigationSurface(
   setSearchOpen,
   setSettingsTab,
   setSettingsScrollTo,
-  setFullPage
+  setFullPage,
+  enabledModules
 ) {
   useEffect(function () {
     if (!window.CyreneUI.has("uiSurface")) return undefined;
@@ -96,13 +105,16 @@ function useWorkbenchNavigationSurface(
     var settingsActive = fullPage === "settings";
     uiSurface.setScope(settingsActive ? "settings" : "main");
     var unregister = [];
+    var enabled = Array.isArray(enabledModules)
+      ? enabledModules
+      : ["schedule", "board", "work", "knowledge", "memory"];
     var modules = [
       ["schedule", t("rail.schedule", "Schedule")],
       ["board", t("workbench.page.board", "Board")],
       ["work", t("workbench.page.work", "Work")],
       ["knowledge", t("rail.knowledge", "Knowledge")],
       ["memory", t("rail.memory", "Memory")],
-    ];
+    ].filter(function (item) { return enabled.indexOf(item[0]) >= 0; });
     modules.forEach(function (item) {
       var page = item[0];
       unregister.push(uiSurface.register({
@@ -161,7 +173,7 @@ function useWorkbenchNavigationSurface(
       }));
     }
     return function () { unregister.forEach(function (remove) { remove(); }); };
-  }, [fullPage, settingsTab, railCollapsed, t]);
+  }, [fullPage, settingsTab, railCollapsed, t, (enabledModules || []).join("|")]);
 }
 
 export { createWorkbenchNavigationActions, useWorkbenchBoardNavigation, useWorkbenchNavigationSurface }

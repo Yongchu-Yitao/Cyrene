@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from cyrene.agent.context import current_run_context
+from agent.plugin import PluginContext
 from cyrene.runtime.host_bridge import HostBridgeError, call_host
-from cyrene.tooling.runtime_api import json_result
+from agent.plugin.native_runtime import json_result, run_context_value
 from cyrene.workbench import app_services
 from cyrene.workbench.app_control import (
-    DELEGATION_OPERATIONS_SCHEMA,
     audit,
     authorize,
     canonical_hash,
@@ -34,8 +33,6 @@ TOOL_DEF = {"type": "function", "function": {
             "message": {"type": "string", "minLength": 1, "maxLength": 20000},
             "reason": {"type": "string", "minLength": 1, "maxLength": 500},
             "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 160},
-            "delegation_quote": {"type": "string", "maxLength": 500},
-            "delegation_operations": DELEGATION_OPERATIONS_SCHEMA,
         },
         "required": ["snapshot_id", "revision", "node_id", "message", "reason", "idempotency_key"],
         "additionalProperties": False,
@@ -67,7 +64,7 @@ def _action(node: dict[str, Any], action_id: str) -> dict[str, Any] | None:
     ), None)
 
 
-async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify: Any) -> str:
+async def handler(args: dict[str, Any], context: PluginContext) -> str:
     operation_id = "cyrene.session.message"
     message = str(args.get("message") or "").strip()
     op_args = {
@@ -123,8 +120,8 @@ async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str,
             "The selected current-tree node is not an empty dispatchable session composer.",
             error_code="invalid_session_composer",
         ))
-    context = current_run_context()
-    if target_id == context.session_id:
+    calling_session_id = str(run_context_value(context, "session_id") or "")
+    if target_id == calling_session_id:
         return json_result(envelope(
             "error", operation_id,
             "The agent may prepare its own visible draft but cannot submit a new run into itself.",
@@ -134,8 +131,6 @@ async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str,
         operation_id,
         op_args,
         reason=str(args.get("reason") or ""),
-        delegation_quote=str(args.get("delegation_quote") or ""),
-        delegation_operations=args.get("delegation_operations"),
     )
     if approval:
         return approval
@@ -158,7 +153,7 @@ async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str,
                 target_kind,
                 target_id,
                 message,
-                origin_session_id=context.session_id,
+                origin_session_id=calling_session_id,
             )
             cleared = await call_host("ui.gesture.execute_current", {
                 "snapshot_id": op_args["snapshot_id"],
@@ -193,7 +188,7 @@ async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str,
         diff={
             "target_session_id": target_id,
             "target_session_kind": target_kind,
-            "origin_session_id": context.session_id,
+            "origin_session_id": calling_session_id,
         },
         error_code=str(result.get("error_code") or ""),
     )

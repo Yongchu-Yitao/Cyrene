@@ -1,18 +1,39 @@
 """Editable Cyrene extensions Plugin pack."""
 
-from ._runtime import create_plugin_pack
+from __future__ import annotations
 
-plugin_pack = create_plugin_pack(
-    package_name=__name__,
-    pack_id="cyrene_extensions",
+from types import ModuleType
+from typing import Any
+
+from agent.plugin import Plugin, PluginPack
+
+from . import list_environment, manage_extensions, search_environment
+
+
+def _plugin(module: ModuleType) -> Plugin:
+    function = module.TOOL_DEF["function"]
+    metadata: dict[str, Any] = dict(getattr(module, "TOOL_METADATA", {}))
+    if str(function["name"]) == "ManageExtensions":
+        metadata["main_only"] = True
+    return Plugin(
+        name=str(function["name"]),
+        description=str(function.get("description") or ""),
+        input_schema=dict(function.get("parameters") or {"type": "object", "properties": {}}),
+        handler=module.handler,
+        allow_parallel=bool(metadata.get("allow_parallel", not metadata.get("requires_order", True))),
+        timeout_seconds=float(metadata.get("timeout_seconds", 180.0)),
+        metadata=metadata,
+    )
+
+
+plugin_pack = PluginPack(
+    id="cyrene_extensions",
     description="Inspect and manage extensions, environments, and hooks.",
-    native_module_names=(
-        "list_environment", "search_environment", "manage_extensions",
-        "manage_agent_hooks",
-    ),
-    registration_providers=(),
+    plugins=tuple(_plugin(module) for module in (
+        list_environment,
+        search_environment,
+        manage_extensions,
+    )),
 )
-if len(plugin_pack.plugins) != 4:
-    raise RuntimeError("extensions pack must contain exactly 4 Plugins")
 
 __all__ = ["plugin_pack"]

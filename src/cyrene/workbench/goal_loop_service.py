@@ -42,13 +42,15 @@ class GoalLoopSessionTransactionPort(Protocol):
     def serialize_run(self, run: dict[str, Any] | None) -> dict[str, Any] | None: ...
     async def publish(self, run: dict[str, Any]) -> None: ...
     async def sync_projection(self, run: dict[str, Any], *, message: str = "") -> None: ...
-    def interrupt(self, session_id: str) -> None: ...
 
 
 class GoalLoopExecutionPort(Protocol):
     def register_run(self, run_id: str, session_id: str) -> None: ...
     def wake(self, run_id: str) -> bool: ...
     def interrupt(self, session_id: str, *, reason: str) -> bool: ...
+    async def cancel_agent_context(
+        self, session_id: str, run_id: str, *, reason: str
+    ) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -157,7 +159,6 @@ class GoalLoopApplicationService:
         if not run or str(run.get("status") or "") != "running":
             raise GoalLoopApplicationError("没有正在运行的持续任务。", 409)
         self.manager.interrupt(session_id, reason="user_paused")
-        self.sessions.interrupt(session_id)
         paused = await self.repository.set_inactive(run, "paused", phase="paused", stop_reason="user_paused")
         if paused:
             await self.repository.add_event(str(run["id"]), "paused")
@@ -182,7 +183,11 @@ class GoalLoopApplicationService:
         if not run or str(run.get("status") or "") in TERMINAL_STATUSES | {"cancelled"}:
             raise GoalLoopApplicationError("没有可取消的持续任务。", 409)
         self.manager.interrupt(session_id, reason="user_cancelled")
-        self.sessions.interrupt(session_id)
+        await self.manager.cancel_agent_context(
+            session_id,
+            str(run["id"]),
+            reason="user_cancelled",
+        )
         cancelled = await self.repository.set_inactive(run, "cancelled", phase="cancelled", stop_reason="user_cancelled")
         if cancelled:
             await self.repository.add_event(str(run["id"]), "cancelled")
@@ -244,6 +249,15 @@ class GoalLoopApplicationService:
 
     def _project_started_run(self, session_id: str, draft: dict[str, Any], run: dict[str, Any] | None) -> dict[str, Any]:
         plan = json_loads(draft.get("plan_json"), [])
+        for step in plan if isinstance(plan, list) else []:
+            if not isinstance(step, dict):
+                continue
+            step.pop("goalLoopAgentRunId", None)
+            step.pop("goalLoopResumeAnswer", None)
+            step.pop("goalLoopAttempts", None)
+            if str(step.get("status") or "") == "running":
+                step["status"] = "pending"
+                step["startedAt"] = None
         acceptance = json_loads(draft.get("acceptance_json"), [])
         revision = int(draft.get("base_plan_revision") or 0) + (1 if bool(draft.get("goal_changed")) else 0)
         now = str(run.get("created_at") if run else utc_iso())
@@ -263,7 +277,12 @@ class GoalLoopApplicationService:
             for step in session.get("plan") or []:
                 if not isinstance(step, dict):
                     continue
-                if str(step.get("status") or "") == "running":
+                if (
+                    str(step.get("status") or "") == "running"
+                    and not str(step.get("goalLoopAgentRunId") or "").strip()
+                ):
+                    # A crash before Agent-id persistence has no identity to
+                    # rebind. Once the id exists, resume keeps the exact run.
                     step["status"], step["startedAt"] = "pending", None
                 if str(step.get("status") or "") not in {"completed", "done", "skipped"}:
                     step["goalLoopAttempts"] = 0

@@ -10,14 +10,10 @@ from typing import Any
 
 from cyrene.config import WORKSPACE_DIR
 
-_WORKBENCH_LEGACY_DATA_KEY = "default"
-
 def _safe_workbench_data_key(value: Any) -> str:
     raw = str(value or '').strip()
-    if not raw:
-        return _WORKBENCH_LEGACY_DATA_KEY
     cleaned = re.sub('[^A-Za-z0-9._-]+', '_', raw).strip('._')
-    return cleaned or _WORKBENCH_LEGACY_DATA_KEY
+    return cleaned or 'project'
 
 def _workbench_default_project_name() -> str:
     if WORKSPACE_DIR.name == 'workspace' and WORKSPACE_DIR.parent.name:
@@ -26,11 +22,11 @@ def _workbench_default_project_name() -> str:
 
 def _workbench_project_data_key(project: dict[str, Any] | None) -> str:
     if not project:
-        return _WORKBENCH_LEGACY_DATA_KEY
+        return ''
     return _safe_workbench_data_key(project.get('dataKey') or project.get('id'))
 
-def _workbench_project_memory_key(project: dict[str, Any] | None) -> str:
-    """Return the project identity used for durable Workbench memory."""
+def _workbench_project_resource_key(project: dict[str, Any] | None) -> str:
+    """Return the stable project identity used by Plugin-owned resources."""
     if not project:
         return 'default'
     return _safe_workbench_data_key(project.get('id'))
@@ -38,17 +34,24 @@ def _workbench_project_memory_key(project: dict[str, Any] | None) -> str:
 def _ndjson_line(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False) + '\n'
 
+def _primary_candidate() -> dict[str, Any]:
+    from cyrene.runtime.model_configuration import candidates_for_route
+
+    candidates = candidates_for_route('primary')
+    return dict(candidates[0]) if candidates else {}
+
 def _live_llm_config() -> tuple[str, str]:
-    from cyrene import config as cy_config
-    return (cy_config.OPENAI_MODEL, cy_config.OPENAI_BASE_URL)
+    candidate = _primary_candidate()
+    return (
+        str(candidate.get('model') or ''),
+        str(candidate.get('base_url') or ''),
+    )
 
 def _get_model() -> str:
-    from cyrene import config as cy_config
-    return cy_config.OPENAI_MODEL
+    return str(_primary_candidate().get('model') or '')
 
 def _get_base_url() -> str:
-    from cyrene import config as cy_config
-    return cy_config.OPENAI_BASE_URL
+    return str(_primary_candidate().get('base_url') or '')
 
 def _parse_ctx_limit(ctx_str: str) -> int:
     """Parse human-readable context limit like '128K', '1M', '200K' to int."""
@@ -64,22 +67,26 @@ def _parse_ctx_limit(ctx_str: str) -> int:
     except (ValueError, TypeError):
         return 0
 
-def _get_current_model_ctx_limit() -> int:
-    """Look up the current model's context window limit from settings."""
-    from cyrene.runtime.config_store import get_models, get_vision_models
-    model_name = _get_model()
+def _ctx_limit_for_model(model_name: str) -> int:
+    """Resolve a model window from canonical profiles, then known families."""
+
+    from cyrene.runtime.model_configuration import get_model_configuration
+
+    target = str(model_name or '').strip()
     ctx_limit = 0
-    for model in get_models() or []:
-        if model.get('model') == model_name or model.get('name') == model_name:
-            ctx_limit = _parse_ctx_limit(model.get('ctx', ''))
-            break
+    for profile in get_model_configuration().get('profiles') or []:
+        if target not in {
+            str(profile.get('id') or '').strip(),
+            str(profile.get('model') or '').strip(),
+            str(profile.get('name') or '').strip(),
+        }:
+            continue
+        ctx_limit = int(profile.get('context_limit') or 0) or _parse_ctx_limit(
+            str(profile.get('ctx') or '')
+        )
+        break
     if not ctx_limit:
-        for model in get_vision_models() or []:
-            if model.get('model') == model_name or model.get('name') == model_name:
-                ctx_limit = _parse_ctx_limit(model.get('ctx', ''))
-                break
-    if not ctx_limit:
-        model_lower = model_name.lower()
+        model_lower = target.lower()
         if any((x in model_lower for x in ('claude-opus-4', 'opus-4'))):
             ctx_limit = 200000
         elif any((x in model_lower for x in ('claude-sonnet-4', 'sonnet-4'))):
@@ -98,6 +105,10 @@ def _get_current_model_ctx_limit() -> int:
             ctx_limit = 1000000
     return ctx_limit
 
+def _get_current_model_ctx_limit() -> int:
+    """Look up the canonical primary model's context window limit."""
+    return _ctx_limit_for_model(_get_model())
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -109,7 +120,7 @@ def _workbench_default_project() -> dict[str, Any]:
     project_id = _short_id('project')
     workspace_name = _workbench_default_project_name()
     initial_session = _workbench_new_session(project_id, '新任务', '', now)
-    return {'projects': [{'id': project_id, 'name': workspace_name, 'dataKey': _WORKBENCH_LEGACY_DATA_KEY, 'workspacePath': str(WORKSPACE_DIR), 'status': 'active', 'model': _get_model(), 'accountTier': 'Pro', 'context': {'summary': f'Workspace at {WORKSPACE_DIR}', 'stack': [], 'decisions': [], 'knowledgeDocumentIds': []}, 'createdAt': now, 'updatedAt': now, 'sessions': [initial_session], 'sharedArtifacts': []}], 'activeProjectId': project_id, 'activeSessionId': initial_session['id']}
+    return {'projects': [{'id': project_id, 'name': workspace_name, 'dataKey': _safe_workbench_data_key(project_id), 'workspacePath': str(WORKSPACE_DIR), 'workspacePathSource': 'user', 'status': 'active', 'model': _get_model(), 'accountTier': 'Pro', 'context': {'summary': f'Workspace at {WORKSPACE_DIR}', 'stack': [], 'decisions': [], 'knowledgeDocumentIds': []}, 'createdAt': now, 'updatedAt': now, 'sessions': [initial_session], 'sharedArtifacts': []}], 'activeProjectId': project_id, 'activeSessionId': initial_session['id']}
 _WORKBENCH_PLACEHOLDER_GOAL = '通过对话明确当前任务目标。'
 
 def _workbench_is_blank_goal(goal: Any) -> bool:
@@ -176,4 +187,7 @@ def _workbench_new_init_session(project_id: str, project: dict[str, Any], now: s
     session['agentReply'] = form['greeting']
     return session
 
-__all__ = ['_WORKBENCH_PLACEHOLDER_GOAL', '_get_base_url', '_get_current_model_ctx_limit', '_get_model', '_live_llm_config', '_ndjson_line', '_parse_ctx_limit', '_safe_workbench_data_key', '_short_id', '_utc_now_iso', '_workbench_acceptance_fully_passed', '_workbench_default_init_form', '_workbench_default_project', '_workbench_default_project_name', '_workbench_derive_title', '_workbench_is_blank_goal', '_workbench_is_default_title', '_workbench_mark_completed_if_acceptance_passed', '_workbench_new_init_session', '_workbench_new_session', '_workbench_project_data_key', '_workbench_project_memory_key']
+workbench_project_data_key = _workbench_project_data_key
+
+
+__all__ = ['workbench_project_data_key']

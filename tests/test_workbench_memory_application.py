@@ -4,15 +4,19 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
-from cyrene.workbench import memory
-from route.workbench.memory import register_workbench_memory_routes
+from agent.plugin.plugin_impl.cyrene_memory import structured as memory
+from agent.plugin.plugin_impl.cyrene_memory.routes_structured import (
+    register_workbench_memory_routes,
+)
 
 
 def test_workspace_memory_crud_preserves_history_and_stale_semantics(tmp_path, monkeypatch):
-    original_store_dir = memory.STORE_DIR
     original_db_path = memory._STORE_DB_PATH
-    monkeypatch.setattr(memory, "STORE_DIR", tmp_path)
-    memory.configure_store("")
+    from cyrene.workbench.store import ensure_schema
+
+    database = tmp_path / "memory.db"
+    ensure_schema(database)
+    memory.configure_store(str(database))
     try:
         app = FastAPI()
         router = APIRouter()
@@ -56,7 +60,6 @@ def test_workspace_memory_crud_preserves_history_and_stale_semantics(tmp_path, m
         assert deleted.status_code == 200
         assert deleted.json()["memories"] == []
     finally:
-        monkeypatch.setattr(memory, "STORE_DIR", original_store_dir)
         memory.configure_store(original_db_path)
 
 

@@ -15,7 +15,6 @@ class RemoteSettingsUpdate(RemoteSettingsModel):
     enabled: bool
     relay_url: str = Field(default="", max_length=500)
     device_name: str = Field(min_length=1, max_length=120)
-    default_tool_packs: list[str] | None = Field(default=None, max_length=50)
 
 
 class RemotePairingInvitationRequest(RemoteSettingsModel):

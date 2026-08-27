@@ -78,6 +78,7 @@ function WorkbenchHelpCenter({ onNewProject, onNewTask, onOpenPage, onSettings }
     if (typeof action === "function") action();
   }
 
+  var pluginModules = Array.isArray(dataState.pluginModules) ? dataState.pluginModules : [];
   var quickItems = [
     {
       id: "tutorial", tone: "cyan", title: t("help.tutorial"), desc: t("help.tutorialDesc"),
@@ -104,7 +105,9 @@ function WorkbenchHelpCenter({ onNewProject, onNewTask, onOpenPage, onSettings }
       icon: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="8.5" width="14" height="11" rx="3.5"/><path d="M12 8.5V4.5M12 4.5a1.5 1.5 0 1 0 0-.01"/><path d="M3.5 13.5v3M20.5 13.5v3"/><circle cx="9.5" cy="13.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="13.5" r="1.1" fill="currentColor" stroke="none"/></svg>,
       action: function () { onSettings && onSettings("agents"); },
     },
-  ];
+  ].filter(function (item) {
+    return item.id !== "knowledge" || pluginModules.indexOf("knowledge") >= 0;
+  });
 
   var shortcuts = shortcutList.map(function (item) {
     return {
@@ -447,7 +450,7 @@ function WorkbenchSidebarCollapseControl({ collapsed, onToggle }) {
   );
 }
 
-function WorkbenchSidebarDock({ activePage, activeDestination, onOpenPage, onSettings, collapsed, persistent }) {
+function WorkbenchSidebarDock({ activePage, activeDestination, onOpenPage, onSettings, collapsed, persistent, enabledModules }) {
   var { t } = workbenchServices.i18n().use();
   var items = [
     { id: "schedule", label: t("workbench.page.schedule"), icon: (
@@ -465,7 +468,9 @@ function WorkbenchSidebarDock({ activePage, activeDestination, onOpenPage, onSet
     { id: "memory", label: t("workbench.page.memory"), icon: (
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4 13.6 10.4 20 12 13.6 13.6 12 20 10.4 13.6 4 12 10.4 10.4Z"/></svg>
     ) },
-  ];
+  ].filter(function (item) {
+    return !Array.isArray(enabledModules) || enabledModules.indexOf(item.id) >= 0;
+  });
   return (
     <div className={"workbench-sidebar-dock" + (persistent ? " is-persistent" : "") + (collapsed ? " is-collapsed" : "")}>
       <nav className="workbench-sidebar-dock-nav" aria-label={t("workbench.navigation", "Workbench navigation")}>
@@ -493,10 +498,11 @@ function WorkbenchSidebarDock({ activePage, activeDestination, onOpenPage, onSet
 }
 
 function WorkbenchFullPage({ config, onClose }) {
+  var { t } = workbenchServices.i18n().use();
   return (
     <div className="workbench-fullscreen">
       <div className="workbench-fullscreen-head">
-        <button type="button" onClick={onClose}>← {wbT("workbench.back", "Back to workbench")}</button>
+        <button type="button" onClick={onClose}>← {t("workbench.back", null, "Back to workbench")}</button>
         <b>{config.title}</b>
       </div>
       <div className="workbench-fullscreen-body">
@@ -507,7 +513,7 @@ function WorkbenchFullPage({ config, onClose }) {
 }
 
 function workbenchFullPageConfig(page, setFullPage, store) {
-  return { title: page, render: function () { return <div className="workbench-empty">{wbT("workbench.pageNotFound", "Page not found.")}</div>; } };
+  return { title: page, render: function () { return <div className="workbench-empty">{workbenchServices.i18n().t("workbench.pageNotFound", null, "Page not found.")}</div>; } };
 }
 
 export { WorkbenchEditProjectModal, WorkbenchFullPage, WorkbenchHelpCenter, WorkbenchProjectMemoryModal, WorkbenchSidebarCollapseControl, WorkbenchSidebarDock, workbenchFullPageConfig }

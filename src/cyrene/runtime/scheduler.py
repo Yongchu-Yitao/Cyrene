@@ -2,13 +2,12 @@
 
 Responsibilities
 ----------------
-1. **Scheduled tasks** -- Check the SQLite database for due tasks and execute
-   them (inherited from the original scheduler).
+1. **Scheduled tasks** -- Host user-editable background Plugins on one clock.
 2. **Heartbeat** -- A low-frequency proactive lottery job, independent from
    the task poll so maintenance does not wake on every task-check interval.
 3. **Lottery** -- A probability-driven mechanism that occasionally prompts the
-   assistant to send an unsolicited message to the user.  State is persisted
-   to ``data/lottery_state.json`` so that it survives restarts.
+   assistant to send an unsolicited message to the user. State is persisted in
+   the runtime settings store so that it survives restarts.
 4. **Smart proactive context** -- When the lottery triggers, the agent now
    receives short-term memory, recent conversation context, and relationship
    state from SOUL.md so the proactive message can reference real events
@@ -18,11 +17,8 @@ Responsibilities
 """
 
 import asyncio
-import importlib
-import json
 import logging
 import random
-import re as _re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -31,35 +27,97 @@ from pathlib import Path
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from cyrene.runtime import database as db
-from cyrene.agent import (
-    append_system_message,
-    is_session_running,
-    run_heartbeat_agent,
-    run_steward_agent,
-    run_task_agent,
-)
+from agent.plugin import active_plugin_service
+from agent.plugin.background import BackgroundPluginHost
+from agent.workbench import ConversationConfig, ConversationRuntime, WorkbenchChatResult
 from cyrene.config import (
-    BASE_DIR,
-    DATA_DIR,
     OWNER_ID,
     PATTERN_DETECTION_INTERVAL,
     SCHEDULER_INTERVAL,
-    STATE_FILE,
     STEWARD_INTERVAL,
+    WORKSPACE_DIR,
 )
-from cyrene.runtime.memory.conversations import CONVERSATIONS_DIR, get_recent_conversations
-from cyrene.runtime.io import atomic_write_json, read_json_safe
 from cyrene.runtime.notifications import notify
-from cyrene.runtime.schedule_spec import compute_next_run
-from cyrene.runtime.memory.short_term import clear_old_entries, get_context as get_short_term_context
-from cyrene.runtime.memory.soul import apply_soul_update, read_shallow_memory, read_soul
+from cyrene.runtime.run_coordinator import run_coordinator_for
+from cyrene.workbench.chat_repository import ChatRepository
 from cyrene.workbench.notifications import append_notification
+from cyrene.workbench.proactive_chat_service import create_proactive_chat
 
 logger = logging.getLogger(__name__)
 
 _scheduler: AsyncIOScheduler | None = None
+_background_plugin_host: BackgroundPluginHost | None = None
 _workbench_db_path: str = ""
+
+
+def _memory_service():
+    return active_plugin_service("memory")
+
+
+def _is_workbench_conversation_running(db_path: str, session_id: str) -> bool:
+    """Check the Plugin run coordinator without consulting the retired Agent."""
+
+    target = str(session_id or "").strip()
+    return bool(
+        target
+        and run_coordinator_for(str(db_path or "")).get("conversation", target)
+        is not None
+    )
+
+
+def _proactive_language_instruction(lang: str) -> str:
+    normalized = str(lang or "").strip().lower()
+    if normalized.startswith("zh"):
+        return "Write the final user-visible report in Simplified Chinese."
+    if normalized.startswith("en"):
+        return "Write the final user-visible report in English."
+    return "Use the language the user normally uses in their recent context."
+
+
+async def _run_plugin_proactive_turn(
+    prompt: str,
+    *,
+    bot,
+    owner_id: int,
+    db_path: str,
+    session_id: str,
+    workspace_dir: str,
+    project_id: str = "",
+    session_title: str = "",
+    lang: str = "",
+) -> WorkbenchChatResult:
+    """Run one scheduler turn through the same Plugin Agent as Workbench Chat."""
+
+    runtime = ConversationRuntime(str(db_path or ""))
+    config = ConversationConfig(
+        session_id=str(session_id),
+        workspace_dir=str(workspace_dir or WORKSPACE_DIR),
+        db_path=str(db_path or ""),
+        bot=bot,
+        host_chat_id=owner_id,
+        permission_mode="auto",
+        command="proactive-heartbeat",
+        public_user_message="",
+        workspace_enabled=True,
+        system_extra=_proactive_language_instruction(lang),
+        project_id=str(project_id or ""),
+        session_title=str(session_title or ""),
+        memory_write_enabled=True,
+        memory_trigger_enabled=False,
+        memory_archive_enabled=True,
+        conversation_source="scheduler",
+    )
+    run_id = f"proactive_run_{uuid.uuid4().hex}"
+    return await runtime.send(
+        config,
+        str(prompt or ""),
+        run_id=run_id,
+        metadata={
+            "system_initiated": True,
+            "proactive": True,
+            "source": "scheduler",
+        },
+    )
 
 # ---------------------------------------------------------------------------
 # Lottery state  (persisted to disk)
@@ -73,18 +131,12 @@ _LOTTERY_STATE: dict[str, float] = {
     "cooldown_until": 0.0,        # Unix timestamp: suppress proactive until this time
     "last_proactive_time": 0.0,   # Unix timestamp: when last proactive message was sent
 }
-_LOTTERY_FILE = BASE_DIR / "data" / "lottery_state.json"
+_LOTTERY_SETTING_KEY = "proactive_lottery_state"
 
 # If this many consecutive proactive messages go unanswered, enter cooldown.
 _PROACTIVE_COOLDOWN_THRESHOLD: int = 2
 # Duration of the cooldown period in seconds (3 days).
 _PROACTIVE_COOLDOWN_SECONDS: int = 3 * 86400
-
-# ---------------------------------------------------------------------------
-# Steward state  (persisted to disk)
-# ---------------------------------------------------------------------------
-
-_STEWARD_STATE_FILE = DATA_DIR / "steward_state.json"
 
 # Big-heartbeat cadence: perform proactive checks.
 # Read from web_settings.json (default 1800s = 30 min).
@@ -117,11 +169,13 @@ def _get_maintenance_lock() -> asyncio.Lock:
 
 
 def _load_lottery_state() -> None:
-    """Restore lottery state from ``_LOTTERY_FILE``."""
+    """Restore lottery state from the runtime settings store."""
     global _LOTTERY_STATE
     try:
-        data = read_json_safe(_LOTTERY_FILE)
-        if data is not None:
+        from cyrene.runtime.settings_store import get
+
+        data = get(_LOTTERY_SETTING_KEY, {})
+        if isinstance(data, dict):
             _LOTTERY_STATE["probability"] = float(data.get("probability", 0.0))
             _LOTTERY_STATE["delta"] = float(data.get("delta", 0.15))
             _LOTTERY_STATE["max_probability"] = float(data.get("max_probability", 0.85))
@@ -139,9 +193,11 @@ def _load_lottery_state() -> None:
 
 
 def _save_lottery_state() -> None:
-    """Persist current lottery state to ``_LOTTERY_FILE``."""
+    """Persist current lottery state through the settings boundary."""
     try:
-        atomic_write_json(_LOTTERY_FILE, _LOTTERY_STATE)
+        from cyrene.runtime.settings_store import set_
+
+        set_(_LOTTERY_SETTING_KEY, dict(_LOTTERY_STATE))
     except Exception:
         logger.exception("Failed to save lottery state")
 
@@ -193,11 +249,9 @@ def _last_user_message_time() -> datetime | None:
     """Infer the timestamp of the user's most recent message.
 
     Workbench ``lastUserMessageAt`` values and conversation archive
-    ``## HH:MM:SS UTC`` headings track real user turns. ``state.json``'s
-    modification time is only a degraded fallback — the agent rewrites that
-    file on its own (proactive replies, steward, behaviour learning, pattern
-    detection), so its mtime is trusted only when the latest message is the
-    user's.
+    ``## HH:MM:SS UTC`` headings track real user turns. The removed Agent
+    session file is deliberately not consulted: ChatRepository and the memory
+    Plugin are the two durable sources of user activity.
 
     Returns ``None`` when no user message can be found.
     """
@@ -211,64 +265,19 @@ def _last_user_message_time() -> datetime | None:
 
     # 2. Conversation archives — authoritative per-user-turn timestamps.
     try:
-        if CONVERSATIONS_DIR.exists():
-            files = sorted(CONVERSATIONS_DIR.glob("*.md"), reverse=True)
-            for filepath in files:
-                content = filepath.read_text(encoding="utf-8")
-                # Each exchange starts with "## HH:MM:SS UTC", then optional
-                # metadata comments, then "**User**: ..." — match lazily.
-                matches = _re.findall(
-                    r"## (\d{2}:\d{2}:\d{2} UTC)\n.*?\*\*User\*\*:",
-                    content,
-                    _re.DOTALL,
-                )
-                if matches:
-                    latest_ts = matches[-1]
-                    date_str = filepath.stem  # YYYY-MM-DD
-                    clean_ts = latest_ts.replace(" UTC", "")
-                    dt_str = f"{date_str} {clean_ts}"
-                    try:
-                        candidates.append(
-                            datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S").replace(
-                                tzinfo=timezone.utc,
-                            )
-                        )
-                        break
-                    except ValueError:
-                        logger.debug(
-                            "Unparseable timestamp in %s: %s",
-                            filepath.name,
-                            latest_ts,
-                            exc_info=True,
-                        )
-                        continue
+        memory_service = _memory_service()
+        archived_at = (
+            memory_service.latest_archived_user_message_time()
+            if memory_service is not None
+            else None
+        )
+        if archived_at is not None:
+            candidates.append(archived_at)
     except Exception:
         logger.debug(
             "Could not scan conversation archives for silence detection",
             exc_info=True,
         )
-
-    # 3. Degraded fallback: state.json mtime, trusted only when the most recent
-    #    non-empty message is the user's (otherwise the mtime reflects one of the
-    #    agent's own writes and would make the user look more recently active
-    #    than they really are). Mostly relevant before any exchange is archived.
-    try:
-        if STATE_FILE.exists():
-            data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-            messages = data.get("messages", []) if isinstance(data, dict) else []
-            last_msg = next(
-                (
-                    m
-                    for m in reversed(messages)
-                    if isinstance(m, dict) and str(m.get("content", "")).strip()
-                ),
-                None,
-            )
-            if last_msg is not None and str(last_msg.get("role") or "") == "user":
-                mtime = STATE_FILE.stat().st_mtime
-                candidates.append(datetime.fromtimestamp(mtime, tz=timezone.utc))
-    except Exception:
-        logger.debug("Could not read state.json for silence detection", exc_info=True)
 
     return max(candidates) if candidates else None
 
@@ -288,19 +297,10 @@ def _parse_activity_timestamp(value: object) -> datetime | None:
 
 def _latest_workbench_user_activity() -> dict[str, object] | None:
     """Return the Workbench chat most recently touched by the user."""
-    if _workbench_db_path:
-        from cyrene.workbench.store import read_document
-
-        data = read_document(
-            _workbench_db_path,
-            "chats",
-            lambda: {"chats": []},
-            legacy_path=DATA_DIR / "workbench_chats.json",
-        )
-    else:
-        data = read_json_safe(DATA_DIR / "workbench_chats.json")
-    if not isinstance(data, dict) or not isinstance(data.get("chats"), list):
+    if not _workbench_db_path:
         return None
+    repository = ChatRepository(_workbench_db_path)
+    data = repository.read()
 
     latest: dict[str, object] | None = None
     for chat in data["chats"]:
@@ -340,20 +340,9 @@ def _workbench_workspace_dir_for_project(project_id: str) -> str:
     if not project_id:
         return ""
     try:
-        if _workbench_db_path:
-            from cyrene.workbench.store import read_document
+        from cyrene.workbench.context import read_projects
 
-            payload = read_document(
-                _workbench_db_path,
-                "projects",
-                lambda: {"projects": []},
-                legacy_path=DATA_DIR / "workbench_projects.json",
-            )
-        else:
-            payload = read_json_safe(DATA_DIR / "workbench_projects.json")
-        projects = payload.get("projects") if isinstance(payload, dict) else None
-        if not isinstance(projects, list):
-            return ""
+        projects = read_projects()
         project = next(
             (
                 item
@@ -375,6 +364,40 @@ def _workbench_workspace_dir_for_project(project_id: str) -> str:
     except Exception:
         logger.debug("Could not resolve Workbench workspace for %s", project_id, exc_info=True)
     return ""
+
+
+def _default_workbench_project_scope() -> dict[str, str]:
+    """Return the active (or first) project without legacy JSON fallbacks."""
+
+    try:
+        from cyrene.workbench.context import read_project_state
+
+        state = read_project_state()
+        projects = [
+            item
+            for item in state.get("projects") or ()
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        ]
+        active_id = str(state.get("activeProjectId") or "").strip()
+        project = next(
+            (
+                item
+                for item in projects
+                if str(item.get("id") or "") == active_id
+            ),
+            projects[0] if projects else None,
+        )
+        if isinstance(project, dict):
+            return {
+                "project_id": str(project.get("id") or "default"),
+                "workspace_dir": _workbench_workspace_dir_for_project(
+                    str(project.get("id") or "")
+                )
+                or str(WORKSPACE_DIR),
+            }
+    except Exception:
+        logger.debug("Could not resolve the proactive default project", exc_info=True)
+    return {"project_id": "default", "workspace_dir": str(WORKSPACE_DIR)}
 
 
 def _silence_hours() -> float | None:
@@ -407,7 +430,12 @@ async def _assemble_proactive_context(db_path: str = "") -> str:
 
     # 1. SOUL.md shallow memory — relationship + observed patterns
     try:
-        soul = read_shallow_memory()
+        memory_service = _memory_service()
+        soul = (
+            memory_service.read_shallow_memory()
+            if memory_service is not None
+            else ""
+        )
         if soul:
             relevant_lines: list[str] = []
             capture = False
@@ -434,9 +462,14 @@ async def _assemble_proactive_context(db_path: str = "") -> str:
 
     # 2. Short-term memory — compressed facts / preferences / emotions
     try:
-        st = get_short_term_context(
-            max_chars=1500,
-            header="## Recent memories about the user",
+        memory_service = _memory_service()
+        st = (
+            memory_service.short_term_context(
+                max_chars=1500,
+                header="## Recent memories about the user",
+            )
+            if memory_service is not None
+            else ""
         )
         if st and st != "## Recent memories about the user":
             parts.append(st)
@@ -448,7 +481,12 @@ async def _assemble_proactive_context(db_path: str = "") -> str:
 
     # 3. Today's conversation — what the user just talked about
     try:
-        conversations = await get_recent_conversations(days=1)
+        memory_service = _memory_service()
+        conversations = (
+            await memory_service.recent_conversations(days=1)
+            if memory_service is not None
+            else ""
+        )
         if conversations:
             if len(conversations) > 3000:
                 # Keep the tail (most recent exchanges)
@@ -469,14 +507,16 @@ async def _assemble_proactive_context(db_path: str = "") -> str:
     if db_path:
         try:
             from datetime import timedelta
-            from cyrene.tool_impl.entity.store import list_entities, query_entities
 
             now_dt = datetime.now(timezone.utc)
             due_cutoff = (now_dt + timedelta(hours=24)).isoformat()
             stale_cutoff = (now_dt - timedelta(days=7)).isoformat()
+            entities = active_plugin_service("entities")
+            if entities is None:
+                raise RuntimeError("Entity Plugin application service is unavailable")
 
-            due_soon = await query_entities(db_path, due_before=due_cutoff, status="active")
-            all_active = await list_entities(db_path, status="active", limit=200)
+            due_soon = await entities.query(due_before=due_cutoff, status="active")
+            all_active = await entities.list(status="active", limit=200)
             stale = [e for e in all_active if e.get("last_referenced_at", "") < stale_cutoff]
             open_dec = [
                 e for e in all_active
@@ -518,7 +558,7 @@ def _build_proactive_user_prompt(context: str, silence_hours: float | None, cons
         unanswered_note = (
             "The user has not replied to the previous proactive report. "
             "Do not repeat it or send a substitute social message. Only report a new, "
-            "material result or risk; otherwise call `quit` silently."
+            "material result or risk; otherwise return an empty final response."
         )
 
     return f"""## Memory context
@@ -530,7 +570,7 @@ def _build_proactive_user_prompt(context: str, silence_hours: float | None, cons
 - When an actionable item exists, use tools and complete the work now. Do not merely suggest work, offer to help, or describe what you could do.
 - Prefer bounded work with a verifiable result. Respect the proactive write-safety boundary in the system instructions.
 - Report only a concrete completed result, a newly verified material fact, or a specific blocker/risk that genuinely needs the user's attention. State what changed or was found and why it matters.
-- If there is no useful safe action, or no material result worth reporting, call `quit` silently.
+- If there is no useful safe action, or no material result worth reporting, return an empty final response.
 - Do not greet the user, make small talk, ask how they are, send lifestyle reminders, or revive a casual topic merely to have something to say.
 - No new user message triggered this round. Never claim or imply that the user just woke up, came online, returned, became available, finished work, is currently busy, or is currently doing anything.
 - Treat the current time and silence duration only as scheduling/deadline context; they are not evidence of the user's present state.
@@ -545,307 +585,43 @@ def _build_proactive_user_prompt(context: str, silence_hours: float | None, cons
 
 
 # ---------------------------------------------------------------------------
-# Scheduled-task execution  (preserved from the original scheduler)
+# Proactive message delivery — Workbench chat + optional bot
 # ---------------------------------------------------------------------------
 
 
-def _user_visible_text(result: str, prompt: str) -> str:
-    """Return *result* if it conveys real user-facing output, else *prompt*.
+async def _deliver_proactive_message(
+    text: str,
+    bot,
+    chat_id: int,
+    *,
+    db_path: str,
+    project_id: str,
+    session_id: str,
+    model: str = "",
+    source_chat_id: str = "",
+    lang: str = "",
+) -> dict[str, str] | None:
+    """Project one result through the new chat service and optional bot."""
 
-    The execution-agent returns ``"Done."`` as a default when it produces no
-    text (see ``_run_execution_agent_locked``).  A bare ``"Done."`` or empty
-    string is indistinguishable from "I have nothing to report" — in that case
-    the original task prompt is a better signal than a dead ``"Done."``.
-    """
-    text = (result or prompt).strip()
-    if not text or text.lower().rstrip(".") == "done":
-        return prompt
-    return text
-
-
-def _plaintext(body: str) -> str:
-    """Strip common Markdown formatting for plaintext notification channels.
-
-    macOS ``terminal-notifier``, WeChat, and the in-app SSE notification panel
-    all display the content verbatim — they do not interpret Markdown.
-    """
-    body = _re.sub(r'\*\*(.+?)\*\*', r'\1', body)
-    body = _re.sub(r'\*(.+?)\*', r'\1', body)
-    body = _re.sub(r'`([^`]+)`', r'\1', body)
-    body = _re.sub(r'#{1,6}\s+', '', body)
-    body = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', body)
-    return body
-
-
-def _truncate(text: str, limit: int) -> str:
-    """Truncate *text* to *limit* characters, appending ``…`` when cut."""
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "…"
-
-
-async def _check_and_execute_tasks(bot, db_path: str) -> None:
-    """Query all due tasks from the database and execute each one."""
-    try:
-        tasks = await db.get_due_tasks(db_path)
-    except Exception:
-        logger.exception("Failed to query due tasks")
-        return
-
-    for task in tasks:
-        try:
-            await _execute_task(task, bot, db_path)
-        except Exception:
-            logger.exception("Failed to execute task %s", task["id"])
-
-
-async def _execute_task(task: dict, bot, db_path: str) -> None:
-    """Run a single scheduled task and update its next-run time."""
-    task_id = task["id"]
-    task_chat_id = task["chat_id"]
-    prompt = task["prompt"]
-    origin_session_id = str(task.get("origin_session_id") or "").strip()
-    action_type = str(task.get("action_type") or "agent_task").strip().lower()
-    if action_type not in {"message", "agent_task"}:
-        action_type = "agent_task"
-    permission_mode = str(task.get("permission_mode") or "workspace_only").strip().lower()
-    logger.info(
-        "Executing task %s for chat %s (permission: %s): %s",
-        task_id, task_chat_id, permission_mode, prompt[:80],
+    projected = await create_proactive_chat(
+        db_path,
+        project_id,
+        text,
+        chat_id=session_id,
+        model=model,
+        source_chat_id=source_chat_id,
+        lang=lang,
     )
-
-    # Bind delivery and file tools to the conversation and workspace that
-    # created the task. Older tasks have no origin and keep legacy behaviour.
-    from cyrene.agent.context import bind_run_context
-    run_binding = bind_run_context(
-        session_id=origin_session_id,
-        agent_id="scheduler",
-        workspace_dir=_workbench_workspace_dir_for_project(
-            str(task.get("project_id") or "")
-        ),
-        temporary_full_access=permission_mode == "full_access",
-    )
-    if permission_mode == "full_access":
-        logger.info("Temporarily elevated write permissions to full_access for task %s", task_id)
-
-    wrapped_prompt = (
-        "You are executing a scheduled task. "
-        "First use tools to complete the task, then use the send_message tool "
-        "to report the result to the user. "
-        f"Task: {prompt}"
-    )
-    notify_state: dict[str, object] = {"sent": False, "delivered_text": ""}
-
-    start = time.monotonic()
-    had_error = False
-    workbench_persisted = False
-    try:
-        if action_type == "message":
-            await append_system_message(
-                prompt,
-                message_meta={"scheduled": True, "task_id": task_id},
-                publish_event={"scheduled": True, "task_id": task_id},
-            )
-            notify_state["sent"] = True
-            notify_state["delivered_text"] = prompt
-            result = prompt
-        else:
-            result = await run_task_agent(
-                wrapped_prompt, bot, task_chat_id, db_path, notify_state,
-            )
-            if notify_state.get("deferred"):
-                logger.info(
-                    "Deferring task %s because origin session %s is busy",
-                    task_id,
-                    origin_session_id or "<legacy-default>",
-                )
-                return
-
-        # Fallback: if the model forgot to call send_message, surface what it
-        # actually did so the result doesn't go silent in web-only mode.
-        # Nested try/except so a notification failure never corrupts the result.
-        if not notify_state["sent"]:
-            try:
-                fallback_text = _user_visible_text(result, prompt)
-                truncated = _truncate(fallback_text, 2000)
-                await append_system_message(
-                    truncated,
-                    message_meta={"scheduled": True, "task_id": task_id},
-                    publish_event={"scheduled": True, "task_id": task_id},
-                )
-                notify_state["sent"] = True
-                notify_state["delivered_text"] = truncated
-            except Exception:
-                logger.warning("Failed to append fallback message for task %s", task_id)
-
-        delivered_text = str(notify_state.get("delivered_text") or "").strip()
-        if origin_session_id and delivered_text:
-            from cyrene.workbench.chat import append_proactive_message
-
-            workbench_persisted = bool(
-                await append_proactive_message(origin_session_id, delivered_text)
-            )
-
-        public_result = delivered_text or _user_visible_text(result, prompt)
-
-        duration_ms = int((time.monotonic() - start) * 1000)
-        await db.log_task_run(
-            db_path, task_id, duration_ms, "success", result=public_result,
-        )
-    except Exception as e:
-        had_error = True
-        duration_ms = int((time.monotonic() - start) * 1000)
-        await db.log_task_run(
-            db_path, task_id, duration_ms, "error", error=str(e),
-        )
-        result = f"Error: {e}"
-        delivered_text = str(notify_state.get("delivered_text") or "").strip()
-        public_result = delivered_text or "定时任务执行失败，请在日程的运行记录中查看详情。"
-        try:
-            if not delivered_text:
-                await append_system_message(
-                    public_result,
-                    message_meta={"scheduled": True, "task_id": task_id, "error": True},
-                    publish_event={"scheduled": True, "task_id": task_id, "error": True},
-                )
-            if origin_session_id and public_result and not workbench_persisted:
-                from cyrene.workbench.chat import append_proactive_message
-
-                workbench_persisted = bool(
-                    await append_proactive_message(origin_session_id, public_result)
-                )
-        except Exception:
-            logger.exception("Failed to persist scheduled-task error in origin chat %s", origin_session_id)
-    finally:
-        run_binding.reset()
-        if permission_mode == "full_access":
-            logger.info("Restored write permissions after task %s", task_id)
-
-    # Re-arm (or retire) the task based on its schedule type. ``next_run`` is
-    # computed through the shared schedule spec so a recurring task fires at the
-    # same cadence the REST API and agent tool promised at creation time.
-    stype = task["schedule_type"]
-    svalue = task["schedule_value"]
-    schedule_timezone = task.get("schedule_timezone") or "UTC"
-    now = datetime.now(timezone.utc)
-
-    try:
-        if stype == "once":
-            await db.update_task_after_run(
-                db_path, task_id, public_result, None, "completed",
-            )
-        else:
-            next_run = compute_next_run(
-                stype,
-                svalue,
-                now=now,
-                timezone_name=schedule_timezone,
-            )
-            await db.update_task_after_run(
-                db_path, task_id, public_result, next_run, "active",
-            )
-    except ValueError:
-        logger.warning(
-            "Unknown/invalid schedule %s(%s) for task %s", stype, svalue, task_id,
-        )
-    except Exception:
-        logger.exception(
-            "Failed to update task %s after execution", task_id,
-        )
-
-    # ── Multi-channel notifications after task execution ─────────────────
-    try:
-        # Every channel must summarize the exact user-visible delivery, never
-        # the hidden execution prompt or the agent's post-tool bookkeeping text.
-        notify_body = public_result
-        notify_body = _plaintext(notify_body)  # strip markdown for plain channels
-        summary = _truncate(notify_body, 120)
-        status_label = "error" if had_error else "completed"
-
-        for ch in ("desktop", "sse", "wechat"):
-            await notify(
-                title=f"Scheduled task {status_label}",
-                body=summary,
-                channel=ch,
-            )
-        append_notification(
-            title="日程提醒",
-            body=summary,
-            tab="system",
-            project_ref=task.get("project_id"),
-            source="scheduled_task_run",
-            source_label="日程",
-            link_label="日程",
-            meta={
-                "taskId": task_id,
-                "status": status_label,
-                "chatId": origin_session_id,
-                "actionType": action_type,
-            },
-        )
-    except Exception:
-        logger.exception("Failed to send task execution notifications")
-
-
-# ---------------------------------------------------------------------------
-# Proactive message delivery — bot + session state + SSE event
-# ---------------------------------------------------------------------------
-
-
-async def _deliver_proactive_message(text: str, bot, chat_id: int) -> None:
-    """Deliver a proactive message so it appears in both the bot and the Web UI.
-
-    1. Sends the text through the bot (Telegram or WebBot).
-    2. Appends an assistant entry to ``state.json`` so the message is visible
-       in the Web UI chat history on the next page load.
-    3. Publishes a ``chat_message`` SSE event so connected frontends update
-       in real time without a refresh.
-
-    The state.json write is best-effort — failures are logged and swallowed
-    so a corrupt or missing state file never blocks proactive delivery.
-    """
-    # 1. Bot delivery (Telegram push or WebBot memory queue)
+    if projected is None:
+        return None
     if bot is not None:
-        await bot.send_message(chat_id=chat_id, text=text)
-
-    # 2. Write to session state for Web UI chat history
-    try:
-        from uuid import uuid4
-
-        from cyrene.observability import debug
-
-        state = read_json_safe(STATE_FILE) or {}
-        if not isinstance(state, dict):
-            state = {}
-
-        messages = state.get("messages", [])
-        if not isinstance(messages, list):
-            messages = []
-
-        entry: dict = {
-            "role": "assistant",
-            "content": text,
-            "message_id": f"msg_{uuid4().hex}",
-            "proactive": True,
-        }
-        messages.append(entry)
-
-        # Keep within the context-window limit (same as agent.py)
-        if len(messages) > 40:
-            messages = messages[-40:]
-
-        state["messages"] = messages
-        atomic_write_json(STATE_FILE, state)
-
-        # 3. Push SSE event so connected frontends update in real time
-        await debug.publish_event({
-            "type": "chat_message",
-            "proactive": True,
-        })
-    except Exception:
-        logger.exception(
-            "Failed to write proactive message to session state"
-        )
+        try:
+            await bot.send_message(chat_id=chat_id, text=text)
+        except Exception:
+            # The ChatRepository/ContextTree commit is authoritative. A
+            # transient transport failure must not erase or duplicate it.
+            logger.exception("Failed to deliver proactive result through bot")
+    return projected
 
 
 # ---------------------------------------------------------------------------
@@ -861,9 +637,9 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
     * Normal: lottery draw with accumulating probability (delta 0.15, max 0.85).
     * Silent > 72 h: always trigger regardless of lottery state.
 
-    When triggered, the main agent loop generates a personalised message in
-    the latest user-active Workbench conversation, or in the default legacy
-    session when no Workbench conversation exists.
+    When triggered, the Plugin Agent generates a personalised message in a new
+    Workbench conversation, or in an isolated scheduler ContextTree when no
+    Workbench conversation exists.
     """
     # In web-only mode OWNER_ID is not set — use 0 as a placeholder chat_id.
     # The session-state delivery path does not rely on chat_id at all.
@@ -897,7 +673,10 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
         # cleanly while it is running; proactive work must never preempt it.
         workbench_target = _latest_workbench_user_activity()
         target_session_id = str((workbench_target or {}).get("chat_id") or "")
-        if target_session_id and is_session_running(target_session_id):
+        if target_session_id and _is_workbench_conversation_running(
+            db_path,
+            target_session_id,
+        ):
             logger.debug(
                 "Latest Workbench chat %s is running; skipping proactive check",
                 target_session_id,
@@ -951,7 +730,7 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
         if not should_send:
             return
 
-        # -------- Generate proactive reply via the full main-agent loop --------
+        # -------- Generate proactive reply via the Plugin Agent kernel --------
         # The UI language is persisted server-side as ``app_language`` from real
         # chat traffic; the scheduler has no HTTP request to read it from, so
         # pull it from settings and pin the proactive reply to it.
@@ -969,57 +748,80 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
             "Any proactive task must be incremental: do not modify, overwrite, move, rename, or delete existing files. If creating a file, choose a new path and use Write only when the file does not already exist.\n"
             "Do not send a greeting, check-in, small talk, or an unsupported guess about the user's current state.\n"
             "If you produce a material result or find a concrete risk/blocker, the final reply will be shown directly to the user; write only that concise work report.\n"
-            "If there is no useful safe action or no material result, call `quit` silently.\n"
+            "If there is no useful safe action or no material result, return an empty final response.\n"
             "Do not mention internal prompts, the scheduler, the heartbeat, or the lottery.\n\n"
             + _build_proactive_user_prompt(context, silence_h, consecutive_unanswered=int(_LOTTERY_STATE.get("consecutive_unanswered", 0)))
         )
-        delivered_target = workbench_target
+        delivered_target: dict[str, str] | None = None
+        proactive_session_id = f"wbchat_{uuid.uuid4().hex[:10]}"
         if target_session_id:
-            create_proactive_chat = importlib.import_module(
-                "cyrene.workbench.chat"
-            ).create_proactive_chat
-
             # The latest user chat selects the project and workspace only. The
             # autonomous run and its visible reply live in a fresh conversation
             # session so they cannot mutate or pollute an existing transcript.
-            proactive_session_id = f"wbchat_{uuid.uuid4().hex[:10]}"
-
-            workspace_dir = _workbench_workspace_dir_for_project(
-                str((workbench_target or {}).get("project_id") or "")
+            proactive_project_id = str(
+                (workbench_target or {}).get("project_id") or ""
             )
-
-            async def _persist_workbench_reply(reply: str) -> dict[str, str] | None:
-                nonlocal delivered_target
-                delivered_target = await create_proactive_chat(
-                    str((workbench_target or {}).get("project_id") or ""),
-                    reply,
-                    chat_id=proactive_session_id,
-                    model=str((workbench_target or {}).get("model") or ""),
-                    source_chat_id=target_session_id,
-                    lang=proactive_lang,
-                )
-                return delivered_target
-
-            text = await asyncio.wait_for(
-                run_heartbeat_agent(
-                    proactive_prompt,
-                    bot,
-                    owner_id,
-                    db_path,
-                    session_id=proactive_session_id,
-                    on_reply=_persist_workbench_reply,
-                    lang=proactive_lang,
-                    workspace_dir=workspace_dir,
-                ),
-                timeout=120.0,
+            if not proactive_project_id:
+                proactive_project_id = _default_workbench_project_scope()[
+                    "project_id"
+                ]
+            workspace_dir = _workbench_workspace_dir_for_project(
+                proactive_project_id
             )
         else:
-            text = await asyncio.wait_for(
-                run_heartbeat_agent(proactive_prompt, bot, owner_id, db_path, lang=proactive_lang),
-                timeout=120.0,
-            )
+            scope = _default_workbench_project_scope()
+            proactive_project_id = scope["project_id"]
+            workspace_dir = scope["workspace_dir"]
 
-        if not str(text or "").strip():
+        result = await asyncio.wait_for(
+            _run_plugin_proactive_turn(
+                proactive_prompt,
+                bot=bot,
+                owner_id=owner_id,
+                db_path=db_path,
+                session_id=proactive_session_id,
+                workspace_dir=workspace_dir,
+                project_id=proactive_project_id,
+                lang=proactive_lang,
+                session_title=(
+                    "Proactive work"
+                    if proactive_lang.lower() == "en"
+                    else "主动工作"
+                ),
+            ),
+            timeout=120.0,
+        )
+        text = str(result.text or "").strip()
+        if result.pending_question is not None:
+            logger.info(
+                "Proactive Plugin Agent requested user input; suppressing "
+                "the unpublished scheduler turn"
+            )
+            return
+        if text:
+            delivered_target = await _deliver_proactive_message(
+                text,
+                bot,
+                owner_id,
+                db_path=db_path,
+                project_id=proactive_project_id,
+                session_id=proactive_session_id,
+                model=str(
+                    result.model
+                    or (workbench_target or {}).get("model")
+                    or ""
+                ),
+                source_chat_id=target_session_id,
+                lang=proactive_lang,
+            )
+            if delivered_target is None:
+                logger.warning(
+                    "Proactive Plugin Agent reply could not be projected "
+                    "into a Workbench chat"
+                )
+                return
+
+        if not text:
             logger.info("Proactive round produced no visible reply")
             return
 
@@ -1030,7 +832,7 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
         _LOTTERY_STATE["last_proactive_time"] = time.time()
         _save_lottery_state()
 
-        logger.info("Proactive message sent via main agent loop: %s", str(text)[:100])
+        logger.info("Proactive message sent via Plugin Agent: %s", str(text)[:100])
 
         # Desktop / SSE notification so the user is alerted even when the
         # Web UI tab is in the background.
@@ -1061,279 +863,8 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Steward auto-trigger
-# ---------------------------------------------------------------------------
-
-def _get_last_steward_run() -> float | None:
-    """Read the last steward run timestamp from ``_STEWARD_STATE_FILE``."""
-    try:
-        data = read_json_safe(_STEWARD_STATE_FILE)
-        if data is not None:
-            return float(data.get("last_run", 0))
-    except Exception:
-        logger.exception("Failed to read steward state")
-    return None
-
-
-def _save_steward_run(timestamp: float) -> None:
-    """Persist the steward run timestamp to ``_STEWARD_STATE_FILE``."""
-    try:
-        atomic_write_json(_STEWARD_STATE_FILE, {"last_run": timestamp})
-    except Exception:
-        logger.exception("Failed to save steward state")
-
-
-def _steward_soul_commands(result: str) -> str:
-    """Return normalized SOUL commands from a mixed Steward/entity response."""
-    sections = (
-        "SELF:IDENTITY",
-        "SELF:BELIEFS",
-        "RELATIONSHIP:USER",
-        "MEMORY:HIGH_IMPACT",
-        "PATTERN:USER",
-        "TEMPORARY",
-    )
-    section_pattern = "(?:" + "|".join(_re.escape(item) for item in sections) + ")"
-    command_pattern = _re.compile(
-        rf"^(APPEND|ERASE|MERGE):?\s+\(?({section_pattern})\)?\s*"
-        rf"(?:::|:|—|\||-)\s*(.+)$",
-        _re.IGNORECASE,
-    )
-    commands: list[str] = []
-    for raw_line in str(result or "").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.upper() == "SKIP":
-            commands.append("SKIP")
-            continue
-        match = command_pattern.match(line)
-        if match:
-            command, section, content = match.groups()
-            commands.append(
-                f"{command.upper()} {section.upper()} :: {content.strip()}"
-            )
-    return "\n".join(commands)
-
-
-def _has_new_conversation() -> bool:
-    """Check whether today's conversation file exists and has actual content.
-
-    A freshly created file contains only the header line; this function
-    returns ``False`` in that case.  At least one archived exchange (with a
-    ``## `` timestamp heading) is required.
-    """
-    try:
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        today_file = CONVERSATIONS_DIR / f"{today}.md"
-        if not today_file.exists():
-            return False
-        content = today_file.read_text(encoding="utf-8").strip()
-        # Look for at least one ``## HH:MM:SS`` timestamp heading added by
-        # ``archive_exchange``, which indicates real conversation content.
-        return bool(content) and "##" in content
-    except Exception:
-        logger.exception("Failed to check for new conversations")
-        return False
-
-
-def _recent_workbench_conversations(
-    since_timestamp: float | None,
-    *,
-    now: float | None = None,
-    max_files: int = 12,
-    max_chars: int = 80_000,
-    max_chars_per_file: int = 12_000,
-) -> str:
-    """Read recently modified per-session Workbench conversation archives.
-
-    Workbench stores ``conversations/<session_id>.md`` instead of the legacy
-    daily ``YYYY-MM-DD.md`` files. Scan the default workspace plus every
-    configured project workspace, bounded by file count and characters.
-    """
-    current = float(now if now is not None else time.time())
-    cutoff = (
-        float(since_timestamp)
-        if since_timestamp is not None
-        else current - 24 * 60 * 60
-    )
-    directories: dict[Path, str] = {CONVERSATIONS_DIR: "default"}
-    try:
-        from cyrene.workbench import runtime as workbench_runtime
-        from cyrene.runtime.memory.conversations import session_conversations_dir
-
-        payload = workbench_runtime._read_workbench_store()
-        for project in payload.get("projects", []) or []:
-            if not isinstance(project, dict):
-                continue
-            workspace_path = str(project.get("workspacePath") or "").strip()
-            if workspace_path:
-                directories[session_conversations_dir(workspace_path)] = str(
-                    project.get("id") or "default"
-                )
-    except Exception:
-        logger.debug("Could not enumerate Workbench conversation directories", exc_info=True)
-
-    candidates: list[tuple[Path, str]] = []
-    for directory, project_id in directories.items():
-        try:
-            for path in directory.glob("*.md"):
-                # Legacy daily archives are loaded separately.
-                if _re.fullmatch(r"\d{4}-\d{2}-\d{2}\.md", path.name):
-                    continue
-                if path.stat().st_mtime > cutoff:
-                    candidates.append((path, project_id))
-        except OSError:
-            logger.debug("Could not scan Workbench conversations in %s", directory, exc_info=True)
-
-    candidates.sort(key=lambda item: item[0].stat().st_mtime, reverse=True)
-    parts: list[str] = []
-    used = 0
-    for path, project_id in candidates[:max_files]:
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            logger.debug("Could not read Workbench conversation %s", path, exc_info=True)
-            continue
-        excerpt = content[-max_chars_per_file:]
-        block = (
-            "=== Workbench conversation: "
-            f"{path.name} project_id={project_id} ===\n{excerpt}"
-        )
-        if parts and used + len(block) > max_chars:
-            break
-        parts.append(block)
-        used += len(block)
-    return "\n\n".join(reversed(parts))
-
-
-async def _run_steward_if_needed(bot, db_path: str) -> None:
-    """Check conditions and run the steward agent when appropriate.
-
-    Triggers when:
-    1. At least ``STEWARD_INTERVAL`` seconds have elapsed since the last run.
-    2. A legacy daily archive or a recently modified Workbench session archive
-       contains conversation text.
-    """
-    try:
-        last_run = _get_last_steward_run()
-        now = time.time()
-
-        if last_run is not None and (now - last_run) < STEWARD_INTERVAL:
-            logger.debug(
-                "Steward not due yet (last run %.0f s ago)", now - last_run,
-            )
-            return
-
-        legacy_text = (
-            await get_recent_conversations(days=1)
-            if _has_new_conversation()
-            else ""
-        )
-        workbench_text = await asyncio.to_thread(
-            _recent_workbench_conversations,
-            last_run,
-            now=now,
-        )
-        conversation_text = "\n\n".join(
-            part for part in (legacy_text, workbench_text) if part
-        )
-        soulmd_content = read_soul()
-
-        if not conversation_text:
-            logger.debug("No new legacy or Workbench conversations, skipping steward")
-            return
-
-        logger.info("Steward conditions met -- running steward agent")
-        # The steward does not deliver a chat reply. OWNER_ID is only a runtime
-        # context identifier here, so Desktop/Web installs can safely use 0.
-        steward_chat_id = OWNER_ID if OWNER_ID is not None else 0
-        result = await run_steward_agent(
-            conversation_text, soulmd_content, bot, steward_chat_id, db_path,
-        )
-
-        result_stripped = (result or "").strip()
-        soul_commands = _steward_soul_commands(result_stripped)
-        if soul_commands.upper().startswith("SKIP") and "\n" not in soul_commands:
-            logger.info("Steward returned SKIP -- no changes to SOUL.md")
-        elif soul_commands:
-            changes = apply_soul_update(soul_commands)
-            logger.info(
-                "Steward applied %d change(s) to SOUL.md", len(changes),
-            )
-        else:
-            logger.info("Steward returned empty result, no changes applied")
-
-        # 解析 Steward 提取的实体（ENTITY 行）
-        try:
-            from cyrene.tool_impl.entity.store import add_candidate, has_similar_entity
-            for line in result_stripped.splitlines():
-                line = line.strip()
-                if not line.upper().startswith("ENTITY "):
-                    continue
-                # Parse: ENTITY type="task" title="..." confidence="0.85" content="..."
-                import re as _re2
-                e_type = _re2.search(r'type="([^"]*)"', line)
-                e_title = _re2.search(r'title="([^"]*)"', line)
-                e_conf = _re2.search(r'confidence="([^"]*)"', line)
-                e_content = _re2.search(r'content="([^"]*)"', line)
-                e_project = _re2.search(r'project_id="([^"]*)"', line)
-                if e_type and e_title and e_conf:
-                    entity_type = e_type.group(1)
-                    entity_title = e_title.group(1)
-                    project_id = (
-                        e_project.group(1).strip()
-                        if e_project
-                        else "default"
-                    ) or "default"
-                    # 去重检查：同类型+相似标题的实体或候选已存在时跳过
-                    if await has_similar_entity(
-                        db_path,
-                        entity_type,
-                        entity_title,
-                        project_id=project_id,
-                    ):
-                        logger.debug("Skipping duplicate entity: %s / %s", entity_type, entity_title)
-                        continue
-                    candidate_id = await add_candidate(
-                        db_path,
-                        type=entity_type,
-                        title=entity_title,
-                        content=e_content.group(1) if e_content else "",
-                        confidence=float(e_conf.group(1)),
-                        project_id=project_id,
-                        raw_text=line,
-                    )
-                    logger.info("Steward extracted entity candidate %s: %s", candidate_id[:8], entity_title)
-        except Exception:
-            logger.exception("Failed to parse steward entity extractions")
-
-        # 处理置信度 >= 0.8 的候选事务，自动提升为正式事务
-        try:
-            from cyrene.tool_impl.entity.store import process_candidates
-            promoted = await process_candidates(db_path)
-            if promoted:
-                logger.info("Steward promoted %d candidate entity/entities", len(promoted))
-        except Exception:
-            logger.exception("process_candidates failed during steward run")
-
-        _save_steward_run(now)
-
-    except Exception:
-        logger.exception("Steward auto-trigger failed")
-
-
-# ---------------------------------------------------------------------------
 # Scheduled jobs
 # ---------------------------------------------------------------------------
-
-async def _scheduled_task_tick(bot, db_path: str) -> None:
-    """Keep due-task precision independent from low-frequency maintenance."""
-    try:
-        await _check_and_execute_tasks(bot, db_path)
-    except Exception:
-        logger.exception("Scheduled-task tick error")
-
 
 async def _proactive_tick(bot, db_path: str) -> None:
     try:
@@ -1344,9 +875,16 @@ async def _proactive_tick(bot, db_path: str) -> None:
 
 
 async def _steward_tick(bot, db_path: str) -> None:
+    del bot, db_path
     try:
         async with _get_maintenance_lock():
-            await _run_steward_if_needed(bot, db_path)
+            memory_service = _memory_service()
+            if memory_service is None:
+                logger.debug("Memory Plugin unavailable, skipping steward")
+                return
+            await memory_service.run_steward_if_needed(
+                interval=STEWARD_INTERVAL,
+            )
     except Exception:
         logger.exception("Steward tick error")
 
@@ -1356,7 +894,7 @@ async def _behavior_learning_tick(bot, db_path: str) -> None:
         async with _get_maintenance_lock():
             # Import lazily so startup does not load the learning stack merely
             # to register the scheduler.
-            from cyrene.learning import tick as _pattern_tick
+            from cyrene.learning.orchestrator import tick as _pattern_tick
 
             await _pattern_tick(bot, db_path)
     except Exception:
@@ -1366,14 +904,11 @@ async def _behavior_learning_tick(bot, db_path: str) -> None:
 async def _cleanup_tick() -> None:
     try:
         async with _get_maintenance_lock():
-            clear_old_entries(days=7)
+            memory_service = _memory_service()
+            if memory_service is not None:
+                memory_service.clear_old_short_term(days=7)
     except Exception:
         logger.exception("Short-term cleanup error")
-
-
-async def _heartbeat(bot, db_path: str) -> None:
-    """Backward-compatible alias for the lightweight due-task poll."""
-    await _scheduled_task_tick(bot, db_path)
 
 
 def _add_interval_job(
@@ -1397,36 +932,39 @@ def _add_interval_job(
 
 
 # ---------------------------------------------------------------------------
-# Public entry point  (signature preserved for bot.py compatibility)
+# Public entry point
 # ---------------------------------------------------------------------------
 
 def setup_scheduler(bot, db_path: str) -> AsyncIOScheduler:
     """Create a scheduler with independent task and maintenance cadences.
 
-    The signature is kept stable so that ``bot._post_init`` continues to
-    work without modification.
+    The shared host signature accepts the optional delivery bot and database
+    path used by web, desktop, and channel entry points.
     """
     global _scheduler
+    global _background_plugin_host
     global _workbench_db_path
     _workbench_db_path = str(db_path)
     try:
+        from cyrene.workbench.context import configure_store as _configure_context
         from cyrene.workbench.notifications import configure_store as _configure_notifications
 
-        _chat_store = importlib.import_module("cyrene.workbench.chat")
-        _chat_store.configure_store(str(db_path))
+        _configure_context(str(db_path))
         _configure_notifications(str(db_path))
     except Exception:
         logger.debug("Could not configure Workbench SQLite stores for scheduler", exc_info=True)
     _load_lottery_state()
     hb_seconds = _get_heartbeat_interval()
     _scheduler = AsyncIOScheduler()
-    _add_interval_job(
+    from cyrene.runtime.schedule_runtime import get_schedule_runtime
+
+    schedule_runtime = get_schedule_runtime(db_path, bot=bot)
+    _background_plugin_host = BackgroundPluginHost(
         _scheduler,
-        _scheduled_task_tick,
-        seconds=SCHEDULER_INTERVAL,
-        job_id="scheduled_tasks",
-        args=[bot, db_path],
+        services={"schedules": schedule_runtime},
+        data={"source": "background", "db_path": str(db_path)},
     )
+    _background_plugin_host.attach()
     _add_interval_job(
         _scheduler,
         _behavior_learning_tick,
@@ -1455,7 +993,7 @@ def setup_scheduler(bot, db_path: str) -> AsyncIOScheduler:
         job_id="short_term_cleanup",
     )
     logger.info(
-        "Scheduler configured: tasks=%ds, behavior=%ds, proactive=%ds, "
+        "Scheduler configured: Plugin tasks=%ds, behavior=%ds, proactive=%ds, "
         "steward=%ds, cleanup=86400s",
         SCHEDULER_INTERVAL,
         PATTERN_DETECTION_INTERVAL,

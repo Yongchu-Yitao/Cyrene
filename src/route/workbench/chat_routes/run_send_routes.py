@@ -23,6 +23,7 @@ from cyrene.workbench.chat_reply_finalization_service import (
     ChatReplyFinalizationRequest,
 )
 from cyrene.workbench.chat_run_lifecycle_service import (
+    ChatRunDispatchResult,
     ChatRunLifecycleApplicationService,
     ChatRunLifecycleDependencies,
     ChatRunLifecycleRequest,
@@ -39,7 +40,6 @@ from cyrene.workbench.chat_session_naming_service import (
 from route import schemas as api_models
 from route.workbench.chat_routes.context import ChatRouteContext
 from route.workbench.chat_routes.shared import (
-    schedule_reply_bookkeeping,
     schedule_workspace_changes_finalize,
     track_session_title_task,
 )
@@ -104,9 +104,6 @@ class ChatSendController:
     def _schedule_workspace_finalize(self, **kwargs: Any) -> None:
         schedule_workspace_changes_finalize(self.service, **kwargs)
 
-    def schedule_reply_bookkeeping(self, **kwargs: Any) -> None:
-        schedule_reply_bookkeeping(self.service, **kwargs)
-
     async def send(
         self,
         chat_id: str,
@@ -148,12 +145,8 @@ class _SendOperation:
         self.truncate_after_id = ""
 
     async def execute(self):
-        from cyrene.agent import run_agent
-        from cyrene.agent.context import set_attachment_paths
-        from cyrene.agent.state import PERMISSION_MODES
+        from agent.permission import PERMISSION_MODES
 
-        self.run_agent = run_agent
-        self.set_attachment_paths = set_attachment_paths
         error = await self._parse_request()
         if error is not None:
             return error
@@ -170,7 +163,10 @@ class _SendOperation:
         if error is not None:
             return error
         self._build_agent_message()
-        await self._capture_state_ids()
+        if self.is_external_agent:
+            await self._capture_state_ids()
+        else:
+            self.state_ids_before = set()
         return await self._dispatch()
 
     async def _parse_request(self):
@@ -179,6 +175,13 @@ class _SendOperation:
         self.public_message = self.message
         self.client_request_id = str(body.get("clientRequestId") or "").strip()
         self.ui_instance_id = str(body.get("uiInstanceId") or "").strip()
+        self.conversation_source = str(
+            body.get("conversationSource") or ""
+        ).strip()
+        self.agent_originated = body.get("agentOriginated") is True
+        self.origin_session_id = str(
+            body.get("sourceSessionId") or ""
+        ).strip()
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         if attachments:
             attachments = [await self.context.resolve_library_file_payload(item) if isinstance(item, dict) else item for item in attachments]
@@ -202,7 +205,7 @@ class _SendOperation:
         self.public_attachments = [self.routes.build_public_attachment_payload(item) for item in self.normalized]
         if not self.retry and not self.message and not self.normalized and not self.command:
             return JSONResponse({"error": "message is required"}, status_code=400)
-        budget_error = await self.context.workbench_runtime.check_budget_gate(self.chat_id)
+        budget_error = await self.context.check_budget_gate(self.chat_id)
         if budget_error:
             return JSONResponse(budget_error, status_code=403)
         return None
@@ -216,7 +219,7 @@ class _SendOperation:
 
         binding = normalize_agent_binding(self.chat.get("agent") if isinstance(self.chat.get("agent"), dict) else None)
         self.is_external_agent = not binding.is_builtin
-        from cyrene.agent.commands import parse_slash_command, parse_slash_invocation
+        from agent.commands import parse_slash_command, parse_slash_invocation
 
         self.dynamic_command = None
         self.dynamic_command_prompt = ""
@@ -238,10 +241,7 @@ class _SendOperation:
             if self.command and declared_commands and self.command not in declared_commands:
                 return JSONResponse({"error": "Agent command is not available"}, status_code=400)
         else:
-            from cyrene.workbench.slash_commands import (
-                prepare_plugin_command_prompt,
-                resolve_slash_command,
-            )
+            from cyrene.workbench.slash_commands import resolve_slash_command
 
             parsed = parse_slash_invocation(self.message) if not self.command else None
             candidate = self.command or str((parsed or {}).get("command") or "")
@@ -256,19 +256,6 @@ class _SendOperation:
                 )
                 if parsed and parsed.get("matched"):
                     self.message = str(parsed.get("arguments") or "")
-                if descriptor.get("source") == "plugin":
-                    try:
-                        self.dynamic_command_prompt = await prepare_plugin_command_prompt(
-                            descriptor,
-                            arguments=self.message,
-                            chat_id=self.chat_id,
-                            project_id=str(self.chat.get("projectId") or ""),
-                        )
-                    except Exception as exc:
-                        return JSONResponse(
-                            {"error": f"Plugin command could not be prepared: {exc}"},
-                            status_code=400,
-                        )
             elif self.command:
                 return JSONResponse({"error": "unknown Cyrene command"}, status_code=400)
         if self.command and not self.public_message:
@@ -378,10 +365,8 @@ class _SendOperation:
         selected_key = "" if self.agent_owns_models else self.requested_model or str(self.chat.get("modelSelectionId") or "").strip()
         if selected_key:
             from cyrene.runtime.model_configuration import selectable_model_candidates
-            from cyrene.plugins.integrations import chat_model_candidates
 
             selectable_candidates = selectable_model_candidates()
-            selectable_candidates.extend(await chat_model_candidates(self.project_id))
 
             self.selected_candidate = next(
                 (
@@ -422,7 +407,7 @@ class _SendOperation:
         return None
 
     def _persist_model_selection(self, selected_key: str, recovered: bool) -> None:
-        from cyrene.model_runtime.client import set_session_model_preference
+        from agent.plugin.model_catalog import set_session_model_preference
 
         candidate = self.selected_candidate
         selected_model = str(candidate.get("model") or candidate.get("name") or selected_key).strip()
@@ -455,7 +440,7 @@ class _SendOperation:
             self.message = str(self.user_entry.get("content") or "").strip()
             self.public_message = self.message
             self.command = str(self.user_entry.get("command") or "").strip()
-            from cyrene.agent.commands import parse_slash_invocation
+            from agent.commands import parse_slash_invocation
 
             parsed_retry_command = parse_slash_invocation(self.message)
             if parsed_retry_command.get("matched") and (
@@ -465,10 +450,7 @@ class _SendOperation:
                 self.command = str(parsed_retry_command.get("command") or "")
                 self.message = str(parsed_retry_command.get("arguments") or "")
             if not self.is_external_agent and self.command:
-                from cyrene.workbench.slash_commands import (
-                    prepare_plugin_command_prompt,
-                    resolve_slash_command,
-                )
+                from cyrene.workbench.slash_commands import resolve_slash_command
 
                 descriptor = await resolve_slash_command(
                     self.command,
@@ -478,29 +460,8 @@ class _SendOperation:
                     self.command = ""
                 elif descriptor.get("source") != "builtin":
                     self.dynamic_command = descriptor
-                    if descriptor.get("source") == "plugin":
-                        try:
-                            self.dynamic_command_prompt = await prepare_plugin_command_prompt(
-                                descriptor,
-                                arguments=self.message,
-                                chat_id=self.chat_id,
-                                project_id=str(self.chat.get("projectId") or ""),
-                            )
-                        except Exception as exc:
-                            return JSONResponse(
-                                {"error": f"Plugin command could not be prepared: {exc}"},
-                                status_code=400,
-                            )
             self.normalized = self.routes.normalize_attachments(self.user_entry.get("agentAttachments") or [])
             self.public_attachments = self.user_entry.get("attachments") if isinstance(self.user_entry.get("attachments"), list) else []
-            if not self.fork_replay:
-                state_path = self.context.workbench_runtime.session_state_file(self.chat_id)
-                previous = await asyncio.to_thread(lambda: state_path.read_bytes() if state_path.exists() else None)
-                self.retry_state_backup = (state_path, previous)
-                await asyncio.to_thread(
-                    self.service.truncate_state_for_retry,
-                    self.chat_id,
-                )
             return None
         self._append_user_message(messages)
         return None
@@ -516,6 +477,10 @@ class _SendOperation:
             self.user_entry["command"] = self.command
         if self.client_request_id:
             self.user_entry["clientRequestId"] = self.client_request_id
+        if self.agent_originated:
+            self.user_entry["agentOriginated"] = True
+        if self.origin_session_id:
+            self.user_entry["originSessionId"] = self.origin_session_id
         if self.public_attachments:
             self.user_entry["attachments"] = self.public_attachments
             self.user_entry["agentAttachments"] = self.normalized
@@ -560,7 +525,7 @@ class _SendOperation:
         if self.should_generate_title:
             task = self.controller.session_naming.generate_and_persist(
                 chat_id=self.chat_id,
-                project_id=self.project_id,
+                project_id=str(getattr(self, "project_id", "") or ""),
                 message=self.public_message,
             )
             track_session_title_task(asyncio.create_task(task))
@@ -594,7 +559,6 @@ class _SendOperation:
             )
         if self.normalized:
             self.agent_message = (self.agent_message or "[Attachment upload]") + self.routes.attachment_prompt_block(self.normalized)
-            self.set_attachment_paths(self._attachment_path_map())
 
     def _attachment_path_map(self) -> dict[str, str]:
         from pathlib import Path
@@ -609,6 +573,9 @@ class _SendOperation:
             parts = uuid_name.split("_", 1)
             if len(parts) == 2:
                 paths[parts[1]] = full_path
+            attachment_id = str(item.get("id") or "").strip()
+            if attachment_id:
+                paths[attachment_id] = full_path
         return paths
 
     async def _capture_state_ids(self) -> None:
@@ -622,7 +589,7 @@ class _SendOperation:
             if message_id:
                 self.state_ids_before.add(message_id)
 
-    async def _run_turn(self, run: ChatRun) -> str:
+    async def _run_turn(self, run: ChatRun) -> Any:
         logger.info(
             "Workbench chat _run entered [chat=%s run=%s]",
             self.chat_id,
@@ -639,69 +606,105 @@ class _SendOperation:
                 projection=self.external,
             )
         from cyrene.runtime.host_bridge import resolve_conversation_source
-        from cyrene.workbench.project_memory_prompt import build_main_agent_suffix
 
         from cyrene.workbench.composer_context import build_context_activation_prompt
+        from agent.commands import command_system_prompt
 
-        system_extras = [
-            build_main_agent_suffix(
-                self.chat.get("projectMemorySnapshot") if isinstance(self.chat.get("projectMemorySnapshot"), dict) else None,
-                include_trigger=not self.is_side_agent,
-            ),
+        memory_snapshot = (
+            self.chat.get("projectMemorySnapshot")
+            if isinstance(self.chat.get("projectMemorySnapshot"), dict)
+            else None
+        )
+        turn_system_extras = [
             build_context_activation_prompt(self.context_activations),
+            command_system_prompt(self.command),
             self.dynamic_command_prompt,
         ]
 
-        source = "side_agent" if self.is_side_agent else await resolve_conversation_source(self.ui_instance_id)
-        from agent.workbench.chat_runtime import (
-            run_workbench_chat,
-            workbench_chat_kernel_enabled,
+        source = (
+            "side_agent"
+            if self.is_side_agent
+            else self.conversation_source
+            or await resolve_conversation_source(self.ui_instance_id)
         )
+        from agent.workbench.conversation_runtime import ConversationConfig
 
-        if workbench_chat_kernel_enabled():
-            return await run_workbench_chat(
-                run=run,
-                user_message=(
-                    self.agent_message
-                    or self.public_message
-                    or (f"/{self.command}" if self.command else "")
-                ),
-                bot=self.context.bot,
-                legacy_chat_id=self.routes.chat_id,
-                db_path=self.context.db_path,
-                session_id=self.chat_id,
-                workspace_dir=self.workspace_dir,
-                client_request_id=self.client_request_id,
-                permission_mode=self.mode,
-                command=self.command,
-                public_user_message=self.public_message or None,
-                public_attachments=self.public_attachments or None,
-                attachment_paths=self._attachment_path_map(),
-                soul_enabled=self.service.chat_soul_active(self.chat),
-                workspace_enabled=self.service.chat_workspace_active(self.chat),
-                system_extra="\n\n".join(part for part in system_extras if part),
-                response_capabilities=("interactive_blocks",),
-                ui_instance_id=self.ui_instance_id,
-                conversation_source=source,
-            )
-        return await self.run_agent(
-            user_message=self.agent_message,
-            bot=self.context.bot,
-            chat_id=self.routes.chat_id,
-            db_path=self.context.db_path,
+        config = ConversationConfig(
             session_id=self.chat_id,
+            workspace_dir=self.workspace_dir,
+            db_path=self.context.db_path,
+            bot=self.context.bot,
+            host_chat_id=self.routes.chat_id,
+            client_request_id=self.client_request_id,
             permission_mode=self.mode,
             command=self.command,
             public_user_message=self.public_message or None,
-            public_attachments=self.public_attachments or None,
-            workspace_dir=self.workspace_dir,
+            attachment_paths=self._attachment_path_map(),
+            remote_device_ids=tuple(
+                str(item or "").strip()
+                for item in (self.chat.get("remoteDeviceIds") or ())
+                if str(item or "").strip()
+            ),
             soul_enabled=self.service.chat_soul_active(self.chat),
             workspace_enabled=self.service.chat_workspace_active(self.chat),
-            final_system_extra="\n\n".join(part for part in system_extras if part),
+            system_extra="\n\n".join(
+                part for part in turn_system_extras if part
+            ),
+            project_id=self.project_id,
+            project_memory_snapshot=memory_snapshot,
+            session_title=str(self.chat.get("title") or ""),
+            memory_write_enabled=not self.is_side_agent,
+            memory_trigger_enabled=not self.is_side_agent,
+            memory_archive_enabled=True,
+            retry=self.retry,
+            completed_turn_count=(
+                int(getattr(self, "completed_turn_count_before", 0) or 0) + 1
+            ),
             response_capabilities=("interactive_blocks",),
             ui_instance_id=self.ui_instance_id,
             conversation_source=source,
         )
+        result = await self.service.run_manager.conversation_runtime.send(
+            config,
+            (
+                self.agent_message
+                or self.public_message
+                or (f"/{self.command}" if self.command else "")
+            ),
+            run_id=run.run_id,
+            metadata={
+                "client_request_id": self.client_request_id,
+                "public_user_message": self.public_message,
+                "public_attachments": [dict(item) for item in self.public_attachments],
+                "command": self.command,
+                "retry": self.retry,
+                "fork_replay": self.fork_replay,
+                "ephemeral_context": "\n\n".join(
+                    part for part in turn_system_extras if part
+                ),
+            },
+            publish=run.publish,
+        )
+        self.external.usage = dict(result.usage)
+        self.external.model = str(result.model or "")
+        self.external.model_identity = dict(result.model_identity)
+        self.external.generation_duration_ms = result.generation_duration_ms
+        self.external.output_tokens_per_second = result.output_tokens_per_second
+        self.external.activity_messages = [
+            dict(message) for message in result.activity_messages
+        ]
+        plan = result.active_plan
+        for event in run.events:
+            if str(event.get("type") or "") not in {"plan", "plan_progress"}:
+                continue
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
+            candidate = payload.get("plan") if isinstance(payload, dict) else None
+            if isinstance(candidate, dict):
+                plan = candidate
+        if isinstance(plan, dict):
+            self.external.plan = copy.deepcopy(plan)
+        self.agent_result = result
+        return result
 
     async def _finalize_reply(self, reply_text: str) -> dict[str, Any]:
         request = ChatReplyFinalizationRequest(
@@ -724,17 +727,6 @@ class _SendOperation:
             request,
             reply_text,
         )
-        if finalized and not self.is_side_agent:
-            self.controller.schedule_reply_bookkeeping(
-                chat_id=self.chat_id,
-                project_id=self.project_id,
-                user_text=self.message,
-                reply_text=str(reply_text or ""),
-                prior_message_ids=self.state_ids_before,
-                command=self.command,
-                retry=self.retry,
-                turn_count=int(finalized.get("completedTurnCount") or 0),
-            )
         return finalized
 
     def _restore_retry_state(self) -> None:
@@ -803,8 +795,380 @@ class _SendOperation:
         self._commit_retry_cut(chat)
         self.service.repository.write_one(chat, base_chat=base_chat)
 
+    def _runtime_message_fields(self, result: Any) -> dict[str, Any]:
+        fields: dict[str, Any] = {}
+        usage = dict(getattr(result, "usage", {}) or {})
+        if any(usage.values()):
+            fields["usage"] = usage
+        identity = dict(getattr(result, "model_identity", {}) or {})
+        if identity:
+            fields["modelIdentity"] = identity
+        duration = getattr(result, "generation_duration_ms", None)
+        if isinstance(duration, (int, float)) and duration > 0:
+            fields["modelGenerationDurationMs"] = round(float(duration), 3)
+        rate = getattr(result, "output_tokens_per_second", None)
+        if isinstance(rate, (int, float)) and rate > 0:
+            fields["outputTokensPerSecond"] = round(float(rate), 3)
+        return fields
+
+    @staticmethod
+    def _checkpointed_run_messages(
+        chat: dict[str, Any], run_id: str
+    ) -> list[dict[str, Any]]:
+        """Return user-visible intermediate messages already saved for this run."""
+
+        if not run_id:
+            return []
+        return [
+            copy.deepcopy(dict(item))
+            for item in (chat.get("messages") or ())
+            if isinstance(item, dict)
+            and str(item.get("role") or "") == "assistant"
+            and item.get("intermediate") is True
+            and str(item.get("roundId") or item.get("round_id") or "") == run_id
+        ]
+
+    def _persist_builtin_result(self, result: Any) -> dict[str, Any]:
+        """Project one typed ContextTree outcome into the public chat record."""
+
+        pending_value = getattr(result, "pending_question", None)
+        pending = pending_value.as_dict() if pending_value is not None else None
+        now = self.service.utc_now_iso()
+        model = str(getattr(result, "model", "") or self.chat.get("model") or "")
+        run_id = str(getattr(result, "run_id", "") or "")
+        activities = [
+            copy.deepcopy(dict(item))
+            for item in (getattr(result, "activity_messages", ()) or ())
+            if isinstance(item, dict)
+        ]
+        for item in activities:
+            item.setdefault("model", model)
+            item.setdefault("createdAt", now)
+        with self.service.repository.lock:
+            chat = self.service.repository.get(self.chat_id)
+            if not chat:
+                raise RuntimeError("chat disappeared while persisting Agent outcome")
+            base_chat = copy.deepcopy(chat)
+            self._commit_retry_cut(chat)
+            checkpointed_messages = self._checkpointed_run_messages(chat, run_id)
+            additions = activities
+            if pending is not None:
+                question = self.service.pending_question_message(
+                    pending,
+                    usage=dict(getattr(result, "usage", {}) or {}),
+                    model=model,
+                )
+                additions = [*activities, question]
+                chat["pendingQuestion"] = pending
+                chat["status"] = "idle"
+            else:
+                assistant = {
+                    "id": self.service.short_id("msg"),
+                    "role": "assistant",
+                    "content": str(getattr(result, "text", "") or ""),
+                    "createdAt": now,
+                    "model": model,
+                    "processingDurationMs": max(
+                        0,
+                        int(round((time.monotonic() - self.processing_started_at) * 1000)),
+                    ),
+                    **self._runtime_message_fields(result),
+                }
+                additions = [*activities, assistant]
+                chat["completedTurnCount"] = self.service.next_completed_turn_count(
+                    {"completedTurnCount": self.completed_turn_count_before},
+                    retry=self.retry,
+                    command=self.command,
+                    is_side_agent=self.is_side_agent,
+                )
+                chat.pop("pendingQuestion", None)
+                chat["status"] = "idle"
+            self.service.merge_chat_messages_chronologically(chat, additions)
+            if model:
+                chat["lastModel"] = model
+            if isinstance(self.external.plan, dict):
+                chat["activePlan"] = copy.deepcopy(self.external.plan)
+            chat["updatedAt"] = now
+            self.service.repository.write_one(chat, base_chat=base_chat)
+        terminal_additions: list[dict[str, Any]] = []
+        terminal_message_ids: set[str] = set()
+        for item in [*checkpointed_messages, *additions]:
+            message_id = str(item.get("id") or "")
+            if message_id and message_id in terminal_message_ids:
+                continue
+            if message_id:
+                terminal_message_ids.add(message_id)
+            terminal_additions.append(item)
+        public_additions = [
+            self.service.public_message(item) for item in terminal_additions
+        ]
+        summary = self.service.public_chat_light(chat)
+        summary["runStatus"] = (
+            "awaiting_user" if pending is not None else "completed"
+        )
+        payload: dict[str, Any] = {
+            "ok": True,
+            "awaitingUser": pending is not None,
+            "runId": run_id,
+            "userMessage": self.service.public_message(self.user_entry),
+            "assistantMessages": public_additions,
+            "chatSummary": summary,
+            "retry": self.retry,
+        }
+        if pending is not None:
+            payload["pendingQuestion"] = pending
+            payload["retryReplacedMessageIds"] = sorted(
+                self.retry_replaced_message_ids
+            )
+        else:
+            payload["assistantMessage"] = self.service.public_message(assistant)
+        return payload
+
+    async def _run_builtin(self, run: ChatRun) -> None:
+        before = await self.service.capture_workspace_changes_baseline(
+            self.workspace_dir,
+            run.run_id,
+        )
+        try:
+            result = await self._run_turn(run)
+            run.status = "finishing"
+            awaiting = str(getattr(result, "status", "")) == "awaiting_user"
+            if awaiting:
+                await self.service.finalize_workspace_changes(
+                    chat_id=self.chat_id,
+                    run_id=str(getattr(result, "run_id", "") or run.run_id),
+                    workspace_dir=self.workspace_dir,
+                    before=before,
+                    status="awaiting_user",
+                    run=run,
+                )
+            else:
+                self.controller._schedule_workspace_finalize(
+                    chat_id=self.chat_id,
+                    run_id=str(getattr(result, "run_id", "") or run.run_id),
+                    workspace_dir=self.workspace_dir,
+                    before=before,
+                    status="completed",
+                )
+            payload = await asyncio.to_thread(self._persist_builtin_result, result)
+            if awaiting:
+                pending = payload.get("pendingQuestion")
+                await asyncio.to_thread(self.notify_attention, pending)
+                run.outcome = {
+                    "kind": "awaiting",
+                    "pending": pending,
+                    "assistantMessages": payload.get("assistantMessages") or [],
+                    "payload": payload,
+                }
+                await run.publish(
+                    {
+                        "type": "awaiting_user",
+                        "pending_question": pending,
+                        "pendingQuestion": pending,
+                        "assistantMessages": payload.get("assistantMessages") or [],
+                        "retry": self.retry,
+                        "retryReplacedMessageIds": sorted(
+                            self.retry_replaced_message_ids
+                        ),
+                        "truncateAfterMessageId": self.truncate_after_id,
+                    }
+                )
+                return
+            await run.publish(
+                {"type": "run_finalizing", "chatId": self.chat_id, "runId": result.run_id}
+            )
+            saved = {
+                "type": "saved",
+                **payload,
+                "retryReplacedMessageIds": sorted(self.retry_replaced_message_ids),
+                "truncateAfterMessageId": self.truncate_after_id,
+            }
+            run.outcome = {"kind": "reply", "payload": payload}
+            await run.publish(saved)
+            from cyrene.runtime.host_actions import finalize_origin
+
+            asyncio.create_task(
+                finalize_origin(
+                    self.chat_id,
+                    "",
+                    origin_run_id=self.client_request_id,
+                )
+            )
+        except asyncio.CancelledError:
+            await self.service.finalize_workspace_changes(
+                chat_id=self.chat_id,
+                run_id=run.run_id,
+                workspace_dir=self.workspace_dir,
+                before=before,
+                status="cancelled",
+                run=run,
+            )
+            await asyncio.to_thread(
+                self.service.settle_chat_running_status,
+                self.chat_id,
+            )
+            raise
+        except Exception as exc:
+            logger.exception("Workbench ContextTree run failed for %s", self.chat_id)
+            await self.service.finalize_workspace_changes(
+                chat_id=self.chat_id,
+                run_id=run.run_id,
+                workspace_dir=self.workspace_dir,
+                before=before,
+                status="error",
+                run=run,
+            )
+            run.outcome = {"kind": "error", "exc": exc}
+            await asyncio.to_thread(
+                self.service.settle_chat_running_status,
+                self.chat_id,
+            )
+            await run.publish(
+                {
+                    "type": "error",
+                    "error": "agent_run_failed",
+                    "message": self.service.chat_run_error_message(exc, self.lang),
+                    **self.service.chat_error_metadata(exc),
+                }
+            )
+
+    async def _publish_builtin_settled(self, run: ChatRun) -> None:
+        outcome = run.outcome or {}
+        kind = str(outcome.get("kind") or "")
+        payload = outcome.get("payload") if isinstance(outcome.get("payload"), dict) else {}
+        summary = payload.get("chatSummary") if isinstance(payload, dict) else None
+        if not isinstance(summary, dict) or not summary:
+            summary = await asyncio.to_thread(
+                self.controller._load_chat_summary,
+                self.chat_id,
+            )
+        await publish_chat_changed(
+            self.chat_id,
+            self.project_id,
+            "settled",
+            run_id=(
+                str(payload.get("runId") or run.run_id)
+                if isinstance(payload, dict)
+                else run.run_id
+            ),
+            run_status={
+                "reply": "completed",
+                "awaiting": "awaiting_user",
+                "error": "failed",
+            }.get(kind, "cancelled"),
+            chatSummary=summary,
+            assistantMessages=(
+                payload.get("assistantMessages") or []
+                if isinstance(payload, dict)
+                else []
+            ),
+        )
+
+    async def _dispatch_builtin(self):
+        ack: dict[str, Any] = {"type": "ack", "chatId": self.chat_id}
+        if self.retry:
+            ack.update(
+                {
+                    "retry": True,
+                    "truncateAfterMessageId": self.truncate_after_id,
+                }
+            )
+        else:
+            ack["userMessage"] = self.service.public_message(self.user_entry)
+
+        async def runner(run: ChatRun) -> None:
+            await self._run_builtin(run)
+
+        run, is_new = self.service.run_manager.start_or_get(
+            self.chat_id,
+            ack,
+            runner,
+            stream=self.wants_stream,
+            settler=self._publish_builtin_settled,
+        )
+        if not is_new:
+            return self._builtin_dispatch_response(
+                payload={
+                    "error": "chat already has a running reply",
+                    "code": "chat_run_in_progress",
+                },
+                status_code=409,
+            )
+        await publish_chat_changed(
+            self.chat_id,
+            self.project_id,
+            "running",
+            run_id=run.run_id,
+            run_status="running",
+            chatSummary=self.service.public_chat_light(self.chat),
+            userMessage=self.service.public_message(self.user_entry),
+        )
+        if self.wants_stream:
+            if self.detached:
+                return self._builtin_dispatch_response(
+                    payload={
+                        "run_id": run.run_id,
+                        "chat_id": self.chat_id,
+                        "status": run.status,
+                        "created_at": run.created_at,
+                        "event_cursor": 0,
+                    },
+                    status_code=202,
+                )
+            return self._builtin_dispatch_response(
+                stream=self.service.run_manager.stream(run),
+            )
+        await run.done.wait()
+        outcome = run.outcome or {}
+        if str(outcome.get("kind") or "") == "error":
+            exc = outcome.get("exc")
+            if not isinstance(exc, Exception):
+                exc = RuntimeError("agent run failed")
+            return self._builtin_dispatch_response(
+                payload={
+                    "error": "agent run failed",
+                    "detail": str(exc),
+                    **self.service.chat_error_metadata(exc),
+                },
+                status_code=502,
+            )
+        payload = outcome.get("payload")
+        return self._builtin_dispatch_response(
+            payload=(
+                payload
+                if isinstance(payload, dict)
+                else {"error": "agent run ended without an outcome"}
+            ),
+            status_code=200 if isinstance(payload, dict) else 500,
+        )
+
+    def _builtin_dispatch_response(
+        self,
+        *,
+        payload: dict[str, Any] | None = None,
+        status_code: int = 200,
+        stream: Any = None,
+    ):
+        if self.domain:
+            return ChatRunDispatchResult(
+                payload=payload,
+                status_code=status_code,
+                stream=stream,
+            )
+        if stream is not None:
+            return StreamingResponse(
+                stream,
+                media_type="application/x-ndjson",
+                headers={"Cache-Control": "no-cache"},
+            )
+        if status_code != 200:
+            return JSONResponse(payload or {}, status_code=status_code)
+        return payload or {}
+
     async def _dispatch(self):
         self.external = ExternalTurnProjection()
+        if not self.is_external_agent:
+            return await self._dispatch_builtin()
         lifecycle = await self.controller.lifecycle.dispatch(
             ChatRunLifecycleRequest(
                 chat_id=self.chat_id,

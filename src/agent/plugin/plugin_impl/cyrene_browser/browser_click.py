@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from agent.plugin import PluginContext
 
 from .definitions import get_native_tool_def
 
@@ -10,7 +11,7 @@ TOOL_NAME = 'browser_click'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
-async def _tool_browser_click(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+async def _tool_browser_click(args: dict[str, Any], _context: PluginContext) -> str:
     from cyrene.browser import click
     selector = str(args.get("selector") or "").strip()
     if not selector:

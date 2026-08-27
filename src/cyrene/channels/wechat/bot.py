@@ -7,12 +7,12 @@ via long-polling, dispatches to ``run_agent()``, splits long responses.
 import asyncio
 import logging
 
-from cyrene.agent.context import with_run_context
 from cyrene.channels.wechat.client import (
     WECHAT_MAX_LENGTH,
     WeChatAuthError,
     WeChatClient,
 )
+from cyrene.workbench.channel_chat_service import get_channel_chat_service
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,6 @@ def _format_pending_question_wechat(question: dict) -> str:
     return "\n".join(lines)
 
 
-@with_run_context(conversation_source="wechat")
 async def _handle_message(
     text: str,
     sender: str,
@@ -128,14 +127,6 @@ async def _handle_message(
     2. Ignore non-owner messages (single-user mode).
     3. Download any attached files, augment the message, run the agent.
     """
-    from cyrene.agent import (
-        _AWAITING_USER_SENTINEL,
-        answer_pending_question,
-        get_pending_question,
-        get_session_labels,
-        run_agent,
-    )
-    from cyrene.runtime.memory.conversations import archive_exchange
     from cyrene.runtime.scheduler import reset_lottery
 
     config = client._config
@@ -162,7 +153,7 @@ async def _handle_message(
     normalized_attachments: list[dict] = []
     if file_items:
         import mimetypes
-        from cyrene.runtime.attachments import UPLOADS_DIR, attachment_kind_from_meta, build_public_attachment_payload
+        from cyrene.runtime.attachments import UPLOADS_DIR, attachment_kind_from_meta
         for item in file_items:
             result = await client.download_incoming_item(item, UPLOADS_DIR)
             if result:
@@ -195,55 +186,32 @@ async def _handle_message(
             att_lines.append(f'- {att["name"]} ({att["content_type"]}): {att["path"]}')
         text = text + "\n".join(att_lines)
 
-    public_attachments = (
-        [build_public_attachment_payload(att) for att in normalized_attachments]
-        if normalized_attachments else None
+    service = get_channel_chat_service(
+        db_path,
+        channel="wechat",
+        identity=sender,
+        bot=client,
+        host_chat_id=sender,
     )
-
-    # If there is a pending question, route this message as the answer
-    pending = get_pending_question()
-    if pending and str(pending.get("id", "")).strip():
-        question_id = str(pending["id"]).strip()
-        options = pending.get("options") or []
-        answer_text = original_text.strip()
-        # Map numeric replies to option labels
-        if options and answer_text.isdigit():
-            idx = int(answer_text) - 1
-            if 0 <= idx < len(options):
-                opt = options[idx]
-                answer_text = str(opt.get("label", opt) if isinstance(opt, dict) else opt).strip()
-        try:
-            response = await answer_pending_question(
-                question_id, answer_text, client, sender, db_path
-            )
-        except Exception as exc:
-            logger.warning("answer_pending_question failed: %s", exc)
-            response = f"处理回答时出错：{exc}"
-    else:
-        response = await run_agent(
-            text, client, sender, db_path,
-            public_user_message=original_text if normalized_attachments else None,
-            public_attachments=public_attachments,
+    try:
+        result = await service.turn(
+            text,
+            public_user_message=(
+                original_text if normalized_attachments else None
+            ),
+            attachments=normalized_attachments,
         )
-
-    # If the agent is now waiting for user input, send the question
-    if response == _AWAITING_USER_SENTINEL:
-        new_pending = get_pending_question()
-        if new_pending:
-            question_text = _format_pending_question_wechat(new_pending)
-            await client.send_message(sender, question_text)
+    except Exception as exc:
+        logger.exception("WeChat Agent turn failed")
+        await client.send_message(sender, f"处理消息时出错：{exc}")
+        return
+    if result.awaiting_user and result.pending_question is not None:
+        await client.send_message(
+            sender,
+            _format_pending_question_wechat(result.pending_question),
+        )
         return
 
-    labels = get_session_labels()
-    await archive_exchange(
-        original_text,
-        response,
-        sender,
-        session_title=labels.get("session_title", ""),
-        round_title=labels.get("round_title", ""),
-        round_id=labels.get("round_id", ""),
-    )
-
     # Split long messages at WeChat's character limit
-    for i in range(0, len(response), WECHAT_MAX_LENGTH):
-        await client.send_message(sender, response[i : i + WECHAT_MAX_LENGTH])
+    for i in range(0, len(result.text), WECHAT_MAX_LENGTH):
+        await client.send_message(sender, result.text[i : i + WECHAT_MAX_LENGTH])

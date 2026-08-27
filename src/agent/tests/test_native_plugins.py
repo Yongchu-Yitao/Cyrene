@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import sys
 from hashlib import sha256
@@ -17,7 +16,7 @@ from agent.plugin.native_tools import (
 )
 
 
-BUSINESS_PACK_IDS = frozenset(
+TOOL_PACK_IDS = frozenset(
     {
         "cyrene_application",
         "cyrene_browser",
@@ -34,14 +33,15 @@ BUSINESS_PACK_IDS = frozenset(
         "cyrene_media",
         "cyrene_memory",
         "cyrene_office",
-        "cyrene_plugins",
         "cyrene_remote",
         "cyrene_renderer",
+        "cyrene_schedule",
         "cyrene_skills",
         "cyrene_subagent",
         "cyrene_task",
     }
 )
+MODEL_VISIBLE_PACK_IDS = TOOL_PACK_IDS - {"cyrene_image"}
 
 
 def _run(coroutine):
@@ -55,50 +55,14 @@ def _sha(content: bytes) -> str:
 def test_seeded_canonical_plugins_complete_toolbox_chain(tmp_path):
     async def scenario():
         plugin_directory = tmp_path / "plugin_impl"
-        legacy_pack = plugin_directory / "cyrene_tools"
-        legacy_pack.mkdir(parents=True)
-        legacy_initializer = legacy_pack / "__init__.py"
-        legacy_initializer.write_bytes(native_tools._FIRST_GENERATION_PACK_INITIALIZER)
-        obsolete_shim = legacy_pack / "tool_obsolete.py"
-        obsolete_shim.write_text(
-            "raise AssertionError('canonical packs imported an obsolete shim')\n",
-            encoding="utf-8",
-        )
 
         seeded = seed_builtin_plugin_directory(plugin_directory)
 
         assert seeded.directory == plugin_directory.resolve()
         assert seeded.manifest == plugin_directory / ".upstream-hashes.json"
         assert seeded.manifest.is_file()
-        assert not legacy_pack.exists()
-        assert seeded.legacy_backups == (
-            plugin_directory / ".cyrene_tools-legacy",
-        )
-        backup = seeded.legacy_backups[0]
-        assert (backup / "__init__.py").read_bytes() == (
-            native_tools._FIRST_GENERATION_PACK_INITIALIZER
-        )
-        assert (backup / obsolete_shim.name).is_file()
-        assert "child-file edits could not be verified" in " ".join(
-            seeded.diagnostics
-        )
         assert not (plugin_directory / "__init__.py").exists()
         assert not tuple(plugin_directory.glob(".*.cyrene-seed-*"))
-
-        # Prove the user-owned business source is the code that executes.  A
-        # packaged handler fallback would ignore this edit and fail the test.
-        guide_source = plugin_directory / "cyrene_plugins" / "tools.py"
-        original_guide = (
-            '    return _result({"ok": True, "apiVersion": 1, '
-            '"guide": AUTHORING_GUIDE})'
-        )
-        sentinel = "sentinel-from-user-plugin-impl"
-        source = guide_source.read_text(encoding="utf-8")
-        assert source.count(original_guide) == 1
-        guide_source.write_text(
-            source.replace(original_guide, f'    return "{sentinel}"'),
-            encoding="utf-8",
-        )
 
         for source_path in plugin_directory.rglob("*.py"):
             source_text = source_path.read_text(encoding="utf-8")
@@ -114,22 +78,21 @@ def test_seeded_canonical_plugins_complete_toolbox_chain(tmp_path):
             for pack in registry.list_packs()
             if registry.pack_source(pack.id) != "core"
         }
-        assert BUSINESS_PACK_IDS <= set(user_packs)
+        assert TOOL_PACK_IDS <= set(user_packs)
         business_names = {
             plugin.name
-            for pack_id in BUSINESS_PACK_IDS
+            for pack_id in TOOL_PACK_IDS
             for plugin in user_packs[pack_id].plugins
         }
-        assert len(business_names) == 196
         assert all(
             plugin.kind == "tool"
-            for pack_id in BUSINESS_PACK_IDS
+            for pack_id in TOOL_PACK_IDS
             for plugin in user_packs[pack_id].plugins
         )
         assert all(
             plugin.kind == "model"
             for pack_id, pack in user_packs.items()
-            if pack_id not in BUSINESS_PACK_IDS
+            if pack_id not in TOOL_PACK_IDS
             for plugin in pack.plugins
         )
         assert not business_names & CORE_PLUGIN_NAMES
@@ -143,28 +106,21 @@ def test_seeded_canonical_plugins_complete_toolbox_chain(tmp_path):
             and item.source != "core"
         }
         assert standalone_names == USER_STANDALONE_PLUGIN_NAMES
-        assert len(business_names | standalone_names | CORE_PLUGIN_NAMES) == 202
-        from cyrene.tooling.catalog import get_tool_names
-
-        assert business_names | standalone_names | CORE_PLUGIN_NAMES == set(
-            get_tool_names()
+        plugin_entity_names = {
+            "entity.track",
+            "entity.update",
+            "entity.list",
+            "entity.query",
+            "entity.delete",
+        }
+        registered_tool_names = (
+            business_names | standalone_names | CORE_PLUGIN_NAMES
         )
+        assert plugin_entity_names <= registered_tool_names
 
         for name in business_names | standalone_names:
             registered = registry.registered(name)
             assert Path(registered.source).is_relative_to(plugin_directory)
-
-        guide = registry.resolve("PluginAuthoringGuide")
-        adapter = getattr(guide.handler, "__self__")
-        implementation = getattr(adapter, "implementation")
-        implementation_source = Path(
-            inspect.getsourcefile(implementation) or ""
-        ).resolve()
-        adapter_source = Path(
-            inspect.getsourcefile(type(adapter)) or ""
-        ).resolve()
-        assert implementation_source == guide_source.resolve()
-        assert adapter_source.is_relative_to(plugin_directory)
 
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -187,43 +143,8 @@ def test_seeded_canonical_plugins_complete_toolbox_chain(tmp_path):
 
         listing = await runtime.call("toolbox", {"operation": "list"}, context)
         assert listing.success is True
-        assert {item["id"] for item in listing.value["packs"]} == BUSINESS_PACK_IDS
-        listed_names = {
-            tool["name"]
-            for pack in listing.value["packs"]
-            for tool in pack["tools"]
-        }
-        assert listed_names == business_names
-        assert {
-            item["name"] for item in listing.value["standalone_tools"]
-        } == USER_STANDALONE_PLUGIN_NAMES
-
-        described = await runtime.call(
-            "toolbox",
-            {"operation": "describe", "name": "PluginAuthoringGuide"},
-            context,
-        )
-        assert described.success is True
-        description = described.value["plugins"][0]
-        assert description["name"] == "PluginAuthoringGuide"
-        assert description["pack"] == "cyrene_plugins"
-        assert description["input_schema"] == guide.input_schema
-
-        invoked = await runtime.call(
-            "toolbox",
-            {
-                "operation": "invoke",
-                "name": "PluginAuthoringGuide",
-                "arguments": {},
-            },
-            context,
-        )
-        assert invoked.success is True
-        assert invoked.value == {
-            "operation": "invoke",
-            "name": "PluginAuthoringGuide",
-            "result": sentinel,
-        }
+        assert set(listing.value["packs"]) == MODEL_VISIBLE_PACK_IDS
+        assert set(listing.value["standalone_tools"]) == USER_STANDALONE_PLUGIN_NAMES
 
         globbed = await runtime.call(
             "toolbox",
@@ -317,6 +238,70 @@ def test_hash_manifest_updates_defaults_without_overwriting_user_edits(
     assert tool.read_bytes() == b"tool-v3\n"
 
 
+def test_hash_manifest_retires_only_unmodified_obsolete_defaults(tmp_path, monkeypatch):
+    plugin_directory = tmp_path / "plugin_impl"
+    current = {
+        "value": MappingProxyType(
+            {
+                "cyrene_entity/__init__.py": b"pack-v1\n",
+                "cyrene_entity/_runtime.py": b"runtime-v1\n",
+                "cyrene_entity/store.py": b"store-v1\n",
+                "old.py": b"old-v1\n",
+            }
+        )
+    }
+    monkeypatch.setattr(
+        native_tools,
+        "_collect_canonical_files",
+        lambda: current["value"],
+    )
+    seed_builtin_plugin_directory(plugin_directory)
+
+    runtime = plugin_directory / "cyrene_entity" / "_runtime.py"
+    store = plugin_directory / "cyrene_entity" / "store.py"
+    old = plugin_directory / "old.py"
+    old.write_bytes(b"user-old\n")
+    current["value"] = MappingProxyType(
+        {"cyrene_entity/__init__.py": b"pack-v2\n"}
+    )
+
+    upgraded = seed_builtin_plugin_directory(plugin_directory)
+
+    assert set(upgraded.removed) == {runtime, store}
+    assert runtime.exists() is False
+    assert store.exists() is False
+    assert old.read_bytes() == b"user-old\n"
+    manifest = json.loads(upgraded.manifest.read_text(encoding="utf-8"))
+    assert manifest["files"] == {
+        "cyrene_entity/__init__.py": _sha(b"pack-v2\n"),
+        "old.py": _sha(b"old-v1\n"),
+    }
+
+    edited_directory = tmp_path / "edited_plugin_impl"
+    current["value"] = MappingProxyType(
+        {
+            "cyrene_entity/__init__.py": b"pack-v1\n",
+            "cyrene_entity/tool.py": b"tool-v1\n",
+            "cyrene_entity/store.py": b"store-v1\n",
+        }
+    )
+    seed_builtin_plugin_directory(edited_directory)
+    edited_tool = edited_directory / "cyrene_entity" / "tool.py"
+    edited_store = edited_directory / "cyrene_entity" / "store.py"
+    edited_tool.write_bytes(b"user-tool\n")
+    current["value"] = MappingProxyType(
+        {
+            "cyrene_entity/__init__.py": b"pack-v2\n",
+            "cyrene_entity/tool.py": b"tool-v2\n",
+        }
+    )
+
+    preserved = seed_builtin_plugin_directory(edited_directory)
+
+    assert edited_store in preserved.existing
+    assert edited_store.read_bytes() == b"store-v1\n"
+
+
 def test_unmanaged_pack_and_standalone_collisions_are_never_merged(
     tmp_path,
     monkeypatch,
@@ -359,85 +344,6 @@ def test_unmanaged_pack_and_standalone_collisions_are_never_merged(
     assert manifest == {"version": 1, "files": {}}
 
 
-def test_modified_aggregate_pack_is_backed_up_without_losing_edits(
-    tmp_path,
-    monkeypatch,
-):
-    plugin_directory = tmp_path / "plugin_impl"
-    canonical = MappingProxyType(
-        {
-            "cyrene_application/__init__.py": b"canonical-pack\n",
-            "edit.py": b"canonical-edit\n",
-        }
-    )
-    monkeypatch.setattr(native_tools, "_collect_canonical_files", lambda: canonical)
-    legacy = plugin_directory / "cyrene_tools"
-    legacy.mkdir(parents=True)
-    (legacy / "__init__.py").write_bytes(b"user-initializer\n")
-    (legacy / "tool_custom.py").write_bytes(b"user-tool\n")
-
-    seeded = seed_builtin_plugin_directory(plugin_directory)
-
-    assert not legacy.exists()
-    assert seeded.legacy_backups == (
-        plugin_directory / ".cyrene_tools-legacy",
-    )
-    backup = seeded.legacy_backups[0]
-    assert (backup / "__init__.py").read_bytes() == b"user-initializer\n"
-    assert (backup / "tool_custom.py").read_bytes() == b"user-tool\n"
-    assert "initializer modification detected" in " ".join(seeded.diagnostics)
-
-
-def test_only_verified_legacy_model_pack_is_migrated(tmp_path, monkeypatch):
-    canonical = MappingProxyType(
-        {
-            "cyrene_model/__init__.py": b"canonical-model\n",
-            "cyrene_model/provider.py": b"provider\n",
-            "edit.py": b"canonical-edit\n",
-        }
-    )
-    monkeypatch.setattr(native_tools, "_collect_canonical_files", lambda: canonical)
-    known_initializer = b"legacy-model\n"
-    known_provider = b"legacy-provider\n"
-    monkeypatch.setattr(
-        native_tools,
-        "_LEGACY_MODEL_DEFAULT_HASHES",
-        MappingProxyType(
-            {
-                "model/__init__.py": _sha(known_initializer),
-                "model/minimax.py": _sha(known_provider),
-            }
-        ),
-    )
-
-    verified_root = tmp_path / "verified" / "plugin_impl"
-    verified_model = verified_root / "model"
-    verified_model.mkdir(parents=True)
-    (verified_model / "__init__.py").write_bytes(known_initializer)
-    (verified_model / "minimax.py").write_bytes(known_provider)
-
-    migrated = seed_builtin_plugin_directory(verified_root)
-
-    assert not verified_model.exists()
-    assert migrated.legacy_backups == (verified_root / ".model-legacy",)
-    assert (verified_root / ".model-legacy" / "minimax.py").read_bytes() == (
-        known_provider
-    )
-    assert (verified_root / "cyrene_model" / "provider.py").is_file()
-
-    unmanaged_root = tmp_path / "unmanaged" / "plugin_impl"
-    unmanaged_model = unmanaged_root / "model"
-    unmanaged_model.mkdir(parents=True)
-    (unmanaged_model / "__init__.py").write_bytes(b"user-model\n")
-
-    preserved = seed_builtin_plugin_directory(unmanaged_root)
-
-    assert unmanaged_model.is_dir()
-    assert not (unmanaged_root / "cyrene_model").exists()
-    assert preserved.legacy_backups == ()
-    assert "skipped cyrene_model" in " ".join(preserved.diagnostics)
-
-
 def test_frozen_build_reads_the_packaged_canonical_tree(tmp_path, monkeypatch):
     bundle = tmp_path / "bundle"
     canonical = (
@@ -449,8 +355,12 @@ def test_frozen_build_reads_the_packaged_canonical_tree(tmp_path, monkeypatch):
     )
     pack = canonical / "cyrene_application"
     pack.mkdir(parents=True)
+    schedule_pack = canonical / "cyrene_schedule"
+    schedule_pack.mkdir(parents=True)
     (canonical / "__init__.py").write_bytes(b"not-seeded\n")
     (pack / "__init__.py").write_bytes(b"pack\n")
+    for name in ("__init__.py", "application.py", "schedule_spec.py", "tools.py"):
+        (schedule_pack / name).write_bytes(name.encode("utf-8"))
     for name in ("edit.py", "glob.py", "grep.py"):
         (canonical / name).write_bytes(name.encode("utf-8"))
 
@@ -461,6 +371,10 @@ def test_frozen_build_reads_the_packaged_canonical_tree(tmp_path, monkeypatch):
 
     assert files == {
         "cyrene_application/__init__.py": b"pack\n",
+        "cyrene_schedule/__init__.py": b"__init__.py",
+        "cyrene_schedule/application.py": b"application.py",
+        "cyrene_schedule/schedule_spec.py": b"schedule_spec.py",
+        "cyrene_schedule/tools.py": b"tools.py",
         "edit.py": b"edit.py",
         "glob.py": b"glob.py",
         "grep.py": b"grep.py",

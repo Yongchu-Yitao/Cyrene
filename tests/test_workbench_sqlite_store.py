@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import multiprocessing
 import sqlite3
 from pathlib import Path
@@ -58,38 +57,8 @@ def _increment_worker(db_path: str, barrier) -> None:
     write_document(db_path, "memory:project", entries, list)
 
 
-def test_sqlite_is_authoritative_after_one_time_json_import(tmp_path: Path) -> None:
+def test_patch_project_fields_preserves_unrelated_sqlite_state(tmp_path: Path) -> None:
     db_path = tmp_path / "cyrene.runtime.database"
-    legacy = tmp_path / "workbench_chats.json"
-    legacy.write_text(
-        json.dumps({"chats": [{"id": "chat_1", "title": "Imported"}]}),
-        encoding="utf-8",
-    )
-
-    imported = read_document(
-        db_path,
-        "chats",
-        lambda: {"chats": []},
-        legacy_path=legacy,
-    )
-    assert imported["chats"][0]["title"] == "Imported"
-
-    legacy.write_text(
-        json.dumps({"chats": [{"id": "chat_1", "title": "External overwrite"}]}),
-        encoding="utf-8",
-    )
-    persisted = read_document(
-        db_path,
-        "chats",
-        lambda: {"chats": []},
-        legacy_path=legacy,
-    )
-    assert persisted["chats"][0]["title"] == "Imported"
-
-
-def test_patch_document_fields_preserves_unrelated_state_and_updates_export(tmp_path: Path) -> None:
-    db_path = tmp_path / "cyrene.runtime.database"
-    export_path = tmp_path / "workbench_projects.json"
     original = {
         "projects": [{"id": "project_1", "sessions": [{"id": "session_1"}]}],
         "activeProjectId": "project_old",
@@ -103,7 +72,6 @@ def test_patch_document_fields_preserves_unrelated_state_and_updates_export(tmp_
         "projects",
         {"activeProjectId": "project_1", "activeSessionId": ""},
         lambda: {"projects": []},
-        export_path=export_path,
     )
 
     assert changed == {"activeProjectId": "project_1", "activeSessionId": ""}
@@ -112,7 +80,6 @@ def test_patch_document_fields_preserves_unrelated_state_and_updates_export(tmp_
     assert persisted["unrelated"] == {"keep": True}
     assert persisted["activeProjectId"] == "project_1"
     assert persisted["activeSessionId"] == ""
-    assert json.loads(export_path.read_text(encoding="utf-8"))["activeSessionId"] == ""
 
 
 def test_concurrent_process_appends_are_merged_without_lost_updates(tmp_path: Path) -> None:

@@ -17,14 +17,10 @@ from typing import Any
 from urllib.parse import urlparse
 
 from cyrene.runtime.paths import TEMP_DIR
-from cyrene.agent.context import (
-    consume_external_upload_grant,
-    publish_runtime_event,
-)
-from cyrene.tooling.runtime_api import (
+from agent.plugin import PluginContext
+from agent.plugin.native_runtime import (
     json_result,
-    request_external_upload_confirmation as _request_external_upload_confirmation,
-    request_read_elevation,
+    publish_runtime_event,
     resolve_tool_path,
 )
 
@@ -41,8 +37,8 @@ TOOL_DEF = {
         "description": (
             "Attach local files to a browser file input without opening the system file picker. "
             "Use chooser_id returned by an intercepted browser click, or use the ref of a visible "
-            "input[type=file] from browser_snapshot. This always pauses for a human, single-use "
-            "approval bound to the destination, input, filenames, sizes, and SHA-256 hashes. "
+            "input[type=file] from browser_snapshot. The host reviews the exact tool call before "
+            "execution; this tool binds the destination, input, filenames, sizes, and hashes. "
             "It never submits a separate form button."
         ),
         "parameters": {
@@ -69,6 +65,10 @@ TOOL_DEF = {
             "required": ["paths"],
         },
     },
+}
+TOOL_METADATA = {
+    "read_only": False,
+    "requires_order": True,
 }
 
 
@@ -183,17 +183,7 @@ async def _resolve_files(path_args: list[str]) -> tuple[list[dict[str, Any]] | N
         path_arg = str(raw or "").strip()
         if not path_arg:
             return None, "File paths must not be empty."
-        try:
-            resolved = resolve_tool_path(path_arg)
-        except ValueError:
-            elevation = await request_read_elevation(
-                tool_name=TOOL_NAME,
-                path_hint=path_arg,
-                reason="Agent needs to read this file in order to disclose it to an external website.",
-            )
-            if elevation is not None:
-                return None, elevation
-            resolved = resolve_tool_path(path_arg)
+        resolved = resolve_tool_path(path_arg)
         key = str(resolved)
         if key in seen:
             continue
@@ -240,10 +230,6 @@ def _upload_fingerprint(target: dict[str, Any], files: list[dict[str, Any]]) -> 
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _consume_upload_grant(fingerprint: str) -> bool:
-    return consume_external_upload_grant(fingerprint)
-
-
 def _public_files(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
@@ -258,10 +244,7 @@ def _public_files(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 async def _tool_browser_upload_files(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
     from cyrene import browser
 
@@ -291,24 +274,13 @@ async def _tool_browser_upload_files(
         return "Browser upload failed: this file input accepts only one file."
 
     fingerprint = _upload_fingerprint(target, files)
-    approval = await _request_external_upload_confirmation(
-        fingerprint=fingerprint,
-        target=target,
-        files=files,
-        reason=str(args.get("reason") or "").strip(),
-    )
-    if approval is not None:
-        return approval
-    if not _consume_upload_grant(fingerprint):
-        return "Browser upload denied: no matching single-use human approval is available."
-
-    # Re-resolve the browser node and re-hash every file after consuming the
-    # approval. Any changed page, origin, path, size, or content cancels the
-    # action and requires a fresh approval rather than silently widening it.
+    # Re-resolve the browser node and re-hash every file immediately before the
+    # side effect. Any changed page, origin, path, size, or content cancels the
+    # action rather than silently widening the centrally reviewed call.
     prepared_now = await browser.prepare_file_upload(chooser_id=chooser_id, ref=ref)
     files_now, validation_error = await _resolve_files([str(item or "") for item in raw_paths])
     if prepared_now.get("ok") is not True or validation_error is not None or files_now is None:
-        await publish_runtime_event({
+        await publish_runtime_event(context, {
             "type": "external_browser_upload",
             "status": "cancelled_before_execution",
             "fingerprint": fingerprint,
@@ -317,14 +289,14 @@ async def _tool_browser_upload_files(
         return f"Browser upload cancelled during revalidation: {validation_error or prepared_now.get('error') or 'unknown error'}"
     target_now = prepared_now.get("target") if isinstance(prepared_now.get("target"), dict) else {}
     if _upload_fingerprint(target_now, files_now) != fingerprint:
-        await publish_runtime_event({
+        await publish_runtime_event(context, {
             "type": "external_browser_upload",
             "status": "cancelled_binding_changed",
             "fingerprint": fingerprint,
         })
         return "Browser upload cancelled: the destination or file content changed after approval."
 
-    await publish_runtime_event({
+    await publish_runtime_event(context, {
         "type": "external_browser_upload",
         "status": "executing",
         "effect": "file_input_population",
@@ -354,7 +326,7 @@ async def _tool_browser_upload_files(
     elif staging_root is not None:
         _remove_upload_snapshot(staging_root)
     status = "completed" if result.get("ok") is True else "failed"
-    await publish_runtime_event({
+    await publish_runtime_event(context, {
         "type": "external_browser_upload",
         "status": status,
         "effect": "file_input_populated" if status == "completed" else "file_input_population_failed",

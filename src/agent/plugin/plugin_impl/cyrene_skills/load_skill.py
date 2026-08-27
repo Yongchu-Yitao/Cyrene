@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from agent.plugin import PluginContext
 from cyrene.learning.skills import load_skill
 from .definitions import get_native_tool_def
 
@@ -13,7 +14,10 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 TOOL_METADATA = {"read_only": True, "resource_keys": ("skills:{skill_id}",), "requires_order": False}
 
 
-async def _tool_load_skill(args: dict[str, Any], *_unused: Any) -> str:
+async def _tool_load_skill(
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     skill_id = str(args.get("skill_id") or "").strip()
     if not skill_id:
         return json.dumps({"ok": False, "error": "skill_id is required"}, ensure_ascii=False)

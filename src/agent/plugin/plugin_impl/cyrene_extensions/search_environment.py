@@ -6,6 +6,8 @@ import asyncio
 import json
 from typing import Any
 
+from agent.plugin import PluginContext
+
 from cyrene.extensions.service import get_extension_service
 from .list_environment import (
     environment_items,
@@ -105,7 +107,7 @@ def _compact_candidate(item: dict[str, Any], installed: set[tuple[str, str]]) ->
     }
 
 
-async def _tool_search_environment(args: dict[str, Any], *_unused: Any) -> str:
+async def _tool_search_environment(args: dict[str, Any], _context: PluginContext) -> str:
     query = str(args.get("query") or "").strip()
     if not query:
         return json.dumps({"ok": False, "error": "query is required"}, ensure_ascii=False)
@@ -145,7 +147,7 @@ async def _tool_search_environment(args: dict[str, Any], *_unused: Any) -> str:
         "results": candidates[:limit],
         "source_errors": errors,
         "next_cursors": next_cursors,
-        "next_step": "Disabled extensions are intentionally hidden and must be re-enabled from the Extension Center. For installable results, invoke skill.manage_extensions with action=install and only the exact install_request returned here. If installable is false, use the exact fallback_request when present; otherwise stop and report reason_code. Never guess request fields or retry alternate payload shapes. Installation remains subject to extension review.",
+        "next_step": "Disabled entries are intentionally hidden. For installable results, use toolbox.describe for ManageExtensions, then toolbox.invoke it with action=install and only the exact install_request returned here. If installable is false, use the exact fallback_request when present; otherwise stop and report reason_code. Never guess request fields or retry alternate payload shapes. Installation remains subject to Plugin permission review.",
     }, ensure_ascii=False)
 
 

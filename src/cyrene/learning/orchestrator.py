@@ -9,16 +9,12 @@ The primary learning path is intentionally small:
 - prefer agent-generated Python or shell implementations for complex,
   non-interactive continuous workflows;
 - retain declarative parameterized tool steps as provenance and fallback;
-- execute scripts through the central tool dispatcher with risk guards.
+- replay safe learned workflows through the live Plugin Runtime.
 
 The learner intentionally has no fingerprint bucket, automatic merge threshold,
 semantic runtime router, or separate review layer. Local retrieval scores only
 shortlist candidates; the learning agent still owns the merge/new decision.
 """
-
-# Historical helper imports in this compatibility module remain available to
-# extensions and tests while implementations move into focused services.
-# ruff: noqa: F401
 
 from __future__ import annotations
 
@@ -30,7 +26,6 @@ import os
 import re
 import shutil
 import sqlite3
-import sys
 
 import aiosqlite
 from collections import defaultdict
@@ -43,82 +38,39 @@ from uuid import uuid4
 from cyrene.config import DATA_DIR
 from cyrene.learning.candidate import CandidatePorts, CandidateService, CandidateSkillDraft
 from cyrene.learning.candidate import (
-    extract_city_entities as _extract_city_entities,
     extract_json_object as _extract_json_object,
     is_meaningful_candidate_item as _is_meaningful_candidate_item,
     is_skillworthy_chain as _is_skillworthy_chain,
-    normalize_entities as _normalize_entities,
     normalize_slot as _normalize_slot,
     normalize_whitespace as _normalize_whitespace,
     parameter_type_for_value as _parameter_type_for_value,
-    purpose_chain_for_prompt as _purpose_chain_for_prompt,
-    redact_learning_prompt_value as _redact_learning_prompt_value,
     safe_slug as _safe_slug,
-    sanitize_learning_purpose as _sanitize_learning_purpose,
-    sanitize_skill_description as _sanitize_skill_description,
-    sanitize_skill_name as _sanitize_skill_name,
     should_expose_stable_arg as _should_expose_stable_arg,
     should_parameterize_arg as _should_parameterize_arg,
 )
-from cyrene.learning.candidate import retrieval_score as candidate_retrieval_score
-from cyrene.learning.candidate import search_terms as candidate_search_terms
 from cyrene.learning.capture import (
-    ActionCapture,
     CapturePorts,
     CaptureService,
-    browser_event_learning_fields,
-    chain_item_from_action,
-    chain_item_from_browser_event,
-    map_tool_to_action,
-    sanitize_browser_capture,
 )
 from cyrene.learning.lifecycle import (
-    CITY_ALIASES,
     CORRECTION_TERMS,
-    SKILL_TYPE_ORDER,
-    WEATHER_ENTITY_HINTS,
-    apply_change_list as _apply_change_list,
-    build_patch_change_list as _build_patch_change_list,
     clone_json_value as _clone_json_value,
     LifecyclePorts,
     LifecycleService,
-    infer_risk_level,
 )
 from cyrene.learning.repository import (
     LearningConnection,
     LearningRepository,
 )
 from cyrene.learning.replay import (
-    AUTO_REPLAY_BLOCKED_TOOLS,
-    HIGH_RISK_TOOLS,
     INTERNAL_LEARNING_MESSAGE_PREFIXES,
     INTERNAL_TOOLS,
-    MIN_SKILL_CHAIN_STEPS,
-    REPLAY_IGNORED_TOOLS,
     TRIVIAL_SKILL_TOOLS,
-    enabled_tools as _enabled_step_tool_names,
-    has_auto_replay_blocked_step as _has_auto_replay_blocked_step,
-    has_reusable_steps as _has_skillworthy_steps,
-    is_complex_continuous_workflow as _is_complex_continuous_workflow,
-    is_reusable_skill_definition as _is_reusable_skill_definition,
-    normalize_generated_script_source as _normalize_generated_script_source,
-    normalize_script_implementation as _normalize_script_implementation,
-    tool_steps_for_replay as _tool_call_steps_for_replay,
-    workflow_can_be_scripted as _workflow_can_be_scripted,
-    enabled_step_tool_names,
-    has_blocked_step,
-    has_skillworthy_steps,
-    resolve_value_template,
-    resolve_value_template as _resolve_value_template,
-    tool_call_steps,
+    is_reusable_skill_definition,
+    normalize_generated_script_source,
 )
 
 logger = logging.getLogger(__name__)
-
-# Kept for the historical learned-skill adapter import surface.
-_AUTO_REPLAY_BLOCKED_TOOLS = AUTO_REPLAY_BLOCKED_TOOLS
-_HIGH_RISK_TOOLS = HIGH_RISK_TOOLS
-_REPLAY_IGNORED_TOOLS = REPLAY_IGNORED_TOOLS
 
 _DATA_DIR: Path | None = None
 _WORKSPACE_DIR: Path | None = None
@@ -138,7 +90,6 @@ _current_round_id: ContextVar[str] = ContextVar("behavior_round_id", default="")
 _CANDIDATE_USER_DECISION_COUNT = 2
 _CANDIDATE_AUTO_LEARN_COUNT = 3
 _CANDIDATE_RETRIEVAL_LIMIT = 5
-_SCRIPT_EXECUTION_TIMEOUT_SECONDS = 30.0
 _MAX_PURPOSE_CHARS = 20
 _INTERNAL_PROACTIVE_PROMPT_PREFIX = "This is a scheduler-initiated proactive check-in."
 _SCHEDULED_CHECK_IN_LABEL = "Scheduled proactive check-in"
@@ -284,6 +235,14 @@ async def init(data_dir: Path, workspace_dir: Path) -> None:
     _INIT_DONE = True
 
 
+async def ensure_initialized(data_dir: Path, workspace_dir: Path) -> None:
+    """Initialize the process learning store once for the active data root."""
+    configured = Path(data_dir).expanduser().resolve()
+    if _INIT_DONE and _DATA_DIR is not None and Path(_DATA_DIR).resolve() == configured:
+        return
+    await init(configured, Path(workspace_dir).expanduser().resolve())
+
+
 def _project_scope_for_session(session_id: str | None) -> dict[str, str]:
     sid = str(session_id or "").strip()
     if not sid:
@@ -408,6 +367,10 @@ async def _latest_turn_for_session_round(session_id: str, round_id: str='') -> s
     return await _capture_service()._latest_turn_for_session_round(session_id, round_id)
 
 
+async def open_turn(session_id: str, round_id: str) -> dict[str, str] | None:
+    return await _capture_service().open_turn(session_id, round_id)
+
+
 async def _upsert_behavior_session(conn: aiosqlite.Connection, *, session_id: str, scope: dict[str, str], now: str, session_title: str, user_message: str) -> None:
     return await _capture_service()._upsert_behavior_session(conn, session_id=session_id, scope=scope, now=now, session_title=session_title, user_message=user_message)
 
@@ -416,8 +379,25 @@ async def _mark_previous_turn_corrected(conn: aiosqlite.Connection, session_id: 
     return await _capture_service()._mark_previous_turn_corrected(conn, session_id, now)
 
 
-async def begin_turn(*, session_id: str, round_id: str, user_message: str, history: list[dict[str, Any]], session_title: str='', system_initiated: bool=False) -> dict[str, Any]:
-    return await _capture_service().begin_turn(session_id=session_id, round_id=round_id, user_message=user_message, history=history, session_title=session_title, system_initiated=system_initiated)
+async def begin_turn(
+    *,
+    session_id: str,
+    round_id: str,
+    user_message: str,
+    history: list[dict[str, Any]],
+    session_title: str = '',
+    system_initiated: bool = False,
+    defer_processing: bool = False,
+) -> dict[str, Any]:
+    return await _capture_service().begin_turn(
+        session_id=session_id,
+        round_id=round_id,
+        user_message=user_message,
+        history=history,
+        session_title=session_title,
+        system_initiated=system_initiated,
+        defer_processing=defer_processing,
+    )
 
 
 def clear_turn_context(context: dict[str, Any]) -> None:
@@ -436,8 +416,31 @@ def _map_tool_to_action(tool_name: str) -> tuple[str, str, str, int]:
     return _capture_service()._map_tool_to_action(tool_name)
 
 
-async def record_action(tool_name: str, args: dict[str, Any], caller: str, round_id: str, duration_ms: float, *, result: Any='', success: bool=True, error: str='') -> None:
-    return await _capture_service().record_action(tool_name, args, caller, round_id, duration_ms, result=result, success=success, error=error)
+async def record_action(
+    tool_name: str,
+    args: dict[str, Any],
+    caller: str,
+    round_id: str,
+    duration_ms: float,
+    *,
+    result: Any = '',
+    success: bool = True,
+    error: str = '',
+    session_id: str = '',
+    turn_id: str = '',
+) -> None:
+    return await _capture_service().record_action(
+        tool_name,
+        args,
+        caller,
+        round_id,
+        duration_ms,
+        result=result,
+        success=success,
+        error=error,
+        session_id=session_id,
+        turn_id=turn_id,
+    )
 
 
 async def record_browser_user_event(*, session_id: str='', round_id: str='', event_kind: str, payload: dict[str, Any] | None=None, browser_url: str='', browser_title: str='', target: dict[str, Any] | None=None) -> None:
@@ -456,16 +459,27 @@ async def complete_turn(*, turn_id: str, assistant_response: str, session_title:
     return await _capture_service().complete_turn(turn_id=turn_id, assistant_response=assistant_response, session_title=session_title, round_title=round_title)
 
 
+async def abort_turn(*, turn_id: str, reason: str = '') -> None:
+    return await _capture_service().abort_turn(turn_id=turn_id, reason=reason)
+
+
 async def _call_llm_json(prompt: str, *, caller: str = "behavior_learning") -> dict[str, Any]:
-    from cyrene.agent.model_service import call_agent_model
+    from agent.plugin import active_plugin_service
     from cyrene.model_runtime.messages import assistant_text
 
     try:
-        response = await call_agent_model(
+        gateway = active_plugin_service("model")
+        complete = getattr(gateway, "complete", None)
+        if not callable(complete):
+            raise RuntimeError("active model Plugin gateway is unavailable")
+        response = await complete(
             [{"role": "user", "content": prompt}],
             tools=None,
             max_tokens=6000,
+            response_format={"type": "json_object"},
+            route="secondary",
             caller=caller,
+            session_id="behavior-learning",
         )
         return _extract_json_object(assistant_text(response))
     except Exception:
@@ -709,7 +723,7 @@ def _persist_learning_agent_script(
     skill_name: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     language = str(implementation.get("language") or "")
-    source = _normalize_generated_script_source(language, implementation.get("source"))
+    source = normalize_generated_script_source(language, implementation.get("source"))
     if not source:
         return original_steps, {"kind": "tool_chain"}
     filename = "run.py" if language == "python" else "run.sh"
@@ -746,92 +760,6 @@ def _persist_learning_agent_script(
         "failure_policy": "fail",
     }
     return [wrapper], persisted_implementation
-
-
-def _resolve_generated_script_path(path_value: Any) -> Path:
-    """Resolve a learned script restored under a different app-data prefix."""
-    raw = str(path_value or "").strip()
-    direct = Path(raw).expanduser()
-    if direct.exists():
-        return direct.resolve()
-    normalized = raw.replace("\\", "/")
-    marker = "/data/learned_skill_scripts/"
-    marker_index = normalized.lower().rfind(marker)
-    if marker_index >= 0 and (
-        normalized.startswith("/") or re.match(r"^[A-Za-z]:/", normalized)
-    ):
-        relative = normalized[marker_index + len(marker):]
-        root = (Path(_DATA_DIR or DATA_DIR) / "learned_skill_scripts").resolve()
-        candidate = (root / Path(relative)).resolve()
-        if candidate == root or root in candidate.parents:
-            return candidate
-    return direct
-
-
-async def _execute_script_step(reference: dict[str, Any], params: dict[str, Any]) -> tuple[str, bool, str]:
-    script_path = _resolve_generated_script_path(reference.get("script_path"))
-    if not script_path.exists():
-        return f"Script failed: missing script {script_path}", False, "missing_script"
-    try:
-        allowed_root = (Path(_DATA_DIR or DATA_DIR) / "learned_skill_scripts").resolve()
-        resolved_script = script_path.resolve()
-        if not resolved_script.is_relative_to(allowed_root):
-            return "Script failed: path is outside the learned-skill script directory", False, "invalid_script_path"
-    except Exception:
-        return "Script failed: invalid script path", False, "invalid_script_path"
-    expected_hash = str(reference.get("source_sha256") or "")
-    actual_hash = hashlib.sha256(resolved_script.read_bytes()).hexdigest()
-    if expected_hash and actual_hash != expected_hash:
-        return "Script failed: source hash mismatch", False, "script_integrity_error"
-    language = str(reference.get("language") or "")
-    if language == "python":
-        command = [sys.executable, str(resolved_script)]
-    elif language == "shell":
-        command = ["/bin/sh", str(resolved_script)]
-    else:
-        return "Script failed: unsupported script language", False, "unsupported_script_language"
-    params_json = _json_dumps(params or {})
-    proc = await asyncio.create_subprocess_exec(
-        *command,
-        "--params-json",
-        params_json,
-        cwd=str(_WORKSPACE_DIR or Path.cwd()),
-        env={**os.environ, "CYRENE_SKILL_PARAMS": params_json},
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_SCRIPT_EXECUTION_TIMEOUT_SECONDS)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.communicate()
-        return "Script failed: timed out", False, "script_timeout"
-    out = stdout.decode("utf-8", errors="replace")[-12000:]
-    err = stderr.decode("utf-8", errors="replace")[-12000:]
-    if proc.returncode == 0:
-        return out or "Script completed.", True, ""
-    return (out + ("\n" if out and err else "") + err).strip() or f"Script failed with exit code {proc.returncode}", False, "script_failed"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1028,7 +956,7 @@ def _lifecycle_service() -> LifecycleService:
         connect=_conn,
         default_skill_stats=_default_skill_stats,
         get_stats_lock=_get_stats_lock,
-        is_reusable_skill_definition=_is_reusable_skill_definition,
+        is_reusable_skill_definition=is_reusable_skill_definition,
         json_dumps=_json_dumps,
         json_loads=_json_loads,
         new_id=_new_id,
@@ -1479,58 +1407,93 @@ async def run_learned_skill(skill_id: str, param_overrides: dict[str, Any] | Non
     skill = await get_learned_skill(skill_id)
     if skill is None:
         return f"Learned skill '{skill_id}' not found."
-    if str(skill.get("risk_level") or "none") == "high" or _has_auto_replay_blocked_step(skill.get("steps") or []):
-        return f"Learned skill '{skill_id}' requires normal agent execution and fresh runtime approval."
-    from cyrene.tooling.executor import execute_tool
+    from agent.plugin import PluginContext, active_plugin_application_host
 
-    context_summary = ""
-    extraction = {
-        "params": param_overrides or {},
-        "complete": True,
-        "missing_required": [],
-        "confidence": 1.0,
-    }
-    if skill["input_schema"]:
-        extraction = await extract_skill_parameters(
-            user_message=" ".join(str(value) for value in (param_overrides or {}).values()),
-            context_summary=context_summary,
-            input_schema=skill["input_schema"],
-            llm_fallback=False,
-            overrides=param_overrides,
+    host = active_plugin_application_host()
+    if host is None:
+        return (
+            f"Learned skill '{skill_id}' cannot run because the Plugin application "
+            "host is unavailable."
         )
-    if not extraction["complete"]:
-        return f"Skill '{skill_id}' is missing required params: {', '.join(extraction['missing_required'])}"
-    results: list[str] = []
-    for step in skill["steps"]:
-        if not bool(step.get("enabled", True)):
-            continue
-        reference = step.get("implementation_reference") or {}
-        implementation_kind = str(step.get("implementation_kind") or "")
-        if implementation_kind == "script":
-            result, ok, reason = await _execute_script_step(reference, extraction["params"])
-            prefix = "run_generated_skill_script" if ok else f"run_generated_skill_script failed ({reason})"
-            results.append(f"{prefix}: {_truncate_text(result, 500)}")
-            continue
-        if implementation_kind != "tool_call":
-            continue
-        tool_name = str(reference.get("tool_name") or "")
-        if tool_name in _REPLAY_IGNORED_TOOLS:
-            continue
-        args_template = reference.get("args_template") or {}
-        items = args_template.get("_items")
-        if isinstance(items, list) and items:
-            for item_args in items:
-                resolved = _resolve_value_template(item_args, extraction["params"])
-                try:
-                    result = await execute_tool(tool_name, resolved, None, 0, "", None)
-                except Exception as exc:
-                    result = f"Tool failed: {exc}"
-                results.append(f"{tool_name}: {_truncate_text(result, 500)}")
-        else:
-            resolved_args = _resolve_value_template(args_template, extraction["params"])
-            try:
-                result = await execute_tool(tool_name, resolved_args, None, 0, "", None)
-            except Exception as exc:
-                result = f"Tool failed: {exc}"
-            results.append(f"{tool_name}: {_truncate_text(result, 500)}")
-    return "\n".join(results) if results else f"Skill '{skill_id}' has no executable steps."
+
+    replay_id = _new_id("learning_replay")
+    session_id = f"learning:{skill_id}"
+    project_id = str(skill.get("project_id") or "").strip()
+    workspace = Path(_WORKSPACE_DIR or DATA_DIR).expanduser().resolve()
+    if project_id:
+        try:
+            from cyrene.workbench.context import read_projects
+            from cyrene.workbench.project_repository import (
+                resolve_project_workspace_dir,
+            )
+
+            project = next(
+                (
+                    item
+                    for item in read_projects()
+                    if isinstance(item, dict)
+                    and str(item.get("id") or "").strip() == project_id
+                ),
+                None,
+            )
+            resolved_workspace = resolve_project_workspace_dir(project)
+            if resolved_workspace:
+                workspace = Path(resolved_workspace).expanduser().resolve()
+        except Exception:
+            logger.debug(
+                "Could not resolve learned-skill project workspace; using default",
+                exc_info=True,
+            )
+    called = await host.runtime.call(
+        "RunLearnedSkill",
+        {
+            "name": str(skill.get("name") or ""),
+            "params": dict(param_overrides or {}),
+        },
+        PluginContext(
+            workspace=workspace,
+            data={
+                "bot": host.bot,
+                "chat_id": 0,
+                "db_path": host.db_path,
+                "notify_state": {},
+                "session_id": session_id,
+                "learning_skill_id": skill_id,
+                "learning_replay": True,
+                "run_context": {
+                    "agent_id": "main",
+                    "caller": "learning_replay",
+                    "conversation_source": "learning",
+                    "project_id": project_id,
+                    "round_id": replay_id,
+                    "session_id": session_id,
+                    "workspace_dir": str(workspace),
+                },
+            },
+            services=dict(host.services),
+        ),
+        call_id=replay_id,
+    )
+    if not called.success:
+        return f"Learned skill '{skill_id}' failed: {called.error or 'Plugin invocation failed'}"
+
+    raw = called.value
+    if isinstance(raw, dict):
+        payload = raw
+    else:
+        try:
+            decoded = json.loads(str(raw or ""))
+        except (TypeError, ValueError):
+            decoded = None
+        payload = decoded if isinstance(decoded, dict) else {}
+    if not payload:
+        return f"Learned skill '{skill_id}' returned an invalid Plugin result."
+    if not bool(payload.get("ok")):
+        return f"Learned skill '{skill_id}' failed: {payload.get('error') or 'unknown error'}"
+
+    outputs = [
+        f"{str(item.get('tool') or 'Plugin')}: {_truncate_text(item.get('output'), 500)}"
+        for item in payload.get("results") or []
+        if isinstance(item, dict)
+    ]
+    return "\n".join(outputs) if outputs else f"Skill '{skill_id}' completed."

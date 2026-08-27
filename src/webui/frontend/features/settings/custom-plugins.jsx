@@ -9,13 +9,62 @@ import {
   Toggle,
 } from "./shared.jsx"
 
-function CustomPluginsPanel(props) {
+function configuredEnabled(item) {
+  return !!item && item.configured_enabled === true
+}
+
+function effectiveEnabled(item) {
+  return !!item && item.effective_enabled === true
+}
+
+function itemLabel(item) {
+  return String(item && (item.name || item.id) || "Plugin")
+}
+
+function searchable(item) {
+  if (!item || typeof item !== "object") return ""
+  return [item.id, item.name, item.description, item.kind, item.source, item.source_path]
+    .join(" ").toLowerCase()
+}
+
+function RegistryBadges(props) {
+  var item = props.item || {}
   var t = props.t
-  var project = props.project || null
-  var projectId = String(project && project.id || "")
-  var [plugins, setPlugins] = useStateSt([])
+  var kind = String(item.kind || (item.plugins ? "pack" : "plugin"))
+  return React.createElement(React.Fragment, null,
+    React.createElement("span", { className: "wb-extension-type" }, t("settings.pluginKind." + kind, kind)),
+    item.source && React.createElement("span", { className: "wb-extension-type", title: item.source_path || "" }, t("settings.pluginSourceKind." + item.source, String(item.source))),
+    kind === "model" && React.createElement("span", { className: "wb-extension-type wb-registry-model-badge" }, t("settings.pluginModel", "Model")),
+    item.source === "core" && React.createElement("span", { className: "wb-extension-type wb-registry-core-badge" }, t("settings.pluginCore", "Core")),
+    item.locked === true && React.createElement("span", { className: "wb-extension-type wb-registry-locked-badge" }, t("settings.pluginLocked", "Locked")),
+  )
+}
+
+function RegistryMember(props) {
+  var item = props.item || {}
+  var t = props.t
+  return React.createElement("div", { className: "wb-registry-member" },
+    React.createElement("div", { className: "wb-registry-member-copy" },
+      React.createElement("strong", null, itemLabel(item)),
+      React.createElement("code", { title: item.source_path || "" }, String(item.name || item.id || "")),
+    ),
+    React.createElement("div", { className: "wb-extension-title-row" },
+      React.createElement(RegistryBadges, { item: item, t: t }),
+      React.createElement("span", {
+        className: "wb-extension-status " + (effectiveEnabled(item) ? "managed" : "disabled"),
+      },
+        React.createElement("span", { className: "wb-extension-status-dot" }),
+        effectiveEnabled(item) ? t("settings.pluginEnabled", "Enabled") : t("settings.pluginDisabled", "Disabled"),
+      ),
+    ),
+  )
+}
+
+function PluginRegistryPanel(props) {
+  var t = props.t
+  var pluginService = workbenchServices.plugins()
+  var [registry, setRegistry] = useStateSt(function () { return pluginService.snapshot() })
   var [query, setQuery] = useStateSt("")
-  var [loading, setLoading] = useStateSt(false)
   var [busy, setBusy] = useStateSt("")
   var [notice, setNotice] = useStateSt("")
   var [noticeKind, setNoticeKind] = useStateSt("info")
@@ -27,197 +76,214 @@ function CustomPluginsPanel(props) {
     }
     setNotice(message || "")
     setNoticeKind(kind || "info")
-    if (message) window.setTimeout(function () { setNotice("") }, 5000)
   }
 
-  function load() {
-    setLoading(true)
-    return settingsFetch("/api/plugins" + (projectId ? "?project_id=" + encodeURIComponent(projectId) : ""))
-      .then(readSettingsResponse)
-      .then(function (payload) { setPlugins(Array.isArray(payload.plugins) ? payload.plugins : []) })
-      .catch(function (error) { tell(error.message, "error") })
-      .finally(function () { setLoading(false) })
-  }
-
-  useEffectSt(function () { load() }, [projectId])
   useEffectSt(function () {
-    function refresh(event) {
-      var changedProject = String(event && event.detail && event.detail.projectId || "")
-      if (!changedProject || !projectId || changedProject === projectId) load()
-    }
-    window.addEventListener("cyrene:plugins-changed", refresh)
-    return function () { window.removeEventListener("cyrene:plugins-changed", refresh) }
-  }, [projectId])
+    return pluginService.subscribe(setRegistry)
+  }, [])
 
-  function installPlugin() {
-    if (!(window.cyrene && typeof window.cyrene.pickExtensionPath === "function")) {
-      tell(t("settings.pluginDesktopRequired", "Select a plugin folder in the desktop app, or use the plugin install API."), "error")
-      return
-    }
-    window.cyrene.pickExtensionPath({
-      directory: true,
-      title: t("settings.pluginInstall", "Install project plugin"),
-    }).then(function (picked) {
-      if (!picked || picked.cancelled || !picked.path) return null
-      return workbenchServices.feedback().confirmModal({
-        title: t("settings.pluginTrustTitle", "Trust and install this plugin?"),
-        body: t("settings.pluginTrustBody", "When enabled, the plugin can read project files, access the network, and start local processes. Install only code you trust.") + "\n\n" + picked.path,
-        confirmLabel: t("settings.install", "Install"),
-        danger: true,
-      }).then(function (confirmed) {
-        if (!confirmed) return null
-        setBusy("install")
-        return settingsFetch("/api/plugins/install", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: picked.path }),
-        }).then(readSettingsResponse).then(function () {
-          tell(t("settings.pluginInstalled", "Plugin installed"), "success")
-          return load()
-        })
-      })
-    }).catch(function (error) { tell(error.message, "error") })
-      .finally(function () { setBusy("") })
+  function reloadRegistry() {
+    setBusy("reload")
+    setNotice("")
+    pluginService.reload().then(function (next) {
+      if (next.applicationRestartRequired) {
+        tell(t("settings.pluginRestartRequired", "Plugin files were reloaded. Restart the application to apply Application Host changes."), "info")
+      } else {
+        tell(t("settings.pluginReloaded", "Plugin registry reloaded"), "success")
+      }
+    }).catch(function (error) {
+      tell(error && error.message || String(error), "error")
+    }).finally(function () {
+      setBusy("")
+    })
   }
 
-  function togglePlugin(item) {
-    if (!projectId) {
-      tell(t("settings.pluginProjectRequired", "Select a project first"), "error")
-      return
-    }
-    setBusy("plugin:" + item.id)
-    settingsFetch("/api/plugins/" + encodeURIComponent(item.id) + "/enabled", {
-      method: "POST",
+  function updateEnabled(kind, item, nextEnabled) {
+    if (!item || item.locked === true || busy) return
+    var id = String(kind === "pack" ? item.id : item.name || item.id || "")
+    if (!id) return
+    var payload = kind === "pack" ? { packs: {} } : { plugins: {} }
+    payload[kind === "pack" ? "packs" : "plugins"][id] = nextEnabled
+    setBusy(kind + ":" + id)
+    setNotice("")
+    settingsFetch("/api/settings/plugins", {
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projectId: projectId, enabled: !item.enabled }),
+      body: JSON.stringify(payload),
     }).then(readSettingsResponse).then(function () {
-      return workbenchServices.plugins().refresh(projectId)
-    }).then(load).catch(function (error) { tell(error.message, "error") })
-      .finally(function () { setBusy("") })
-  }
-
-  function reloadPlugin(item) {
-    if (!projectId) return
-    setBusy("plugin:" + item.id)
-    settingsFetch("/api/plugins/" + encodeURIComponent(item.id) + "/reload", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projectId: projectId }),
-    }).then(readSettingsResponse).then(function () {
-      return workbenchServices.plugins().refresh(projectId)
-    }).then(load).catch(function (error) { tell(error.message, "error") })
-      .finally(function () { setBusy("") })
-  }
-
-  function deletePlugin(item, deleteData) {
-    workbenchServices.feedback().confirmModal({
-      title: deleteData
-        ? t("settings.pluginDeleteDataTitle", "Delete plugin and data")
-        : t("settings.pluginDeleteTitle", "Delete plugin"),
-      body: deleteData
-        ? t("settings.pluginDeleteDataBody", "The plugin package, data for every project, and logs will be permanently deleted.")
-        : t("settings.pluginDeleteBody", "The plugin package will be deleted, while plugin data and logs are retained."),
-      confirmLabel: t("settings.delete", "Delete"),
-      danger: true,
-    }).then(function (confirmed) {
-      if (!confirmed) return null
-      setBusy("plugin:" + item.id)
-      return settingsFetch("/api/plugins/" + encodeURIComponent(item.id) + "?delete_data=" + (deleteData ? "true" : "false"), {
-        method: "DELETE",
-      }).then(readSettingsResponse).then(function () {
-        if (projectId) return workbenchServices.plugins().refresh(projectId)
-        return null
-      }).then(load).catch(function (error) { tell(error.message, "error") })
-        .finally(function () { setBusy("") })
+      return pluginService.refresh()
+    }).then(function () {
+      tell(t("settings.saved", "Saved"), "success")
+    }).catch(function (error) {
+      tell(error && error.message || String(error), "error")
+    }).finally(function () {
+      setBusy("")
     })
   }
 
   var normalizedQuery = query.trim().toLowerCase()
-  var filtered = plugins.filter(function (item) {
-    return !normalizedQuery || [item.name, item.id, item.description, item.version]
-      .join(" ").toLowerCase().indexOf(normalizedQuery) >= 0
+  var packs = (Array.isArray(registry.packs) ? registry.packs : []).filter(function (pack) {
+    if (!normalizedQuery) return true
+    if (searchable(pack).indexOf(normalizedQuery) >= 0) return true
+    return (Array.isArray(pack.plugins) ? pack.plugins : []).some(function (item) {
+      return searchable(item).indexOf(normalizedQuery) >= 0
+    })
   })
+  var standalone = (Array.isArray(registry.standalonePlugins) ? registry.standalonePlugins : []).filter(function (item) {
+    return !normalizedQuery || searchable(item).indexOf(normalizedQuery) >= 0
+  })
+  var failures = Array.isArray(registry.failures) ? registry.failures : []
+  var directory = registry.directory && typeof registry.directory === "object" ? registry.directory : {}
+  var attachedPacks = Array.isArray(registry.attachedApplicationPacks) ? registry.attachedApplicationPacks : []
+  var resultCount = packs.length + standalone.length
 
   return React.createElement("div", {
-    className: "settings-panel wb-extensions-page wb-custom-plugins-page",
-    id: "setting-custom-plugins",
+    className: "settings-panel wb-plugin-registry-page",
+    id: "setting-plugin-registry",
   },
     React.createElement("header", { className: "wb-extensions-header" },
       SectionTitle(
-        t("settings.customPlugins", "Custom plugins"),
-        t("settings.customPluginsHint", "Install trusted plugins and control them independently for the current project.")
+        t("settings.pluginRegistry", "Plugin Registry"),
+        t("settings.pluginRegistryHint", "Inspect Plugin packs and standalone Plugins loaded from the editable Plugin directory.")
       ),
       React.createElement("button", {
         type: "button",
         className: "wb-btn primary wb-extension-install-button",
-        disabled: busy === "install",
-        onClick: installPlugin,
-      }, busy === "install" ? t("settings.loading") : t("settings.pluginInstall", "Install project plugin"))
+        disabled: busy === "reload" || registry.reloading,
+        onClick: reloadRegistry,
+      }, busy === "reload" || registry.reloading ? t("settings.loading", "Loading…") : t("settings.pluginReload", "Reload"))
     ),
-    React.createElement("div", { className: "wb-custom-plugins-scope" },
-      React.createElement("strong", null, t("settings.pluginCurrentProject", "Current project")),
-      React.createElement("span", null, project ? String(project.name || project.id) : t("settings.pluginNoProject", "No project selected")),
-      React.createElement("small", null, t("settings.pluginScopeHint", "The switch controls whether the plugin runs and appears under Tools in this project."))
+    React.createElement("section", { className: "wb-plugin-registry-directory" },
+      React.createElement("strong", null, t("settings.pluginDirectory", "Plugin directory")),
+      React.createElement("code", { title: directory.path || "" }, directory.path || t("settings.pluginDirectoryUnavailable", "Unavailable")),
+      React.createElement("small", null,
+        [
+          t("settings.pluginDirectoryStatus." + (directory.status || (directory.exists ? "ready" : "missing")), directory.status || (directory.exists ? "ready" : "missing")),
+          directory.readable === false ? t("settings.pluginDirectoryUnreadable", "not readable") : "",
+          directory.writable === false ? t("settings.pluginDirectoryReadOnly", "read-only") : "",
+          directory.seeded === true ? t("settings.pluginDirectorySeeded", "seeded") : "",
+        ].filter(Boolean).join(" · ")
+      ),
+    ),
+    attachedPacks.length > 0 && React.createElement("div", { className: "wb-registry-attached-packs" },
+      React.createElement("strong", null, t("settings.pluginApplicationPacks", "Application Host packs")),
+      attachedPacks.map(function (item, index) {
+        var label = typeof item === "string" ? item : itemLabel(item)
+        return React.createElement("span", { key: label + ":" + index, className: "wb-extension-type" }, label)
+      }),
     ),
     React.createElement("div", { className: "wb-extension-filter" },
       React.createElement("input", {
         className: "wb-input",
         value: query,
         onChange: function (event) { setQuery(event.target.value) },
-        placeholder: t("settings.extensionFilter"),
-        "aria-label": t("settings.extensionFilter"),
+        placeholder: t("settings.pluginFilter", "Filter Plugins"),
+        "aria-label": t("settings.pluginFilter", "Filter Plugins"),
       }),
-      React.createElement("span", null, t("settings.extensionCount", { n: filtered.length }))
+      React.createElement("span", null, t("settings.pluginCount", { n: resultCount }, String(resultCount) + " items"))
     ),
-    notice && React.createElement("div", {
-      className: "wb-extension-notice " + noticeKind,
-      role: noticeKind === "error" ? "alert" : "status",
-    }, notice),
-    React.createElement("div", {
-      className: "wb-extension-list wb-project-plugin-list",
-      "aria-busy": loading ? "true" : "false",
-    },
-      loading && !filtered.length && React.createElement("div", { className: "wb-extensions-empty" }, t("settings.loading")),
-      !loading && !filtered.length && React.createElement("div", { className: "wb-extensions-empty" }, t("settings.pluginEmpty", "No project plugins installed")),
-      filtered.map(function (item) {
-        var itemBusy = busy === "plugin:" + item.id
-        return React.createElement("article", { key: item.id, className: "wb-extension-card wb-project-plugin-card" },
+    (notice || registry.error) && React.createElement("div", {
+      className: "wb-extension-notice " + (registry.error ? "error" : noticeKind),
+      role: registry.error || noticeKind === "error" ? "alert" : "status",
+    }, registry.error || notice),
+    React.createElement("section", { className: "wb-registry-section", "aria-busy": registry.loading ? "true" : "false" },
+      React.createElement("div", { className: "wb-registry-section-heading" },
+        React.createElement("strong", null, t("settings.pluginPacks", "Plugin packs")),
+        React.createElement("span", null, String(packs.length)),
+      ),
+      registry.loading && !registry.loaded && React.createElement("div", { className: "wb-extensions-empty" }, t("settings.loading", "Loading…")),
+      !registry.loading && !packs.length && React.createElement("div", { className: "wb-extensions-empty" }, t("settings.pluginPacksEmpty", "No plugin packs found")),
+      React.createElement("div", { className: "wb-extension-list" }, packs.map(function (pack) {
+        var packId = String(pack.id || "")
+        var packBusy = busy === "pack:" + packId
+        var members = Array.isArray(pack.plugins) ? pack.plugins : []
+        return React.createElement("article", { key: packId, className: "wb-extension-card wb-registry-pack-card" },
           React.createElement("div", { className: "wb-extension-card-main" },
             React.createElement("span", { className: "wb-extension-glyph extension-agent", "aria-hidden": "true" },
-              React.createElement("span", { className: "wb-extension-glyph-text" }, String(item.name || item.id || "P").slice(0, 1).toUpperCase())
+              React.createElement("span", { className: "wb-extension-glyph-text" }, itemLabel(pack).slice(0, 1).toUpperCase())
             ),
             React.createElement("div", { className: "wb-extension-copy" },
               React.createElement("div", { className: "wb-extension-title-row" },
-                React.createElement("strong", null, item.name || item.id),
-                React.createElement("span", { className: "wb-extension-type" }, item.version || "0.0.0")
+                React.createElement("strong", null, itemLabel(pack)),
+                React.createElement(RegistryBadges, { item: pack, t: t }),
               ),
-              React.createElement("span", { className: "wb-extension-description" }, item.description || item.id),
+              React.createElement("span", { className: "wb-extension-description" }, pack.description || packId),
               React.createElement("div", { className: "wb-extension-meta" },
-                React.createElement("span", { className: "wb-extension-status " + (item.state === "load-error" ? "warning" : item.enabled ? "managed" : "disabled") },
+                React.createElement("span", { className: "wb-extension-status " + (effectiveEnabled(pack) ? "managed" : "disabled") },
                   React.createElement("span", { className: "wb-extension-status-dot" }),
-                  item.state === "load-error"
-                    ? t("settings.pluginLoadError", "Failed to load")
-                    : item.enabled
-                      ? t("settings.pluginEnabled", "Enabled for this project")
-                      : t("settings.pluginDisabled", "Disabled for this project")
+                  effectiveEnabled(pack) ? t("settings.pluginEnabled", "Enabled") : t("settings.pluginDisabled", "Disabled")
                 ),
-                React.createElement("code", null, item.id)
+                React.createElement("code", { title: pack.source_path || "" }, packId),
+                React.createElement("span", null, t("settings.pluginMemberCount", { n: members.length }, String(members.length) + " plugins")),
               ),
-              item.error && React.createElement("small", { className: "workbench-error" }, item.error)
             ),
             React.createElement("div", { className: "wb-extension-actions" },
-              Toggle(item.enabled === true, function () { togglePlugin(item) }, itemBusy || !projectId, item.name || item.id)
-            )
+              Toggle(configuredEnabled(pack), function () {
+                updateEnabled("pack", pack, !configuredEnabled(pack))
+              }, packBusy || pack.locked === true, itemLabel(pack))
+            ),
           ),
-          React.createElement("div", { className: "wb-project-plugin-actions" },
-            React.createElement("button", { type: "button", className: "wb-btn", disabled: itemBusy || !item.enabled || !projectId, onClick: function () { reloadPlugin(item) } }, t("settings.pluginReload", "Reload")),
-            React.createElement("button", { type: "button", className: "wb-btn danger", disabled: itemBusy, onClick: function () { deletePlugin(item, false) } }, t("settings.pluginDeleteKeepData", "Delete and retain data")),
-            React.createElement("button", { type: "button", className: "wb-btn danger", disabled: itemBusy, onClick: function () { deletePlugin(item, true) } }, t("settings.pluginDeleteWithData", "Delete plugin and data"))
-          )
+          members.length > 0 && React.createElement("div", { className: "wb-registry-pack-members" }, members.map(function (item) {
+            return React.createElement(RegistryMember, { key: item.name || item.id, item: item, t: t })
+          })),
         )
-      })
-    )
+      }))
+    ),
+    React.createElement("section", { className: "wb-registry-section" },
+      React.createElement("div", { className: "wb-registry-section-heading" },
+        React.createElement("strong", null, t("settings.pluginStandalone", "Standalone Plugins")),
+        React.createElement("span", null, String(standalone.length)),
+      ),
+      !standalone.length && React.createElement("div", { className: "wb-extensions-empty" }, t("settings.pluginStandaloneEmpty", "No standalone Plugins found")),
+      React.createElement("div", { className: "wb-extension-list" }, standalone.map(function (item) {
+        var id = String(item.name || item.id || "")
+        var itemBusy = busy === "plugin:" + id
+        return React.createElement("article", { key: id, className: "wb-extension-card" },
+          React.createElement("div", { className: "wb-extension-card-main" },
+            React.createElement("span", { className: "wb-extension-glyph", "aria-hidden": "true" },
+              React.createElement("span", { className: "wb-extension-glyph-text" }, itemLabel(item).slice(0, 1).toUpperCase())
+            ),
+            React.createElement("div", { className: "wb-extension-copy" },
+              React.createElement("div", { className: "wb-extension-title-row" },
+                React.createElement("strong", null, itemLabel(item)),
+                React.createElement(RegistryBadges, { item: item, t: t }),
+              ),
+              React.createElement("span", { className: "wb-extension-description" }, item.description || item.desc || id),
+              React.createElement("div", { className: "wb-extension-meta" },
+                React.createElement("span", { className: "wb-extension-status " + (effectiveEnabled(item) ? "managed" : "disabled") },
+                  React.createElement("span", { className: "wb-extension-status-dot" }),
+                  effectiveEnabled(item) ? t("settings.pluginEnabled", "Enabled") : t("settings.pluginDisabled", "Disabled")
+                ),
+                React.createElement("code", { title: item.source_path || "" }, id),
+              ),
+            ),
+            React.createElement("div", { className: "wb-extension-actions" },
+              Toggle(configuredEnabled(item), function () {
+                updateEnabled("plugin", item, !configuredEnabled(item))
+              }, itemBusy || item.locked === true, itemLabel(item))
+            ),
+          ),
+        )
+      }))
+    ),
+    failures.length > 0 && React.createElement("section", { className: "wb-registry-section wb-registry-failures" },
+      React.createElement("div", { className: "wb-registry-section-heading" },
+        React.createElement("strong", null, t("settings.pluginLoadFailures", "Load failures")),
+        React.createElement("span", null, String(failures.length)),
+      ),
+      React.createElement("ul", null, failures.map(function (failure, index) {
+        return React.createElement("li", { key: String(failure.path || failure.pack_id || index) },
+          React.createElement("div", { className: "wb-registry-failure-head" },
+            React.createElement("code", null, failure.pack_id || failure.path || t("settings.pluginUnknown", "unknown")),
+            React.createElement("b", null, t("settings.pluginFailureStage." + failure.stage, failure.stage || t("settings.pluginLoadError", "load error"))),
+          ),
+          failure.source && React.createElement("small", null, t("settings.pluginSource", { source: failure.source }, "Source: {source}")),
+          failure.path && React.createElement("small", null, failure.path),
+          React.createElement("pre", null, String(failure.error || t("settings.pluginLoadError", "Failed to load"))),
+        )
+      }))
+    ),
   )
 }
 
-export { CustomPluginsPanel }
+export { PluginRegistryPanel }

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from typing import Any
+from agent.plugin import PluginContext
 
-from cyrene.tooling.runtime_api import json_result
+from agent.plugin.native_runtime import json_result
 from cyrene.workbench import app_services
-from cyrene.workbench.app_control import DELEGATION_OPERATIONS_SCHEMA, audit, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
+from cyrene.workbench.app_control import audit, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
 
 TOOL_NAME = "CyreneProjectControl"
 TOOL_DEF = {"type": "function", "function": {
@@ -21,8 +22,6 @@ TOOL_DEF = {"type": "function", "function": {
             "changes": {"type": "object", "maxProperties": 8},
             "reason": {"type": "string", "maxLength": 500},
             "idempotency_key": {"type": "string", "maxLength": 160},
-            "delegation_quote": {"type": "string", "maxLength": 500},
-            "delegation_operations": DELEGATION_OPERATIONS_SCHEMA,
         },
         "required": ["operation"],
         "additionalProperties": False,
@@ -31,7 +30,7 @@ TOOL_DEF = {"type": "function", "function": {
 TOOL_METADATA = {"read_only": False, "resource_keys": ("cyrene:projects",), "requires_order": True}
 
 
-async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify: Any) -> str:
+async def handler(args: dict[str, Any], _context: PluginContext) -> str:
     operation = str(args.get("operation") or "")
     if operation == "list":
         return json_result(envelope("success", "cyrene.project.manage", "Projects listed.", projects=app_services.list_projects()))
@@ -42,7 +41,11 @@ async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str,
             return json_result(envelope("error", "cyrene.project.manage", str(exc), error_code="project_error"))
 
     op_id = "cyrene.project.delete" if operation == "delete" else "cyrene.project.manage"
-    op_args = {key: value for key, value in args.items() if key not in {"reason", "idempotency_key", "delegation_quote", "delegation_operations"}}
+    op_args = {
+        key: value
+        for key, value in args.items()
+        if key not in {"reason", "idempotency_key"}
+    }
     key = str(args.get("idempotency_key") or "")
     if not key:
         return json_result(envelope("error", op_id, "idempotency_key is required.", error_code="idempotency_required"))
@@ -53,8 +56,6 @@ async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str,
     approval = await authorize(
         op_id, op_args,
         reason=str(args.get("reason") or ""),
-        delegation_quote=str(args.get("delegation_quote") or ""),
-        delegation_operations=args.get("delegation_operations"),
     )
     if approval:
         return approval

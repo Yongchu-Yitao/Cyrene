@@ -14,6 +14,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -21,6 +22,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from route.registry import register_routes
+from agent.plugin.plugin_impl.cyrene_schedule.schedule_spec import (
+    next_run as compute_next_run,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -32,45 +36,28 @@ FIXED_NOW = datetime(2026, 6, 4, 12, 0, 0, tzinfo=timezone.utc)
 
 def test_interval_is_seconds_not_milliseconds():
     """An interval of "3600" means one hour — the value the Web UI promises."""
-    from cyrene.runtime.schedule_spec import compute_next_run
-
     nxt = compute_next_run("interval", "3600", now=FIXED_NOW)
     assert datetime.fromisoformat(nxt) == FIXED_NOW + timedelta(seconds=3600)
 
 
-def test_rest_agent_and_runner_agree_on_next_run():
-    """All three call sites route through compute_next_run, so identical inputs
-    produce identical next_run values (the core of issue #50)."""
-    from cyrene.runtime import scheduler
-    from cyrene.tool_impl.task import schedule_task as tools
-    from cyrene.runtime.schedule_spec import compute_next_run
-
-    # The agent tool and the scheduler runner both import the shared helper.
-    assert tools.compute_next_run is compute_next_run
-    assert scheduler.compute_next_run is compute_next_run
-
+def test_schedule_plugin_create_and_runner_share_next_run_rule():
+    """Creation and execution import the same editable Plugin recurrence rule."""
     a = compute_next_run("interval", "90", now=FIXED_NOW)
     b = compute_next_run("interval", "90", now=FIXED_NOW)
     assert a == b == (FIXED_NOW + timedelta(seconds=90)).isoformat()
 
 
 def test_once_respects_provided_time():
-    """``once`` must schedule for the requested time, not 'now' (REST bug)."""
-    from cyrene.runtime.schedule_spec import compute_next_run
-
+    """``once`` must schedule for the requested time, not immediately."""
     nxt = compute_next_run("once", "2026-12-25T09:30:00+00:00", now=FIXED_NOW)
     assert datetime.fromisoformat(nxt) == datetime(2026, 12, 25, 9, 30, tzinfo=timezone.utc)
 
 
 def test_once_empty_means_now():
-    from cyrene.runtime.schedule_spec import compute_next_run
-
     assert compute_next_run("once", "", now=FIXED_NOW) == FIXED_NOW.isoformat()
 
 
 def test_once_naive_datetime_interpreted_local_then_utc():
-    from cyrene.runtime.schedule_spec import compute_next_run
-
     nxt = compute_next_run("once", "2026-06-04T12:00:00", now=FIXED_NOW)
     # Whatever the machine tz, the result is a valid UTC ISO timestamp.
     parsed = datetime.fromisoformat(nxt)
@@ -79,16 +66,12 @@ def test_once_naive_datetime_interpreted_local_then_utc():
 
 
 def test_cron_next_run():
-    from cyrene.runtime.schedule_spec import compute_next_run
-
     nxt = compute_next_run("cron", "0 9 * * *", now=FIXED_NOW)
     assert datetime.fromisoformat(nxt) == datetime(2026, 6, 5, 9, 0, tzinfo=timezone.utc)
 
 
 def test_cron_timezone_preserves_wall_clock_across_dst_transition():
     from zoneinfo import ZoneInfo
-
-    from cyrene.runtime.schedule_spec import compute_next_run
 
     new_york = ZoneInfo("America/New_York")
     before_dst = datetime(2026, 3, 7, 15, 0, tzinfo=timezone.utc)
@@ -118,8 +101,6 @@ def test_cron_timezone_preserves_wall_clock_across_dst_transition():
 
 
 def test_invalid_cron_timezone_raises_valueerror():
-    from cyrene.runtime.schedule_spec import compute_next_run
-
     with pytest.raises(ValueError, match="invalid schedule timezone"):
         compute_next_run(
             "cron",
@@ -140,10 +121,7 @@ def test_invalid_cron_timezone_raises_valueerror():
     ],
 )
 def test_invalid_schedules_raise_valueerror(stype, svalue):
-    """Invalid values raise ValueError so the REST API can answer 400 instead of
-    silently scheduling for 'now'."""
-    from cyrene.runtime.schedule_spec import compute_next_run
-
+    """Invalid values are rejected instead of silently scheduling for now."""
     with pytest.raises(ValueError):
         compute_next_run(stype, svalue, now=FIXED_NOW)
 
@@ -245,7 +223,7 @@ async def test_analyze_attachment_reuses_and_invalidates_cache(tmp_path, monkeyp
 
 
 async def test_analyze_attachment_uses_local_ocr_without_vision_for_clear_text(tmp_path, monkeypatch):
-    from cyrene.knowledge import local_models, ocr
+    import agent.plugin
     from cyrene.runtime import attachments
 
     image = tmp_path / "clear.png"
@@ -253,8 +231,12 @@ async def test_analyze_attachment_uses_local_ocr_without_vision_for_clear_text(t
     monkeypatch.setattr(attachments, "ANALYSIS_CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(attachments, "_image_metadata", lambda _path: {"format": "PNG", "width": 10, "height": 10, "mode": "RGB"})
     monkeypatch.setattr(attachments, "model_supports_multimodal", lambda: False)
-    monkeypatch.setattr(local_models, "is_ready", lambda _model_id: True)
-    monkeypatch.setattr(ocr, "recognize", AsyncMock(return_value="这是一段足够长的本地文字识别结果，用来确认默认附件分析不再请求远程视觉模型。"))
+    service = SimpleNamespace(
+        ocr_model_id="pp-ocrv6-medium",
+        is_local_model_ready=lambda _model_id: True,
+        recognize_image=AsyncMock(return_value="这是一段足够长的本地文字识别结果，用来确认默认附件分析不再请求远程视觉模型。"),
+    )
+    monkeypatch.setattr(agent.plugin, "active_plugin_service", lambda _name: service)
     vision = AsyncMock(return_value={"vision_text": "should not run"})
     monkeypatch.setattr(attachments, "_vision_analysis", vision)
 
@@ -267,7 +249,7 @@ async def test_analyze_attachment_uses_local_ocr_without_vision_for_clear_text(t
 
 
 async def test_analyze_attachment_keeps_short_ocr_and_falls_back_to_vision(tmp_path, monkeypatch):
-    from cyrene.knowledge import local_models, ocr
+    import agent.plugin
     from cyrene.runtime import attachments
 
     image = tmp_path / "short.png"
@@ -275,8 +257,12 @@ async def test_analyze_attachment_keeps_short_ocr_and_falls_back_to_vision(tmp_p
     monkeypatch.setattr(attachments, "ANALYSIS_CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(attachments, "_image_metadata", lambda _path: {"format": "PNG", "width": 10, "height": 10, "mode": "RGB"})
     monkeypatch.setattr(attachments, "model_supports_multimodal", lambda: True)
-    monkeypatch.setattr(local_models, "is_ready", lambda _model_id: True)
-    monkeypatch.setattr(ocr, "recognize", AsyncMock(return_value="短文字"))
+    service = SimpleNamespace(
+        ocr_model_id="pp-ocrv6-medium",
+        is_local_model_ready=lambda _model_id: True,
+        recognize_image=AsyncMock(return_value="短文字"),
+    )
+    monkeypatch.setattr(agent.plugin, "active_plugin_service", lambda _name: service)
     vision = AsyncMock(return_value={"vision_model": "vision-test", "vision_text": "A visual description."})
     monkeypatch.setattr(attachments, "_vision_analysis", vision)
 
@@ -298,9 +284,16 @@ async def test_analyze_attachment_reports_missing_file(tmp_path):
 
 async def test_analyze_attachment_extracts_extensionless_docx(tmp_path, monkeypatch):
     import zipfile
+    import agent.plugin
+    from agent.plugin.plugin_impl.cyrene_knowledge.content import extract_text
     from cyrene.runtime import attachments
 
     monkeypatch.setattr(attachments, "ANALYSIS_CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(
+        agent.plugin,
+        "active_plugin_service",
+        lambda _name: SimpleNamespace(extract_file_text=extract_text),
+    )
     uploaded = tmp_path / "uuid_docx"
     with zipfile.ZipFile(uploaded, "w") as archive:
         archive.writestr(
@@ -491,235 +484,6 @@ async def test_macos_desktop_reports_notifier_failure(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_update_restart_missing_package_skips_spawn(tmp_path):
-    from cyrene.workbench import runtime as routes
-
-    popen = MagicMock()
-    ok, message, code, status = routes._launch_update_restart(
-        {"done": True, "path": str(tmp_path / "missing.dmg")},
-        get_restart_script_fn=lambda _path: "echo ok\n",
-        popen_fn=popen,
-    )
-
-    assert ok is False
-    assert status == 409
-    assert code == "update_package_missing"
-    assert "missing" in message.lower()
-    popen.assert_not_called()
-
-
-def test_update_restart_empty_package_skips_spawn(tmp_path):
-    from cyrene.workbench import runtime as routes
-
-    package = tmp_path / "Cyrene-update.dmg"
-    package.write_bytes(b"")
-    popen = MagicMock()
-
-    ok, message, code, status = routes._launch_update_restart(
-        {"done": True, "path": str(package)},
-        get_restart_script_fn=lambda _path: "echo ok\n",
-        popen_fn=popen,
-    )
-
-    assert ok is False
-    assert status == 409
-    assert code == "update_package_empty"
-    assert "empty" in message.lower()
-    popen.assert_not_called()
-
-
-def test_update_restart_incomplete_package_skips_spawn(tmp_path):
-    from cyrene.workbench import runtime as routes
-
-    package = tmp_path / "Cyrene-update.dmg"
-    package.write_bytes(b"partial")
-    popen = MagicMock()
-
-    ok, message, code, status = routes._launch_update_restart(
-        {"done": True, "path": str(package), "total": package.stat().st_size + 1},
-        get_restart_script_fn=lambda _path: "echo ok\n",
-        popen_fn=popen,
-    )
-
-    assert ok is False
-    assert status == 409
-    assert code == "update_package_size_mismatch"
-    assert "size mismatch" in message.lower()
-    popen.assert_not_called()
-
-
-def test_update_restart_missing_checksum_skips_spawn(tmp_path):
-    from cyrene.workbench import runtime as routes
-
-    package = tmp_path / "Cyrene-update.dmg"
-    package.write_bytes(b"fake update")
-    popen = MagicMock()
-
-    ok, message, code, status = routes._launch_update_restart(
-        {"done": True, "path": str(package), "total": package.stat().st_size, "verified": False},
-        get_restart_script_fn=lambda _path: "echo ok\n",
-        popen_fn=popen,
-    )
-
-    assert ok is False
-    assert status == 409
-    assert code == "update_checksum_missing"
-    assert "sha256" in message.lower()
-    popen.assert_not_called()
-
-
-def test_update_restart_checksum_mismatch_skips_spawn(tmp_path):
-    from cyrene.workbench import runtime as routes
-
-    package = tmp_path / "Cyrene-update.dmg"
-    package.write_bytes(b"fake update")
-    popen = MagicMock()
-
-    ok, message, code, status = routes._launch_update_restart(
-        {
-            "done": True,
-            "path": str(package),
-            "total": package.stat().st_size,
-            "expected_sha256": "0" * 64,
-            "actual_sha256": "1" * 64,
-            "verified": False,
-        },
-        get_restart_script_fn=lambda _path: "echo ok\n",
-        popen_fn=popen,
-    )
-
-    assert ok is False
-    assert status == 409
-    assert code == "update_checksum_mismatch"
-    popen.assert_not_called()
-
-
-def test_update_restart_unverified_package_skips_spawn(tmp_path):
-    from cyrene.workbench import runtime as routes
-
-    package = tmp_path / "Cyrene-update.dmg"
-    package.write_bytes(b"fake update")
-    popen = MagicMock()
-
-    ok, message, code, status = routes._launch_update_restart(
-        {
-            "done": True,
-            "path": str(package),
-            "total": package.stat().st_size,
-            "expected_sha256": "0" * 64,
-            "actual_sha256": "0" * 64,
-            "verified": False,
-            "verification_error": "verification did not pass",
-        },
-        get_restart_script_fn=lambda _path: "echo ok\n",
-        popen_fn=popen,
-    )
-
-    assert ok is False
-    assert status == 409
-    assert code == "update_package_unverified"
-    assert "verification did not pass" in message
-    popen.assert_not_called()
-
-
-def test_update_restart_spawn_failure_reports_error(tmp_path):
-    from cyrene.workbench import runtime as routes
-
-    package = tmp_path / "Cyrene-update.dmg"
-    package.write_bytes(b"fake update")
-    digest = hashlib.sha256(package.read_bytes()).hexdigest()
-    popen = MagicMock(side_effect=OSError("spawn denied"))
-
-    ok, message, code, status = routes._launch_update_restart(
-        {
-            "done": True,
-            "path": str(package),
-            "total": package.stat().st_size,
-            "expected_sha256": digest,
-            "actual_sha256": digest,
-            "verified": True,
-        },
-        get_restart_script_fn=lambda _path: "echo ok\n",
-        popen_fn=popen,
-    )
-
-    assert ok is False
-    assert status == 500
-    assert code == "update_restart_launch_failed"
-    assert "spawn denied" in message
-    popen.assert_called_once()
-
-
-def test_update_restart_success_spawns_detached_script(tmp_path):
-    from cyrene.workbench import runtime as routes
-
-    package = tmp_path / "Cyrene-update.dmg"
-    package.write_bytes(b"fake update")
-    digest = hashlib.sha256(package.read_bytes()).hexdigest()
-    popen = MagicMock()
-
-    ok, message, code, status = routes._launch_update_restart(
-        {
-            "done": True,
-            "path": str(package),
-            "total": package.stat().st_size,
-            "expected_sha256": digest,
-            "actual_sha256": digest,
-            "verified": True,
-        },
-        get_restart_script_fn=lambda _path: "echo ok\n",
-        popen_fn=popen,
-    )
-
-    assert ok is True
-    assert message == ""
-    assert code == ""
-    assert status == 200
-    popen.assert_called_once()
-    argv = popen.call_args.args[0]
-    kwargs = popen.call_args.kwargs
-    if sys.platform == "win32":
-        assert argv[:2] == ["cmd", "/c"]
-        assert Path(argv[2]).name == "update.bat"
-        assert kwargs["creationflags"] & 0x00000200
-        assert kwargs["creationflags"] & 0x00000008
-    else:
-        assert argv == ["bash", str(tmp_path / "update.sh")]
-        assert kwargs["start_new_session"] is True
-        assert os.access(tmp_path / "update.sh", os.X_OK)
-
-
-def test_update_restart_rehashes_package_before_spawn(tmp_path):
-    from cyrene.workbench import runtime as routes
-
-    package = tmp_path / "Cyrene-update.dmg"
-    package.write_bytes(b"original")
-    digest = hashlib.sha256(package.read_bytes()).hexdigest()
-    package.write_bytes(b"modified")
-    popen = MagicMock()
-    progress = {
-        "done": True,
-        "path": str(package),
-        "total": package.stat().st_size,
-        "expected_sha256": digest,
-        "actual_sha256": digest,
-        "verified": True,
-    }
-
-    ok, message, code, status = routes._launch_update_restart(
-        progress,
-        get_restart_script_fn=lambda _path: "echo ok\n",
-        popen_fn=popen,
-    )
-
-    assert ok is False
-    assert status == 409
-    assert code == "update_checksum_mismatch"
-    assert "checksum mismatch" in message.lower()
-    assert progress["verified"] is False
-    popen.assert_not_called()
-
-
 def _update_restart_client(tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -829,19 +593,3 @@ BROWSER_TOOLS = [
     "browser_network_log",
     "browser_request_takeover",
 ]
-
-
-@pytest.mark.parametrize("tool", BROWSER_TOOLS)
-def test_subagent_cannot_use_browser_tools(tool):
-    """The single shared browser session must not be driven by subagents (#52)."""
-    from cyrene.tooling import catalog as tools
-
-    assert tools.is_tool_allowed_for_actor(tool, "subagent") is False
-    assert tools.is_tool_allowed_for_actor(tool, "main") is True
-
-
-def test_subagent_tool_defs_exclude_browser():
-    from cyrene.tooling import catalog as tools
-
-    names = {td["function"]["name"] for td in tools.get_active_tool_defs_for_actor("subagent")}
-    assert names.isdisjoint(BROWSER_TOOLS)

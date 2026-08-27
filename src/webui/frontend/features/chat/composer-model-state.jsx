@@ -87,11 +87,8 @@ function useWbcComposerConfiguredModels(chatId, chat, managed) {
     if (managed) return undefined
     var cancelled = false
     function loadConfiguredModels() {
-      var projectId = String(chat && chat.projectId || "")
-      return workbenchServices.api().json("/api/settings/models" + (projectId ? "?project_id=" + encodeURIComponent(projectId) : ""), { toast: false }).then(function (payload) {
-        var options = Array.isArray(payload.selectable_models)
-          ? payload.selectable_models
-          : (Array.isArray(payload.models) ? payload.models : [])
+      return workbenchServices.api().json("/api/settings/model-config", { toast: false }).then(function (payload) {
+        var options = Array.isArray(payload.selectable_models) ? payload.selectable_models : []
         var needsCodexCatalog = options.some(function (item) { return String(item.provider || "") === "codex_oauth" })
         var catalogRequest = needsCodexCatalog
           ? workbenchServices.api().json("/api/settings/openai-oauth", { toast: false }).catch(function () { return {} })
@@ -111,7 +108,7 @@ function useWbcComposerConfiguredModels(chatId, chat, managed) {
             }) : item
           })
           setModels(options)
-          var chatSelection = String(chat && (chat.modelSelectionId || chat.model || chat.lastModel) || "").trim()
+          var chatSelection = String(chat && (chat.modelSelectionId || chat.model) || "").trim()
           var selected = options.find(function (item) {
             return chatSelection && [String(item.id || ""), String(item.model || ""), String(item.name || "")].indexOf(chatSelection) >= 0
           }) || options.find(function (item) {
@@ -129,11 +126,7 @@ function useWbcComposerConfiguredModels(chatId, chat, managed) {
         if (!cancelled) setModels([])
       })
     }
-    function onChanged(event) {
-      var changedProjectId = String(event && event.detail && event.detail.projectId || "")
-      var currentProjectId = String(chat && chat.projectId || "")
-      if (!changedProjectId || !currentProjectId || changedProjectId === currentProjectId) loadConfiguredModels()
-    }
+    function onChanged() { loadConfiguredModels() }
     loadConfiguredModels()
     window.addEventListener("cyrene:model-configuration-changed", onChanged)
     window.addEventListener("cyrene:plugins-changed", onChanged)

@@ -7,7 +7,7 @@ import pytest
 
 
 def test_requested_terminal_title_preserves_user_supplied_name() -> None:
-    from cyrene.tooling.backends.terminals import requested_terminal_title
+    from agent.plugin.plugin_impl.cyrene_code.services import requested_terminal_title
 
     assert requested_terminal_title("Explicit", "请新建一个名为 Ignored 的终端") == "Explicit"
     assert requested_terminal_title("", "请新建一个名为 E2E-Alpha-Dev 的持久终端") == "E2E-Alpha-Dev"
@@ -16,31 +16,21 @@ def test_requested_terminal_title_preserves_user_supplied_name() -> None:
     assert requested_terminal_title("", "请新建一个持久终端") == ""
 
 
-def test_terminal_operation_intent_grants_read_and_write_but_not_show() -> None:
-    from cyrene.tooling.backends.terminals import _explicit_access
-
-    request = "去 Terminal 5 的 SSH 里面安装 Git"
-    assert _explicit_access(request, "read") is True
-    assert _explicit_access(request, "write") is True
-    assert _explicit_access(request, "show") is False
-
-    visible_request = "你来查询一下系统信息，用左侧这个终端"
-    assert _explicit_access(visible_request, "read") is True
-    assert _explicit_access(visible_request, "write") is True
-    assert _explicit_access(visible_request, "show") is False
-
-
 @pytest.mark.asyncio
 async def test_visible_split_terminal_is_discoverable_without_conversation_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from types import SimpleNamespace
+    from agent.plugin import PluginContext
+    from agent.plugin.plugin_impl.cyrene_code import services as terminals
 
-    from cyrene.tooling.backends import terminals
-
-    context = SimpleNamespace(
-        ui_instance_id="surface-1",
-        user_request_text="用左侧这个终端查询系统信息",
+    context = PluginContext(
+        data={
+            "run_context": {
+                "project_id": "project-1",
+                "session_id": "chat-1",
+                "ui_instance_id": "surface-1",
+            }
+        },
     )
 
     async def fake_request(ui_instance_id, method, args, *, timeout):
@@ -69,14 +59,12 @@ async def test_visible_split_terminal_is_discoverable_without_conversation_bindi
                 "status": "running",
             }]}
 
-    monkeypatch.setattr(
-        terminals, "_context_scope", lambda **_kwargs: (context, "project-1", "chat-1")
-    )
     monkeypatch.setattr("cyrene.workbench.ui_surface.request", fake_request)
-    monkeypatch.setattr(terminals, "get_terminal_daemon_client", lambda: FakeClient())
+    service = terminals.CyreneTerminalService()
+    monkeypatch.setattr(service, "_client", lambda: FakeClient())
 
-    visible = await terminals.list_visible_terminals()
-    resolved = await terminals.resolve_terminal(access="read")
+    visible = await service.list_visible(context)
+    resolved = await service.resolve(context)
 
     assert visible[0]["id"] == "term_visible"
     assert visible[0]["visible"] is True
@@ -85,44 +73,12 @@ async def test_visible_split_terminal_is_discoverable_without_conversation_bindi
 
 
 @pytest.mark.asyncio
-async def test_visible_terminal_context_identifies_split_and_requires_terminal_tools(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from cyrene.tooling.backends import terminals
-
-    async def one_visible_terminal():
-        return [{
-            "id": "term_remote",
-            "title": "Terminal 1",
-            "displayTitle": "syw@ubuntu",
-            "visibleSide": "right",
-            "status": "running",
-            "shellTitle": "syw@ubuntu: ~",
-            "connectionKind": "ssh",
-            "sshTarget": "syw@100.100.10.2",
-            "remoteCwd": "/home/syw",
-            "cwd": "/Users/syw/Documents/playground/Cyrene",
-        }]
-
-    monkeypatch.setattr(terminals, "list_visible_terminals", one_visible_terminal)
-
-    block = await terminals.visible_terminal_context_block()
-
-    assert "<visible_terminal_context>" in block
-    assert "id=term_remote" in block
-    assert "title=syw@ubuntu" in block
-    assert "side=right" in block
-    assert "ssh_target=syw@100.100.10.2" in block
-    assert "remote_cwd=/home/syw" in block
-    assert "code.shell.read" in block
-    assert "Do not use Bash" in block
-
-
-@pytest.mark.asyncio
 async def test_list_shells_includes_visible_unbound_terminal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from cyrene.tool_impl.code import list_shells
+    from agent.plugin import PluginContext
+    from agent.plugin.plugin_impl.cyrene_code import list_shells
+    from agent.plugin.plugin_impl.cyrene_code.services import CyreneTerminalService
 
     async def no_bound_terminals(*, include_exited):
         assert include_exited is True
@@ -137,17 +93,13 @@ async def test_list_shells_includes_visible_unbound_terminal(
             "visibleSide": "left",
         }]
 
-    monkeypatch.setattr(
-        "cyrene.tooling.backends.terminals.list_agent_terminals",
-        no_bound_terminals,
-    )
-    monkeypatch.setattr(
-        "cyrene.tooling.backends.terminals.list_visible_terminals",
-        one_visible_terminal,
-    )
+    service = CyreneTerminalService()
+    monkeypatch.setattr(service, "list_owned", lambda _context, *, include_exited: no_bound_terminals(include_exited=include_exited))
+    monkeypatch.setattr(service, "list_visible", lambda _context: one_visible_terminal())
+    context = PluginContext(services={"terminals": service})
 
     result = json.loads(
-        await list_shells._tool_list_shells({}, None, 0, "", None)
+        await list_shells._tool_list_shells({}, context)
     )
 
     assert result == [{
@@ -171,20 +123,21 @@ def test_terminal_input_tools_trigger_the_shared_control_animation() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    send = (root / "src/cyrene/tool_impl/code/send_shell.py").read_text(encoding="utf-8")
-    interrupt = (root / "src/cyrene/tool_impl/code/interrupt_shell.py").read_text(
+    source = root / "src/agent/plugin/plugin_impl/cyrene_code"
+    send = (source / "send_shell.py").read_text(encoding="utf-8")
+    interrupt = (source / "interrupt_shell.py").read_text(
         encoding="utf-8"
     )
 
-    assert 'await animate_terminal_control(str(terminal.get("id") or ""), "input")' in send
-    assert 'await animate_terminal_control(str(terminal.get("id") or ""), "interrupt")' in interrupt
+    assert 'await terminals.animate(context, str(terminal.get("id") or ""), "input")' in send
+    assert 'await terminals.animate(context, str(terminal.get("id") or ""), "interrupt")' in interrupt
 
 
 @pytest.mark.asyncio
 async def test_current_terminal_requires_user_choice_when_two_panes_are_visible(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from cyrene.tooling.backends import terminals
+    from agent.plugin.plugin_impl.cyrene_code import services as terminals
 
     async def fake_request(_ui_instance_id, method, _args, *, timeout):
         assert method == "terminal.current"
@@ -199,8 +152,9 @@ async def test_current_terminal_requires_user_choice_when_two_panes_are_visible(
         }
 
     monkeypatch.setattr("cyrene.workbench.ui_surface.request", fake_request)
-    with pytest.raises(ValueError, match="Ask the user which terminal") as exc:
-        await terminals._surface_current_terminal("surface-1")
+    service = terminals.CyreneTerminalService()
+    with pytest.raises(ValueError, match="Provide a terminal name") as exc:
+        await service._current_terminal_id("surface-1")
     assert "API (term_a)" in str(exc.value)
     assert "Worker (term_b)" in str(exc.value)
 
@@ -209,8 +163,8 @@ async def test_current_terminal_requires_user_choice_when_two_panes_are_visible(
 async def test_terminal_control_animation_is_best_effort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from cyrene.agent.context import bind_run_context
-    from cyrene.tooling.backends import terminals
+    from agent.plugin import PluginContext
+    from agent.plugin.plugin_impl.cyrene_code import services as terminals
 
     calls = []
 
@@ -219,16 +173,17 @@ async def test_terminal_control_animation_is_best_effort(
         return {"ok": True, "highlighted": True}
 
     monkeypatch.setattr("cyrene.workbench.ui_surface.request", fake_request)
-    binding = bind_run_context(
-        agent_id="main",
-        caller="main_agent",
-        session_id="chat-1",
-        ui_instance_id="surface-1",
+    context = PluginContext(
+        data={
+            "run_context": {
+                "project_id": "project-1",
+                "session_id": "chat-1",
+                "ui_instance_id": "surface-1",
+            }
+        },
     )
-    try:
-        assert await terminals.animate_terminal_control("term_a", "input") is True
-    finally:
-        binding.reset()
+    service = terminals.CyreneTerminalService()
+    assert await service.animate(context, "term_a", "input") is True
 
     assert calls == [
         (
@@ -244,18 +199,17 @@ async def test_terminal_control_animation_is_best_effort(
 async def test_sensitive_terminal_input_is_sent_without_command_guards(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from cyrene.tool_impl.code import send_shell
+    from agent.plugin import PluginContext
+    from agent.plugin.plugin_impl.cyrene_code import send_shell
+    from agent.plugin.plugin_impl.cyrene_code.services import CyreneTerminalService
 
     sent = []
 
-    async def fake_resolve_terminal(**_kwargs):
+    async def fake_resolve_terminal(_context, **_kwargs):
         return {"id": "term_secret", "title": "SSH"}
 
-    async def fake_animation(_terminal_id, _action):
+    async def fake_animation(_context, _terminal_id, _action):
         return True
-
-    async def unexpected_elevation(**_kwargs):
-        raise AssertionError("sensitive prompt input must not be treated as a command")
 
     class FakeClient:
         def __init__(self):
@@ -283,19 +237,12 @@ async def test_sensitive_terminal_input_is_sent_without_command_guards(
                 "cursor": {"x": 0, "y": 0, "visible": True},
             }
 
-    monkeypatch.setattr(
-        "cyrene.tooling.backends.terminals.resolve_terminal", fake_resolve_terminal
-    )
-    monkeypatch.setattr(
-        "cyrene.tooling.backends.terminals.animate_terminal_control", fake_animation
-    )
-    monkeypatch.setattr(
-        "cyrene.terminal.client.get_terminal_daemon_client", lambda: FakeClient()
-    )
-    monkeypatch.setattr(send_shell, "request_scope_elevation", unexpected_elevation)
-    monkeypatch.setattr(send_shell, "request_write_elevation", unexpected_elevation)
-    monkeypatch.setattr(send_shell, "request_destructive_confirmation", unexpected_elevation)
-    monkeypatch.setattr(send_shell, "request_delete_confirmation", unexpected_elevation)
+    service = CyreneTerminalService()
+    fake_client = FakeClient()
+    monkeypatch.setattr(service, "resolve", fake_resolve_terminal)
+    monkeypatch.setattr(service, "animate", fake_animation)
+    monkeypatch.setattr(service, "_client", lambda: fake_client)
+    context = PluginContext(services={"terminals": service})
 
     result = json.loads(await send_shell._tool_send_shell(
         {
@@ -304,10 +251,7 @@ async def test_sensitive_terminal_input_is_sent_without_command_guards(
             "key": "enter",
             "sensitive": True,
         },
-        None,
-        0,
-        "",
-        None,
+        context,
     ))
 
     assert sent == [("term_secret", "literal-user-secret\r")]
@@ -315,7 +259,7 @@ async def test_sensitive_terminal_input_is_sent_without_command_guards(
 
 
 def test_sensitive_terminal_input_requires_visible_credential_prompt() -> None:
-    from cyrene.tool_impl.code.send_shell import _screen_accepts_sensitive_input
+    from agent.plugin.plugin_impl.cyrene_code.send_shell import _screen_accepts_sensitive_input
 
     assert _screen_accepts_sensitive_input("[sudo] password for syw:") is True
     assert _screen_accepts_sensitive_input("Enter passphrase for key '/tmp/id':") is True
@@ -327,11 +271,13 @@ def test_sensitive_terminal_input_requires_visible_credential_prompt() -> None:
 async def test_read_shell_explicitly_distinguishes_screen_and_scrollback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from cyrene.tool_impl.code import read_shell
+    from agent.plugin import PluginContext
+    from agent.plugin.plugin_impl.cyrene_code import read_shell
+    from agent.plugin.plugin_impl.cyrene_code.services import CyreneTerminalService
 
     terminal = {"id": "term_a", "title": "API"}
 
-    async def fake_resolve_terminal(**_kwargs):
+    async def fake_resolve_terminal(_context, **_kwargs):
         return dict(terminal)
 
     class FakeClient:
@@ -364,15 +310,13 @@ async def test_read_shell_explicitly_distinguishes_screen_and_scrollback(
             }
 
     fake_client = FakeClient()
-    monkeypatch.setattr(
-        "cyrene.tooling.backends.terminals.resolve_terminal", fake_resolve_terminal
-    )
-    monkeypatch.setattr(
-        "cyrene.terminal.client.get_terminal_daemon_client", lambda: fake_client
-    )
+    service = CyreneTerminalService()
+    monkeypatch.setattr(service, "resolve", fake_resolve_terminal)
+    monkeypatch.setattr(service, "_client", lambda: fake_client)
+    context = PluginContext(services={"terminals": service})
 
     screen = json.loads(
-        await read_shell._tool_read_shell({}, None, 0, "", None)
+        await read_shell._tool_read_shell({}, context)
     )
     assert screen["source"] == "screen"
     assert screen["text"] == screen["screen_text"] == "prompt\nready"
@@ -388,10 +332,7 @@ async def test_read_shell_explicitly_distinguishes_screen_and_scrollback(
     scrollback = json.loads(
         await read_shell._tool_read_shell(
             {"view": "scrollback", "cursor": 10, "max_bytes": 64},
-            None,
-            0,
-            "",
-            None,
+            context,
         )
     )
     assert scrollback["source"] == "scrollback"
@@ -412,9 +353,11 @@ async def test_read_shell_explicitly_distinguishes_screen_and_scrollback(
 async def test_read_shell_exposes_indexed_commands_and_selected_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from cyrene.tool_impl.code import read_shell
+    from agent.plugin import PluginContext
+    from agent.plugin.plugin_impl.cyrene_code import read_shell
+    from agent.plugin.plugin_impl.cyrene_code.services import CyreneTerminalService
 
-    async def fake_resolve_terminal(**_kwargs):
+    async def fake_resolve_terminal(_context, **_kwargs):
         return {"id": "term_remote", "title": "Remote"}
 
     class FakeClient:
@@ -431,18 +374,16 @@ async def test_read_shell_exposes_indexed_commands_and_selected_output(
                 "text": "Linux remote\n",
             }
 
-    monkeypatch.setattr(
-        "cyrene.tooling.backends.terminals.resolve_terminal", fake_resolve_terminal
-    )
-    monkeypatch.setattr(
-        "cyrene.terminal.client.get_terminal_daemon_client", lambda: FakeClient()
-    )
+    service = CyreneTerminalService()
+    monkeypatch.setattr(service, "resolve", fake_resolve_terminal)
+    monkeypatch.setattr(service, "_client", lambda: FakeClient())
+    context = PluginContext(services={"terminals": service})
 
     commands = json.loads(await read_shell._tool_read_shell(
-        {"view": "commands"}, None, 0, "", None,
+        {"view": "commands"}, context,
     ))
     output = json.loads(await read_shell._tool_read_shell(
-        {"view": "command_output", "command_id": "cmd_1"}, None, 0, "", None,
+        {"view": "command_output", "command_id": "cmd_1"}, context,
     ))
 
     assert commands["commands"][0]["command"] == "uname -a"

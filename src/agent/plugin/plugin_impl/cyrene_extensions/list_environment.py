@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from agent.plugin import PluginContext
+
 from cyrene.extensions.service import get_extension_service
 from .definitions import get_native_tool_def
 
@@ -102,7 +104,7 @@ def environment_items(state: dict[str, Any]):
             yield kind, item
 
 
-async def _tool_list_environment(args: dict[str, Any], *_unused: Any) -> str:
+async def _tool_list_environment(args: dict[str, Any], _context: PluginContext) -> str:
     kind = str(args.get("kind") or "all").strip().lower()
     if kind != "all" and kind not in _COLLECTIONS:
         return json.dumps({"ok": False, "error": f"unsupported environment kind: {kind}"}, ensure_ascii=False)
@@ -127,7 +129,7 @@ async def _tool_list_environment(args: dict[str, Any], *_unused: Any) -> str:
         "query": query,
         "count": len(items),
         "items": items,
-        "note": "This is discovery metadata only. Disabled extensions are intentionally hidden. CLI and runtime binaries are exposed through Cyrene's Agent process environment. Skills are discovered separately through skill_tools.",
+        "note": "This is discovery metadata only. Disabled entries are intentionally hidden. CLI and runtime binaries are exposed through Cyrene's Agent process environment. Skills are discovered through the cyrene_skills Plugin pack.",
     }, ensure_ascii=False)
 
 

@@ -5,9 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from conftest import workbench_settings_source
-
-
 pytestmark = pytest.mark.asyncio
 
 
@@ -34,50 +31,10 @@ def _file(*, sha256: str = "a" * 64) -> dict:
     }
 
 
-async def test_external_upload_requires_human_even_in_full_access(monkeypatch):
-    from cyrene.agent import session, state
-    from cyrene.tooling.runtime_support import _request_external_upload_confirmation
-
-    captured = {}
-
-    async def fake_publish(event, *args, **kwargs):
-        captured.setdefault("events", []).append(event)
-
-    async def fake_upsert(payload):
-        captured["question"] = payload
-        return {"id": "question_upload_1"}
-
-    monkeypatch.setattr(state, "_publish_runtime_event", fake_publish)
-    monkeypatch.setattr(session, "_upsert_pending_question", fake_upsert)
-    monkeypatch.setattr(session, "get_session_labels", lambda _round_id: {})
-
-    mode_token = state._permission_mode.set("full_access")
-    round_token = state._current_round_id.set("round_upload_1")
-    grants_token = state._external_upload_confirmation_fingerprints.set(frozenset())
-    try:
-        result = await _request_external_upload_confirmation(
-            fingerprint="fingerprint_1",
-            target=_target(),
-            files=[_file()],
-            reason="Upload the requested report.",
-        )
-    finally:
-        state._external_upload_confirmation_fingerprints.reset(grants_token)
-        state._current_round_id.reset(round_token)
-        state._permission_mode.reset(mode_token)
-
-    payload = json.loads(result)
-    assert payload["status"] == "awaiting_user"
-    assert payload["permission"] == "external_upload_confirmation"
-    assert captured["question"]["meta"]["kind"] == "external_upload_confirmation"
-    assert captured["question"]["options"] == ["允许这次上传", "拒绝"]
-    assert "upload.example" in captured["question"]["text"]
-
-
-async def test_upload_grant_is_consumed_once(monkeypatch, tmp_path):
+async def test_upload_executes_after_central_plugin_review(monkeypatch, tmp_path):
+    from agent.plugin import PluginContext
     from cyrene import browser
-    from cyrene.agent import state
-    from cyrene.tool_impl.browser import browser_upload_files as tool
+    from agent.plugin.plugin_impl.cyrene_browser import browser_upload_files as tool
 
     target = _target()
     files = [_file()]
@@ -89,15 +46,9 @@ async def test_upload_grant_is_consumed_once(monkeypatch, tmp_path):
     async def fake_resolve(_paths):
         return [dict(item) for item in files], None
 
-    async def fake_approval(**_kwargs):
-        return None
-
     async def fake_set_input_files(bound_target, bound_files):
         calls.append((bound_target, bound_files))
         return {"ok": True, "url": target["topUrl"]}
-
-    async def fake_publish(*_args, **_kwargs):
-        return None
 
     monkeypatch.setattr(browser, "prepare_file_upload", fake_prepare)
     monkeypatch.setattr(browser, "set_input_files", fake_set_input_files)
@@ -106,32 +57,19 @@ async def test_upload_grant_is_consumed_once(monkeypatch, tmp_path):
     monkeypatch.setattr(tool, "_new_upload_snapshot", lambda: tmp_path / "snapshot")
     monkeypatch.setattr(tool, "_retain_upload_snapshot", lambda _root: None)
     (tmp_path / "snapshot").mkdir()
-    monkeypatch.setattr(tool, "_request_external_upload_confirmation", fake_approval)
-    monkeypatch.setattr(state, "_publish_runtime_event", fake_publish)
-
-    fingerprint = tool._upload_fingerprint(target, files)
-    token = state._external_upload_confirmation_fingerprints.set(frozenset({fingerprint}))
-    try:
-        result = await tool._tool_browser_upload_files(
-            {"chooser_id": "chooser_1", "paths": ["report.txt"]},
-            None,
-            0,
-            "db",
-            None,
-        )
-        remaining = state._external_upload_confirmation_fingerprints.get()
-    finally:
-        state._external_upload_confirmation_fingerprints.reset(token)
+    result = await tool._tool_browser_upload_files(
+        {"chooser_id": "chooser_1", "paths": ["report.txt"]},
+        PluginContext(workspace=tmp_path),
+    )
 
     assert json.loads(result)["status"] == "files_attached"
     assert len(calls) == 1
-    assert fingerprint not in remaining
 
 
 async def test_changed_file_binding_cancels_after_approval(monkeypatch):
+    from agent.plugin import PluginContext
     from cyrene import browser
-    from cyrene.agent import state
-    from cyrene.tool_impl.browser import browser_upload_files as tool
+    from agent.plugin.plugin_impl.cyrene_browser import browser_upload_files as tool
 
     target = _target()
     before = [_file(sha256="a" * 64)]
@@ -145,43 +83,27 @@ async def test_changed_file_binding_cancels_after_approval(monkeypatch):
     async def fake_resolve(_paths):
         return [dict(item) for item in resolved.pop(0)], None
 
-    async def fake_approval(**_kwargs):
-        return None
-
     async def fake_set_input_files(*_args, **_kwargs):
         nonlocal executed
         executed = True
         return {"ok": True}
 
-    async def fake_publish(*_args, **_kwargs):
-        return None
-
     monkeypatch.setattr(browser, "prepare_file_upload", fake_prepare)
     monkeypatch.setattr(browser, "set_input_files", fake_set_input_files)
     monkeypatch.setattr(tool, "_resolve_files", fake_resolve)
-    monkeypatch.setattr(tool, "_request_external_upload_confirmation", fake_approval)
-    monkeypatch.setattr(state, "_publish_runtime_event", fake_publish)
-
-    fingerprint = tool._upload_fingerprint(target, before)
-    token = state._external_upload_confirmation_fingerprints.set(frozenset({fingerprint}))
-    try:
-        result = await tool._tool_browser_upload_files(
-            {"chooser_id": "chooser_1", "paths": ["report.txt"]},
-            None,
-            0,
-            "db",
-            None,
-        )
-    finally:
-        state._external_upload_confirmation_fingerprints.reset(token)
+    result = await tool._tool_browser_upload_files(
+        {"chooser_id": "chooser_1", "paths": ["report.txt"]},
+        PluginContext(),
+    )
 
     assert "changed after approval" in result
     assert executed is False
 
 
 async def test_non_http_destination_is_rejected_before_reading_files(monkeypatch):
+    from agent.plugin import PluginContext
     from cyrene import browser
-    from cyrene.tool_impl.browser import browser_upload_files as tool
+    from agent.plugin.plugin_impl.cyrene_browser import browser_upload_files as tool
 
     async def fake_prepare(**_kwargs):
         target = _target()
@@ -198,57 +120,10 @@ async def test_non_http_destination_is_rejected_before_reading_files(monkeypatch
 
     result = await tool._tool_browser_upload_files(
         {"chooser_id": "chooser_1", "paths": ["report.txt"]},
-        None,
-        0,
-        "db",
-        None,
+        PluginContext(),
     )
 
     assert "verified HTTP(S) origin" in result
-
-
-async def test_approval_answer_adds_only_bound_upload_fingerprint(monkeypatch):
-    from cyrene.agent import coordinator, guidance, state
-
-    seen = {}
-
-    async def fake_run(*_args, **kwargs):
-        seen["grants"] = state._external_upload_confirmation_fingerprints.get()
-        seen["full_access"] = state._temporary_full_access.get()
-        seen["system"] = kwargs.get("ephemeral_system", "")
-        return "continued"
-
-    async def fake_publish(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(coordinator, "_run_chat_agent", fake_run)
-    monkeypatch.setattr(state, "_publish_runtime_event", fake_publish)
-    grant_token = state._external_upload_confirmation_fingerprints.set(frozenset())
-    full_token = state._temporary_full_access.set(False)
-    try:
-        result = await guidance._handle_permission_elevation_answer(
-            round_id="round_1",
-            pending={
-                "meta": {
-                    "kind": "external_upload_confirmation",
-                    "fingerprint": "bound_fp",
-                    "tool_name": "browser_upload_files",
-                    "target": {"origin": "https://upload.example"},
-                    "files": [{"name": "report.txt", "sha256": "a" * 64}],
-                }
-            },
-            answer_text="允许这次上传",
-            client_request_id="request_1",
-            context={},
-        )
-    finally:
-        state._temporary_full_access.reset(full_token)
-        state._external_upload_confirmation_fingerprints.reset(grant_token)
-
-    assert result == "continued"
-    assert "bound_fp" in seen["grants"]
-    assert seen["full_access"] is False
-    assert "exactly one external browser file upload" in seen["system"]
 
 
 async def test_electron_upload_transport_uses_dedicated_rpc(monkeypatch):
@@ -275,7 +150,7 @@ async def test_electron_upload_transport_uses_dedicated_rpc(monkeypatch):
 
 
 async def test_intercepted_chooser_message_is_actionable():
-    from cyrene.tool_impl.browser.browser_output import file_chooser_instruction
+    from agent.plugin.plugin_impl.cyrene_browser.browser_output import file_chooser_instruction
 
     message = file_chooser_instruction({
         "code": "FILE_CHOOSER_INTERCEPTED",
@@ -289,7 +164,7 @@ async def test_intercepted_chooser_message_is_actionable():
 
 
 async def test_approved_file_snapshot_preserves_exact_bytes_and_name(tmp_path):
-    from cyrene.tool_impl.browser import browser_upload_files as tool
+    from agent.plugin.plugin_impl.cyrene_browser import browser_upload_files as tool
 
     source = tmp_path / "report.txt"
     source.write_bytes(b"approved bytes")
@@ -317,18 +192,3 @@ async def test_electron_upload_uses_guarded_cdp_path():
     assert "FILE_CHOOSER_GUARD_UNAVAILABLE" in main
     assert "await this._setFileChooserInterception(tab, false)" in main
     assert "frameLoaderId" in main
-
-
-async def test_browser_upload_is_managed_by_browser_package_and_prompt():
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parent.parent
-    settings = workbench_settings_source()
-    prompt = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
-
-    assert '"browser_upload_files"' not in settings
-    assert "saveToolGroup(group.id, !packageEnabled)" in settings
-    assert 't("toolName." + group.wire_name)' in settings
-    assert 't("toolPackageDesc." + group.id)' in settings
-    assert "FILE_CHOOSER_INTERCEPTED" in prompt
-    assert "do not retry the click" in prompt

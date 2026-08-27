@@ -34,8 +34,7 @@ async def test_delete_project_preserves_cross_owner_cleanup_order():
         assert value is payload
         calls.append("write_store")
 
-    async def clear_session(*, session_id: str, deleting: bool):
-        assert deleting is True
+    async def clear_session(*, session_id: str):
         calls.append(f"clear:{session_id}")
 
     async def remove_chats(project_id: str) -> int:
@@ -64,7 +63,6 @@ async def test_delete_project_preserves_cross_owner_cleanup_order():
         find_session=lambda _value, _session_id: (None, None),
     )
     lifecycle = ProjectLifecyclePort(
-        legacy_data_key="default",
         workspace_root=Path("/workspace/projects"),
         validate_workspace=lambda path, **_kwargs: Path(path),
         get_model=lambda: "model",
@@ -78,7 +76,7 @@ async def test_delete_project_preserves_cross_owner_cleanup_order():
         new_init_session=lambda *_args: {},
         new_session=lambda *_args: {},
         project_data_key=lambda project: str(project["dataKey"]),
-        project_memory_key=lambda project: str(project["id"]),
+        project_resource_key=lambda project: str(project["id"]),
         notify=lambda **_kwargs: None,
         list_notifications=lambda **_kwargs: {},
         mark_notifications_read=lambda *_args, **_kwargs: {},

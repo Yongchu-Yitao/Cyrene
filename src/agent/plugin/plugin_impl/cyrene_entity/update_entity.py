@@ -1,23 +1,63 @@
-"""Tool implementation for update_entity."""
+"""Safely update one durable entity."""
 
 from __future__ import annotations
 
-from .definitions import get_native_tool_def
+from typing import Any
 
-TOOL_NAME = 'update_entity'
-TOOL_DEF = get_native_tool_def(TOOL_NAME)
+from agent.plugin import PluginContext
+
+from ._plugin import create_tool_plugin
+from ._service import current_project_id, entity_service, resolve_entity
+
+TOOL_NAME = "entity.update"
 
 
-async def _tool_update_entity(args, bot, chat_id, db_path, notify_state):
-    from .store import update_entity
-    field = args["field"]
-    value = args["value"]
-    entity = await update_entity(db_path, args["id"], **{field: value})
+async def update_entity(
+    arguments: dict[str, Any],
+    context: PluginContext,
+) -> dict[str, Any]:
+    if not arguments.get("id") and not arguments.get("title"):
+        return {
+            "ok": False,
+            "error": "invalid_locator",
+            "message": "请提供完整 UUID、唯一 UUID 前缀或精确标题。",
+        }
+    service = entity_service(context)
+    resolution = await resolve_entity(
+        service,
+        entity_id=arguments.get("id"),
+        title=arguments.get("title"),
+        type=arguments.get("type"),
+        project_id=current_project_id(context),
+    )
+    if resolution["matches"]:
+        return {
+            "ok": False,
+            "error": "ambiguous",
+            "matched_by": resolution["matched_by"],
+            "matches": resolution["matches"],
+            "message": "匹配到多条事务，为避免误改未执行。",
+        }
+    entity = resolution["entity"]
     if entity is None:
-        return f"未找到事务 {args['id']}"
-    return f"已更新事务 {entity['title']} 的 {field}"
+        return {"ok": False, "error": "not_found", "message": "未找到事务。"}
+
+    field = str(arguments["field"])
+    updated = await service.update(
+        entity["id"],
+        **{field: arguments.get("value")},
+    )
+    if updated is None:
+        return {"ok": False, "error": "not_found", "message": "未找到事务。"}
+    return {
+        "ok": True,
+        "entity": updated,
+        "updated_field": field,
+        "message": f"已更新事务 {updated['title']} 的 {field}。",
+    }
 
 
-handler = _tool_update_entity
+plugin = create_tool_plugin(TOOL_NAME, update_entity)
+handler = update_entity
 
-__all__ = ["TOOL_NAME", "TOOL_DEF", "handler", "_tool_update_entity"]
+__all__ = ["TOOL_NAME", "handler", "plugin", "update_entity"]

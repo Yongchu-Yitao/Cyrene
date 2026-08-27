@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from typing import Any
+from agent.plugin import PluginContext
 
 from cyrene.runtime.config_store import get_settings_revision
 from cyrene.runtime.host_bridge import HostBridgeError, call_host
 from cyrene.runtime.host_actions import list_actions
 from cyrene.runtime.version import get_version
-from cyrene.tooling.runtime_api import json_result
+from agent.plugin.native_runtime import json_result
 from cyrene.workbench.app_control import envelope
 
 TOOL_NAME = "CyreneAppStatus"
@@ -18,7 +19,7 @@ TOOL_DEF = {"type": "function", "function": {
 TOOL_METADATA = {"read_only": True, "resource_keys": ("cyrene:status",), "requires_order": False}
 
 
-async def handler(_args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify: Any) -> str:
+async def handler(_args: dict[str, Any], _context: PluginContext) -> str:
     host: dict[str, Any]
     try:
         host = await call_host("host.status", {})

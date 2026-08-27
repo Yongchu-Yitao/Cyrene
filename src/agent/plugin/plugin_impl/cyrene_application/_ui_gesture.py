@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Collection
 
+from agent.plugin import PluginContext
+
 from ._ui_action import execute_action
-from cyrene.workbench.app_control import DELEGATION_OPERATIONS_SCHEMA
 
 
 def gesture_tool_def(name: str, description: str) -> dict[str, Any]:
@@ -20,8 +21,6 @@ def gesture_tool_def(name: str, description: str) -> dict[str, Any]:
                 "input": {"type": "object"},
                 "reason": {"type": "string", "maxLength": 500},
                 "idempotency_key": {"type": "string", "maxLength": 160},
-                "delegation_quote": {"type": "string", "maxLength": 500},
-                "delegation_operations": DELEGATION_OPERATIONS_SCHEMA,
             },
             "required": ["snapshot_id", "revision", "node_id", "action_id", "reason", "idempotency_key"],
             "additionalProperties": False,
@@ -33,19 +32,13 @@ async def run_gesture(
     operation_id: str,
     allowed_kinds: Collection[str],
     args: dict[str, Any],
-    bot: Any,
-    chat_id: int,
-    db_path: str,
-    notify: Any,
+    context: PluginContext,
     *,
     required_gesture_aliases: Collection[str] | None = None,
 ) -> str:
     return await execute_action(
         args,
-        bot,
-        chat_id,
-        db_path,
-        notify,
+        context,
         operation_family=operation_id,
         allowed_kinds=frozenset(allowed_kinds),
         required_gesture_aliases=(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from collections.abc import Callable
@@ -11,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..hook import CONTEXT_CHANGE, CONTEXT_USED, ContextUsed, HookEvent
+from ..observability import log_operation
 from .hook_store import TreeHookStore
 from .errors import (
     ContextError,
@@ -22,6 +24,8 @@ from .errors import (
 from .tree import ContextChange, ContextNode, ContextTree
 from .schema import connect, ensure_tree_schema, transaction
 from .serialization import Clock, decode_value, encode_value, normalize_time, utc_now
+
+logger = logging.getLogger(__name__)
 
 _MISSING = object()
 TokenCounter = Callable[[Any], int]
@@ -66,9 +70,32 @@ class ContextTreeStore:
                 if not _tree_id or not _root_id:
                     raise ValueError("tree_id and root_id are required when creating a tree")
                 self._tree = self._initialize_tree(_tree_id, _root_id, _root_value)
-        except Exception:
+        except Exception as exc:
+            log_operation(
+                logger,
+                "context.store",
+                "open",
+                phase="failed",
+                level=logging.ERROR,
+                exc_info=True,
+                database=self.database,
+                requested_tree_id=_tree_id,
+                requested_root_id=_root_id,
+                error=exc,
+            )
             self.close()
             raise
+        log_operation(
+            logger,
+            "context.store",
+            "open",
+            phase="completed",
+            database=self.database,
+            tree_id=self._tree.id,
+            root_id=self._tree.root_id,
+            created=_root_value is not _MISSING,
+            token_limit=self._token_limit,
+        )
 
     @classmethod
     def create(
@@ -112,11 +139,39 @@ class ContextTreeStore:
                 return
             self._closed = True
             self._connection.close()
+        log_operation(
+            logger,
+            "context.store",
+            "close",
+            phase="completed",
+            database=self.database,
+            tree_id=getattr(getattr(self, "_tree", None), "id", None),
+        )
 
     def _ensure_available(self) -> None:
         if self._closed:
+            log_operation(
+                logger,
+                "context.store",
+                "availability_check",
+                phase="failed",
+                level=logging.ERROR,
+                database=self.database,
+                tree_id=getattr(getattr(self, "_tree", None), "id", None),
+                reason="closed",
+            )
             raise ContextError("context tree store is closed")
         if self._deleted:
+            log_operation(
+                logger,
+                "context.store",
+                "availability_check",
+                phase="failed",
+                level=logging.ERROR,
+                database=self.database,
+                tree_id=self._tree.id,
+                reason="deleted",
+            )
             raise TreeNotFoundError(f"context tree has been deleted: {self._tree.id}")
 
     def _now(self) -> datetime:
@@ -204,7 +259,7 @@ class ContextTreeStore:
                 raise ValueError("token_counter must return a non-negative integer")
             node_tokens[str(row["node_id"])] = count
         tokens = sum(node_tokens.values())
-        return ContextUsed(
+        usage = ContextUsed(
             tree_id=self._tree.id,
             node_id=str(node_id),
             tokens=tokens,
@@ -213,9 +268,22 @@ class ContextTreeStore:
             node_tokens=node_tokens,
             time=time,
         )
+        log_operation(
+            logger,
+            "context.store",
+            "calculate_usage",
+            phase="completed",
+            tree_id=self._tree.id,
+            node_id=node_id,
+            tokens=tokens,
+            token_limit=self._token_limit,
+            usage_ratio=usage.usage_ratio,
+            node_tokens=node_tokens,
+        )
+        return usage
 
     def _enqueue_change(self, change: ContextChange, *, report_usage: bool = True) -> None:
-        self.hooks.enqueue(
+        change_deliveries = self.hooks.enqueue(
             HookEvent(
                 CONTEXT_CHANGE,
                 change.tree_id,
@@ -227,7 +295,7 @@ class ContextTreeStore:
         )
         if report_usage:
             usage = self._context_usage(change.node_id, change.time)
-            self.hooks.enqueue(
+            usage_deliveries = self.hooks.enqueue(
                 HookEvent(
                     CONTEXT_USED,
                     usage.tree_id,
@@ -237,6 +305,20 @@ class ContextTreeStore:
                     is_root=usage.node_id == self._tree.root_id,
                 )
             )
+        else:
+            usage_deliveries = 0
+        log_operation(
+            logger,
+            "context.store",
+            "enqueue_change",
+            phase="completed",
+            tree_id=change.tree_id,
+            node_id=change.node_id,
+            context_action=change.action,
+            change=change,
+            context_change_deliveries=change_deliveries,
+            context_used_deliveries=usage_deliveries,
+        )
 
     def enqueue_initial_root(self) -> None:
         """Queue root notifications after initial Hooks have been installed."""
@@ -251,10 +333,18 @@ class ContextTreeStore:
             )
             with transaction(self._connection):
                 self._enqueue_change(change)
+        log_operation(
+            logger,
+            "context.store",
+            "enqueue_initial_root",
+            phase="completed",
+            tree_id=self._tree.id,
+            root_id=self._tree.root_id,
+        )
 
     def enqueue_context_used(self, usage: ContextUsed) -> None:
         with self._lock, transaction(self._connection):
-            self.hooks.enqueue(
+            deliveries = self.hooks.enqueue(
                 HookEvent(
                     CONTEXT_USED,
                     usage.tree_id,
@@ -264,6 +354,18 @@ class ContextTreeStore:
                     is_root=usage.node_id == self._tree.root_id,
                 )
             )
+        log_operation(
+            logger,
+            "context.store",
+            "enqueue_context_used",
+            phase="completed",
+            tree_id=usage.tree_id,
+            node_id=usage.node_id,
+            tokens=usage.tokens,
+            token_limit=usage.token_limit,
+            node_tokens=usage.node_tokens,
+            deliveries=deliveries,
+        )
 
     def _require_node_row(self, node_id: str) -> sqlite3.Row:
         row = self._connection.execute(
@@ -275,6 +377,16 @@ class ContextTreeStore:
             (node_id,),
         ).fetchone()
         if row is None:
+            log_operation(
+                logger,
+                "context.store",
+                "require_node",
+                phase="failed",
+                level=logging.WARNING,
+                tree_id=self._tree.id,
+                node_id=node_id,
+                reason="not_found",
+            )
             raise NodeNotFoundError(
                 f"context node not found in tree {self._tree.id}: {node_id}"
             )
@@ -289,6 +401,16 @@ class ContextTreeStore:
     ) -> ContextNode:
         parent_id = str(parent_id)
         node_id = str(node_id or self._new_node_id())
+        log_operation(
+            logger,
+            "context.store",
+            "mount",
+            phase="requested",
+            tree_id=self._tree.id,
+            parent_id=parent_id,
+            node_id=node_id,
+            value=value,
+        )
         encoded = encode_value(value)
         created_at = self._now()
         timestamp = created_at.isoformat()
@@ -317,10 +439,29 @@ class ContextTreeStore:
             except sqlite3.IntegrityError as exc:
                 raise ContextError(f"context node id already exists: {node_id}") from exc
         node = ContextNode(node_id, self._tree.id, parent_id, decode_value(encoded), created_at, created_at)
+        log_operation(
+            logger,
+            "context.store",
+            "mount",
+            phase="completed",
+            tree_id=self._tree.id,
+            parent_id=parent_id,
+            node_id=node_id,
+            node=node,
+        )
         return node
 
     def update_node(self, node_id: str, value: Any) -> ContextNode:
         node_id = str(node_id)
+        log_operation(
+            logger,
+            "context.store",
+            "update_node",
+            phase="requested",
+            tree_id=self._tree.id,
+            node_id=node_id,
+            value=value,
+        )
         encoded = encode_value(value)
         updated_at = self._now()
         timestamp = updated_at.isoformat()
@@ -353,17 +494,47 @@ class ContextTreeStore:
             datetime.fromisoformat(str(existing["created_at"])),
             updated_at,
         )
+        log_operation(
+            logger,
+            "context.store",
+            "update_node",
+            phase="completed",
+            tree_id=self._tree.id,
+            node_id=node_id,
+            node=node,
+        )
         return node
 
     def get_node(self, node_id: str) -> ContextNode:
+        normalized_id = str(node_id)
         with self._lock:
             self._ensure_available()
-            row = self._require_node_row(str(node_id))
-        return self._node_from_row(row)
+            row = self._require_node_row(normalized_id)
+        node = self._node_from_row(row)
+        log_operation(
+            logger,
+            "context.store",
+            "get_node",
+            phase="completed",
+            tree_id=self._tree.id,
+            node_id=normalized_id,
+            node=node,
+        )
+        return node
 
     def is_root(self, node_id: str) -> bool:
         self.get_node(str(node_id))
-        return self._tree.root_id == str(node_id)
+        result = self._tree.root_id == str(node_id)
+        log_operation(
+            logger,
+            "context.store",
+            "is_root",
+            phase="completed",
+            tree_id=self._tree.id,
+            node_id=node_id,
+            result=result,
+        )
+        return result
 
     def has_child(self, node_id: str) -> bool:
         node_id = str(node_id)
@@ -374,16 +545,45 @@ class ContextTreeStore:
                 "SELECT 1 FROM context_nodes WHERE parent_id = ? LIMIT 1",
                 (node_id,),
             ).fetchone()
-        return row is not None
+        result = row is not None
+        log_operation(
+            logger,
+            "context.store",
+            "has_child",
+            phase="completed",
+            tree_id=self._tree.id,
+            node_id=node_id,
+            result=result,
+        )
+        return result
 
     def get_parent(self, node_id: str) -> ContextNode | None:
         with self._lock:
             self._ensure_available()
             row = self._require_node_row(str(node_id))
             if row["parent_id"] is None:
+                log_operation(
+                    logger,
+                    "context.store",
+                    "get_parent",
+                    phase="completed",
+                    tree_id=self._tree.id,
+                    node_id=node_id,
+                    parent=None,
+                )
                 return None
             parent = self._require_node_row(str(row["parent_id"]))
-        return self._node_from_row(parent)
+        result = self._node_from_row(parent)
+        log_operation(
+            logger,
+            "context.store",
+            "get_parent",
+            phase="completed",
+            tree_id=self._tree.id,
+            node_id=node_id,
+            parent=result,
+        )
+        return result
 
     def get_children(self, node_id: str) -> list[ContextNode]:
         node_id = str(node_id)
@@ -399,7 +599,18 @@ class ContextTreeStore:
                 """,
                 (node_id,),
             ).fetchall()
-        return [self._node_from_row(row) for row in rows]
+        result = [self._node_from_row(row) for row in rows]
+        log_operation(
+            logger,
+            "context.store",
+            "get_children",
+            phase="completed",
+            tree_id=self._tree.id,
+            node_id=node_id,
+            count=len(result),
+            children=result,
+        )
+        return result
 
     def get_path(self, node_id: str) -> list[ContextNode]:
         node_id = str(node_id)
@@ -426,7 +637,18 @@ class ContextTreeStore:
                 """,
                 (node_id,),
             ).fetchall()
-        return [self._node_from_row(row) for row in rows]
+        result = [self._node_from_row(row) for row in rows]
+        log_operation(
+            logger,
+            "context.store",
+            "get_path",
+            phase="completed",
+            tree_id=self._tree.id,
+            node_id=node_id,
+            count=len(result),
+            path=result,
+        )
+        return result
 
     def get_subtree(self, node_id: str) -> list[ContextNode]:
         node_id = str(node_id)
@@ -455,10 +677,30 @@ class ContextTreeStore:
                 """,
                 (node_id,),
             ).fetchall()
-        return [self._node_from_row(row) for row in rows]
+        result = [self._node_from_row(row) for row in rows]
+        log_operation(
+            logger,
+            "context.store",
+            "get_subtree",
+            phase="completed",
+            tree_id=self._tree.id,
+            node_id=node_id,
+            count=len(result),
+            subtree=result,
+        )
+        return result
 
     def delete_node(self, node_id: str, *, recursive: bool = False) -> ContextChange:
         node_id = str(node_id)
+        log_operation(
+            logger,
+            "context.store",
+            "delete_node",
+            phase="requested",
+            tree_id=self._tree.id,
+            node_id=node_id,
+            recursive=recursive,
+        )
         deleted_at = self._now()
         with self._lock:
             self._ensure_available()
@@ -480,6 +722,16 @@ class ContextTreeStore:
                 )
                 self._enqueue_change(change, report_usage=False)
                 self._connection.execute("DELETE FROM context_nodes WHERE node_id = ?", (node_id,))
+        log_operation(
+            logger,
+            "context.store",
+            "delete_node",
+            phase="completed",
+            tree_id=self._tree.id,
+            node_id=node_id,
+            recursive=recursive,
+            change=change,
+        )
         return change
 
     def mark_deleted(self) -> tuple[str, ...]:
@@ -489,9 +741,26 @@ class ContextTreeStore:
                 "SELECT node_id FROM context_nodes ORDER BY created_at, node_id"
             ).fetchall()
             self._deleted = True
-            return tuple(str(row["node_id"]) for row in rows)
+            node_ids = tuple(str(row["node_id"]) for row in rows)
+        log_operation(
+            logger,
+            "context.store",
+            "mark_deleted",
+            phase="completed",
+            tree_id=self._tree.id,
+            node_ids=node_ids,
+        )
+        return node_ids
 
     def unmark_deleted(self) -> None:
         with self._lock:
             if not self._closed:
                 self._deleted = False
+        log_operation(
+            logger,
+            "context.store",
+            "unmark_deleted",
+            phase="completed",
+            tree_id=self._tree.id,
+            closed=self._closed,
+        )

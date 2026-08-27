@@ -41,8 +41,8 @@ cd electron
 npm run dev
 ```
 
-This launches the Electron window and starts the Python backend through the
-physical `src/cyrene/local_cli.py` launcher.
+This launches the Electron window and starts the Python backend through
+`uv run cyrene --workbench --electron-mode`.
 
 ---
 
@@ -202,13 +202,11 @@ When the target daemon enables local token authentication, the CLI reads
 
 ## Interactive streaming CLI
 
-Bare `cyrene` is the recommended terminal interface: it starts the daemon in
-the background when needed, then enters interactive chat. `cyrene chat` is the
-equivalent explicit entry point. Both connect to the
+`cyrene chat` is the recommended terminal interface: it starts the daemon in
+the background when needed, then enters interactive chat. It connects to the
 background daemon and shares Workbench's persistent conversations and runs:
 
 ```bash
-cyrene
 cyrene chat --chat CHAT_ID
 cyrene chat --mode plan
 ```

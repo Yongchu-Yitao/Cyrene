@@ -2,6 +2,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,69 @@ CHECKOUT_VENV_PYTHON = (
     if os.name == "nt"
     else PROJECT_DIR / ".venv" / "bin" / "python3"
 )
+CHECKOUT_CYRENE_COMMAND = (
+    PROJECT_DIR / ".venv" / "Scripts" / "cyrene.exe"
+    if os.name == "nt"
+    else PROJECT_DIR / ".venv" / "bin" / "cyrene"
+)
+
+
+def test_uv_console_script_and_electron_use_runtime_entrypoint():
+    project = tomllib.loads((PROJECT_DIR / "pyproject.toml").read_text(encoding="utf-8"))
+    assert project["project"]["scripts"]["cyrene"] == "cyrene.__main__:main"
+
+    source = (PROJECT_DIR / "electron" / "main.js").read_text(encoding="utf-8")
+    development_binary = source.split(
+        "function getPythonBinaryPath()", 1
+    )[1].split("function getPythonArgs()", 1)[0]
+    development_args = source.split("function getPythonArgs()", 1)[1].split(
+        "function getCurrentAppExecutablePath()", 1
+    )[0]
+
+    assert "return 'uv'" in development_binary
+    assert "'run'" in development_args
+    assert "'cyrene'" in development_args
+    assert "'local_cli.py'" not in development_args
+
+
+@pytest.mark.skipif(
+    not CHECKOUT_CYRENE_COMMAND.is_file(),
+    reason="checkout console command is not available",
+)
+def test_checkout_console_command_loads_runtime_and_new_agent_package(tmp_path):
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    help_result = subprocess.run(
+        [str(CHECKOUT_CYRENE_COMMAND), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        env=env,
+        check=False,
+    )
+
+    assert help_result.returncode == 0, help_result.stderr
+    assert "Cyrene runtime entry point" in help_result.stdout
+
+    import_result = subprocess.run(
+        [
+            str(CHECKOUT_VENV_PYTHON),
+            "-I",
+            "-c",
+            "import agent, agent.plugin; print(agent.__file__)",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        env=env,
+        check=False,
+    )
+
+    assert import_result.returncode == 0, import_result.stderr
+    expected_agent = PROJECT_DIR / "src" / "agent" / "__init__.py"
+    assert Path(import_result.stdout.strip()).resolve() == expected_agent.resolve()
 
 
 def test_direct_local_cli_file_bootstraps_source_imports(tmp_path):

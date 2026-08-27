@@ -27,8 +27,6 @@ def _register_trace_route(router: APIRouter, context: ChatRouteContext) -> None:
         match what ran live. The client uploads its authoritative trace per
         saved activity-card message id; this endpoint stores it sanitized.
         """
-        if chat_id.startswith("legacy:"):
-            return JSONResponse({"error": "legacy chat transcript is read-only"}, status_code=403)
         body = await request.json()
         if not isinstance(body, dict):
             return JSONResponse({"error": "object body required"}, status_code=400)

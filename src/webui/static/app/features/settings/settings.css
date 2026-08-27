@@ -409,13 +409,13 @@ html[data-theme="light"] .wb-tool-list .mono {
   background-clip: padding-box;
 }
 
-/* The Extension Center keeps one scroll surface across all of its category
-   tabs. Preserve scrolling while removing the scrollbar chrome. */
-.settings-overlay-content[data-settings-active-tab="extensions"] {
+/* MCP Provider settings use the surrounding settings pane as their one
+   scrolling surface. */
+.settings-overlay-content[data-settings-active-tab="mcp-providers"] {
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
-.settings-overlay-content[data-settings-active-tab="extensions"]::-webkit-scrollbar {
+.settings-overlay-content[data-settings-active-tab="mcp-providers"]::-webkit-scrollbar {
   display: none;
   width: 0;
   height: 0;
@@ -1065,75 +1065,6 @@ html[data-theme] .settings-overlay .wb-toggle.on {
   line-height: 1.4;
 }
 
-.remote-pairing-settings {
-  overflow: hidden;
-  border: 1px solid var(--wb-line);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--wb-muted) 4%, var(--wb-card-bg));
-}
-
-.remote-pairing-settings summary {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  list-style: none;
-  padding: 11px 12px;
-  color: var(--wb-text);
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.remote-pairing-settings summary::-webkit-details-marker {
-  display: none;
-}
-
-.remote-pairing-settings-chevron {
-  display: inline-flex;
-  flex: 0 0 auto;
-  color: color-mix(in srgb, var(--wb-muted) 82%, var(--wb-text));
-  transition: transform 140ms ease;
-}
-
-.remote-pairing-settings-chevron svg {
-  width: 14px;
-  height: 14px;
-}
-
-.remote-pairing-settings[open] .remote-pairing-settings-chevron {
-  transform: rotate(90deg);
-}
-
-.remote-pairing-settings-title {
-  flex: 0 0 auto;
-}
-
-.remote-pairing-settings summary:hover,
-.remote-pairing-settings summary:focus-visible {
-  background: color-mix(in srgb, var(--wb-text) 5%, var(--wb-card-bg));
-}
-
-.remote-pairing-settings summary:focus {
-  outline: none;
-}
-
-.remote-pairing-settings summary small {
-  color: var(--wb-muted);
-  font-size: 11px;
-  font-weight: 400;
-}
-
-.remote-pairing-settings[open] summary {
-  border-bottom: 1px solid var(--wb-line);
-}
-
-.remote-pairing-share-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(180px, 0.8fr);
-  gap: 10px;
-  padding: 10px;
-}
-
 .remote-pairing-group {
   min-width: 0;
   padding: 11px 12px;
@@ -1147,25 +1078,6 @@ html[data-theme] .settings-overlay .wb-toggle.on {
   color: var(--wb-muted);
   font-size: 11px;
   font-weight: 650;
-}
-
-.remote-required-capabilities {
-  display: block;
-  margin: -3px 0 9px;
-  color: var(--wb-muted);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.remote-pairing-group .remote-option-list {
-  max-height: 220px;
-  padding: 3px;
-  border: 0;
-  background: transparent;
-}
-
-.remote-tool-package-options {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .remote-project-choices {
@@ -1392,8 +1304,7 @@ html[data-theme] .settings-overlay .wb-toggle.on {
 }
 
 @media (max-width: 860px) {
-  .remote-identity-grid,
-  .remote-pairing-share-grid {
+  .remote-identity-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1419,4 +1330,3 @@ html[data-theme] .settings-overlay .wb-toggle.on {
     flex-direction: column;
   }
 }
-

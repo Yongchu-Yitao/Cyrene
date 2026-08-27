@@ -9,7 +9,7 @@ def test_media_tool_keeps_reference_sources_and_roles_in_provider_order(
     tmp_path,
     monkeypatch,
 ):
-    from cyrene.tool_impl.media import start_media_generation as media_tool
+    from agent.plugin.plugin_impl.cyrene_media import start_media_generation as media_tool
 
     local = tmp_path / "local.png"
     attached = tmp_path / "attached.mp4"
@@ -80,7 +80,7 @@ def test_media_tool_rejects_unsafe_or_ambiguous_inputs(
     updates,
     message,
 ):
-    from cyrene.tool_impl.media import start_media_generation as media_tool
+    from agent.plugin.plugin_impl.cyrene_media import start_media_generation as media_tool
 
     mask = tmp_path / "mask.png"
     mask.write_bytes(b"mask")
@@ -105,7 +105,7 @@ def test_media_tool_rejects_unsafe_or_ambiguous_inputs(
 
 
 def test_media_tool_rejects_attachments_outside_the_current_chat(monkeypatch):
-    from cyrene.tool_impl.media import start_media_generation as media_tool
+    from agent.plugin.plugin_impl.cyrene_media import start_media_generation as media_tool
 
     with pytest.raises(ValueError, match="current conversation"):
         media_tool._resolve_attachment_reference(

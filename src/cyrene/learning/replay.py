@@ -139,7 +139,7 @@ HIGH_RISK_TOOLS: frozenset[str] = frozenset({
     # File write operations (outside-workspace risk)
     "Write", "write_file", "Edit", "edit_file",
     # Persistent scheduled task creation or mutation
-    "schedule_task", "edit_task",
+    "schedule.create", "schedule.edit",
     # Entering data or uploading a file can disclose information or submit a
     # state-changing form.  Navigation, observation, and ordinary clicks remain
     # replayable because the user explicitly invoked the learned workflow.
@@ -153,24 +153,7 @@ BROWSER_SKILL_EVENT_KINDS = frozenset({
 
 _MAX_GENERATED_SCRIPT_CHARS = 48_000
 
-def _enabled_step_tool_names(steps: list[dict[str, Any]]) -> list[str]:
-    return enabled_step_tool_names(steps)
-
-def _tool_call_steps_for_replay(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return tool_call_steps(steps)
-
-def _has_auto_replay_blocked_step(steps: list[dict[str, Any]]) -> bool:
-    return has_blocked_step(steps, AUTO_REPLAY_BLOCKED_TOOLS)
-
-def _has_skillworthy_steps(steps: list[dict[str, Any]]) -> bool:
-    return has_skillworthy_steps(
-        steps,
-        trivial_tools=TRIVIAL_SKILL_TOOLS,
-        internal_tools=INTERNAL_TOOLS,
-        minimum_steps=MIN_SKILL_CHAIN_STEPS,
-    )
-
-def _is_reusable_skill_definition(definition: dict[str, Any] | None) -> bool:
+def is_reusable_skill_definition(definition: dict[str, Any] | None) -> bool:
     """Return whether a stored skill is eligible for learning or execution.
 
     This is intentionally checked at every read boundary as well as during
@@ -180,9 +163,14 @@ def _is_reusable_skill_definition(definition: dict[str, Any] | None) -> bool:
     """
     if not isinstance(definition, dict):
         return False
-    return _has_skillworthy_steps(definition.get("steps") or [])
+    return has_skillworthy_steps(
+        definition.get("steps") or [],
+        trivial_tools=TRIVIAL_SKILL_TOOLS,
+        internal_tools=INTERNAL_TOOLS,
+        minimum_steps=MIN_SKILL_CHAIN_STEPS,
+    )
 
-def _is_complex_continuous_workflow(steps: list[dict[str, Any]]) -> bool:
+def is_complex_continuous_workflow(steps: list[dict[str, Any]]) -> bool:
     call_count = 0
     has_repeated_call = False
     for step in steps:
@@ -197,11 +185,11 @@ def _is_complex_continuous_workflow(steps: list[dict[str, Any]]) -> bool:
             call_count += 1
     return call_count >= 3 or has_repeated_call
 
-def _workflow_can_be_scripted(steps: list[dict[str, Any]]) -> bool:
-    tools = _enabled_step_tool_names(steps)
+def workflow_can_be_scripted(steps: list[dict[str, Any]]) -> bool:
+    tools = enabled_step_tool_names(steps)
     return bool(tools) and not any(tool.startswith("browser.user.") for tool in tools)
 
-def _normalize_generated_script_source(language: str, value: Any) -> str:
+def normalize_generated_script_source(language: str, value: Any) -> str:
     source = str(value or "").replace("\r\n", "\n").strip()
     fenced = re.fullmatch(r"```(?:python|py|bash|sh|shell)?\s*\n([\s\S]*?)\n```", source, re.IGNORECASE)
     if fenced:
@@ -235,12 +223,12 @@ def _normalize_generated_script_source(language: str, value: Any) -> str:
         return ""
     return source.rstrip() + "\n"
 
-def _normalize_script_implementation(value: Any, *, allow_script: bool) -> dict[str, Any]:
+def normalize_script_implementation(value: Any, *, allow_script: bool) -> dict[str, Any]:
     if not allow_script or not isinstance(value, dict):
         return {"kind": "tool_chain"}
     raw_kind = str(value.get("kind") or value.get("language") or "").strip().lower()
     language = "python" if raw_kind in {"python", "py", "python_script"} else "shell" if raw_kind in {"shell", "sh", "bash", "shell_script"} else ""
-    source = _normalize_generated_script_source(language, value.get("source"))
+    source = normalize_generated_script_source(language, value.get("source"))
     if not language or not source:
         return {"kind": "tool_chain"}
     return {
@@ -250,16 +238,3 @@ def _normalize_script_implementation(value: Any, *, allow_script: bool) -> dict[
         "source": source,
         "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
     }
-
-def _resolve_value_template(value: Any, params: dict[str, Any]) -> Any:
-    return resolve_value_template(value, params)
-
-enabled_tools = _enabled_step_tool_names
-tool_steps_for_replay = _tool_call_steps_for_replay
-has_auto_replay_blocked_step = _has_auto_replay_blocked_step
-has_reusable_steps = _has_skillworthy_steps
-is_reusable_skill_definition = _is_reusable_skill_definition
-is_complex_continuous_workflow = _is_complex_continuous_workflow
-workflow_can_be_scripted = _workflow_can_be_scripted
-normalize_script_implementation = _normalize_script_implementation
-normalize_generated_script_source = _normalize_generated_script_source

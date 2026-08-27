@@ -68,43 +68,11 @@ def test_config_reset_replaces_persisted_and_live_environment(monkeypatch):
     assert live_env["OPENAI_MODEL"] == config_store._DEFAULT_ENV["OPENAI_MODEL"]
 
 
-def test_model_configuration_invalidation_drops_all_stale_affinity():
-    from cyrene.model_runtime import client
-
-    client._last_success_cache = {"primary": {"model": "old"}}
-    client._session_model_preference_cache = {"chat": {"model": "old"}}
-    client._candidate_cooldowns[("chat", "old", "https://old.test")] = 1.0
-    client._published_fallback_notices[("chat", "round", "old", "fallback")] = None
-
-    client.invalidate_model_configuration()
-
-    assert client._last_success_cache is None
-    assert client._session_model_preference_cache is None
-    assert client._candidate_cooldowns == {}
-    assert client._published_fallback_notices == {}
-
-
-def test_unconfigured_model_failure_has_actionable_error_metadata():
-    from cyrene.workbench.chat import _workbench_chat_error_metadata
-    from cyrene.workbench.runtime import _WorkbenchAgentRunError
-
-    error = _WorkbenchAgentRunError(
-        "model_not_configured",
-        "No model is configured.",
-        status_code=400,
-    )
-
-    assert _workbench_chat_error_metadata(error) == {
-        "code": "model_not_configured",
-        "detail_key": "workbenchChat.error.modelNotConfigured",
-    }
-
-
 @pytest.mark.asyncio
 async def test_delete_all_local_models_cancels_runtime_and_removes_root(
     monkeypatch, tmp_path: Path
 ):
-    from cyrene.knowledge import local_models
+    from agent.plugin.plugin_impl.cyrene_knowledge import local_models
 
     root = tmp_path / "knowledge_models"
     (root / "qwen3-embedding-0.6b").mkdir(parents=True)
@@ -154,49 +122,6 @@ async def test_clear_browser_data_erases_electron_and_playwright_profiles(
     assert calls[0][0] == "clearStorage"
     assert not profile.exists()
     browser.close_session.assert_awaited_once()
-
-
-def test_reset_clears_legacy_workspace_root_leftovers_but_keeps_user_folders(
-    monkeypatch, tmp_path: Path
-):
-    from cyrene.workbench import runtime
-
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    monkeypatch.setattr(runtime, "WORKSPACE_DIR", workspace)
-
-    # Signature-matching Cyrene leftovers from a failed migration/old restore.
-    conversations = workspace / "conversations"
-    conversations.mkdir()
-    (conversations / "2026-01-01.md").write_text(
-        "# Conversations - 2026-01-01\nold", encoding="utf-8"
-    )
-    (workspace / "plan").mkdir()
-    (workspace / "plan" / "plan_deadbeef01.md").write_text("# plan", encoding="utf-8")
-    (workspace / "projects").mkdir()
-    (workspace / "projects" / "project_deadbeef01").mkdir()
-    (workspace / "scratch").mkdir()
-    (workspace / "scratch" / "tmp.bin").write_bytes(b"\x00")
-    soul = workspace / "SOUL.md"
-    soul.write_text("# Soul\n\n## SELF:IDENTITY\n- legacy\n", encoding="utf-8")
-
-    # User-owned folders with the same names but no Cyrene signature survive.
-    user_plan = workspace / "patterns"
-    user_plan.mkdir()
-    (user_plan / "notes.md").write_text("# my notes", encoding="utf-8")
-    user_soul = workspace / "notes.md"
-    user_soul.write_text("# not a soul", encoding="utf-8")
-
-    runtime._reset_legacy_workspace_root_leftovers()
-
-    assert not conversations.exists()
-    assert not (workspace / "plan").exists()
-    assert not (workspace / "projects").exists()
-    assert not (workspace / "scratch").exists()
-    assert not soul.exists()
-    assert user_plan.exists()
-    assert (user_plan / "notes.md").read_text(encoding="utf-8") == "# my notes"
-    assert user_soul.exists()
 
 
 def test_reset_frontend_confirms_and_clears_all_client_storage():

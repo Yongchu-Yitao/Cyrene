@@ -79,16 +79,19 @@ Short-term Entry 保存情绪、提及次数和 Fact/Pattern/Preference/Emotion 
 
 ### Knowledge 与 Library
 
-通过 Workbench 导入的文件、Chat Attachment、Generated Export 和 Zotero
-Attachment 会被 Hash 并存入项目 SQLite。可提取内容会被分块；只有配置
-Embedding Provider 后才生成 Embedding，否则仍提供 Lexical/FTS Retrieval。
-把任意文件放进 Project Workspace 不会自动 Ingest。`knowledge_tools` 提供
-项目 Document 和 Literature Library 能力；`AnalyzeAttachment`、
-`WebSearch`、`WebFetch` 是 Direct Tool。
+可编辑的 `cyrene_knowledge` 插件包完整拥有 Knowledge 后端：SQLite Schema、
+托管附件、内容抽取、分块、本地向量、混合检索、Zotero 同步、Workbench HTTP
+Route、全局搜索与 Agent 工具。数据统一保存在
+`data/plugin_data/cyrene_knowledge/`，所有记录按 Workbench Project 隔离。
+Chat Attachment、Generated Export 和完成后的 Task Artifact 都进入同一个
+插件服务；旧 `cyrene.knowledge` 与 Workbench Library Route 不再位于活动调用链。
+Agent 通过 `toolbox.list → describe → invoke` 使用这些工具。
 
 ### Entity
 
-`entity_tools` 提供 `entity.track`、`query`、`update`、`delete`。
+可编辑的 `cyrene_entity` 插件包通过
+`toolbox.list → describe → invoke` 提供 `entity.track`、`query`、`update`、`delete`；
+旧实体工具入口不再注册。
 
 ### Skill
 
@@ -120,8 +123,17 @@ Electron 与 Web 后端仅作为客户端连接，因此关闭视图不会结束
 
 ### Scheduler
 
-`task_tools` 的 `task.schedule` 创建 Cron、Interval、One-shot Task，并在
-SQLite 保存执行历史。
+可编辑的 `cyrene_schedule` 插件包负责全部定时任务行为。Agent 通过
+`toolbox.list → describe → invoke` 使用 `schedule.create`、`list`、`edit`、
+`pause`、`resume`、`cancel` 和 `runs`。隐藏的 `schedule.tick` 在插件元数据中
+声明后台任务；通用 Plugin Background Host 只提供时钟，并在每次触发时调用用户
+目录中的当前实现。
+
+任务和执行历史持久化在 SQLite。Lease Claim、稳定 Run ID 与按 Revision 的
+Finalize 防止重复执行，也避免旧 Run 覆盖并发 Pause/Edit。Agent Task 直接通过
+Workbench Chat Runtime 执行并把一个最终结果投递回 Workbench。插件包的
+`application_setup` 同时注册 Workbench Route、全局搜索 Provider 和 Schedule
+模块；插件未加载时不会回退到另一套内置定时任务后端。
 
 ### Cyrene 自管理控制面
 
@@ -244,7 +256,7 @@ src/
 │   ├── tools.py
 │   ├── __init__.py
 │   ├── __main__.py
-│   └── local_cli.py         Electron 物理启动垫片
+│   └── local_cli.py         旧版直接文件启动兼容垫片
 ├── route/                   FastAPI Adapter 与 Registry
 ├── webui/                   App Lifecycle、Auth、唯一 Workbench 前端与 SPA Hosting
 │   ├── frontend/            唯一 React/JSX 源码根
@@ -257,5 +269,5 @@ store/
 
 `cyrene.db`、`cyrene.scheduler`、`cyrene.workbench_runtime` 等历史 Import 由
 `cyrene/runtime/module_compat.py` 惰性解析到完全相同的正式模块对象，不需要
-重复顶层实现文件。`local_cli.py` 是唯一物理兼容启动器，因为 Electron 开发
-流程仍执行这个确切路径。
+重复顶层实现文件。`local_cli.py` 仅保留为旧版直接文件启动兼容垫片；当前源码
+启动和 Electron 开发模式统一使用 `cyrene` 项目入口。

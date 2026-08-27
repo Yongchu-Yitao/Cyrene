@@ -24,13 +24,7 @@ from cyrene.observability.benchmark_cache import (
 )
 
 
-DEFAULT_GROUPS = ("agent", "chat", "search", "features")
-
-
-async def _run_agent(repeats: int) -> dict[str, Any]:
-    from cyrene.observability.performance_benchmark import run_benchmark
-
-    return await run_benchmark(repeats=repeats)
+DEFAULT_GROUPS = ("chat", "search", "features")
 
 
 async def _run_chat(repeats: int) -> dict[str, Any]:
@@ -53,7 +47,6 @@ async def _run_features(repeats: int) -> dict[str, Any]:
 
 GroupRunner = Callable[[int], Awaitable[dict[str, Any]]]
 GROUP_RUNNERS: dict[str, GroupRunner] = {
-    "agent": _run_agent,
     "chat": _run_chat,
     "search": _run_search,
     "features": _run_features,
@@ -81,29 +74,6 @@ def _format_cache_progression(values: Any) -> str:
 
 
 def _normalized_cases(group: str, report: dict[str, Any]) -> list[dict[str, Any]]:
-    if group == "agent":
-        return [
-            {
-                "id": f"agent/{item['scenario']}",
-                "group": group,
-                "scenario": item["scenario"],
-                "primary_metric": "wall_ms",
-                "primary_ms": float(item["wall_ms"]),
-                "quality_preserved": bool(
-                    item.get("model_rounds", 0) >= 1
-                    and item.get("trace_span_count", 0) >= 2
-                ),
-                "parallel_workers": int(item["parallel_sessions"]),
-                "rounds_per_worker": int(item["turns_per_session"]),
-                "ideal_cache_hit_rate": _ideal_cache_hit_rate(
-                    item.get("ideal_cache")
-                ),
-                "ideal_cache_progression": _ideal_cache_progression(
-                    item.get("ideal_cache")
-                ),
-            }
-            for item in report["results"]
-        ]
     if group == "chat":
         return [
             {

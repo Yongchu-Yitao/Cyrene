@@ -374,7 +374,7 @@ async def test_terminal_manager_keeps_a_resizable_replayable_pty(
         lambda project_id: {"id": project_id, "workspacePath": str(tmp_path)},
     )
     monkeypatch.setattr(
-        "cyrene.tooling.backends.shell_runtime.interactive_argv",
+        "cyrene.terminal.shell_runtime.interactive_argv",
         lambda: ("sh", ["/bin/sh"]),
     )
     monkeypatch.setenv("NO_COLOR", "1")
@@ -877,7 +877,7 @@ async def test_user_terminal_input_temporarily_has_priority(tmp_path: Path) -> N
 
 
 def test_agent_terminal_key_sequences_cover_interactive_tui_controls() -> None:
-    from cyrene.tool_impl.code.send_shell import _terminal_key_sequence
+    from agent.plugin.plugin_impl.cyrene_code.send_shell import _terminal_key_sequence
 
     assert _terminal_key_sequence("escape") == "\x1b"
     assert _terminal_key_sequence("up") == "\x1b[A"

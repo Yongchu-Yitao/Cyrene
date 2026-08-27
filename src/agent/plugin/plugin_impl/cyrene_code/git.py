@@ -3,25 +3,35 @@
 import asyncio
 import json
 
+from agent.plugin import PluginContext
+from agent.plugin.native_runtime import resolve_workspace_path, workspace_root
 
-async def _run_git(args: list[str], timeout: float = 30.0) -> dict:
+
+async def _run_git(
+    args: list[str],
+    context: PluginContext,
+    timeout: float = 30.0,
+) -> dict:
     """Run a git command and return {stdout, stderr, returncode}."""
-    # Follow the active Workbench project's workspace (per-round ContextVar),
-    # falling back to the global WORKSPACE_DIR outside a project — same as Bash.
-    from cyrene.agent.context import active_workspace_dir
     try:
         proc = await asyncio.create_subprocess_exec(
             "git", *args,
-            cwd=str(active_workspace_dir()),
+            cwd=str(workspace_root(context)),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return {
+        result = {
             "stdout": stdout.decode("utf-8", errors="replace"),
             "stderr": stderr.decode("utf-8", errors="replace"),
             "returncode": proc.returncode or 0,
         }
+        if result["returncode"]:
+            result["error"] = (
+                str(result["stderr"] or result["stdout"] or "git command failed")
+                .strip()
+            )
+        return result
     except asyncio.TimeoutError:
         return {"error": "git command timed out"}
     except FileNotFoundError:
@@ -69,8 +79,8 @@ def _parse_log(oneline: str) -> list[dict]:
 
 # ── Tool handlers ──
 
-async def _tool_git_status(args: dict, bot=None, chat_id=None, db_path=None, notify_state=None) -> str:
-    result = await _run_git(["status", "--porcelain"])
+async def _tool_git_status(args: dict, context: PluginContext) -> str:
+    result = await _run_git(["status", "--porcelain"], context)
     if result.get("error"):
         return json.dumps({"error": result["error"]}, ensure_ascii=False)
     files = _parse_status(result["stdout"])
@@ -82,15 +92,16 @@ async def _tool_git_status(args: dict, bot=None, chat_id=None, db_path=None, not
     }, ensure_ascii=False)
 
 
-async def _tool_git_diff(args: dict, bot=None, chat_id=None, db_path=None, notify_state=None) -> str:
+async def _tool_git_diff(args: dict, context: PluginContext) -> str:
     cmd = ["diff"]
     if args.get("staged"):
         cmd.append("--staged")
     path = args.get("path", "")
     if path:
         cmd.append("--")
-        cmd.append(path)
-    result = await _run_git(cmd, timeout=60.0)
+        resolved = resolve_workspace_path(str(path), context)
+        cmd.append(str(resolved.relative_to(workspace_root(context))))
+    result = await _run_git(cmd, context, timeout=60.0)
     if result.get("error"):
         return json.dumps({"error": result["error"]}, ensure_ascii=False)
     diff_text = result["stdout"]
@@ -101,9 +112,9 @@ async def _tool_git_diff(args: dict, bot=None, chat_id=None, db_path=None, notif
     }, ensure_ascii=False)
 
 
-async def _tool_git_log(args: dict, bot=None, chat_id=None, db_path=None, notify_state=None) -> str:
+async def _tool_git_log(args: dict, context: PluginContext) -> str:
     count = int(args.get("count", 10))
-    result = await _run_git(["log", "--oneline", f"-n{count}"])
+    result = await _run_git(["log", "--oneline", f"-n{count}"], context)
     if result.get("error"):
         return json.dumps({"error": result["error"]}, ensure_ascii=False)
     commits = _parse_log(result["stdout"])
@@ -114,43 +125,29 @@ async def _tool_git_log(args: dict, bot=None, chat_id=None, db_path=None, notify
     }, ensure_ascii=False)
 
 
-async def _tool_git_commit(args: dict, bot=None, chat_id=None, db_path=None, notify_state=None) -> str:
-    """Stage and commit changes. Requires user confirmation via scope elevation."""
+async def _tool_git_commit(args: dict, context: PluginContext) -> str:
+    """Stage and commit changes after the central PreToolUse review."""
     message = str(args.get("message", ""))
     files = args.get("files", [])
 
     if not message:
         return json.dumps({"error": "Commit message is required"}, ensure_ascii=False)
 
-    from cyrene.tooling.runtime_api import request_scope_elevation
-    from cyrene.agent.context import has_temporary_full_access
-
-    # Ask user for confirmation (skip if already granted this round)
-    if not has_temporary_full_access():
-        files_hint = ", ".join(files) if files else "all changes"
-        elevation_result = await request_scope_elevation(
-            tool_name="GitCommit",
-            path_hint=files_hint,
-            operation=f"commit: {message}",
-            reason=f"Commit {files_hint} with message: {message}",
-            permission_kind="git_commit",
-            options=["allow_once"],
-        )
-        # None=已授权(auto 模式批准/full_access 短路)，继续提交；
-        # 非 None=拒绝串或 awaiting_user JSON，直接回传给 agent。
-        if elevation_result is not None:
-            return elevation_result
-
     # Stage files first (if specific files given, add only those)
     if files:
-        add_result = await _run_git(["add", "--"] + list(files))
+        root = workspace_root(context)
+        pathspecs = [
+            str(resolve_workspace_path(str(path), context).relative_to(root))
+            for path in files
+        ]
+        add_result = await _run_git(["add", "--", *pathspecs], context)
     else:
-        add_result = await _run_git(["add", "-A"])
+        add_result = await _run_git(["add", "-A"], context)
     if add_result.get("error"):
         return json.dumps({"error": "Failed to stage files: " + add_result["error"]}, ensure_ascii=False)
 
     cmd = ["commit", "-m", message]
-    result = await _run_git(cmd)
+    result = await _run_git(cmd, context)
     if result.get("error"):
         return json.dumps({"error": result["error"]}, ensure_ascii=False)
     return json.dumps({
@@ -159,10 +156,10 @@ async def _tool_git_commit(args: dict, bot=None, chat_id=None, db_path=None, not
     }, ensure_ascii=False)
 
 
-async def _tool_git_branch(args: dict, bot=None, chat_id=None, db_path=None, notify_state=None) -> str:
+async def _tool_git_branch(args: dict, context: PluginContext) -> str:
     new_branch = args.get("create", "")
     if new_branch:
-        result = await _run_git(["branch", new_branch])
+        result = await _run_git(["branch", new_branch], context)
         if result.get("error"):
             return json.dumps({"error": result["error"]}, ensure_ascii=False)
         return json.dumps({
@@ -172,7 +169,7 @@ async def _tool_git_branch(args: dict, bot=None, chat_id=None, db_path=None, not
         }, ensure_ascii=False)
 
     # List branches
-    result = await _run_git(["branch"])
+    result = await _run_git(["branch"], context)
     if result.get("error"):
         return json.dumps({"error": result["error"]}, ensure_ascii=False)
     branches = []
@@ -266,15 +263,12 @@ GIT_BRANCH_DEF = {
     },
 }
 
+PLUGIN_DECLARATIONS = (
+    (GIT_STATUS_DEF, _tool_git_status),
+    (GIT_DIFF_DEF, _tool_git_diff),
+    (GIT_LOG_DEF, _tool_git_log),
+    (GIT_COMMIT_DEF, _tool_git_commit),
+    (GIT_BRANCH_DEF, _tool_git_branch),
+)
 
-def register_to(tool_defs: list, tool_handlers: dict) -> None:
-    tool_defs.append(GIT_STATUS_DEF)
-    tool_handlers["GitStatus"] = _tool_git_status
-    tool_defs.append(GIT_DIFF_DEF)
-    tool_handlers["GitDiff"] = _tool_git_diff
-    tool_defs.append(GIT_LOG_DEF)
-    tool_handlers["GitLog"] = _tool_git_log
-    tool_defs.append(GIT_COMMIT_DEF)
-    tool_handlers["GitCommit"] = _tool_git_commit
-    tool_defs.append(GIT_BRANCH_DEF)
-    tool_handlers["GitBranch"] = _tool_git_branch
+__all__ = ["PLUGIN_DECLARATIONS"]

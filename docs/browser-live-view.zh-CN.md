@@ -111,8 +111,8 @@ cd electron
 npm run dev
 ```
 
-Electron 通过 `src/cyrene/local_cli.py` 启动 Backend。成功时输出
-`UIMODE=workbench` 和 `PORT=4242`。
+Electron 通过 `uv run cyrene --workbench --electron-mode` 启动 Backend。
+成功时输出 `UIMODE=workbench` 和 `PORT=4242`。
 
 ## Permission
 

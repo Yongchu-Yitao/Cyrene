@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -14,6 +15,7 @@ from cyrene.runtime.model_configuration import (
     normalize_model_configuration,
     public_model_configuration,
     save_model_configuration,
+    selectable_model_candidates,
 )
 
 
@@ -24,17 +26,73 @@ def _error(message: str, status: int = 400, *, detail: str = "") -> JSONResponse
     return JSONResponse(payload, status_code=status)
 
 
+def _public_configuration_with_plugins(
+    configuration: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    resolved = configuration or get_model_configuration()
+    payload = public_model_configuration(resolved)
+    try:
+        from agent.plugin.model_catalog import model_plugin_catalog
+
+        plugin_catalog = model_plugin_catalog()
+        payload["model_plugins"] = plugin_catalog
+    except Exception as exc:
+        plugin_catalog = []
+        payload["model_plugins"] = []
+        payload["model_plugin_error"] = str(exc)
+    providers = {
+        str(item.get("id") or "").strip().lower(): item
+        for item in plugin_catalog
+        if isinstance(item, dict)
+    }
+    connections = {
+        str(connection.get("id") or ""): connection
+        for connection in resolved.get("connections") or []
+        if isinstance(connection, dict)
+    }
+    selectable: list[dict[str, Any]] = []
+    for candidate in selectable_model_candidates(resolved):
+        item = {
+            key: value
+            for key, value in candidate.items()
+            if key not in {"api_key", "options", "endpoints", "preferred_endpoint"}
+            and not str(key).startswith("_")
+        }
+        connection = connections.get(str(candidate.get("connection_id") or ""), {})
+        options = connection.get("options")
+        provider_id = str(
+            options.get("provider_preset") if isinstance(options, dict) else ""
+        ).strip().lower()
+        provider = providers.get(provider_id, {})
+        efforts = provider.get("supported_reasoning_efforts")
+        if isinstance(efforts, list) and efforts:
+            item["supported_reasoning_efforts"] = list(efforts)
+        default_effort = str(provider.get("default_reasoning_effort") or "").strip()
+        if default_effort:
+            item["default_reasoning_effort"] = default_effort
+        selectable.append(item)
+    payload["selectable_models"] = selectable
+    primary = list((resolved.get("routes") or {}).get("primary") or ())
+    payload["active"] = str(primary[0] if primary else "")
+    return payload
+
+
 def _connection_draft(connection_id: str, body: Any) -> dict[str, Any]:
     configuration = get_model_configuration()
     existing = next(
         (item for item in configuration["connections"] if item["id"] == connection_id),
         None,
     )
-    source = body.get("connection", body) if isinstance(body, dict) else {}
+    if not isinstance(body, dict) or not isinstance(body.get("connection"), dict):
+        raise ValueError("connection draft must contain a canonical connection object")
+    source = body["connection"]
     if not isinstance(source, dict):
         raise ValueError("connection draft must be an object")
     if existing is None and not source:
         raise ValueError("model connection not found")
+    submitted_id = str(source.get("id") or "").strip()
+    if submitted_id != connection_id:
+        raise ValueError("connection draft id must match the requested connection")
     merged = {**(existing or {}), **source, "id": connection_id}
     connections = list(configuration["connections"])
     if existing is None:
@@ -54,69 +112,38 @@ def _connection_draft(connection_id: str, body: Any) -> dict[str, Any]:
 
 async def _discover(connection: dict[str, Any]) -> list[dict[str, Any]]:
     adapter = str(connection.get("adapter") or "")
-    if adapter == "codex_oauth":
-        from cyrene.model_runtime.codex_provider import get_codex_provider
+    options = connection.get("options")
+    provider_preset = str(
+        options.get("provider_preset") if isinstance(options, dict) else ""
+    ).strip().lower()
+    from agent.plugin import PluginContext, PluginRuntime
+    from agent.plugin.model_catalog import resolve_model_plugin
 
-        raw_models = await get_codex_provider().models()
-        return [
-            {
-                "id": str(item.get("model") or item.get("id") or "").strip(),
-                "model": str(item.get("model") or item.get("id") or "").strip(),
-                "name": str(item.get("name") or item.get("model") or item.get("id") or "").strip(),
-                "capabilities": ["chat", "vision", "tools", "reasoning"],
-            }
-            for item in raw_models
-            if str(item.get("model") or item.get("id") or "").strip()
-        ]
-    if adapter == "local_onnx":
-        return [{
-            "id": "qwen3-embedding-0.6b",
-            "model": "qwen3-embedding-0.6b",
-            "name": "Qwen3 Embedding 0.6B",
-            "capabilities": ["embedding"],
-            "dimensions": 1024,
-        }]
-
-    from cyrene.model_runtime.protocol_adapters import (
-        discovery_request,
-        parse_discovery_response,
+    registry, plugin = resolve_model_plugin(provider_preset, adapter)
+    if plugin is None:
+        raise RuntimeError(
+            f"no model Provider Plugin is registered for {provider_preset or adapter}"
+        )
+    outcome = await PluginRuntime(registry).call(
+        plugin.name,
+        {"operation": "list_models"},
+        PluginContext(
+            data={"caller": "settings_model_discovery"},
+            services={"model_connection": connection},
+        ),
     )
-
-    base_url = str(connection.get("base_url") or "").rstrip("/")
-    api_key = str(connection.get("api_key") or "")
-    endpoint, headers = discovery_request(adapter, base_url, api_key)
-    timeout = httpx.Timeout(20.0, connect=5.0)
-    from cyrene.runtime.network_proxy import configured_proxy_url
-
-    proxy_url = configured_proxy_url(opt_in=connection.get("use_proxy") is True)
-    async with httpx.AsyncClient(
-        timeout=timeout,
-        follow_redirects=True,
-        proxy=proxy_url or None,
-    ) as client:
-        response = await client.get(endpoint, headers=headers)
-        response.raise_for_status()
-        return parse_discovery_response(adapter, response.json())
+    if not outcome.success:
+        raise RuntimeError(outcome.error or "model Plugin discovery failed")
+    result = outcome.value
+    if not isinstance(result, dict) or not isinstance(result.get("models"), list):
+        raise RuntimeError(
+            f"model Plugin {plugin.name!r} returned an invalid model catalog"
+        )
+    return [dict(item) for item in result["models"] if isinstance(item, dict)]
 
 
 async def _test_connection(connection: dict[str, Any]) -> dict[str, Any]:
     adapter = str(connection.get("adapter") or "")
-    if adapter == "codex_oauth":
-        from cyrene.model_runtime.codex_provider import get_codex_provider
-
-        account = await get_codex_provider().account()
-        connected = (
-            isinstance(account.get("account"), dict)
-            and account["account"].get("type") == "chatgpt"
-        )
-        if not connected:
-            raise ValueError("Codex OAuth login is required")
-        return {"connected": True, "adapter": adapter, "account": account.get("account")}
-    if adapter == "local_onnx":
-        from cyrene.knowledge.local_models import status
-
-        snapshot = status()
-        return {"connected": True, "adapter": adapter, "local_models": snapshot}
     models = await _discover(connection)
     return {"connected": True, "adapter": adapter, "model_count": len(models)}
 
@@ -124,7 +151,18 @@ async def _test_connection(connection: dict[str, Any]) -> dict[str, Any]:
 async def _test_model(connection: dict[str, Any], profile: Any) -> dict[str, Any]:
     if not isinstance(profile, dict):
         raise ValueError("model profile is required")
-    model = str(profile.get("model") or profile.get("model_id") or "").strip()
+    normalized = normalize_model_configuration({
+        "connections": [connection],
+        "profiles": [profile],
+        "routes": {
+            "primary": [],
+            "secondary": [],
+            "vision": [],
+            "embedding": [],
+        },
+    })
+    profile = normalized["profiles"][0]
+    model = str(profile.get("model") or "").strip()
     if not model:
         raise ValueError("model id is required")
     capabilities = {
@@ -132,86 +170,78 @@ async def _test_model(connection: dict[str, Any], profile: Any) -> dict[str, Any
         for item in (profile.get("capabilities") or [])
         if str(item or "").strip()
     }
-    configured_adapter = str(
-        connection.get("adapter") or "openai_compatible"
-    ).strip().lower()
+    adapter = str(connection.get("adapter") or "").strip().lower()
     connection_options = (
         connection.get("options")
         if isinstance(connection.get("options"), dict)
         else {}
     )
-    from cyrene.model_runtime.protocol_adapters import runtime_adapter_for_provider
-
     provider_preset = str(
         connection_options.get("provider_preset") or ""
     ).strip().lower()
-    adapter = runtime_adapter_for_provider(
-        configured_adapter,
-        model,
-        provider_preset=provider_preset,
-    )
+    from agent.plugin import PluginContext, PluginRuntime
+    from agent.plugin.model_catalog import resolve_model_plugin
 
-    # Embedding-only profiles do not accept a chat probe. Confirm that the
-    # exact configured model is currently advertised by the provider instead.
+    registry, plugin = resolve_model_plugin(provider_preset, adapter)
+    if plugin is None:
+        raise RuntimeError(
+            f"no model Provider Plugin is registered for {provider_preset or adapter}"
+        )
+
+    # Embedding-only profiles are probed through the same Provider Plugin
+    # operation used by knowledge indexing.
     if "embedding" in capabilities and not ({"chat", "vision"} & capabilities):
-        discovered = await _discover(connection)
-        available = {
-            str(item.get("model") or item.get("id") or "").strip()
-            for item in discovered
-            if isinstance(item, dict)
+        arguments: dict[str, Any] = {
+            "operation": "embed",
+            "inputs": ["connection test"],
+            "input_type": "query",
+            "model": model,
         }
-        if model not in available:
-            raise ValueError("configured model is not available")
+        dimensions = int(profile.get("dimensions") or 0)
+        if dimensions:
+            arguments["dimensions"] = dimensions
+        outcome = await asyncio.wait_for(
+            PluginRuntime(registry).call(
+                plugin.name,
+                arguments,
+                PluginContext(
+                    data={"caller": "settings_model_test"},
+                    services={
+                        "model_connection": connection,
+                        "model_profile": profile,
+                    },
+                ),
+            ),
+            timeout=20.0,
+        )
+        if not outcome.success or not isinstance(outcome.value, dict):
+            raise RuntimeError(
+                outcome.error or "model Provider Plugin embedding test failed"
+            )
         return {"connected": True, "adapter": adapter, "model": model}
-
-    runtime_provider = (
-        "codex_oauth"
-        if configured_adapter == "codex_oauth"
-        else "opencode_go"
-        if provider_preset == "opencode_go"
-        else adapter
-        if adapter in {"anthropic", "openai", "openai_responses", "gemini"}
-        else "openai_compatible"
-    )
-    base_url = str(connection.get("base_url") or "").strip().rstrip("/")
-    if adapter == "ollama" and base_url and not base_url.endswith("/v1"):
-        base_url = f"{base_url}/v1"
-    candidate = {
-        "id": str(profile.get("id") or model),
-        "profile_id": str(profile.get("id") or model),
-        "connection_id": str(connection.get("id") or ""),
-        "model": model,
-        "name": str(profile.get("name") or model),
-        "provider": runtime_provider,
-        "adapter": adapter,
-        "base_url": base_url,
-        "api_key": str(connection.get("api_key") or ""),
-        "capabilities": sorted(capabilities),
-        "reasoning_effort": str(profile.get("reasoning_effort") or ""),
-        "use_proxy": connection.get("use_proxy") is True,
-    }
-    if connection_options:
-        candidate["options"] = dict(connection_options)
-    from cyrene.model_runtime.client import call_llm, _normalized_llm_endpoints
-    from cyrene.model_runtime.protocol_adapters import protocol_endpoints
-
-    candidate["endpoints"] = (
-        _normalized_llm_endpoints(base_url)
-        if adapter == "openai_compatible"
-        else protocol_endpoints(adapter, base_url, model)
-    )
-
-    response = await call_llm(
-        [{"role": "user", "content": "Reply with OK."}],
-        candidates=[candidate],
-        max_tokens=8,
+    outcome = await asyncio.wait_for(
+        PluginRuntime(registry).call(
+            plugin.name,
+            {
+                "operation": "complete",
+                "messages": [{"role": "user", "content": "Reply with OK."}],
+                "model": model,
+                "max_tokens": 8,
+                "reasoning_effort": str(profile.get("reasoning_effort") or ""),
+            },
+            PluginContext(
+                data={"caller": "settings_model_test"},
+                services={
+                    "model_connection": connection,
+                    "model_profile": profile,
+                },
+            ),
+        ),
         timeout=20.0,
-        caller="settings_model_test",
-        phase="connectivity",
-        publish_events=False,
-        record_usage=False,
-        record_latency=False,
     )
+    if not outcome.success:
+        raise RuntimeError(outcome.error or "model Provider Plugin test failed")
+    response = outcome.value
     if not isinstance(response, dict):
         raise RuntimeError("model returned an invalid response")
     return {"connected": True, "adapter": adapter, "model": model}
@@ -220,7 +250,7 @@ async def _test_model(connection: dict[str, Any], profile: Any) -> dict[str, Any
 def register_model_configuration_routes(router: APIRouter) -> None:
     @router.get("/api/settings/model-config")
     async def api_get_model_configuration():
-        return public_model_configuration()
+        return _public_configuration_with_plugins()
 
     @router.put("/api/settings/model-config")
     async def api_put_model_configuration(request: Request):
@@ -236,7 +266,7 @@ def register_model_configuration_routes(router: APIRouter) -> None:
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 return _error("revision must be a non-negative integer")
             expected_revision = value
-        source = body.get("model_configuration", body)
+        source = {key: value for key, value in body.items() if key != "revision"}
         try:
             saved, revision = save_model_configuration(
                 source,
@@ -254,7 +284,7 @@ def register_model_configuration_routes(router: APIRouter) -> None:
             )
         except (TypeError, ValueError) as exc:
             return _error(str(exc))
-        payload = public_model_configuration(saved)
+        payload = _public_configuration_with_plugins(saved)
         payload["revision"] = revision
         return {"ok": True, **payload}
 

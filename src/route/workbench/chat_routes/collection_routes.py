@@ -17,8 +17,6 @@ logger = logging.getLogger(__name__)
 
 def _register_list_route(router: APIRouter, context: ChatRouteContext):
     service = context.service
-    _project_data_key = context.project_data_key
-    _legacy_chats = service.legacy_chats
     _prune_orphaned_fork_metadata = service.prune_orphaned_fork_metadata
     _public_chat_light = service.public_chat_light
     _read_chats_store = service.repository.read
@@ -37,19 +35,12 @@ def _register_list_route(router: APIRouter, context: ChatRouteContext):
             if _prune_orphaned_fork_metadata(full_payload):
                 await asyncio.to_thread(_write_chats_store, full_payload)
                 payload = await asyncio.to_thread(_read_chat_summaries_store)
-        data_key = await asyncio.to_thread(_project_data_key, project) if project else ""
         chats = [
             _public_chat_light(chat)
             for chat in payload.get("chats", [])
             if str(chat.get("kind") or "chat") == "chat" and (not project or str(chat.get("projectId") or "") == project)
         ]
-        if project and data_key == "default":
-            legacy = await asyncio.to_thread(_legacy_chats, project)
-            legacy.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
-            chats.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
-            chats = chats + legacy
-        else:
-            chats.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
+        chats.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
         elapsed_ms = (time.monotonic() - started) * 1000
         if elapsed_ms >= 1000:
             logger.warning("Slow Workbench chat list load [project=%s duration_ms=%.1f]", project, elapsed_ms)
@@ -71,9 +62,8 @@ def _register_quick_targets_route(router: APIRouter, context: ChatRouteContext) 
         every project plus the resolved default project (where an unselected
         quick chat starts a new conversation).
 
-        Legacy sessions are read-only and live outside the chats store, so they
-        never appear here. ``running`` reflects the authoritative in-flight run
-        registry (not the persisted status, which can be stale after a crash).
+        ``running`` reflects the authoritative in-flight run registry (not the
+        persisted status, which can be stale after a crash).
         """
         R = _routes()
         store = await asyncio.to_thread(R.read_store)
@@ -151,9 +141,7 @@ def _register_create_route(router: APIRouter, context: ChatRouteContext):
         if not project:
             return JSONResponse({"error": "project not found"}, status_code=404)
 
-        from cyrene.workbench.project_memory_prompt import current_snapshot
-
-        memory_snapshot = await asyncio.to_thread(current_snapshot, project_id)
+        memory_snapshot = await context.project_memory_snapshot(project_id)
 
         from cyrene.workbench.composer_context import validate_context_activations
 

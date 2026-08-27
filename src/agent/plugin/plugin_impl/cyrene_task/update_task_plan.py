@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+from agent.plugin.native_runtime import publish_runtime_event, run_context_value
+
 TOOL_NAME = "update_task_plan"
 TOOL_DEF = {
     "type": "function",
@@ -70,24 +73,20 @@ TOOL_DEF = {
 
 async def _tool_update_task_plan(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
-    from cyrene.agent.context import get_current_agent_id, get_current_session_id, publish_runtime_event
     from cyrene.workbench.context import resolve_workbench_session_kind
 
-    if get_current_agent_id() != "main":
+    if str(run_context_value(context, "agent_id", "main") or "main") != "main":
         return "Only the main agent can update a Workbench task plan."
-    session_id = str(get_current_session_id() or "").strip()
+    session_id = str(run_context_value(context, "session_id", "") or "").strip()
     if not session_id:
         return "No active Workbench task session."
     if resolve_workbench_session_kind(session_id) != "task":
         return "update_task_plan is only available inside Workbench task sessions."
 
     operation = str(args.get("operation") or "").strip().lower()
-    from cyrene.workbench.runtime import update_task_plan_for_session
+    from cyrene.workbench.project_repository import update_task_plan_for_session
 
     result = update_task_plan_for_session(
         session_id,
@@ -102,12 +101,15 @@ async def _tool_update_task_plan(
     if not result.get("ok"):
         return "Task plan not updated: " + str(result.get("error") or "unknown error")
 
-    await publish_runtime_event({
-        "type": "task_plan_updated",
-        "operation": operation,
-        "plan": result.get("plan") or [],
-        "planDefinitionRevision": result.get("planDefinitionRevision"),
-    })
+    await publish_runtime_event(
+        context,
+        {
+            "type": "task_plan_updated",
+            "operation": operation,
+            "plan": result.get("plan") or [],
+            "planDefinitionRevision": result.get("planDefinitionRevision"),
+        },
+    )
     return "Task plan updated. Current plan revision: " + str(result.get("planDefinitionRevision") or "")
 
 

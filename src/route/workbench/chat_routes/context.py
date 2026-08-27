@@ -2,23 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
+import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
-from cyrene import config
-from cyrene.knowledge.workspace import WorkspaceResolutionError
+from cyrene.config import WORKSPACE_DIR
+from cyrene.observability.context_trace import approx_token_count
 from cyrene.workbench.chat_service import ChatService
+from cyrene.workbench import project_runtime
 from cyrene.workbench.conversation_context_service import (
+    AgentContextRepository,
     ConversationContextQueryService,
     ConversationInboxQueryService,
-    SessionStateRepository,
 )
-from cyrene.workbench.runtime_facade import WorkbenchRuntimeFacade
-from cyrene.runtime.config_store import effective_ctx_limit_for_model
 
 logger = logging.getLogger(__name__)
+
+_AWAITING_USER_SENTINEL = "[[cyrene.awaiting_user]]"
 
 
 @dataclass(slots=True)
@@ -26,54 +29,308 @@ class ChatRouteContext:
     bot: Any
     db_path: str
     service: ChatService
-    workbench_runtime: WorkbenchRuntimeFacade
     conversation_context: ConversationContextQueryService
     conversation_inbox: ConversationInboxQueryService
+    knowledge: Any = None
+    memory: Any = None
 
     @classmethod
-    def create(cls, *, bot: Any, db_path: str) -> "ChatRouteContext":
+    def create(
+        cls,
+        *,
+        bot: Any,
+        db_path: str,
+        knowledge_service: Any = None,
+        memory_service: Any = None,
+    ) -> "ChatRouteContext":
         service = ChatService(db_path)
         from cyrene.workbench import chat_groups, pinned_resources
+        from cyrene.workbench.project_repository import configure_workbench_store
 
         pinned_resources.configure(db_path)
         chat_groups.configure_store(db_path)
-        runtime = WorkbenchRuntimeFacade()
+        configure_workbench_store(db_path)
+        from agent.workbench.chat_runtime import workbench_agent_data_directory
+        from cyrene.runtime.inbox import peek_messages as peek_agent_inbox_messages
+
+        agent_state_root = workbench_agent_data_directory(str(db_path))
+
+        async def compact_agent_context(
+            chat_id: str,
+            context_limit: int,
+        ) -> dict[str, Any]:
+            from agent.workbench.conversation_runtime import ConversationConfig
+            from cyrene.workbench.project_repository import (
+                find_workbench_project_lightweight,
+            )
+
+            chat = await asyncio.to_thread(service.repository.get, str(chat_id))
+            if not isinstance(chat, dict):
+                raise LookupError("chat not found")
+            project_id = str(chat.get("projectId") or "")
+            project = await asyncio.to_thread(
+                find_workbench_project_lightweight,
+                project_id,
+            )
+            workspace_dir = str(
+                chat.get("workspaceOverride")
+                or (project or {}).get("workspacePath")
+                or WORKSPACE_DIR
+            )
+            compact_config = ConversationConfig(
+                session_id=str(chat_id),
+                workspace_dir=workspace_dir,
+                db_path=str(db_path),
+                bot=bot,
+                project_id=project_id,
+                session_title=str(chat.get("title") or ""),
+                remote_device_ids=tuple(
+                    str(item or "").strip()
+                    for item in (chat.get("remoteDeviceIds") or ())
+                    if str(item or "").strip()
+                ),
+                completed_turn_count=max(
+                    0,
+                    int(chat.get("completedTurnCount") or 0),
+                ),
+            )
+            return await service.run_manager.conversation_runtime.compact(
+                compact_config,
+                context_limit=max(0, int(context_limit or 0)),
+            )
+
+        async def agent_inbox_messages(
+            chat_id: str,
+            round_id: str,
+            limit: int,
+        ) -> dict[str, Any]:
+            return await asyncio.to_thread(
+                peek_agent_inbox_messages,
+                "main",
+                str(chat_id),
+                round_id=str(round_id or ""),
+                limit=int(limit),
+            )
+
         context = cls(
             bot=bot,
             db_path=str(db_path),
             service=service,
-            workbench_runtime=runtime,
             conversation_context=ConversationContextQueryService(
-                states=SessionStateRepository(
-                    lambda session_id: runtime.session_state_file(session_id)
-                ),
                 chats=service.repository,
-                agent_runtime=service.agent_runtime_builtin,
-                context_payload=service.chat_context_payload,
-                context_segments=service.context_segment_tokens,
-                subagent_payload=service.subagent_payload,
-                compact_session=service.compact_session,
-                default_model=lambda: str(getattr(config, "OPENAI_MODEL", "") or ""),
-                context_limit=effective_ctx_limit_for_model,
-                approx_token_count=lambda text: runtime.approx_token_count(text),
+                default_model=project_runtime._get_model,
+                context_limit=project_runtime._ctx_limit_for_model,
+                approx_token_count=lambda text: approx_token_count(str(text or "")),
+                agent_states=AgentContextRepository(agent_state_root / "context"),
+                compact_agent=compact_agent_context,
             ),
             conversation_inbox=ConversationInboxQueryService(
                 chats=service.repository,
                 run_manager=service.run_manager,
                 utc_now=service.utc_now_iso,
+                agent_messages=agent_inbox_messages,
             ),
+            knowledge=knowledge_service,
+            memory=memory_service,
         )
         context._configure_shell_wake()
         context._configure_media_wake()
         return context
 
     def runtime(self):
-        return self.workbench_runtime
+        """Return the explicit route dependency object used by old call sites."""
+
+        return self
+
+    @property
+    def awaiting_user_sentinel(self) -> str:
+        return _AWAITING_USER_SENTINEL
+
+    @property
+    def chat_id(self) -> int:
+        return -1
+
+    @staticmethod
+    def read_store() -> dict[str, Any]:
+        from cyrene.workbench.project_repository import read_workbench_store
+
+        return read_workbench_store()
+
+    @staticmethod
+    def find_project(
+        payload: dict[str, Any],
+        project_id: str,
+    ) -> dict[str, Any] | None:
+        from cyrene.workbench.project_repository import find_workbench_project
+
+        return find_workbench_project(payload, str(project_id or ""))
+
+    @staticmethod
+    def find_project_lightweight(project_id: str) -> dict[str, Any] | None:
+        from cyrene.workbench.project_repository import (
+            find_workbench_project_lightweight,
+        )
+
+        return find_workbench_project_lightweight(str(project_id or ""))
+
+    @staticmethod
+    def resolve_workspace_dir(project: dict[str, Any] | None) -> str:
+        from cyrene.workbench.project_repository import (
+            resolve_project_workspace_dir,
+        )
+
+        return resolve_project_workspace_dir(project)
+
+    @staticmethod
+    def get_model() -> str:
+        return project_runtime._get_model()
+
+    @staticmethod
+    def normalize_attachments(attachments: Any) -> list[dict[str, Any]]:
+        from cyrene.workbench.chat_attachment_service import (
+            normalize_chat_attachments,
+        )
+
+        return normalize_chat_attachments(attachments)
+
+    @staticmethod
+    def build_public_attachment_payload(item: dict[str, Any]) -> dict[str, Any]:
+        from cyrene.workbench.chat_attachment_service import public_chat_attachment
+
+        return public_chat_attachment(item)
+
+    async def register_attachments_kb(
+        self,
+        session_id: str,
+        items: list[dict[str, Any]],
+    ) -> None:
+        if self.knowledge is None:
+            return
+        register = getattr(self.knowledge, "register_attachments", None)
+        if not callable(register):
+            return
+        try:
+            result = register(str(session_id or ""), items)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.exception(
+                "Failed to register chat attachments for %s",
+                session_id,
+            )
+
+    @staticmethod
+    def attachment_prompt_block(items: list[dict[str, Any]]) -> str:
+        from cyrene.workbench.chat_attachment_service import attachment_prompt_block
+
+        return attachment_prompt_block(items)
+
+    def pending_question_for(self, chat_id: str) -> dict[str, Any] | None:
+        checkpoint = self.service.run_manager.conversation_runtime.context_checkpoint(
+            str(chat_id or "")
+        )
+        pending = (
+            checkpoint.get("pending_question")
+            if isinstance(checkpoint, dict)
+            and checkpoint.get("status") == "awaiting_user"
+            else None
+        )
+        return pending.as_dict() if hasattr(pending, "as_dict") else None
+
+    @staticmethod
+    def reply_stream_chunks(text: str, target_chars: int = 36) -> list[str]:
+        source = str(text or "")
+        if not source:
+            return []
+        chunks: list[str] = []
+        for block in re.split(r"(\n\n+)", source):
+            if not block:
+                continue
+            if block.startswith("\n"):
+                chunks.append(block)
+                continue
+            remaining = block
+            while remaining:
+                if len(remaining) <= target_chars:
+                    chunks.append(remaining)
+                    break
+                split_at = target_chars
+                for index in range(
+                    target_chars - 1,
+                    max(0, target_chars - 14) - 1,
+                    -1,
+                ):
+                    if remaining[index] in "，。！？；：,.!?;: ":
+                        split_at = index + 1
+                        break
+                chunks.append(remaining[:split_at])
+                remaining = remaining[split_at:]
+        return [chunk for chunk in chunks if chunk]
 
     def project_data_key(self, project_id: str) -> str:
-        runtime = self.runtime()
-        project = runtime.find_project_lightweight(project_id)
-        return runtime.project_data_key(project) if project else project_id
+        from cyrene.workbench.project_runtime import workbench_project_data_key
+
+        project = self.find_project_lightweight(project_id)
+        return workbench_project_data_key(project) if project else project_id
+
+    async def check_budget_gate(self, session_id: str) -> dict[str, Any] | None:
+        """Apply the application spending guard without the retired Agent."""
+
+        from cyrene.observability import debug
+        from cyrene.runtime.budget import check_budget_and_block
+        from cyrene.runtime.settings_store import get_all
+
+        settings = get_all()
+        result = await check_budget_and_block(
+            self.db_path,
+            monthly=float(settings.get("budget_monthly") or 0),
+            enabled=bool(settings.get("budget_enabled", False)),
+        )
+        if not result:
+            return None
+        if result.get("warning"):
+            await debug.publish_event(
+                {
+                    "type": "budget_warning",
+                    "code": str(result.get("code") or ""),
+                    "message": str(result.get("message") or ""),
+                },
+                session_id=str(session_id),
+            )
+            return None
+        return {
+            "error": str(result.get("message") or "Budget exhausted"),
+            "code": str(result.get("code") or "budget_exhausted"),
+        }
+
+    async def project_memory_snapshot(
+        self,
+        project_id: str,
+    ) -> dict[str, Any] | None:
+        if self.memory is None:
+            return None
+        loader = getattr(self.memory, "current_snapshot", None)
+        if not callable(loader):
+            return None
+        try:
+            value = await asyncio.to_thread(loader, str(project_id or ""))
+        except Exception:
+            logger.exception(
+                "Failed to load project-memory snapshot for %s",
+                project_id,
+            )
+            return None
+        return dict(value) if isinstance(value, dict) else None
+
+    async def delete_chat_memory(self, chat_id: str) -> None:
+        if self.memory is None:
+            return
+        delete = getattr(self.memory, "delete_chat", None)
+        if not callable(delete):
+            return
+        result = delete(str(chat_id or ""))
+        if inspect.isawaitable(result):
+            await result
 
     async def resolve_library_file_payload(
         self,
@@ -86,52 +343,10 @@ class ChatRouteContext:
         workspace = str(body.get("ownerProjectId") or nested.get("ownerProjectId") or "")
         if source_kind != "library" or not item_id or not workspace:
             return body
+        if self.knowledge is None:
+            return body
         try:
-            from cyrene.knowledge import library as knowledge_library
-            from cyrene.runtime.attachments import resolve_managed_attachment_path
-            from cyrene.knowledge.workspace import ensure_workspace_db
-
-            kb_path = await ensure_workspace_db(workspace)
-            if not await knowledge_library.get_item(kb_path, item_id):
-                return body
-            attachment = await knowledge_library.get_primary_attachment(kb_path, item_id)
-            if not attachment:
-                return body
-            stored_path = str(attachment.get("document_path") or attachment.get("path") or "")
-            path = Path(stored_path)
-            if not path.is_file():
-                path = resolve_managed_attachment_path(stored_path)
-            if path is None or not path.is_file():
-                return body
-            name = str(attachment.get("filename") or path.name)
-            content_type = str(attachment.get("document_content_type") or attachment.get("content_type") or body.get("content_type") or "application/octet-stream")
-            resolved_file = {
-                **nested,
-                "id": str(nested.get("id") or f"library:{workspace}:{item_id}"),
-                "name": name,
-                "path": str(path.resolve()),
-                "url": str(body.get("url") or nested.get("url") or ""),
-                "content_type": content_type,
-                "size": int(path.stat().st_size),
-                "kind": str(nested.get("kind") or "file"),
-                "sourceKind": "library",
-                "libraryItemId": item_id,
-                "ownerProjectId": workspace,
-            }
-            return {
-                **body,
-                "name": name,
-                "title": str(body.get("title") or name),
-                "path": str(path.resolve()),
-                "content_type": content_type,
-                "size": int(path.stat().st_size),
-                "sourceKind": "library",
-                "libraryItemId": item_id,
-                "ownerProjectId": workspace,
-                "file": resolved_file,
-            }
-        except WorkspaceResolutionError:
-            raise
+            return await self.knowledge.resolve_library_file_payload(body)
         except Exception:
             logger.exception(
                 "Failed to resolve dragged library item %s in %s",
@@ -150,7 +365,6 @@ class ChatRouteContext:
         return public
 
     def _configure_shell_wake(self) -> None:
-        from cyrene.agent import is_session_running
         from cyrene.runtime.shell_wake import get_shell_wake_service
 
         async def dispatch(wake: dict[str, Any]) -> str:
@@ -164,17 +378,14 @@ class ChatRouteContext:
             dispatcher=dispatch,
             is_busy=lambda chat_id: (
                 self.service.run_manager.get(str(chat_id)) is not None
-                or is_session_running(str(chat_id))
             ),
         )
 
     def _configure_media_wake(self) -> None:
-        from cyrene.agent import is_session_running
         from cyrene.media.wake import get_media_wake_bridge
-        from cyrene.workbench.chat import dispatch_media_wake_run
 
         async def dispatch(wake: dict[str, Any]) -> str:
-            return await dispatch_media_wake_run(
+            return await self.service.dispatch_media_wake_run(
                 wake,
                 bot=self.bot,
                 db_path=self.db_path,
@@ -184,7 +395,6 @@ class ChatRouteContext:
             dispatcher=dispatch,
             is_busy=lambda chat_id: (
                 self.service.run_manager.get(str(chat_id)) is not None
-                or is_session_running(str(chat_id))
             ),
         )
 

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from typing import Any
+from agent.plugin import PluginContext
 
 from cyrene.runtime import updater
 from cyrene.runtime.host_actions import schedule_action
 from cyrene.runtime.host_bridge import HostBridgeError, call_host
-from cyrene.tooling.runtime_api import json_result
-from cyrene.workbench.app_control import DELEGATION_OPERATIONS_SCHEMA, audit, authorization_decision, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
+from agent.plugin.native_runtime import json_result
+from cyrene.workbench.app_control import audit, authorization_decision, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
 
 TOOL_NAME = "CyreneUpdateControl"
 TOOL_DEF = {"type": "function", "function": {
@@ -19,8 +20,6 @@ TOOL_DEF = {"type": "function", "function": {
             "operation": {"type": "string", "enum": ["check", "status", "download", "install"]},
             "reason": {"type": "string", "maxLength": 500},
             "idempotency_key": {"type": "string", "maxLength": 160},
-            "delegation_quote": {"type": "string", "maxLength": 500},
-            "delegation_operations": DELEGATION_OPERATIONS_SCHEMA,
         },
         "required": ["operation"],
         "additionalProperties": False,
@@ -29,7 +28,7 @@ TOOL_DEF = {"type": "function", "function": {
 TOOL_METADATA = {"read_only": False, "resource_keys": ("cyrene:update",), "requires_order": True}
 
 
-async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify: Any) -> str:
+async def handler(args: dict[str, Any], _context: PluginContext) -> str:
     operation = str(args.get("operation") or "")
     if operation == "check":
         info = await updater.check_for_update()
@@ -52,8 +51,6 @@ async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str,
     approval = await authorize(
         op_id, op_args,
         reason=str(args.get("reason") or ""),
-        delegation_quote=str(args.get("delegation_quote") or ""),
-        delegation_operations=args.get("delegation_operations"),
     )
     if approval:
         return approval

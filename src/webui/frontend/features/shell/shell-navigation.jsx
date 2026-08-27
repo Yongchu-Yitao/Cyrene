@@ -43,7 +43,10 @@ function wbNavigateFromSearch(context, requestedPayload) {
     context.setFullPage(null);
   } else {
     if (project && project.id !== context.store.activeProjectId) context.getSelectProject()(project.id);
-    if (pageMap[type]) context.setFullPage(pageMap[type]);
+    if (pageMap[type] && (
+      !Array.isArray(context.enabledModules)
+      || context.enabledModules.indexOf(pageMap[type]) >= 0
+    )) context.setFullPage(pageMap[type]);
   }
   var navigation = workbenchServices.navigation();
   navigation.setPending(payload);
@@ -53,15 +56,6 @@ function wbNavigateFromSearch(context, requestedPayload) {
 
 function wbNavigateFromNotification(context, navigateFromSearch, item) {
   var meta = item && item.meta && typeof item.meta === "object" ? item.meta : {};
-  if (meta.category === "hook_approval") {
-    context.setSettingsTab("extensions");
-    context.setSettingsScrollTo(null);
-    context.setFullPage("settings");
-    window.setTimeout(function () {
-      try { window.dispatchEvent(new CustomEvent("cyrene:open-agent-hooks", { detail: meta })); } catch (error) {}
-    }, 80);
-    return true;
-  }
   if (meta.category === "app_update" || String(item && item.source || "") === "updater") {
     context.setSettingsTab("about");
     context.setSettingsScrollTo(null);

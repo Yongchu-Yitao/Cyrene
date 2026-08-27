@@ -993,8 +993,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     var project = props && props.project;
     var active = !props || props.active !== false;
     var workspace = (project && (project.id || project.dataKey)) || "default";
-    // Both memory and learning use the canonical Workbench project id. The
-    // backend still accepts legacy dataKey values for older clients.
+    // Both memory and learning use the canonical Workbench project id.
     var learningProject = (project && project.id) || workspace;
     var t = useMemoryT();
 

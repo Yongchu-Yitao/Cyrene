@@ -1,73 +1,118 @@
-"""Explicit application-service seam used by Workbench chat HTTP routes."""
+"""Workbench Chat application boundary backed by the native Agent kernel."""
 
 from __future__ import annotations
 
+import asyncio
+import copy
+import json
+import logging
+import re
+import time
+from collections.abc import Mapping
 from typing import Any, cast
 
-from cyrene.agent_runtime import builtin as agent_runtime_builtin
-from cyrene.workbench import chat as _legacy
+from cyrene.workbench.chat_application import (
+    ContextTreeTranscript,
+    WorkspaceChangeService,
+    chat_error_metadata,
+    chat_preview,
+    chat_run_error_message,
+    chat_soul_active,
+    chat_transcript_for_brief,
+    chat_workspace_active,
+    clear_fork_metadata,
+    coerce_brief_acceptance,
+    coerce_brief_constraints,
+    completed_turn_count,
+    disable_button_block,
+    extract_exchange_timeline,
+    has_button_block,
+    last_exchange_model,
+    mark_user_activity,
+    merge_chat_messages_chronologically,
+    new_chat,
+    next_completed_turn_count,
+    normalize_workspace_override,
+    parse_json_object,
+    pending_question_message,
+    prune_orphaned_fork_metadata,
+    public_chat_full,
+    public_chat_light,
+    public_message,
+    remove_retry_replaced_messages,
+    resolve_chat_workspace_dir,
+    sanitize_durable_traces,
+    short_id,
+    side_agent_parent_transcript,
+    utc_now_iso,
+)
 from cyrene.workbench.chat_dto import (
-    ChatContextDTO,
     ChatCreateDTO,
     ChatDetailDTO,
     ChatMessageDTO,
     ChatSummaryDTO,
 )
 from cyrene.workbench.chat_repository import ChatRepository
-from cyrene.workbench.chat_runs import ChatRunManager
+from cyrene.workbench.chat_runs import (
+    ChatRun,
+    ChatRunManager,
+    get_chat_run_manager as _get_chat_run_manager,
+)
+from cyrene.workbench.notifications import append_notification
+
+logger = logging.getLogger(__name__)
+
+_WORKSPACE_SERVICES: dict[str, WorkspaceChangeService] = {}
 
 
 def get_chat_run_manager() -> ChatRunManager:
-    """Return the process-wide durable run manager through a public seam."""
-    return _legacy._CHAT_RUN_MANAGER
+    return _get_chat_run_manager()
+
+
+def _workspace_service(
+    db_path: str,
+    repository: ChatRepository,
+) -> WorkspaceChangeService:
+    key = str(db_path or "")
+    service = _WORKSPACE_SERVICES.get(key)
+    if service is None:
+        service = WorkspaceChangeService(key, repository)
+        _WORKSPACE_SERVICES[key] = service
+    return service
+
+
+async def shutdown_chat_services() -> None:
+    services = list(_WORKSPACE_SERVICES.values())
+    _WORKSPACE_SERVICES.clear()
+    for service in services:
+        await service.shutdown()
 
 
 def settle_chat_running_status(chat_id: str) -> None:
-    """Reconcile a durable chat record after an interrupt or lost stream."""
-    _legacy._settle_chat_running_status(chat_id)
-
-
-class _ChatRunManagerProxy:
-    """Resolve the legacy process-wide manager at each operation.
-
-    Some embedders and compatibility tests replace the manager after route
-    registration.  Keeping the proxy stable lets routes retain an explicit
-    service dependency without freezing the replaceable process singleton.
-    """
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(get_chat_run_manager(), name)
-
-
-_CHAT_RUN_MANAGER_PROXY = _ChatRunManagerProxy()
+    get_chat_run_manager().settle_chat_running_status(str(chat_id or ""))
 
 
 class ChatService:
-    """Application operations required by HTTP adapters.
-
-    This class is deliberately explicit: adding a new route dependency now
-    requires adding a named method here instead of silently copying every
-    private symbol from ``cyrene.workbench.chat`` into a route module.
-    """
+    """Application operations consumed by the split Workbench HTTP routes."""
 
     def __init__(self, db_path: str, repository: ChatRepository | None = None):
         self.db_path = str(db_path)
         self.repository = repository or ChatRepository()
         self.repository.configure(self.db_path)
-        self.run_manager.configure(self.db_path)
+        manager = get_chat_run_manager()
+        if manager.configured_db_path != self.db_path:
+            manager.configure(self.db_path)
+        self._workspace = _workspace_service(self.db_path, self.repository)
+        self._transcript = ContextTreeTranscript(self.db_path)
 
     @property
-    def run_manager(self) -> _ChatRunManagerProxy:
-        return _CHAT_RUN_MANAGER_PROXY
-
-    @property
-    def agent_runtime_builtin(self):
-        return agent_runtime_builtin
+    def run_manager(self) -> ChatRunManager:
+        return get_chat_run_manager()
 
     def new_chat(self, request: ChatCreateDTO) -> ChatDetailDTO:
         return cast(
             ChatDetailDTO,
-            _legacy._new_chat(
+            new_chat(
                 request["project_id"],
                 request.get("title", ""),
                 request.get("model", ""),
@@ -88,179 +133,716 @@ class ChatService:
         model: str = "",
         **options: Any,
     ) -> ChatDetailDTO:
-        request = ChatCreateDTO(
-            project_id=project_id,
-            title=title,
-            model=model,
-            project_memory_snapshot=options.get("project_memory_snapshot"),
-            agent=options.get("agent"),
-            model_access=options.get("model_access"),
-            capabilities=options.get("capabilities"),
-            soul_active=options.get("soul_active"),
-            workspace_active=options.get("workspace_active"),
-            reasoning_effort=str(options.get("reasoning_effort") or ""),
+        return self.new_chat(
+            ChatCreateDTO(
+                project_id=project_id,
+                title=title,
+                model=model,
+                project_memory_snapshot=options.get("project_memory_snapshot"),
+                agent=options.get("agent"),
+                model_access=options.get("model_access"),
+                capabilities=options.get("capabilities"),
+                soul_active=options.get("soul_active"),
+                workspace_active=options.get("workspace_active"),
+                reasoning_effort=str(options.get("reasoning_effort") or ""),
+            )
         )
-        return self.new_chat(request)
-
-    def chat_context_payload(self, *args: Any, **kwargs: Any) -> ChatContextDTO:
-        return cast(ChatContextDTO, _legacy._chat_context_payload(*args, **kwargs))
 
     def public_chat_light(self, chat: dict[str, Any]) -> ChatSummaryDTO:
-        return cast(ChatSummaryDTO, _legacy._public_chat_light(chat))
+        run = self.run_manager.get(str(chat.get("id") or ""))
+        return cast(ChatSummaryDTO, public_chat_light(chat, active_run=run))
 
     def public_chat_full(self, chat: dict[str, Any]) -> ChatDetailDTO:
-        return cast(ChatDetailDTO, _legacy._public_chat_full(chat))
+        run = self.run_manager.get(str(chat.get("id") or ""))
+        return cast(ChatDetailDTO, public_chat_full(chat, active_run=run))
 
     def public_message(self, message: dict[str, Any]) -> ChatMessageDTO:
-        return cast(ChatMessageDTO, _legacy._public_message(message))
+        return cast(ChatMessageDTO, public_message(message))
 
-    async def capture_workspace_changes_baseline(self, *args: Any, **kwargs: Any):
-        return await _legacy._capture_workspace_changes_baseline(*args, **kwargs)
+    async def capture_workspace_changes_baseline(
+        self,
+        workspace_dir: Any,
+        run_id: str = "",
+    ) -> Any:
+        return await self._workspace.capture(workspace_dir, run_id)
+
+    async def finalize_workspace_changes(self, **kwargs: Any) -> Any:
+        return await self._workspace.finalize(**kwargs)
+
+    def prewarm_workspace_changes(self, workspace_dir: Any) -> None:
+        self._workspace.prewarm(workspace_dir)
+
+    def sync_chat_generated_files(
+        self,
+        chat_id: str,
+        change_set: dict[str, Any] | None = None,
+    ) -> None:
+        self._workspace.sync_generated_files(chat_id, change_set)
 
     async def run_external_agent_turn(self, *args: Any, **kwargs: Any):
         from cyrene.agent_runtime import run_external_agent_turn
 
         return await run_external_agent_turn(*args, **kwargs)
 
-    def prewarm_workspace_changes(self, *args: Any, **kwargs: Any) -> None:
-        _legacy.prewarm_workspace_changes(*args, **kwargs)
+    def chat_preview(self, chat: Mapping[str, Any]) -> str:
+        return chat_preview(chat)
 
-    def chat_preview(self, *args: Any, **kwargs: Any):
-        return _legacy._chat_preview(*args, **kwargs)
+    def chat_soul_active(self, chat: Mapping[str, Any]) -> bool:
+        return chat_soul_active(chat)
 
-    def chat_soul_active(self, *args: Any, **kwargs: Any):
-        return _legacy._chat_soul_active(*args, **kwargs)
+    def chat_workspace_active(self, chat: Mapping[str, Any]) -> bool:
+        return chat_workspace_active(chat)
 
-    def chat_workspace_active(self, *args: Any, **kwargs: Any):
-        return _legacy._chat_workspace_active(*args, **kwargs)
+    def clear_fork_metadata(self, chat: dict[str, Any]) -> bool:
+        return clear_fork_metadata(chat)
 
-    def clear_fork_metadata(self, *args: Any, **kwargs: Any):
-        return _legacy._clear_fork_metadata(*args, **kwargs)
+    def coerce_brief_acceptance(self, raw: Any) -> list[dict[str, Any]]:
+        return coerce_brief_acceptance(raw)
 
-    def coerce_brief_acceptance(self, *args: Any, **kwargs: Any):
-        return _legacy._coerce_brief_acceptance(*args, **kwargs)
+    def coerce_brief_constraints(self, raw: Any) -> list[str]:
+        return coerce_brief_constraints(raw)
 
-    def coerce_brief_constraints(self, *args: Any, **kwargs: Any):
-        return _legacy._coerce_brief_constraints(*args, **kwargs)
-
-    def completed_turn_count(self, *args: Any, **kwargs: Any):
-        return _legacy._completed_turn_count(*args, **kwargs)
-
-    def context_segment_tokens(self, *args: Any, **kwargs: Any):
-        return _legacy._context_segment_tokens(*args, **kwargs)
-
-    async def compact_session(self, *args: Any, **kwargs: Any):
-        from cyrene import agent
-
-        return await agent.compact_session_if_needed(*args, **kwargs)
+    def completed_turn_count(self, chat: Mapping[str, Any]) -> int:
+        return completed_turn_count(chat)
 
     def extract_exchange_timeline(self, *args: Any, **kwargs: Any):
-        return _legacy._extract_exchange_timeline(*args, **kwargs)
+        return extract_exchange_timeline(*args, **kwargs)
 
-    async def finalize_workspace_changes(self, *args: Any, **kwargs: Any):
-        return await _legacy._finalize_workspace_changes(*args, **kwargs)
+    def last_exchange_model(self, *args: Any, **kwargs: Any) -> str:
+        return last_exchange_model(*args, **kwargs)
 
-    def last_exchange_model(self, *args: Any, **kwargs: Any):
-        return _legacy._last_exchange_model(*args, **kwargs)
+    def mark_user_activity(self, chat: dict[str, Any], timestamp: str) -> None:
+        mark_user_activity(chat, timestamp)
 
-    def legacy_chats(self, *args: Any, **kwargs: Any):
-        return _legacy._legacy_chats(*args, **kwargs)
+    def merge_chat_messages_chronologically(
+        self,
+        chat: dict[str, Any],
+        additions: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        return merge_chat_messages_chronologically(chat, additions)
 
-    def mark_user_activity(self, *args: Any, **kwargs: Any):
-        return _legacy._mark_user_activity(*args, **kwargs)
+    def next_completed_turn_count(self, *args: Any, **kwargs: Any) -> int:
+        return next_completed_turn_count(*args, **kwargs)
 
-    def merge_chat_messages_chronologically(self, *args: Any, **kwargs: Any):
-        return _legacy._merge_chat_messages_chronologically(*args, **kwargs)
-
-    def next_completed_turn_count(self, *args: Any, **kwargs: Any):
-        return _legacy._next_completed_turn_count(*args, **kwargs)
-
-    def normalize_workspace_override(self, *args: Any, **kwargs: Any):
-        return _legacy._normalize_workspace_override(*args, **kwargs)
+    def normalize_workspace_override(self, path: Any) -> str:
+        return normalize_workspace_override(path)
 
     def pending_question_message(self, *args: Any, **kwargs: Any):
-        return _legacy._pending_question_message(*args, **kwargs)
+        return pending_question_message(*args, **kwargs)
 
-    def prune_orphaned_fork_metadata(self, *args: Any, **kwargs: Any):
-        return _legacy._prune_orphaned_fork_metadata(*args, **kwargs)
+    def prune_orphaned_fork_metadata(self, payload: dict[str, Any]) -> bool:
+        return prune_orphaned_fork_metadata(payload)
 
-    async def publish_live_exchange_segments_loop(self, *args: Any, **kwargs: Any):
-        return await _legacy._publish_live_exchange_segments_loop(*args, **kwargs)
+    async def publish_live_exchange_segments_loop(
+        self,
+        run: ChatRun,
+        chat_id: str,
+        state_ids_before: set[str],
+        stop_event: asyncio.Event,
+    ) -> None:
+        del run, chat_id, state_ids_before
+        await stop_event.wait()
 
-    def record_chat_run_outcome(self, *args: Any, **kwargs: Any):
-        return _legacy._record_chat_run_outcome(*args, **kwargs)
+    def remove_retry_replaced_messages(self, *args: Any, **kwargs: Any) -> None:
+        remove_retry_replaced_messages(*args, **kwargs)
 
-    def remove_retry_replaced_messages(self, *args: Any, **kwargs: Any):
-        return _legacy._remove_retry_replaced_messages(*args, **kwargs)
+    def resolve_chat_workspace_dir(self, *args: Any, **kwargs: Any) -> str:
+        return resolve_chat_workspace_dir(*args, **kwargs)
 
-    def resolve_chat_workspace_dir(self, *args: Any, **kwargs: Any):
-        return _legacy._resolve_chat_workspace_dir(*args, **kwargs)
+    def sanitize_durable_traces(self, traces: list[Any]):
+        return sanitize_durable_traces(traces)
 
-    def sanitize_durable_traces(self, *args: Any, **kwargs: Any):
-        return _legacy._sanitize_durable_traces(*args, **kwargs)
+    def session_state_messages(self, session_id: str) -> list[dict[str, Any]]:
+        return self._transcript.messages(session_id)
 
-    def session_state_messages(self, *args: Any, **kwargs: Any):
-        return _legacy._session_state_messages(*args, **kwargs)
+    def settle_chat_running_status(self, chat_id: str) -> None:
+        self.run_manager.settle_chat_running_status(chat_id)
 
-    def settle_chat_running_status(self, *args: Any, **kwargs: Any):
-        return _legacy._settle_chat_running_status(*args, **kwargs)
+    def short_id(self, prefix: str) -> str:
+        return short_id(prefix)
 
-    def short_id(self, *args: Any, **kwargs: Any):
-        return _legacy._short_id(*args, **kwargs)
+    def side_agent_parent_transcript(self, chat: Mapping[str, Any] | None) -> str:
+        return side_agent_parent_transcript(chat)
 
-    def side_agent_parent_transcript(self, *args: Any, **kwargs: Any):
-        return _legacy._side_agent_parent_transcript(*args, **kwargs)
+    def utc_now_iso(self) -> str:
+        return utc_now_iso()
 
-    def stash_chat_pending_for(self, *args: Any, **kwargs: Any):
-        return _legacy._stash_chat_pending_for(*args, **kwargs)
+    def chat_run_error_message(self, exc: Exception, lang: str = "") -> str:
+        return chat_run_error_message(exc, lang)
 
-    async def summarize_chat_to_brief(self, *args: Any, **kwargs: Any):
-        return await _legacy._summarize_chat_to_brief(*args, **kwargs)
+    def chat_error_metadata(self, exc: Exception) -> dict[str, str]:
+        return chat_error_metadata(exc)
 
-    def sync_chat_generated_files(self, *args: Any, **kwargs: Any):
-        return _legacy._sync_chat_generated_files(*args, **kwargs)
+    def disable_button_block(self, content: str, action_id: str):
+        return disable_button_block(content, action_id)
 
-    def truncate_state_file_at_user_ordinal(self, *args: Any, **kwargs: Any):
-        return _legacy._truncate_state_file_at_user_ordinal(*args, **kwargs)
+    def has_button_block(self, content: str, action_id: str) -> bool:
+        return has_button_block(content, action_id)
 
-    def truncate_state_for_retry(self, *args: Any, **kwargs: Any):
-        return _legacy._truncate_state_for_retry(*args, **kwargs)
+    def set_chat_external_session_id(
+        self,
+        chat_id: str,
+        external_session_id: str,
+    ) -> dict[str, Any] | None:
+        def persist(chat: dict[str, Any]) -> None:
+            agent = dict(chat.get("agent") or {})
+            agent["externalSessionId"] = str(external_session_id or "").strip()
+            chat["agent"] = agent
+            chat["updatedAt"] = utc_now_iso()
 
-    def utc_now_iso(self, *args: Any, **kwargs: Any):
-        return _legacy._utc_now_iso(*args, **kwargs)
+        return self.repository.mutate_one(chat_id, persist)
 
-    def chat_run_error_message(self, *args: Any, **kwargs: Any):
-        return _legacy._workbench_chat_run_error_message(*args, **kwargs)
+    def update_chat_agent_context_report(
+        self,
+        chat_id: str,
+        report: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        def safe_int(value: Any) -> int:
+            try:
+                return max(0, int(value or 0))
+            except (TypeError, ValueError, OverflowError):
+                return 0
 
-    def chat_error_metadata(self, *args: Any, **kwargs: Any):
-        return _legacy._workbench_chat_error_metadata(*args, **kwargs)
+        segments: list[dict[str, Any]] = []
+        raw_segments = report.get("segments")
+        for index, item in enumerate(raw_segments if isinstance(raw_segments, list) else ()):
+            if index >= 32 or not isinstance(item, Mapping):
+                break
+            tokens = safe_int(item.get("tokens") or item.get("tokens_est") or item.get("used"))
+            if not tokens:
+                continue
+            key = str(item.get("key") or item.get("id") or item.get("type") or f"segment_{index + 1}")[:80]
+            segments.append(
+                {
+                    "key": key,
+                    "label": str(item.get("label") or item.get("name") or key)[:120],
+                    "tokens": tokens,
+                }
+            )
+        normalized = {
+            "used": safe_int(report.get("used") or report.get("totalTokens")),
+            "size": safe_int(report.get("size") or report.get("limit") or report.get("contextWindow")),
+            "segments": segments,
+            "updatedAt": utc_now_iso(),
+        }
+        if not normalized["used"] and segments:
+            normalized["used"] = sum(item["tokens"] for item in segments)
+        if not normalized["used"] and not normalized["size"] and not segments:
+            return self.repository.get(chat_id)
 
-    def subagent_payload(self, *args: Any, **kwargs: Any):
-        return _legacy._workbench_subagent_payload(*args, **kwargs)
+        def persist(chat: dict[str, Any]) -> None:
+            chat["agentContextReport"] = normalized
+            chat["updatedAt"] = utc_now_iso()
 
-    async def generate_chat_group_metadata(self, *args: Any, **kwargs: Any):
-        return await _legacy.generate_chat_group_metadata(*args, **kwargs)
+        return self.repository.mutate_one(chat_id, persist)
 
-    def set_chat_external_session_id(self, *args: Any, **kwargs: Any):
-        return _legacy.set_chat_external_session_id(*args, **kwargs)
+    async def _secondary_json(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int,
+        caller: str,
+    ) -> dict[str, Any] | None:
+        from agent.plugin import active_plugin_service
 
-    def update_chat_agent_context_report(self, *args: Any, **kwargs: Any):
-        return _legacy.update_chat_agent_context_report(*args, **kwargs)
+        model = active_plugin_service("model")
+        complete = getattr(model, "complete", None)
+        if not callable(complete):
+            return None
+        try:
+            response = await asyncio.wait_for(
+                complete(
+                    [{"role": "user", "content": prompt}],
+                    max_tokens=max_tokens,
+                    response_format={"type": "json_object"},
+                    route="secondary",
+                    caller=caller,
+                ),
+                timeout=90,
+            )
+        except Exception:
+            logger.exception("Secondary model call failed (%s)", caller)
+            return None
+        return parse_json_object(
+            response.get("content") if isinstance(response, Mapping) else ""
+        )
 
-    def complete_chat_plan(self, *args: Any, **kwargs: Any):
-        return _legacy.complete_chat_plan(*args, **kwargs)
+    async def generate_chat_group_metadata(
+        self,
+        members: list[dict[str, Any]],
+        *,
+        lang: str = "zh",
+        title_locked: bool = False,
+        current_title: str = "",
+    ) -> dict[str, str]:
+        target_lang = "en" if str(lang or "").strip().lower() == "en" else "zh"
 
-    def disable_button_block(self, *args: Any, **kwargs: Any):
-        return _legacy.disable_button_block(*args, **kwargs)
+        def collapse(value: Any, limit: int) -> str:
+            return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
-    async def dispatch_shell_wake_run(self, *args: Any, **kwargs: Any):
-        return await _legacy.dispatch_shell_wake_run(*args, **kwargs)
+        cleaned = [
+            {
+                "title": collapse(item.get("title"), 160),
+                "preview": collapse(item.get("preview"), 800),
+            }
+            for item in members[:50]
+            if isinstance(item, Mapping)
+            and (
+                str(item.get("title") or "").strip()
+                or str(item.get("preview") or "").strip()
+            )
+        ]
+        if len(cleaned) < 2:
+            raise ValueError("at least two chat members are required")
+        prompt = (
+            "Infer the shared topic of these conversations. Return only JSON "
+            "with string fields title and summary. "
+            + ("Write in English." if target_lang == "en" else "标题和摘要使用简体中文。")
+            + (" Return an empty title because it is user-locked." if title_locked else "")
+            + f"\nCurrent title: {current_title[:160]}\nMembers: "
+            + json.dumps(cleaned, ensure_ascii=False)
+        )
+        parsed = await self._secondary_json(
+            prompt,
+            max_tokens=512,
+            caller="workbench_chat_group_metadata",
+        )
+        title = collapse((parsed or {}).get("title"), 60)
+        summary = collapse((parsed or {}).get("summary"), 160)
+        if not title_locked and not title:
+            title = next((item["title"] for item in cleaned if item["title"]), "")
+        if not summary:
+            summary = next((item["preview"] for item in cleaned if item["preview"]), "")
+        return {
+            "title": "" if title_locked else title,
+            "summary": summary,
+            "lang": target_lang,
+        }
 
-    def has_button_block(self, *args: Any, **kwargs: Any):
-        return _legacy.has_button_block(*args, **kwargs)
+    async def summarize_chat_to_brief(
+        self,
+        chat: dict[str, Any],
+        project: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        transcript = chat_transcript_for_brief(chat)
+        if not transcript:
+            return None
+        prompt = (
+            "把以下完整对话整理成可直接执行的任务简报。只返回 JSON 对象，字段为 title、goal、"
+            "constraints（字符串数组）、acceptanceCriteria（字符串数组）；全部使用简体中文。\n"
+            f"项目：{str(project.get('name') or '')}\n"
+            f"对话标题：{str(chat.get('title') or '')}\n"
+            f"===== 对话开始 =====\n{transcript}\n===== 对话结束 ====="
+        )
+        return await self._secondary_json(
+            prompt,
+            max_tokens=6000,
+            caller="workbench_chat_to_task_brief",
+        )
 
-    async def terminate_chat_agents(self, *args: Any, **kwargs: Any):
-        return await _legacy.terminate_chat_agents(*args, **kwargs)
+    async def dispatch_shell_wake_run(
+        self,
+        wake: dict[str, Any],
+        *,
+        bot: Any,
+        db_path: str,
+    ) -> str:
+        """Continue the same ContextTree after a shell/media/session wake."""
+
+        from agent.workbench.conversation_runtime import ConversationConfig
+        from cyrene.workbench.project_repository import (
+            find_workbench_project_lightweight,
+            resolve_project_workspace_dir,
+        )
+
+        chat_id = str(wake.get("chat_id") or "").strip()
+        prompt = str(wake.get("prompt") or "").strip()
+        source = str(wake.get("source") or "")
+        agent_originated = source == "agent_session"
+        media_wake = source == "media_job"
+        terminal_id = str(
+            wake.get("terminal_id") or wake.get("shell_id") or ""
+        ).strip()
+        if (
+            not chat_id
+            or (agent_originated and not prompt)
+            or (media_wake and not str(wake.get("batch_id") or "").strip())
+            or (not agent_originated and not media_wake and not terminal_id)
+        ):
+            return "missing"
+        if self.run_manager.get(chat_id) is not None:
+            return "busy"
+        checkpoint = self.run_manager.conversation_runtime.context_checkpoint(chat_id)
+        if isinstance(checkpoint, Mapping) and checkpoint.get("status") in {
+            "running",
+            "awaiting_user",
+        }:
+            return "busy"
+
+        chat = await asyncio.to_thread(self.repository.get, chat_id)
+        if not chat:
+            return "missing"
+        wake_id = str(wake.get("wake_id") or "").strip()
+        if wake_id and any(
+            isinstance(item, Mapping)
+            and str(item.get("wakeId") or "") == wake_id
+            for item in chat.get("messages") or ()
+        ):
+            return "started"
+        project_id = str(chat.get("projectId") or "")
+        project = await asyncio.to_thread(
+            find_workbench_project_lightweight,
+            project_id,
+        )
+        if not project:
+            return "missing"
+        try:
+            workspace_dir = resolve_chat_workspace_dir(
+                chat,
+                project,
+                resolve_project_workspace_dir,
+            )
+        except ValueError:
+            logger.warning(
+                "Background workspace is unavailable for %s",
+                chat_id,
+                exc_info=True,
+            )
+            return "error"
+
+        now = utc_now_iso()
+        user_entry: dict[str, Any] | None = None
+        if agent_originated:
+            user_entry = {
+                "id": short_id("msg"),
+                "role": "user",
+                "content": prompt,
+                "createdAt": now,
+                "agentOriginated": True,
+                "originSessionId": str(wake.get("origin_session_id") or ""),
+            }
+            chat.setdefault("messages", []).append(user_entry)
+        base_chat = copy.deepcopy(chat)
+        chat["status"] = "running"
+        chat["updatedAt"] = now
+        await asyncio.to_thread(
+            self.repository.write_one,
+            chat,
+            base_chat=base_chat,
+        )
+
+        if agent_originated:
+            input_text = prompt
+            system_extra = (
+                "This instruction was delegated by another local Agent session. "
+                "Treat it as agent-originated context, not human approval."
+            )
+            conversation_source = "agent_session"
+        elif media_wake:
+            input_text = prompt or "Generated media was attached. Continue the prior work."
+            system_extra = (
+                "Generated media is now durable in this chat. Continue without "
+                "polling it again."
+            )
+            conversation_source = "system_media_wake"
+        else:
+            input_text = (
+                "An internal terminal completion event occurred. "
+                f"Read terminal {terminal_id} with code.shell.read, then continue "
+                "the prior work."
+            )
+            system_extra = (
+                "This is internal system context, not a user instruction. Inspect "
+                "the completed terminal before continuing."
+            )
+            conversation_source = "system_shell_wake"
+
+        started_at = time.monotonic()
+
+        async def runner(run: ChatRun) -> None:
+            before = await self.capture_workspace_changes_baseline(
+                workspace_dir,
+                run.run_id,
+            )
+            try:
+                config = ConversationConfig(
+                    session_id=chat_id,
+                    workspace_dir=workspace_dir,
+                    db_path=str(db_path or self.db_path),
+                    bot=bot,
+                    permission_mode="default" if agent_originated else "auto",
+                    public_user_message=prompt if agent_originated else "",
+                    soul_enabled=chat_soul_active(chat),
+                    workspace_enabled=chat_workspace_active(chat),
+                    system_extra=system_extra,
+                    project_id=project_id,
+                    project_memory_snapshot=(
+                        chat.get("projectMemorySnapshot")
+                        if isinstance(chat.get("projectMemorySnapshot"), Mapping)
+                        else None
+                    ),
+                    session_title=str(chat.get("title") or ""),
+                    completed_turn_count=(
+                        completed_turn_count(chat) + (1 if agent_originated else 0)
+                    ),
+                    response_capabilities=("interactive_blocks",),
+                    conversation_source=conversation_source,
+                    remote_device_ids=tuple(
+                        str(item or "").strip()
+                        for item in chat.get("remoteDeviceIds") or ()
+                        if str(item or "").strip()
+                    ),
+                )
+                result = await self.run_manager.conversation_runtime.send(
+                    config,
+                    input_text,
+                    run_id=run.run_id,
+                    metadata={
+                        "system_initiated": not agent_originated,
+                        "wake_id": wake_id,
+                        "source": conversation_source,
+                    },
+                    publish=run.publish,
+                )
+                fresh = await asyncio.to_thread(self.repository.get, chat_id)
+                if not fresh:
+                    raise RuntimeError(
+                        "chat disappeared during background continuation"
+                    )
+                fresh_base = copy.deepcopy(fresh)
+                model = str(result.model or fresh.get("model") or "")
+                additions = [
+                    {
+                        **copy.deepcopy(dict(item)),
+                        "model": str(item.get("model") or model),
+                    }
+                    for item in result.activity_messages
+                    if isinstance(item, Mapping)
+                ]
+                if (
+                    result.status == "awaiting_user"
+                    and result.pending_question is not None
+                ):
+                    pending = result.pending_question.as_dict()
+                    additions.append(
+                        pending_question_message(
+                            pending,
+                            usage=result.usage,
+                            model=model,
+                        )
+                    )
+                    fresh["pendingQuestion"] = pending
+                    fresh["status"] = "idle"
+                    run.outcome = {"kind": "awaiting", "pending": pending}
+                else:
+                    assistant: dict[str, Any] = {
+                        "id": short_id("msg"),
+                        "role": "assistant",
+                        "content": str(result.text or ""),
+                        "createdAt": utc_now_iso(),
+                        "model": model,
+                        "processingDurationMs": max(
+                            0,
+                            int(
+                                round(
+                                    (time.monotonic() - started_at) * 1000
+                                )
+                            ),
+                        ),
+                        "shellWake": not agent_originated and not media_wake,
+                        "mediaWake": media_wake,
+                        "wakeId": wake_id,
+                    }
+                    if any(result.usage.values()):
+                        assistant["usage"] = dict(result.usage)
+                    if result.model_identity:
+                        assistant["modelIdentity"] = dict(result.model_identity)
+                    if result.generation_duration_ms:
+                        assistant["modelGenerationDurationMs"] = round(
+                            result.generation_duration_ms,
+                            3,
+                        )
+                    if result.output_tokens_per_second:
+                        assistant["outputTokensPerSecond"] = round(
+                            result.output_tokens_per_second,
+                            3,
+                        )
+                    additions.append(assistant)
+                    fresh.pop("pendingQuestion", None)
+                    fresh["status"] = "idle"
+                    if agent_originated:
+                        fresh["completedTurnCount"] = (
+                            completed_turn_count(fresh) + 1
+                        )
+                    run.outcome = {
+                        "kind": "reply",
+                        "payload": {
+                            "assistantMessage": assistant,
+                            "assistantMessages": additions,
+                        },
+                    }
+                merge_chat_messages_chronologically(fresh, additions)
+                if isinstance(result.active_plan, Mapping):
+                    fresh["activePlan"] = copy.deepcopy(dict(result.active_plan))
+                fresh["lastModel"] = model
+                fresh["updatedAt"] = utc_now_iso()
+                await asyncio.to_thread(
+                    self.repository.write_one,
+                    fresh,
+                    base_chat=fresh_base,
+                )
+
+                if result.status == "awaiting_user":
+                    event: dict[str, Any] = {
+                        "type": "awaiting_user",
+                        "pendingQuestion": (run.outcome or {}).get("pending"),
+                        "assistantMessages": [
+                            public_message(item) for item in additions
+                        ],
+                    }
+                else:
+                    event = {
+                        "type": "saved",
+                        "assistantMessage": public_message(additions[-1]),
+                        "assistantMessages": [
+                            public_message(item) for item in additions
+                        ],
+                    }
+                if user_entry is not None:
+                    event["userMessage"] = public_message(user_entry)
+                await run.publish(event)
+                try:
+                    append_notification(
+                        title="后台工作已接续",
+                        body=(
+                            f"Agent 已在「{fresh.get('title') or '新对话'}」中继续处理。"
+                        ),
+                        tab="mention",
+                        project_ref=project_id,
+                        source=conversation_source,
+                        link_label=str(fresh.get("title") or ""),
+                        meta={"chatId": chat_id, "wakeId": wake_id},
+                    )
+                except Exception:
+                    logger.debug(
+                        "Background continuation notification failed",
+                        exc_info=True,
+                    )
+                await self.finalize_workspace_changes(
+                    chat_id=chat_id,
+                    run_id=run.run_id,
+                    workspace_dir=workspace_dir,
+                    before=before,
+                    status=(
+                        "awaiting_user"
+                        if result.status == "awaiting_user"
+                        else "completed"
+                    ),
+                    run=run,
+                )
+            except asyncio.CancelledError:
+                await self.finalize_workspace_changes(
+                    chat_id=chat_id,
+                    run_id=run.run_id,
+                    workspace_dir=workspace_dir,
+                    before=before,
+                    status="cancelled",
+                    run=run,
+                )
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "Background conversation continuation failed for %s",
+                    chat_id,
+                )
+                self.settle_chat_running_status(chat_id)
+                run.outcome = {"kind": "error", "exc": exc}
+                await run.publish(
+                    {
+                        "type": "error",
+                        "error": "background_chat_run_failed",
+                        "message": str(exc) or "Background conversation run failed",
+                    }
+                )
+                await self.finalize_workspace_changes(
+                    chat_id=chat_id,
+                    run_id=run.run_id,
+                    workspace_dir=workspace_dir,
+                    before=before,
+                    status="error",
+                    run=run,
+                )
+
+        ack: dict[str, Any] = {
+            "type": "ack",
+            "chatId": chat_id,
+            "shellWake": not agent_originated and not media_wake,
+            "mediaWake": media_wake,
+            "agentOriginated": agent_originated,
+        }
+        if user_entry is not None:
+            ack["userMessage"] = public_message(user_entry)
+        _run, is_new = self.run_manager.start_or_get(
+            chat_id,
+            ack,
+            runner,
+            stream=True,
+        )
+        if not is_new:
+            if user_entry is not None:
+
+                def rollback(fresh: dict[str, Any]) -> None:
+                    fresh["messages"] = [
+                        item
+                        for item in fresh.get("messages") or ()
+                        if not isinstance(item, Mapping)
+                        or str(item.get("id") or "")
+                        != str(user_entry.get("id") or "")
+                    ]
+
+                await asyncio.to_thread(
+                    self.repository.mutate_one,
+                    chat_id,
+                    rollback,
+                )
+            return "busy"
+        return "started"
+
+    async def dispatch_media_wake_run(
+        self,
+        wake: dict[str, Any],
+        *,
+        bot: Any,
+        db_path: str,
+    ) -> str:
+        return await self.dispatch_shell_wake_run(
+            {**dict(wake or {}), "source": "media_job"},
+            bot=bot,
+            db_path=db_path,
+        )
+
+    async def terminate_chat_agents(
+        self,
+        chat_ids: list[str] | set[str] | tuple[str, ...],
+    ) -> None:
+        for chat_id in dict.fromkeys(
+            str(item or "").strip() for item in chat_ids
+        ):
+            if not chat_id:
+                continue
+            await self.run_manager.terminate(
+                chat_id,
+                termination_reason="chat_deleted",
+            )
+            await asyncio.to_thread(
+                self.run_manager.conversation_runtime.delete_context,
+                chat_id,
+            )
 
 
-__all__ = ["ChatService", "get_chat_run_manager", "settle_chat_running_status"]
+__all__ = [
+    "ChatService",
+    "get_chat_run_manager",
+    "settle_chat_running_status",
+    "shutdown_chat_services",
+]

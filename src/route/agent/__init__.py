@@ -1,1 +1,1 @@
-"""Legacy agent-facing HTTP and WebSocket routes."""
+"""Agent session and browser HTTP routes."""

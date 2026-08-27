@@ -9,14 +9,10 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from cyrene.runtime.memory.conversations import archive_session_exchange
 from cyrene.workbench.chat_events import publish_chat_changed
 from cyrene.workbench.chat_runs import ChatRun
 from route import schemas as api_models
 from route.workbench.chat_routes.context import ChatRouteContext
-from route.workbench.chat_routes.shared import (
-    schedule_structured_memory_capture,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +71,7 @@ class _AnswerOperation:
         self.processing_started_at = time.monotonic()
 
     async def execute(self):
-        from cyrene.agent.state import PERMISSION_MODES
+        from agent.permission import PERMISSION_MODES
 
         self.requested_mode = str(self.body.get("mode") or "").strip().lower()
         error = await self._prepare(PERMISSION_MODES)
@@ -128,12 +124,28 @@ class _AnswerOperation:
             self.requested_mode,
             permission_modes,
         )
-        pending = self.chat.get("pendingQuestion") if isinstance(self.chat.get("pendingQuestion"), dict) else None
+        checkpoint = await asyncio.to_thread(
+            self.service.run_manager.conversation_runtime.context_checkpoint,
+            self.chat_id,
+        )
+        pending_value = (
+            checkpoint.get("pending_question")
+            if isinstance(checkpoint, dict)
+            and checkpoint.get("status") == "awaiting_user"
+            else None
+        )
+        pending = (
+            pending_value.as_dict()
+            if hasattr(pending_value, "as_dict")
+            else None
+        )
         if not pending or str(pending.get("id") or "") != self.question_id:
             return JSONResponse(
                 {"error": "no matching pending question"},
                 status_code=409,
             )
+        self.pending = pending
+        self.agent_run_id = str((checkpoint or {}).get("run_id") or "")
         self.routes = self.context.runtime()
         self.project_id = str(self.chat.get("projectId") or "")
         store = await asyncio.to_thread(self.routes.read_store)
@@ -188,18 +200,9 @@ class _AnswerOperation:
             chatSummary=running_summary,
             userMessage=self.service.public_message(self.answer_entry),
         )
-        self.state_ids_before_resume: set[str] = set()
-        messages = await asyncio.to_thread(
-            self.service.session_state_messages,
-            self.chat_id,
-        )
-        for message in messages:
-            message_id = str(message.get("message_id") or message.get("id") or "").strip()
-            if message_id:
-                self.state_ids_before_resume.add(message_id)
         self.changes_before = await self.service.capture_workspace_changes_baseline(
             self.workspace_dir,
-            run.run_id,
+            self.agent_run_id or run.run_id,
         )
         from cyrene.runtime.host_bridge import resolve_conversation_source
 
@@ -210,23 +213,19 @@ class _AnswerOperation:
         self.answer_persisted = False
         try:
             await self._persist_answer(run)
-            reply = await self._resume_agent()
+            result = await self._resume_agent(run)
             run.status = "finishing"
-            status = (
-                "awaiting_user"
-                if reply == self.routes.awaiting_user_sentinel
-                else "completed"
-            )
+            status = str(result.status or "completed")
             await self.service.finalize_workspace_changes(
                 chat_id=self.chat_id,
-                run_id=run.run_id,
+                run_id=result.run_id,
                 workspace_dir=self.workspace_dir,
                 before=self.changes_before,
                 status=status,
                 run=run,
             )
-            if reply == self.routes.awaiting_user_sentinel:
-                payload = await self._handle_awaiting_user(run)
+            if status == "awaiting_user":
+                payload = await self._handle_awaiting_user(result)
                 run.outcome = {
                     "kind": "awaiting",
                     "pending": payload.get("pendingQuestion"),
@@ -243,7 +242,7 @@ class _AnswerOperation:
                     )
                 return
 
-            payload = await self._handle_reply(run, reply)
+            payload = await self._handle_reply(result)
             run.outcome = {"kind": "reply", "payload": payload}
             if self.wants_stream:
                 event_types = {str(event.get("type") or "") for event in run.events}
@@ -272,20 +271,95 @@ class _AnswerOperation:
         except Exception as exc:
             await self._handle_error(run, exc)
 
-    async def _resume_agent(self):
-        kwargs = {
-            "ui_instance_id": self.ui_instance_id,
-            "conversation_source": self.conversation_source,
-        }
-        if self.mode != "default":
-            kwargs["permission_mode"] = self.mode
-        return await self.routes.answer_pending(
-            self.chat_id,
+    def _attachment_path_map(self) -> dict[str, str]:
+        from pathlib import Path
+
+        paths: dict[str, str] = {}
+        for message in self.chat.get("messages") or ():
+            if not isinstance(message, dict):
+                continue
+            attachments = message.get("agentAttachments")
+            for item in attachments if isinstance(attachments, list) else ():
+                if not isinstance(item, dict):
+                    continue
+                full_path = str(item.get("path") or "").strip()
+                if not full_path:
+                    continue
+                name = Path(full_path).name
+                paths[name] = full_path
+                parts = name.split("_", 1)
+                if len(parts) == 2:
+                    paths[parts[1]] = full_path
+                attachment_id = str(item.get("id") or "").strip()
+                if attachment_id:
+                    paths[attachment_id] = full_path
+        return paths
+
+    async def _resume_agent(self, run: ChatRun):
+        from agent.workbench.conversation_runtime import ConversationConfig
+
+        original_request = next(
+            (
+                str(item.get("content") or "")
+                for item in reversed(self.chat.get("messages") or [])
+                if isinstance(item, dict)
+                and item.get("role") == "user"
+                and not item.get("answerToQuestionId")
+            ),
+            "",
+        )
+        memory_snapshot = (
+            self.chat.get("projectMemorySnapshot")
+            if isinstance(self.chat.get("projectMemorySnapshot"), dict)
+            else None
+        )
+        config = ConversationConfig(
+            session_id=self.chat_id,
+            workspace_dir=self.workspace_dir,
+            db_path=self.context.db_path,
+            bot=self.context.bot,
+            host_chat_id=self.routes.chat_id,
+            client_request_id=str(self.pending.get("clientRequestId") or ""),
+            permission_mode=self.mode,
+            public_user_message=original_request,
+            attachment_paths=self._attachment_path_map(),
+            remote_device_ids=tuple(
+                str(item or "").strip()
+                for item in (self.chat.get("remoteDeviceIds") or ())
+                if str(item or "").strip()
+            ),
+            soul_enabled=self.service.chat_soul_active(self.chat),
+            workspace_enabled=self.service.chat_workspace_active(self.chat),
+            project_id=self.project_id,
+            project_memory_snapshot=memory_snapshot,
+            session_title=str(self.chat.get("title") or ""),
+            memory_write_enabled=not self.is_side_agent,
+            memory_trigger_enabled=not self.is_side_agent,
+            memory_archive_enabled=True,
+            completed_turn_count=int(self.chat.get("completedTurnCount") or 0) + 1,
+            response_capabilities=("interactive_blocks",),
+            ui_instance_id=self.ui_instance_id,
+            conversation_source=self.conversation_source,
+        )
+        result = await self.service.run_manager.conversation_runtime.answer(
+            config,
             self.question_id,
             self.answer_text,
-            self.workspace_dir,
-            **kwargs,
+            publish=run.publish,
         )
+        self._project_plan(run, result)
+        return result
+
+    def _project_plan(self, run: ChatRun, result: Any) -> None:
+        plan = result.active_plan
+        for event in run.events:
+            if str(event.get("type") or "") not in {"plan", "plan_progress"}:
+                continue
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
+            candidate = payload.get("plan") if isinstance(payload, dict) else None
+            if isinstance(candidate, dict):
+                plan = candidate
+        self.active_plan = copy.deepcopy(plan) if isinstance(plan, dict) else None
 
     async def _handle_cancelled(self, run: ChatRun) -> None:
         await self.service.finalize_workspace_changes(
@@ -297,11 +371,17 @@ class _AnswerOperation:
             run=run,
         )
         if self.answer_persisted:
-            await asyncio.to_thread(
-                self.service.stash_chat_pending_for,
-                self.chat_id,
-                None,
-            )
+            await asyncio.to_thread(self._clear_answered_pending)
+
+    def _clear_answered_pending(self) -> None:
+        chat = self.service.repository.get(self.chat_id)
+        if not chat:
+            return
+        base_chat = copy.deepcopy(chat)
+        chat.pop("pendingQuestion", None)
+        chat["status"] = "idle"
+        chat["updatedAt"] = self.service.utc_now_iso()
+        self.service.repository.write_one(chat, base_chat=base_chat)
 
     async def _handle_error(self, run: ChatRun, exc: Exception) -> None:
         await self.service.finalize_workspace_changes(
@@ -317,6 +397,8 @@ class _AnswerOperation:
             self.chat_id,
         )
         run.outcome = {"kind": "error", "exc": exc}
+        if self.answer_persisted:
+            await asyncio.to_thread(self._clear_answered_pending)
         if self.wants_stream:
             await run.publish(
                 {
@@ -331,78 +413,91 @@ class _AnswerOperation:
         chat = self.service.repository.get(self.chat_id)
         return self.service.public_chat_light(chat) if chat else {}
 
-    async def _handle_awaiting_user(self, run: ChatRun) -> dict[str, Any]:
-        pending = await asyncio.to_thread(
-            self.routes.pending_question_for,
-            self.chat_id,
-        )
-        state_messages = await asyncio.to_thread(
-            self.service.session_state_messages,
-            self.chat_id,
-        )
-        timeline, usage, files = await asyncio.to_thread(
-            self.service.extract_exchange_timeline,
-            state_messages,
-            self.state_ids_before_resume,
-            include_open_tool_preamble=True,
-        )
-        model = self.service.last_exchange_model(
-            state_messages,
-            self.state_ids_before_resume,
-        ) or str(self.chat.get("model") or "")
-        for entry in timeline:
-            entry.setdefault("model", model)
-        additions = [*timeline]
-        if pending:
-            additions.append(
-                self.service.pending_question_message(
-                    pending,
-                    usage=usage,
-                    files=files,
-                    model=model,
-                )
+    def _runtime_activities(self, result: Any, model: str) -> list[dict[str, Any]]:
+        now = self.service.utc_now_iso()
+        activities = [
+            copy.deepcopy(dict(item))
+            for item in (result.activity_messages or ())
+            if isinstance(item, dict)
+        ]
+        for item in activities:
+            item.setdefault("model", model)
+            item.setdefault("createdAt", now)
+        return activities
+
+    def _runtime_message_fields(self, result: Any) -> dict[str, Any]:
+        fields: dict[str, Any] = {}
+        usage = dict(result.usage or {})
+        if any(usage.values()):
+            fields["usage"] = usage
+        identity = dict(result.model_identity or {})
+        if identity:
+            fields["modelIdentity"] = identity
+        if result.generation_duration_ms is not None and result.generation_duration_ms > 0:
+            fields["modelGenerationDurationMs"] = round(
+                float(result.generation_duration_ms),
+                3,
             )
+        if result.output_tokens_per_second is not None and result.output_tokens_per_second > 0:
+            fields["outputTokensPerSecond"] = round(
+                float(result.output_tokens_per_second),
+                3,
+            )
+        return fields
+
+    async def _handle_awaiting_user(self, result: Any) -> dict[str, Any]:
+        pending_value = result.pending_question
+        if pending_value is None:
+            raise RuntimeError("Agent paused without a pending question")
+        pending = pending_value.as_dict()
+        model = str(result.model or self.chat.get("model") or "")
+        additions = self._runtime_activities(result, model)
+        additions.append(
+            self.service.pending_question_message(
+                pending,
+                usage=dict(result.usage or {}),
+                model=model,
+            )
+        )
+        fresh_chat = await asyncio.to_thread(self.service.repository.get, self.chat_id)
+        if not fresh_chat:
+            raise RuntimeError("chat disappeared while saving pending question")
+        base_chat = copy.deepcopy(fresh_chat)
+        self.service.merge_chat_messages_chronologically(fresh_chat, additions)
+        fresh_chat["pendingQuestion"] = pending
+        fresh_chat["status"] = "idle"
+        fresh_chat["lastModel"] = model
+        if isinstance(self.active_plan, dict):
+            fresh_chat["activePlan"] = copy.deepcopy(self.active_plan)
+        fresh_chat["updatedAt"] = self.service.utc_now_iso()
         await asyncio.to_thread(
-            self.service.stash_chat_pending_for,
-            self.chat_id,
-            pending,
-            additions=additions,
+            self.service.repository.write_one,
+            fresh_chat,
+            base_chat=base_chat,
         )
         public_additions = [self.service.public_message(item) for item in additions]
         return {
             "ok": True,
             "awaitingUser": True,
-            "runId": run.run_id,
+            "runId": result.run_id,
             "pendingQuestion": pending,
             "userMessage": self.service.public_message(self.answer_entry),
             "assistantMessages": public_additions,
+            "chatSummary": self.service.public_chat_light(fresh_chat),
         }
 
-    async def _handle_reply(self, run: ChatRun, reply: Any) -> dict[str, Any]:
-        state_messages = await asyncio.to_thread(
-            self.service.session_state_messages,
-            self.chat_id,
-        )
-        timeline, usage, files = await asyncio.to_thread(
-            self.service.extract_exchange_timeline,
-            state_messages,
-            self.state_ids_before_resume,
-        )
+    async def _handle_reply(self, result: Any) -> dict[str, Any]:
         fresh_chat = await asyncio.to_thread(
             self.service.repository.get,
             self.chat_id,
         )
         if not fresh_chat:
             raise RuntimeError("chat disappeared while resuming its answer")
-        model = self.service.last_exchange_model(
-            state_messages,
-            self.state_ids_before_resume,
-        ) or str(fresh_chat.get("model") or "")
-        for entry in timeline:
-            entry.setdefault("model", model)
-        assistant = self._assistant_message(reply, model, usage, files)
+        model = str(result.model or fresh_chat.get("model") or "")
+        timeline = self._runtime_activities(result, model)
+        assistant = self._assistant_message(result, model)
         saved_messages = [*timeline, assistant]
-        completed_turn_count = await self._persist_completed_reply(
+        await self._persist_completed_reply(
             fresh_chat,
             saved_messages,
             assistant,
@@ -411,18 +506,10 @@ class _AnswerOperation:
         # ChatRunManager records lastRun immediately after the runner returns.
         # Keep the terminal stream projection accurate during that tiny gap.
         summary["runStatus"] = "completed"
-        await self._archive_reply(fresh_chat, reply)
-        if self.project_id and not self.is_side_agent:
-            await self._schedule_memory(
-                fresh_chat,
-                reply,
-                state_messages,
-                completed_turn_count,
-            )
         return {
             "ok": True,
             "awaitingUser": False,
-            "runId": run.run_id,
+            "runId": result.run_id,
             "userMessage": self.service.public_message(self.answer_entry),
             "assistantMessage": self.service.public_message(assistant),
             "assistantMessages": [self.service.public_message(item) for item in saved_messages],
@@ -431,15 +518,13 @@ class _AnswerOperation:
 
     def _assistant_message(
         self,
-        reply: Any,
+        result: Any,
         model: str,
-        usage: dict[str, Any],
-        files: list[Any],
     ) -> dict[str, Any]:
         message: dict[str, Any] = {
             "id": self.service.short_id("msg"),
             "role": "assistant",
-            "content": str(reply or ""),
+            "content": str(result.text or ""),
             "createdAt": self.service.utc_now_iso(),
             "model": model,
             "processingDurationMs": max(
@@ -447,10 +532,7 @@ class _AnswerOperation:
                 int(round((time.monotonic() - self.processing_started_at) * 1000)),
             ),
         }
-        if any(usage.values()):
-            message["usage"] = usage
-        if files:
-            message["attachments"] = files
+        message.update(self._runtime_message_fields(result))
         return message
 
     async def _persist_completed_reply(
@@ -469,6 +551,8 @@ class _AnswerOperation:
         chat["lastModel"] = assistant["model"]
         chat["status"] = "idle"
         chat.pop("pendingQuestion", None)
+        if isinstance(self.active_plan, dict):
+            chat["activePlan"] = copy.deepcopy(self.active_plan)
         chat["updatedAt"] = assistant["createdAt"]
         await asyncio.to_thread(
             self.service.repository.write_one,
@@ -478,7 +562,6 @@ class _AnswerOperation:
         from cyrene.runtime.host_actions import finalize_origin
 
         asyncio.create_task(finalize_origin(self.chat_id, ""))
-        await asyncio.to_thread(self.service.complete_chat_plan, self.chat_id)
         return completed
 
     def _response(self, run: ChatRun):
@@ -525,7 +608,11 @@ class _AnswerOperation:
         }.get(kind, "cancelled" if run.status == "cancelled" else run.status)
         payload = outcome.get("payload")
         details: dict[str, Any] = {
-            "run_id": run.run_id,
+            "run_id": (
+                str(payload.get("runId") or run.run_id)
+                if isinstance(payload, dict)
+                else run.run_id
+            ),
             "run_status": run_status,
             "chatSummary": await asyncio.to_thread(self._load_chat_summary),
         }
@@ -537,70 +624,6 @@ class _AnswerOperation:
             "settled",
             **details,
         )
-
-    async def _archive_reply(self, chat: dict[str, Any], reply: Any) -> None:
-        try:
-            await asyncio.to_thread(
-                archive_session_exchange,
-                self.chat_id,
-                self.answer_text,
-                str(reply or ""),
-                workspace_dir=self.workspace_dir,
-                session_title=str(chat.get("title") or ""),
-            )
-        except Exception:
-            logger.exception(
-                "Failed to archive workbench conversation %s",
-                self.chat_id,
-            )
-
-    async def _schedule_memory(
-        self,
-        chat: dict[str, Any],
-        reply: Any,
-        state_messages: list[dict[str, Any]],
-        completed_turn_count: int,
-    ) -> None:
-        schedule_structured_memory_capture(
-            self.routes,
-            project_id=self.project_id,
-            user_text=self.answer_text,
-            agent_text=str(reply or ""),
-            state_messages=state_messages,
-            prior_message_ids=self.state_ids_before_resume,
-            session_id=self.chat_id,
-        )
-        from cyrene.workbench.project_memory_prompt import (
-            completed_context_snapshot,
-            context_auto_trigger_threshold,
-            schedule_learning,
-        )
-
-        snapshot = await asyncio.to_thread(
-            completed_context_snapshot,
-            self.chat_id,
-            self.project_id,
-            completed_turn_count=completed_turn_count,
-            final_assistant_text=str(reply or ""),
-        )
-        threshold = (
-            context_auto_trigger_threshold(
-                self.project_id,
-                self.chat_id,
-                snapshot.get("messages") or [],
-            )
-            if snapshot
-            else None
-        )
-        if snapshot and threshold is not None:
-            snapshot["contextThresholdPercent"] = threshold
-            schedule_learning(
-                self.project_id,
-                snapshot,
-                source="conversation_auto",
-                reason=f"context_{threshold}_percent",
-            )
-
 
 def register_run_answer_routes(
     router: APIRouter,

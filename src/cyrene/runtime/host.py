@@ -64,17 +64,64 @@ def _bootstrap_source_checkout() -> None:
 
 _bootstrap_source_checkout()
 
-from cyrene.agent import clear_session_id, run_agent
-from cyrene.agent.commands import DEEP_REFLECT_COMMAND_ID, parse_deep_reflect_command
 from cyrene.config import (
     ASSISTANT_NAME,
     DB_PATH,
+    WORKSPACE_DIR,
     WEB_PORT,
 )
 from cyrene.runtime.application import ApplicationLifecycle
 from cyrene.runtime.bootstrap import create_runtime_context
 
 logger = logging.getLogger(__name__)
+_CLI_SESSION_ID = "cli"
+
+
+class _CliRun:
+    """Small event sink used by the terminal UI's Plugin-backed conversation."""
+
+    def __init__(self) -> None:
+        self.run_id = "run_" + uuid.uuid4().hex
+
+    async def publish(self, _event: dict[str, object]) -> None:
+        return None
+
+
+async def _run_cli_agent(user_input: str) -> str:
+    """Execute one CLI turn through the same AgentSession used by Workbench."""
+
+    from agent.workbench.chat_runtime import run_workbench_chat
+
+    result = await run_workbench_chat(
+        run=_CliRun(),
+        user_message=str(user_input or ""),
+        bot=None,
+        host_chat_id=0,
+        db_path=str(DB_PATH),
+        session_id=_CLI_SESSION_ID,
+        workspace_dir=str(WORKSPACE_DIR),
+        public_user_message=str(user_input or ""),
+        conversation_source="cli",
+    )
+    return result.text
+
+
+async def _clear_cli_context() -> None:
+    """Delete only the durable ContextTree owned by the terminal UI."""
+
+    from agent.context import ContextStoreRouter, TreeNotFoundError
+    from agent.workbench.chat_runtime import workbench_agent_data_directory
+
+    router = ContextStoreRouter(
+        workbench_agent_data_directory(str(DB_PATH)) / "context"
+    )
+    try:
+        try:
+            await asyncio.to_thread(router.delete_tree, _CLI_SESSION_ID)
+        except TreeNotFoundError:
+            pass
+    finally:
+        router.close()
 
 
 async def _shielded_application_shutdown(
@@ -147,6 +194,38 @@ async def _prepare_application(
         create_runtime_context(host_mode="cli")
     )
     await application.initialize()
+
+    # CLI and one-shot hosts use the exact same editable Plugin application
+    # contributions as Workbench.  A headless router is sufficient: it creates
+    # the model, memory, content, MCP, and schedule services without serving an
+    # HTTP app, and keeps their lifecycle owned by this ApplicationLifecycle.
+    from fastapi import APIRouter, FastAPI
+    from agent.plugin import (
+        PluginApplicationHost,
+        active_plugin_application_host,
+        set_active_plugin_application_host,
+    )
+
+    plugin_host = PluginApplicationHost.load_user_plugins(
+        app=FastAPI(),
+        bot=None,
+        db_path=str(application.context.database_path),
+        data_directory=application.context.paths.data,
+    )
+    plugin_host.attach(APIRouter())
+    set_active_plugin_application_host(plugin_host)
+    await plugin_host.startup()
+
+    async def close_plugin_host() -> None:
+        await plugin_host.shutdown()
+        if active_plugin_application_host() is plugin_host:
+            set_active_plugin_application_host(None)
+
+    application.register_manager(
+        "plugin_application",
+        plugin_host,
+        close=close_plugin_host,
+    )
     await application.start_external_services()
     return application
 
@@ -161,15 +240,19 @@ async def _prepare_cli() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _cli_mcp_list() -> None:
-    from cyrene.tooling.backends.mcp_manager import get_manager as _get_mgr, get_mcp_servers as _get_cfg
+def _cli_mcp_service():
+    from agent.plugin.mcp_service import get_mcp_service
 
-    configs = _get_cfg()
+    return get_mcp_service()
+
+
+async def _cli_mcp_list() -> None:
+    service = _cli_mcp_service()
+    configs = service.configs()
     if not configs:
         print("  No MCP servers configured.")
         return
-    manager = _get_mgr()
-    statuses = {s["name"]: s for s in manager.get_server_status()}
+    statuses = {s["name"]: s for s in service.status()}
     print(f"\n  {'Name':<16} {'Transport':<10} {'Status':<14} {'Tools':<6} Endpoint")
     print(f"  {'-'*16} {'-'*10} {'-'*14} {'-'*6} {'-'*40}")
     for cfg in configs:
@@ -182,17 +265,21 @@ async def _cli_mcp_list() -> None:
         enabled = cfg.get("enabled", True)
         enabled_mark = "" if enabled else " [disabled]"
         print(f"  {name:<16} {transport:<10} {status:<14} {tools:<6} {endpoint}{enabled_mark}")
-    # Show tool summary if any connected
-    mcp_defs = manager.get_tool_defs()
-    if mcp_defs:
-        print(f"\n  Total MCP tools available: {len(mcp_defs)}")
-        for td in mcp_defs:
-            print(f"    - {td['function']['name']}: {td['function']['description'][:80]}")
+    tools = [
+        tool
+        for status in statuses.values()
+        for tool in status.get("tools") or ()
+    ]
+    if tools:
+        print(f"\n  Total MCP Plugins available: {len(tools)}")
+        for tool in tools:
+            print(
+                f"    - {tool.get('plugin') or tool.get('name')}: "
+                f"{str(tool.get('description') or '')[:80]}"
+            )
 
 
 async def _cli_mcp_add(args: list[str]) -> None:
-    from cyrene.tooling.backends.mcp_manager import save_mcp_servers as _save, get_mcp_servers as _load
-
     if len(args) < 3:
         print("  Usage: add <name> stdio <command> [args...]")
         print("         add <name> sse <url>")
@@ -208,76 +295,70 @@ async def _cli_mcp_add(args: list[str]) -> None:
     else:
         print(f"  Unknown transport: {transport} (use stdio or sse)")
         return
-    servers = _load()
+    service = _cli_mcp_service()
+    servers = service.configs()
     servers = [s for s in servers if s.get("name") != name]
     servers.append(server)
-    _save(servers)
-    # Restart MCP manager
-    from cyrene.tooling.backends.mcp_manager import restart_mcp
-
-    await restart_mcp()
-    print(f"  ✅ MCP server '{name}' added and connected.")
+    await service.replace_configs(servers)
+    status = service.server_status(name) or {}
+    state = str(status.get("status") or "disconnected")
+    if state == "connected":
+        print(f"  ✅ MCP server '{name}' added and connected.")
+    else:
+        detail = str(status.get("error") or state)
+        print(f"  MCP server '{name}' was saved but is not connected: {detail}")
 
 
 async def _cli_mcp_remove(args: list[str]) -> None:
-    from cyrene.tooling.backends.mcp_manager import save_mcp_servers as _save, get_mcp_servers as _load, restart_mcp
-
     if not args:
         print("  Usage: remove <name>")
         return
     name = args[0]
-    servers = _load()
-    before = len(servers)
-    servers = [s for s in servers if s.get("name") != name]
-    if len(servers) == before:
+    removed = await _cli_mcp_service().remove(name)
+    if removed is None:
         print(f"  Server '{name}' not found.")
         return
-    _save(servers)
-    await restart_mcp()
     print(f"  ✅ MCP server '{name}' removed.")
 
 
 async def _cli_mcp_toggle(args: list[str]) -> None:
-    from cyrene.tooling.backends.mcp_manager import save_mcp_servers as _save, get_mcp_servers as _load, restart_mcp
-
     if not args:
         print("  Usage: toggle <name>")
         return
     name = args[0]
-    servers = _load()
-    found = False
-    for s in servers:
-        if s.get("name") == name:
-            s["enabled"] = not s.get("enabled", True)
-            found = True
-            break
-    if not found:
+    service = _cli_mcp_service()
+    existing = next(
+        (item for item in service.configs() if item.get("name") == name),
+        None,
+    )
+    if existing is None:
         print(f"  Server '{name}' not found.")
         return
-    _save(servers)
-    await restart_mcp()
-    status = "enabled" if next(s for s in servers if s["name"] == name).get("enabled", True) else "disabled"
+    enabled = not bool(existing.get("enabled", True))
+    await service.set_enabled(name, enabled)
+    status = "enabled" if enabled else "disabled"
     print(f"  ✅ MCP server '{name}' {status}.")
 
 
 async def _cli_mcp_test(args: list[str]) -> None:
-    from cyrene.tooling.backends.mcp_manager import get_manager as _get_mgr
-
     if not args:
         print("  Usage: test <name>")
         return
     name = args[0]
-    manager = _get_mgr()
-    for conn_name, conn in manager._servers.items():
-        if conn_name == name:
-            tools = conn.get_tool_defs()
-            print(f"  ✅ Server '{name}' connected, {len(tools)} tools available.")
-            for td in tools[:10]:
-                print(f"    - {td['function']['name']}: {td['function']['description'][:60]}")
-            if len(tools) > 10:
-                print(f"    ... and {len(tools) - 10} more")
-            return
-    print(f"  Server '{name}' is not connected. Check config with '/mcp list'.")
+    status = _cli_mcp_service().server_status(name)
+    if status and status.get("status") == "connected":
+        tools = list(status.get("tools") or ())
+        print(f"  ✅ Server '{name}' connected, {len(tools)} tools available.")
+        for tool in tools[:10]:
+            print(
+                f"    - {tool.get('plugin') or tool.get('name')}: "
+                f"{str(tool.get('description') or '')[:60]}"
+            )
+        if len(tools) > 10:
+            print(f"    ... and {len(tools) - 10} more")
+        return
+    detail = str((status or {}).get("error") or "not connected")
+    print(f"  Server '{name}' is {detail}. Check config with '/mcp list'.")
 
 
 async def _handle_mcp_command(cmd_line: str) -> None:
@@ -331,49 +412,59 @@ async def _handle_menu():
             return
 
         elif choice == "2":
-            await clear_session_id()
+            await _clear_cli_context()
             print("✅ 对话上下文已清除。")
             return
 
         elif choice == "3":
-            from cyrene.runtime.memory.soul import get_soul_path, ensure_soul
-            from cyrene.runtime.memory.short_term import save_entries
-            soul_path = get_soul_path()
-            if soul_path.exists():
-                soul_path.unlink()
-            ensure_soul()
-            save_entries([])  # 同时清空短期记忆
+            from agent.plugin import active_plugin_service
+
+            memory_service = active_plugin_service("memory")
+            if memory_service is None:
+                print("❌ 记忆插件当前不可用。")
+                return
+            memory_service.reset_persona_memory()
             print("✅ SOUL.md 已重置为默认。短期记忆已清空。")
             return
 
         elif choice == "4":
-            from cyrene.config import OPENAI_MODEL, OPENAI_BASE_URL
-            from cyrene.runtime.memory.soul import get_soul_path, read_soul
-            from cyrene.runtime.memory.short_term import load_entries
+            from agent.plugin import active_plugin_service
+            from cyrene.runtime.model_configuration import candidates_for_route
+
+            primary = candidates_for_route("primary")
+            candidate = primary[0] if primary else {}
+            memory_service = active_plugin_service("memory")
             print("\n--- 系统状态 ---")
-            print(f"  模型: {OPENAI_MODEL}")
-            print(f"  地址: {OPENAI_BASE_URL}")
-            soul_path = get_soul_path()
-            print(f"  SOUL.md: {'存在' if soul_path.exists() else '不存在'} ({soul_path})")
-            if soul_path.exists():
-                soul_content = read_soul()
+            print(f"  模型: {candidate.get('model') or '未配置'}")
+            print(f"  地址: {candidate.get('base_url') or '未配置'}")
+            soul_path = memory_service.soul_path() if memory_service is not None else None
+            print(
+                f"  SOUL.md: {'存在' if soul_path and soul_path.exists() else '不存在'}"
+                f" ({soul_path or 'memory Plugin unavailable'})"
+            )
+            if soul_path and soul_path.exists() and memory_service is not None:
+                soul_content = memory_service.read_soul()
                 print(f"  人格内容: {len(soul_content)} 字符")
-            st_entries = load_entries()
+            st_entries = (
+                memory_service.short_term_entries()
+                if memory_service is not None
+                else []
+            )
             print(f"  短期记忆: {len(st_entries)} 条")
-            from cyrene.config import STATE_FILE
-            if STATE_FILE.exists():
-                import json
-                msgs = json.loads(STATE_FILE.read_text()).get("messages", [])
-                print(f"  当前 session: {len(msgs)} 条消息")
-            else:
-                print("  当前 session: 空")
+            from agent.workbench.chat_runtime import workbench_agent_data_directory
+            from cyrene.workbench.conversation_context_service import AgentContextRepository
+
+            cli_state = AgentContextRepository(
+                workbench_agent_data_directory(str(DB_PATH)) / "context"
+            ).read(_CLI_SESSION_ID)
+            cli_messages = cli_state.get("messages") if isinstance(cli_state, dict) else []
+            print(f"  当前 session: {len(cli_messages or [])} 条消息")
             # MCP 状态
-            from cyrene.tooling.backends.mcp_manager import get_manager as _get_mgr, get_mcp_servers as _get_cfg
-            mcp_cfgs = _get_cfg()
+            mcp_service = _cli_mcp_service()
+            mcp_cfgs = mcp_service.configs()
             if mcp_cfgs:
                 print(f"  MCP 服务器: {len(mcp_cfgs)} 个已配置")
-                mcp_mgr = _get_mgr()
-                for st in mcp_mgr.get_server_status():
+                for st in mcp_service.status():
                     print(f"    {st['name']}: {st['status']} ({st['tool_count']} tools)")
             print("------------------")
             return
@@ -396,7 +487,7 @@ async def _cli_loop() -> None:
                 await _handle_menu()
                 continue
             if user_input.lower() == "/clear":
-                await clear_session_id()
+                await _clear_cli_context()
                 print("Session cleared.")
                 continue
             if user_input.lower().startswith("/mcp "):
@@ -407,18 +498,7 @@ async def _cli_loop() -> None:
                 await _cli_mcp_list()
                 continue
 
-            deep_reflect = parse_deep_reflect_command(user_input)
-            if deep_reflect.get("matched"):
-                response = await run_agent(
-                    str(deep_reflect.get("focus") or ""),
-                    None,
-                    0,
-                    str(DB_PATH),
-                    command=DEEP_REFLECT_COMMAND_ID,
-                    public_user_message=user_input,
-                )
-            else:
-                response = await run_agent(user_input, None, 0, str(DB_PATH))
+            response = await _run_cli_agent(user_input)
             print(f"\n{ASSISTANT_NAME}: {response}")
         except (KeyboardInterrupt, EOFError):
             break

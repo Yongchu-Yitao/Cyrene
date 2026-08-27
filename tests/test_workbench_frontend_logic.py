@@ -137,19 +137,17 @@ def test_pane_cards_can_detach_into_native_windows_with_browser_view_migration()
     assert "ipcRenderer.on('detached-pane:returned'" in preload
 
 
-def test_external_agent_context_uses_report_then_transcript_fallback_copy():
+def test_context_panel_has_only_the_new_agent_tree_projection():
     source = workbench_chat_source()
     i18n = workbench_i18n_source()
-    assert 'data.compositionSource === "agent_report"' in source
-    assert 'data.compositionSource === "public_transcript"' in source
-    assert "workbenchChat.ctxBlocks.agentReportDetailed" in source
-    assert 'className: "wbc-context-source-info"' in source
-    assert 'className: "wbc-context-source-popover"' in source
-    assert 'usesAgentReport && React.createElement("p"' not in source
-    assert '"workbenchChat.ctxBlocks.externalEstimate": "以下为 Cyrene 可见的对话内容估算。' in i18n
+    assert 'data.compositionSource === "agent_report"' not in source
+    assert 'data.compositionSource === "public_transcript"' not in source
+    assert "workbenchChat.ctxBlocks.agentReportDetailed" not in source
+    assert 'className: "wbc-context-source-info"' not in source
+    assert 'className: "wbc-context-source-popover"' not in source
+    assert "workbenchChat.ctxBlocks.externalEstimate" not in i18n
     assert 'className: "wbc-ctx-layer-row"' in source
-    assert '"workbenchChat.ctxBlocks.layer.agent_other": "External Agent"' in i18n
-    assert '"workbenchChat.ctxBlocks.layer.agent_other": "外部 Agent"' in i18n
+    assert "workbenchChat.ctxBlocks.layer.agent_other" not in i18n
 
 
 def test_external_agent_context_hides_cyrene_only_inbox_and_tool_packages():
@@ -409,29 +407,6 @@ def test_conversation_panel_has_separate_files_and_artifacts_rows():
     assert 'if (artifactItems.length) tabs.push({ id: "artifacts", label: wbcT("workbenchChat.artifacts", "Artifacts") });' in source
     assert 'files: hasFiles ? String(fileItems.length) : ""' in source
     assert 'artifacts: artifactItems.length ? String(artifactItems.length) : ""' in source
-
-
-def test_send_file_prompt_registers_user_requested_save_locations_as_artifacts():
-    from cyrene.agent.prompts import _MAIN_DELIVERY_FILE_PROMPT, workspace_scope_block
-    from cyrene.tooling.native_definitions import get_native_tool_def
-
-    tool = get_native_tool_def("send_file")["function"]
-    description = tool["description"]
-    path_description = tool["parameters"]["properties"]["path"]["description"]
-
-    assert "file you actually created" in description
-    assert "never guess paths or merely print one" in description
-    assert "specific save location" in description
-    assert "does not save or move files" in description
-    assert "authorized user-requested locations" in path_description
-    assert "real file you created" in _MAIN_DELIVERY_FILE_PROMPT
-    assert "printing or guessing a path is not delivery" in _MAIN_DELIVERY_FILE_PROMPT
-    assert "specific save location" in _MAIN_DELIVERY_FILE_PROMPT
-    assert "registered as an artifact" in _MAIN_DELIVERY_FILE_PROMPT
-    # The workspace scope block must still push send_file as the delivery path
-    # (no dedicated deliverables/ folder anymore).
-    assert "send_file" in workspace_scope_block()
-    assert "deliverables/" not in workspace_scope_block()
 
 
 def test_global_search_times_out_and_ignores_stale_requests():
@@ -4127,7 +4102,7 @@ def test_data_refresh_cancels_superseded_requests_and_is_event_driven():
     ).read_text(encoding="utf-8")
 
     for name, endpoint in (
-        ("sessions", "/api/sessions"),
+        ("sessions", "/api/workbench/sessions"),
         ("status", "/api/status"),
         ("dashboard", "/api/dashboard?tz="),
     ):
@@ -4218,7 +4193,6 @@ def test_workbench_memory_skill_learning_selects_tool_chains(monkeypatch, tmp_pa
     pattern = (
         root / "src" / "cyrene" / "learning" / "facade.py"
     ).read_text(encoding="utf-8")
-    prompts = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
 
     assert "selectedLearningChainId" in source
     assert "selectedLearningSessionId" in source
@@ -4304,7 +4278,6 @@ def test_workbench_memory_skill_learning_selects_tool_chains(monkeypatch, tmp_pa
     assert "ListScripts" not in pattern
     assert "RunScript" not in pattern
     assert "LearnSkill" not in pattern
-    assert "call `LearnSkill`" not in prompts
 
 
 def test_workbench_chat_overview_i18n_has_zh_labels():
@@ -5474,8 +5447,11 @@ def test_workbench_chat_model_label_and_context_usage_use_live_data():
 
     assert "var modelName = wbcCurrentModel(chat, project, runtime, null);" in composer
     assert "var liveData = useWbcLiveChatMetrics(chat, !!runtime);" in overview
-    assert "wbcCurrentModel(chat, null, runtime, liveData)" in overview
-    assert "var usage = Object.assign({}, (liveData && liveData.usage) || chat.usage || {}, runtimeUsage);" in overview
+    assert "runtime && runtime.activeModel" in overview
+    assert "liveData && liveData.model" in overview
+    assert "wbcCurrentModel(chat, null, runtime, liveData)" not in overview
+    assert "var usage = Object.assign({}, (liveData && liveData.usage) || {}, runtimeUsage);" in overview
+    assert "chat.usage" not in overview
     assert '<WbcOverviewUsage usage={usage} />' in overview
     assert '<WbcContextUsage data={liveData} compact={true} />' in overview
     assert '{!compact && (' not in usage
@@ -5886,7 +5862,58 @@ process.stdout.write(JSON.stringify(values.map(wbcFormatProcessingDuration)));
     assert footer.index("wbcFormatTime(msg.createdAt)") < footer.index(
         "processingDuration"
     )
-    assert footer.index("processingDuration") < footer.index("total_tokens")
+    assert footer.index("processingDuration") < footer.index("usageTokenCount")
+    assert footer.index("usageTokenCount") < footer.index("outputTokenSpeed")
+
+
+def test_workbench_assistant_footer_uses_step_total_and_formats_speed():
+    source = frontend_module_source("features/chat/messages.jsx")
+    token_helper = "function wbcAssistantUsageTokenCount" + source.split(
+        "function wbcAssistantUsageTokenCount", 1
+    )[1].split("function wbcFormatOutputTokenSpeed", 1)[0]
+    speed_helper = "function wbcFormatOutputTokenSpeed" + source.split(
+        "function wbcFormatOutputTokenSpeed", 1
+    )[1].split("function WbcAssistantMessage", 1)[0]
+    script = f"""
+{token_helper}
+{speed_helper}
+const result = {{
+  tokens: [
+    wbcAssistantUsageTokenCount({{completion_tokens: 12, total_tokens: 30}}),
+    wbcAssistantUsageTokenCount({{output_tokens: 14, total_tokens: 31}}),
+    wbcAssistantUsageTokenCount({{total_tokens: 32}}),
+    wbcAssistantUsageTokenCount({{completion_tokens: 0, total_tokens: 33}}),
+    wbcAssistantUsageTokenCount({{prompt_tokens: 7, completion_tokens: 8}}),
+    wbcAssistantUsageTokenCount({{completion_tokens: 12}}),
+    wbcAssistantUsageTokenCount({{output_tokens: 14}}),
+    wbcAssistantUsageTokenCount({{}}),
+    wbcAssistantUsageTokenCount(null),
+  ],
+  speeds: [
+    wbcFormatOutputTokenSpeed(42.56),
+    wbcFormatOutputTokenSpeed(42),
+    wbcFormatOutputTokenSpeed(0),
+    wbcFormatOutputTokenSpeed(undefined),
+    wbcFormatOutputTokenSpeed(Infinity),
+    wbcFormatOutputTokenSpeed(0.04),
+  ],
+}};
+process.stdout.write(JSON.stringify(result));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+
+    assert json.loads(completed.stdout) == {
+        "tokens": [30, 31, 32, 33, 15, 12, 14, None, None],
+        "speeds": ["42.6 tok/s", "42 tok/s", "", "", "", "<0.1 tok/s"],
+    }
+    footer = source.split('<div className="wbc-msg-foot">', 1)[1].split(
+        "</div>", 1
+    )[0]
+    assert "wbcCompactNumber(usageTokenCount)" in footer
+    assert "msg.usage.total_tokens" not in footer
+    assert 'className="wbc-msg-output-speed"' in footer
 
 
 def test_workbench_terminal_reply_snapshot_is_authoritative_after_streamed_calls():
@@ -6364,7 +6391,7 @@ def test_agent_terminal_control_reuses_surface_glint_and_visible_terminal_is_una
     assert "showAgentCursor(terminalPoint" in control
 
 
-def test_workbench_context_tab_has_live_session_inbox_card():
+def test_workbench_context_tab_has_durable_agent_inbox_card():
     source = workbench_chat_source()
     css = workbench_style_source()
     context_tab = source.split("function WbcContextTab", 1)[1].split(
@@ -6402,7 +6429,9 @@ def test_workbench_context_tab_has_live_session_inbox_card():
     assert 'className={"wbc-inbox-queue-count"' in inbox_card
     assert 'className="wbc-context-empty-label"' in inbox_card
     assert "hideTitle && feed.length === 0" not in inbox_card
-    assert "queueDepth === 0 ? (" in inbox_card
+    assert "queueDepth === 0 && !historyTruncated ? (" in inbox_card
+    assert "data.eventsTruncated || data.historyWindowTruncated" in inbox_card
+    assert "workbenchChat.inbox.historyTruncated" in inbox_card
     assert 'queueDepth === null ? "—" : queueDepth' in inbox_card
     inbox_head_css = css.split("\n.wbc-inbox-head {", 1)[1].split("}", 1)[0]
     assert "justify-content: flex-start;" in inbox_head_css
@@ -6416,11 +6445,9 @@ def test_workbench_context_tab_has_live_session_inbox_card():
     assert "wbc-inbox-run-row" not in inbox_card
     assert 'workbenchChat.inbox.guidancePending' not in inbox_card
     assert 'workbenchChat.inbox.activeTools' not in inbox_card
-    assert 'wbcT("toolName." + item.toolName, item.toolName)' in source
-    assert "wbcInboxArgumentPreview(tool.arguments)" in inbox_card
-    assert "item.toolCallId && <code" not in inbox_card
-    assert 'className={"wbc-inbox-event-preview"' in inbox_card
-    assert 'item.type === "tool_result" || item.type === "tool_activity"' in inbox_card
+    assert "wbcInboxArgumentPreview" not in inbox_card
+    assert "tool_activity" not in inbox_card
+    assert 'className="wbc-inbox-event-preview"' in inbox_card
     assert 'aria-live="polite"' in source
     assert ".wbc-inbox-card" in css
     inbox_card_css = css.split(".wbc-inbox-card", 1)[1].split(
@@ -6431,7 +6458,7 @@ def test_workbench_context_tab_has_live_session_inbox_card():
     assert "padding-bottom: 10px" in inbox_card_css
     assert "justify-content: space-between" in inbox_meta_css
     assert "white-space: nowrap" in inbox_meta_time_css
-    assert inbox_card.index('className={"wbc-inbox-event-preview"') > inbox_card.index('className="wbc-inbox-event-meta"')
+    assert inbox_card.index('className="wbc-inbox-event-preview"') > inbox_card.index('className="wbc-inbox-event-meta"')
     assert ".wbc-inbox-event-meta code" not in css
 
 
@@ -6472,21 +6499,18 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
     )[0]
     assert 'fetch("/api/settings/tools"' not in context_tab
     assert '"cyrene-tool-packages-change"' not in context_tab
-    assert "wbcUsedToolPackages(chat, runtime)" in context_tab
-    assert "message.tools" in disclosure
-    assert "message.trace" in disclosure
-    assert "runtime.activities" in disclosure
-    assert "runtime.segments" in disclosure
-    assert "activity && activity.trace" in disclosure
-    assert "segment && segment.trace" in disclosure
-    assert "WBC_PROGRESSIVE_TOOL_PACKAGES.has(name)" in disclosure
-    for package_id in (
-        "cyrene_tools",
-        "office_tools",
-        "plugin_tools",
-        "custom_tools",
-    ):
-        assert f'"{package_id}"' in chat
+    assert "wbcUsedToolPackages(contextBlocks)" in context_tab
+    assert "message.tools" not in disclosure
+    assert "runtime.activities" not in disclosure
+    assert "WBC_PROGRESSIVE_TOOL_PACKAGES" not in chat
+    assert 'compositionSource === "public_transcript"' not in context_tab
+    assert 'compositionSource === "agent_report"' not in context_tab
+    assert "contextBlocks.usedToolPackages" in disclosure
+    assert ".forEach(addReportedPackage)" in disclosure
+    assert "contextBlocks.messageCount" in context_tab
+    assert "contextBlocks.updatedAt" in context_tab
+    assert "chat.messageCount" not in context_tab
+    assert 'item.messageType === "task_result"' in chat
     assert "workbenchChat.usedToolPackages" in context_tab
     assert "usedToolPackages.length === 0" in context_tab
     assert "workbenchChat.noUsedToolPackages" in context_tab
@@ -6520,118 +6544,139 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
         assert i18n.count(f'"toolPackageDesc.{package_id}"') == 2
         assert i18n.count(f'"toolName.{package_id}"') == 2
 
+    for package_id in (
+        "cyrene_application",
+        "cyrene_browser",
+        "cyrene_code",
+        "cyrene_content",
+        "cyrene_control",
+        "cyrene_delivery",
+        "cyrene_desktop",
+        "cyrene_entity",
+        "cyrene_extensions",
+        "cyrene_image",
+        "cyrene_knowledge",
+        "cyrene_map",
+        "cyrene_media",
+        "cyrene_memory",
+        "cyrene_model",
+        "cyrene_office",
+        "cyrene_plugins",
+        "cyrene_remote",
+        "cyrene_renderer",
+        "cyrene_schedule",
+        "cyrene_skills",
+        "cyrene_subagent",
+        "cyrene_task",
+    ):
+        assert i18n.count(f'"toolName.{package_id}"') == 2
+
     assert not classic_settings.exists()
     assert "@media (prefers-reduced-motion: reduce)" in css
     assert '"workbenchChat.inbox.title": "Session inbox"' in i18n
     assert '"workbenchChat.inbox.title": "Agent 收件箱"' in i18n
     assert '"workbenchChat.usedToolPackages": "Used tool packages"' in i18n
     assert '"workbenchChat.usedToolPackages": "已使用的工具包"' in i18n
+    assert '"workbenchChat.inbox.agentMessage": "Agent message"' in i18n
+    assert '"workbenchChat.inbox.subagentResult": "Subagent 结果"' in i18n
+    assert '"workbenchChat.ctxBlock.system.root": "Agent instructions"' in i18n
+    assert '"workbenchChat.ctxBlock.context.project_memory": "项目记忆"' in i18n
+    assert '"workbenchChat.ctxBlock.context.plugin_session": "Plugin session context"' in i18n
+    assert 'id.startsWith("context.")' in chat
     assert '"workbenchChat.inbox.live"' not in i18n
 
 
-def test_custom_tool_status_is_located_under_extensions_and_system():
+def test_new_context_projection_drives_used_tool_package_list():
+    source = workbench_chat_source()
+    helper = "function wbcUsedToolPackages" + source.split(
+        "function wbcUsedToolPackages", 1
+    )[1].split("function WbcContextTab", 1)[0]
+    script = f"""
+eval({json.dumps(helper)});
+process.stdout.write(JSON.stringify(wbcUsedToolPackages({{
+  usedToolPackages: ["cyrene_subagent", "", "cyrene_code", "cyrene_subagent"]
+}})));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout) == ["cyrene_subagent", "cyrene_code"]
+
+
+def test_registry_tool_settings_replace_the_legacy_custom_tool_page():
     root = Path(__file__).resolve().parents[1]
     settings = workbench_settings_source()
+    appearance = frontend_module_source("features/settings/appearance.jsx")
+    capabilities = frontend_module_source("features/settings/capabilities.jsx")
+    overlay = frontend_module_source("settings-overlay.jsx")
+    events = frontend_module_source("platform/events.jsx")
     settings_index = (
         root / "src" / "webui" / "frontend" / "shared" / "settings-index.jsx"
     ).read_text(encoding="utf-8")
-    i18n = workbench_i18n_source()
     app_entry = (root / "src" / "webui" / "frontend" / "entry" / "app.jsx").read_text(
         encoding="utf-8"
     )
     css = workbench_style_source()
 
-    assert "function CustomToolsPanel" in settings
-    assert 'request("/api/custom-tools/status")' in settings
-    assert '{ id: "custom-tools", labelKey: "settings.customTools", icon: "code" }' in settings
-    assert '{ labelKey: "settings.group.extensionsSystem", ids: ["extensions", "custom-plugins", "custom-tools", "integrations"] }' in settings
-    assert 'tab === "custom-tools" && React.createElement(' in settings
-    assert 'className: "settings-panel wb-custom-tools-page"' in settings
-    assert 'var categories = ["recommended", "skills", "mcp", "cli", "toolchains", "agent"]' in settings
-    assert 'category === "customTools"' not in settings
-    assert '{ id: "custom-tools", labelKey: "settings.customTools" }' in settings_index
-    assert '{ id: "setting-custom-tools", tab: "custom-tools",' in settings_index
-    assert '"settings.group.extensionsSystem": "扩展与系统"' in i18n
-
-    extensions_panel = settings.split("function ExtensionsPanel(p) {", 1)[1].split(
-        "function ShortcutsPanel(p) {", 1
-    )[0]
-    assert '"customTools"' not in extensions_panel
-    assert "React.createElement(CustomToolsPanel" not in extensions_panel
-
-    custom_panel = settings.split("function CustomToolsPanel(p) {", 1)[1].split(
-        "function CapabilitiesPanel(p) {", 1
-    )[0]
-    assert 'request("/api/custom-tools/reload", { method: "POST" })' in custom_panel
-    assert '"/api/custom-tools/packages/" + encodeURIComponent(packageId) + "/enabled"' in custom_panel
-    assert 'request("/api/custom-tools")' not in custom_panel
-    assert "/restart" not in custom_panel
-    assert 'tool.name || tool.stable_name || tool.concrete_name' in custom_panel
-    assert 'className: "wb-custom-tools-code-detail"' in custom_panel
-    assert 'className: "wb-field wb-custom-tools-package-heading"' in custom_panel
-    assert 'className: "wb-extension-card wb-custom-tool-card"' in custom_panel
-    assert 'className: "wb-extension-card-summary"' in custom_panel
-    assert 'className: "wb-extension-expand-button"' not in custom_panel
-    assert '"aria-labelledby": packageTitleId' in custom_panel
-    assert '"aria-expanded": toolExpanded ? "true" : "false"' in custom_panel
-    assert 'role: "region"' in custom_panel
-    assert 'className: "wb-controls wb-custom-tools-package-control"' in custom_panel
-    assert 'setExpandedToolId(toolExpanded ? "" : toolKey)' in custom_panel
-    assert 'className: "wb-extension-details wb-custom-tool-details"' in custom_panel
-    assert 't("settings.customToolsDetailSchema")' in custom_panel
-    assert ".wb-custom-tool-card .wb-extension-card-summary" in css
-    assert 'onClick: function () { load(); }' not in custom_panel
-    for legacy_management in (
-        "createPackage",
-        "beginEdit",
-        "openPublicationReview",
-        "publishReviewed",
-        "deletePackage",
-        "customToolUiUrl",
-    ):
-        assert legacy_management not in custom_panel
+    assert "/api/custom-tools" not in settings
+    assert "function CustomToolsPanel" not in appearance
+    assert "CustomToolsPanel" not in overlay
+    assert 'id: "custom-tools"' not in overlay
+    assert 'id: "custom-tools"' not in settings_index
+    assert 'id: "setting-custom-tools"' not in settings_index
+    assert 'id: "setting-standalone-tools", tab: "tools"' in settings_index
+    assert 'setStandaloneTools(Array.isArray(payload.standalone_tools)' in overlay
+    assert 'settingsFetch("/api/settings/tools")' in overlay
+    assert 'payload[kind === "package" ? "packages" : "tools"]' in overlay
+    assert 'workbenchServices.plugins().refresh()' in overlay
+    assert 't("settings.pluginStandalone", "Standalone tools")' in capabilities
+    assert 'tool.locked === true || !!toolSettingBusy' in capabilities
+    assert 'group.locked === true || !!toolSettingBusy' in capabilities
+    assert "custom_tools_changed" not in events
+    assert ".wb-custom-tools-" not in css
 
     assert 'import "../settings-overlay.jsx"' in app_entry
     assert 'import "../shared/settings-index.jsx"' in app_entry
 
 
-def test_project_plugin_toggle_controls_tool_contributions_and_tools_label():
-    root = Path(__file__).resolve().parents[1]
-    settings = workbench_settings_source()
-    styles = workbench_style_source()
-    rail = (
-        root / "src" / "webui" / "frontend" / "features" / "chat" / "rail.jsx"
-    ).read_text(encoding="utf-8")
-    zh = (
-        root / "src" / "webui" / "frontend" / "shared" / "i18n" / "catalog-zh.jsx"
-    ).read_text(encoding="utf-8")
-    plugin_view = (
-        root / "src" / "webui" / "frontend" / "platform" / "plugins.jsx"
-    ).read_text(encoding="utf-8")
+def test_plugin_registry_frontend_uses_only_the_new_status_and_activation_apis():
+    overlay = frontend_module_source("settings-overlay.jsx")
+    plugin_settings = frontend_module_source("features/settings/custom-plugins.jsx")
+    plugin_service = frontend_module_source("platform/plugins.jsx")
 
-    assert '{ id: "custom-plugins", labelKey: "settings.customPlugins", icon: "package" }' in settings
-    assert settings.count('icon: "package"') == 1
-    assert settings.count('icon: "plug-connected"') == 1
-    assert 'tab === "custom-plugins" && React.createElement(CustomPluginsPanel' in settings
-    assert 'function CustomPluginsPanel(props)' in settings
-    assert '"/api/plugins/" + encodeURIComponent(item.id) + "/enabled"' in settings
-    assert 'enabled: !item.enabled' in settings
-    extensions_panel = settings.split("function ExtensionsPanel(p) {", 1)[1].split(
-        "function ShortcutsPanel(p) {", 1
-    )[0]
-    assert '"plugins"' not in extensions_panel
-    assert 'String(item && item.point || "") === "cyrene.projectTool"' in rail
-    assert 'workbenchServices.plugins().subscribe(String(projectId)' in rail
-    assert 'onOpenPluginView({' in rail
-    assert 'detail: { tab: "custom-plugins" }' in plugin_view
-    assert '"rail.projectTools": "工具"' in zh
-    plugin_pane_css = styles.split(".wbc-plugin-view-pane {", 1)[1].split("}", 1)[0]
-    plugin_frame_css = styles.split(".wbc-plugin-view-frame {", 1)[1].split("}", 1)[0]
-    assert "color: inherit;" in plugin_pane_css
-    assert "background: transparent;" in plugin_pane_css
-    assert "background: transparent;" in plugin_frame_css
-    assert 'html[data-theme="dark"] .wbc-plugin-view-frame { color-scheme: dark; }' in styles
-    assert 'html[data-theme="light"] .wbc-plugin-view-frame { color-scheme: light; }' in styles
+    assert '{ id: "custom-plugins", labelKey: "settings.customPlugins", icon: "package" }' in overlay
+    assert 'tab === "custom-plugins" && React.createElement(CustomPluginsPanel' in overlay
+    assert 'api.json("/api/plugins", { toast: false })' in plugin_service
+    assert 'api.json("/api/plugins/reload", {' in plugin_service
+    assert "standalone_plugins" in plugin_service
+    assert "attached_application_packs" in plugin_service
+    assert "application_restart_required" in plugin_service
+    assert "EventSource" not in plugin_service
+    assert "/contributions" not in plugin_service
+    assert '"/call"' not in plugin_service
+    assert 'settingsFetch("/api/settings/tools", {' in plugin_settings
+    assert 'kind === "package" ? { packages: {} } : { tools: {} }' in plugin_settings
+    assert 'item.locked === true' in plugin_settings
+    assert 'kind === "model"' in plugin_settings
+    assert 'item.source === "core"' in plugin_settings
+    assert 'model_visible === true' not in plugin_settings
+    assert "registry.failures" in plugin_settings
+    assert "registry.packs" in plugin_settings
+    assert "registry.standalonePlugins" in plugin_settings
+    assert "projectId" not in plugin_settings
+    for removed_api in (
+        "/api/plugins/install",
+        "/api/plugins/contributions",
+        "/api/plugins/events",
+        "/enabled",
+        "/call",
+        "/assets/",
+    ):
+        assert removed_api not in plugin_service + plugin_settings
 
 
 def test_workbench_inbox_cleanup_aborts_and_ignores_a_late_response():
@@ -8195,44 +8240,12 @@ def test_workbench_chat_context_and_browser_trace_have_dynamic_i18n_labels():
     assert "if (label && label !== key) return label;" in chat
     assert "if (isToolEntry) return wbcLocalizedToolName(toolKey);" in chat
     assert "function wbcLocalizedToolName(toolName)" in chat
-    assert '"workbenchChat.ctxBlock.skills.learned": "Learned skills"' in i18n
-    assert '"workbenchChat.ctxBlock.skills.learned": "已学习技能"' in i18n
-    assert (
-        '"workbenchChat.ctxBlock.client.renderer.workbench": '
-        '"Workbench response format"'
-    ) in i18n
-    assert (
-        '"workbenchChat.ctxBlock.client.renderer.workbench": '
-        '"Workbench 响应格式"'
-    ) in i18n
+    assert '"workbenchChat.ctxBlock.system.root": "Agent instructions"' in i18n
+    assert '"workbenchChat.ctxBlock.context.plugin_session": "插件会话上下文"' in i18n
     assert '"toolName.browser_user_events": "User browser operations"' in i18n
     assert '"toolName.browser_user_events": "用户浏览器操作"' in i18n
     assert '"toolName.browser_upload_files": "Upload files"' in i18n
     assert '"toolName.browser_upload_files": "上传文件"' in i18n
-
-
-def test_progressive_capability_ids_resolve_to_existing_tool_name_i18n():
-    from cyrene.tooling.native_definitions import get_native_tool_defs
-    from cyrene.tooling.packs import CAPABILITY_BINDINGS
-
-    i18n = workbench_i18n_source()
-
-    # Runtime traces intentionally publish model-facing IDs such as
-    # browser.navigate. Every native progressive capability must map back to
-    # the existing localized concrete-tool label instead of leaking that ID.
-    for bindings in CAPABILITY_BINDINGS.values():
-        for capability_id, concrete_name in bindings:
-            assert f'"{capability_id}": "{concrete_name}"' in i18n
-            assert i18n.count(f'"toolName.{concrete_name}"') == 2
-    for tool_def in get_native_tool_defs():
-        tool_name = tool_def["function"]["name"]
-        assert i18n.count(f'"toolName.{tool_name}"') == 2
-
-    assert 'var alias = WORKBENCH_TOOL_NAME_ALIASES[toolName];' in i18n
-    assert 'resolvedKey = "toolName." + alias;' in i18n
-    assert '"browser.navigate": "browser_navigate"' in i18n
-    assert '"toolName.browser_navigate": "Navigate"' in i18n
-    assert '"toolName.browser_navigate": "浏览器导航"' in i18n
 
 
 def test_tool_i18n_fallbacks_do_not_leak_internal_keys_after_classic_removal():
@@ -8421,23 +8434,6 @@ wbcToolPreviewText("invoke, skill_tools, {'name': '播放首页推荐首个视�
     )
 
     assert result == "调用能力, 技能工具, name: 播放首页推荐首个视频, auto: True"
-
-
-def test_workbench_phase_events_publish_translation_keys():
-    root = Path(__file__).resolve().parent.parent
-    planning = (root / "src" / "cyrene" / "agent" / "planning.py").read_text(encoding="utf-8")
-    guidance = (root / "src" / "cyrene" / "agent" / "guidance.py").read_text(encoding="utf-8")
-    reflection = (root / "src" / "cyrene" / "agent" / "deep_reflection.py").read_text(encoding="utf-8")
-    i18n = workbench_i18n_source()
-
-    assert '"detail_key": "phase.planning"' in planning
-    assert '"detail_key": "phase.applyingGuidanceToSubagents"' in guidance
-    assert '"detail_params": {"count": len(snapshot)}' in guidance
-    assert '"detail_key": "phase.guidedRoundContinuation"' in guidance
-    assert '"detail_key": "phase.guidanceExecution"' in guidance
-    assert '"detail_key": "phase.deepReflection"' in reflection
-    assert '"phase.useToolsAttachments": "Phase 1 decided to use tools. Task: Analyze uploaded attachments"' in i18n
-    assert '"phase.useToolsAttachments": "阶段一决定使用工具。任务：分析上传的附件"' in i18n
 
 
 def test_workbench_chat_last_user_message_has_retry_action():
@@ -9034,20 +9030,19 @@ def test_backup_actions_use_native_file_pickers_and_comfortable_density_only(
     assert 't("settings.backupRestoreBtn")' in data_panel
     assert 't("settings.backupHint")' in data_panel
     assert 'var [exportSids, setExportSids] = useStateSt([])' in settings
-    assert 'settingsFetch("/api/workbench/chats")' in settings
-    assert "(workbenchExportSessions || []).concat(dataState.sessions || [])" in data_panel
+    assert 'settingsFetch("/api/workbench/chats")' not in settings
+    assert "(dataState.sessions || []).filter" in data_panel
     assert "exportSessions.map(function (s)" in data_panel
     assert 'className: "wb-export-session-list"' in data_panel
     assert 'type: "checkbox", checked: selected' in data_panel
     assert 't("settings.sessionExportHint")' in data_panel
     assert 'exportSids.forEach(function (sessionId)' in data_panel
-    assert '"/api/sessions/" + encodeURIComponent(sessionId) + "/export?format="' in data_panel
+    assert '"/api/workbench/sessions/" + encodeURIComponent(sessionId) + "/export?format="' in data_panel
+    assert '"/api/workbench/sessions/" + encodeURIComponent(session.id) + "/clear"' in data_panel
 
-    from cyrene.agent.session_services import (
-        SessionApplicationService,
-        SessionRepository,
-    )
     from cyrene.runtime import backup as backup_runtime
+    from cyrene.workbench import store as workbench_store
+    from cyrene.workbench.session_presentation import WorkbenchSessionPresentation
 
     captured = {}
 
@@ -9070,21 +9065,19 @@ def test_backup_actions_use_native_file_pickers_and_comfortable_density_only(
         "updatedAt": "2026-08-23T01:01:00Z",
         "messages": [{"role": "user", "content": "hello"}],
     }
-    sessions = SessionApplicationService(
-        "",
-        repository=SessionRepository(
-            state_file=tmp_path / "state.json",
-            conversations_dir=tmp_path / "conversations",
-            chat_reader=lambda session_id: chat if session_id == "chat_1" else None,
-        ),
+    session_db = tmp_path / "sessions.sqlite3"
+    workbench_store.write_chat_bundle(
+        session_db,
+        {"chats": [chat]},
+        lambda: {"chats": []},
     )
-    exported = asyncio.run(sessions.export_session("chat_1", "json"))
+    exported = WorkbenchSessionPresentation(session_db).export("chat_1", "json")
     exported_payload = json.loads(exported.content)
-    assert exported.media_type == "application/json"
-    assert exported_payload["id"] == "chat_1"
-    assert exported_payload["title"] == "Exported chat"
-    assert exported_payload["messages"] == [
-        {"role": "user", "content": "hello", "time": ""}
+    assert exported.media_type == "application/json; charset=utf-8"
+    assert exported_payload["chat"]["id"] == "chat_1"
+    assert exported_payload["chat"]["title"] == "Exported chat"
+    assert exported_payload["chat"]["messages"] == [
+        {"role": "user", "content": "hello"}
     ]
 
     assert 'document.documentElement.dataset.density = "cozy"' in settings
@@ -9106,7 +9099,10 @@ def test_electron_browser_panel_uses_native_browser_bridge():
     assert "ipcMain.handle('browser:set-bounds'" in main
     assert "setAudioMuted" in main
     assert "isCurrentlyAudible" in main
-    assert "browser_tab_new" in (root / "src" / "cyrene" / "tooling" / "catalog.py").read_text(encoding="utf-8")
+    browser_pack = (
+        root / "src" / "agent" / "plugin" / "plugin_impl" / "cyrene_browser" / "__init__.py"
+    ).read_text(encoding="utf-8")
+    assert "browser_tab_new" in browser_pack
     assert "browser: {" in preload
     assert "ipcRenderer.invoke('browser:navigate'" in preload
     assert "ipcRenderer.invoke('browser:set-context'" in preload
@@ -9115,7 +9111,7 @@ def test_electron_browser_panel_uses_native_browser_bridge():
     assert "bridge.setBounds" in view
     assert "bridge.setContext" in view
     assert "bridge.setMuted" in view
-    assert "browser_user_events" in (root / "src" / "cyrene" / "tooling" / "catalog.py").read_text(encoding="utf-8")
+    assert "browser_user_events" in browser_pack
 
 
 def test_native_browser_yields_to_model_confirm_and_topbar_overlays():
@@ -9204,27 +9200,6 @@ def test_browser_snapshot_filters_non_interactable_page_nodes():
         assert "interactive," in source
         assert "disabled," in source
         assert "new Set(out.map((item) => item.text)" in source
-
-
-def test_agent_browser_tabs_are_owned_reused_and_finalized_per_round():
-    root = Path(__file__).resolve().parent.parent
-    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
-    browser = (root / "src" / "cyrene" / "browser.py").read_text(encoding="utf-8")
-    coordinator = (root / "src" / "cyrene" / "agent" / "coordinator.py").read_text(encoding="utf-8")
-
-    assert "this.activeAgentRoundId = ''" in main
-    assert "this.agentOwnedTabIdsByRound = new Map()" in main
-    assert "_recordAgentTab(tab, roundId)" in main
-    assert "agentCreated: Boolean(String(agentOwnerRoundId" in main
-    assert "beginAgentRound(roundId)" in main
-    assert "finishAgentRound(roundId)" in main
-    assert "this._reduceAgentTabs(this._agentTabs(), { activateKept: true })" in main
-    assert "tab.agentOwnerRoundId === normalized" in main
-    assert "agentRequest: true" in main
-    assert "if (method === 'finishRound')" in main
-    assert "opener && opener.agentClickInFlight" in main
-    assert '"finishRound"' in browser
-    assert "finish_electron_browser_round(_current_session_id.get(), round_id)" in coordinator
 
 
 async def test_electron_browser_user_events_are_recorded_for_learning(monkeypatch):
@@ -9400,7 +9375,7 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     assert 'key: "mcpServers"' in chat
     assert 'key: "skills"' in chat
     assert 'key: "toolPackages"' in chat
-    assert 'key: "customTools"' in chat
+    assert 'key: "customTools"' not in chat
     assert ".wbc-tools-context-options" in styles
     command_clear_guard = 'session.updateKind === "available_commands_update" || session.commands.length'
     assert command_clear_guard in runtime_hooks
@@ -9662,53 +9637,6 @@ def test_agent_error_notice_keeps_its_content_inside_a_uniform_border():
     assert "flex: 0 0 auto;" in error_card_css
     assert "border-left:" not in agent_error_css
     assert "border-left-color:" not in agent_error_tones_css
-
-
-def test_workbench_subagent_payload_recovers_chat_scoped_snapshot(monkeypatch):
-    from cyrene import subagent
-    from cyrene.workbench import chat as routes_workbench_chat
-
-    messages = [
-        {"role": "user", "round_id": "round_1", "content": "Compare two approaches"},
-        {
-            "role": "assistant",
-            "round_id": "round_1",
-            "tool_calls": [{
-                "id": "spawn_1",
-                "function": {
-                    "name": "spawn_subagent",
-                    "arguments": json.dumps({"agent_id": "alpha", "task": "Review approach A"}),
-                },
-            }],
-        },
-        {
-            "role": "assistant",
-            "round_id": "round_1",
-            "subagent_flow_snapshot": {
-                "round_id": "round_1",
-                "agents": {
-                    "alpha": {
-                        "task": "Review approach A",
-                        "status": "done",
-                        "result": "Approach A is simpler.",
-                        "messages": [],
-                        "round_id": "round_1",
-                    },
-                },
-                "comm_messages": [],
-            },
-        },
-    ]
-    monkeypatch.setattr(routes_workbench_chat, "_session_state_messages", lambda _chat_id: messages)
-    monkeypatch.setattr(subagent, "_registry", {})
-
-    payload = routes_workbench_chat._workbench_subagent_payload("wbchat_one")
-
-    assert payload["activeRoundId"] == "round_1"
-    assert payload["rounds"][0]["title"] == "Compare two approaches"
-    assert payload["agents"][0]["id"] == "alpha"
-    assert payload["agents"][0]["result"] == "Approach A is simpler."
-    assert payload["messages"][0]["type"] == "result"
 
 
 def _run_workbench_shortcuts_js(expression: str):
@@ -10969,7 +10897,7 @@ def test_workbench_live_reply_disables_interactive_markdown_until_done():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     styles = workbench_style_source()
-    contract = (root / "src" / "cyrene" / "tool_impl" / "renderer" / "load_contract.py").read_text(encoding="utf-8")
+    contract = (root / "src" / "agent" / "plugin" / "plugin_impl" / "cyrene_renderer" / "load_contract.py").read_text(encoding="utf-8")
 
     live_message = chat.split("function WbcLiveMessage", 1)[1].split("// ---------------------------------------------------------------------------", 1)[0]
     assistant_message = chat.split("function WbcAssistantMessage", 1)[1].split("var WBC_HEARTBEAT_STALL_MS", 1)[0]
@@ -10997,32 +10925,6 @@ def test_workbench_agent_transport_notice_has_structured_event_and_durable_bubbl
     assert '"notificationCard": True' in route
     assert ".wbc-agent-notification" in styles
     assert 'role="status" aria-live="polite"' in chat
-
-
-def test_model_retry_and_switch_use_one_durable_system_status_card():
-    root = Path(__file__).resolve().parent.parent
-    chat = workbench_chat_source()
-    quick = (root / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx").read_text(encoding="utf-8")
-    backend = (root / "src" / "cyrene" / "workbench" / "chat.py").read_text(encoding="utf-8")
-    i18n = workbench_i18n_source()
-    live_events = frontend_module_source("features/chat/live-event-controller.jsx")
-
-    assert "function WbcModelStatusMessage" in chat
-    assert 'className={"wbc-model-status-message "' in chat
-    assert 'className="wbc-msg user wbc-model-status-message"' not in chat
-    assert "wbc-model-status-card" in chat
-    assert "wbc-model-status-icon" not in chat
-    assert "msg.modelStatusCard" in chat
-    assert "message.modelStatusCard" in chat
-    assert "m.modelStatusCard" in quick
-    assert "persist_model_status_message" in backend
-    assert 'f"{session}\\0{round_key}\\0model-status"' in backend
-    assert "retryCount" in chat
-    assert "retryLimit" in chat
-    assert "workbenchChat.modelRetryCountCard" in chat
-    assert '"workbenchChat.modelRetryCountCard": "正在重试 {model}（{count}/{limit}）"' in i18n
-    assert '"workbenchChat.modelSwitchedCard": "已切换到 {model}"' in i18n
-    assert "wbcPublishChatModelChanged(chatId, { model: fallbackModel }, { refresh: false })" in live_events
 
 
 def test_custom_model_connection_protocol_does_not_select_a_brand_icon():
@@ -11493,7 +11395,7 @@ def test_workbench_assistant_message_mounts_charts_and_contract_teaches_chart():
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     styles = workbench_style_source()
-    contract = (root / "src" / "cyrene" / "tool_impl" / "renderer" / "load_contract.py").read_text(encoding="utf-8")
+    contract = (root / "src" / "agent" / "plugin" / "plugin_impl" / "cyrene_renderer" / "load_contract.py").read_text(encoding="utf-8")
     index_html = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
     build_script = (root / "src" / "webui" / "build-jsx.mjs").read_text(encoding="utf-8")
 
@@ -11636,7 +11538,7 @@ def test_workbench_button_wiring_and_protocol_surface():
     mount = (root / "src" / "webui" / "frontend" / "shared" / "chart" / "mount.jsx").read_text(encoding="utf-8")
     renderer = (root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx").read_text(encoding="utf-8")
     styles = workbench_style_source()
-    contract = (root / "src" / "cyrene" / "tool_impl" / "renderer" / "load_contract.py").read_text(encoding="utf-8")
+    contract = (root / "src" / "agent" / "plugin" / "plugin_impl" / "cyrene_renderer" / "load_contract.py").read_text(encoding="utf-8")
 
     assert 'chatId: String(chatId || "")' in chat
     assert 'messageId: String(msg && msg.id || "")' in chat
@@ -11746,7 +11648,7 @@ def test_workbench_actions_grid_wiring_and_contract_rules():
     root = Path(__file__).resolve().parent.parent
     renderer = (root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx").read_text(encoding="utf-8")
     styles = workbench_style_source()
-    contract = (root / "src" / "cyrene" / "tool_impl" / "renderer" / "load_contract.py").read_text(encoding="utf-8")
+    contract = (root / "src" / "agent" / "plugin" / "plugin_impl" / "cyrene_renderer" / "load_contract.py").read_text(encoding="utf-8")
 
     assert "findClosingLine" in renderer
     assert "depth" in renderer
@@ -11767,7 +11669,7 @@ def test_workbench_button_model_mode_forwards_to_runtime_endpoint():
     root = Path(__file__).resolve().parent.parent
     mount = (root / "src" / "webui" / "frontend" / "shared" / "chart" / "mount.jsx").read_text(encoding="utf-8")
     chat_route = workbench_chat_route_source()
-    service = (root / "src" / "cyrene" / "workbench" / "chat.py").read_text(encoding="utf-8")
+    service = (root / "src" / "cyrene" / "workbench" / "chat_application.py").read_text(encoding="utf-8")
     schemas = (root / "src" / "route" / "schemas.py").read_text(encoding="utf-8")
     wbc = workbench_chat_source()
 

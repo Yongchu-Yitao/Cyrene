@@ -3,9 +3,8 @@
 Cyrene's internal message contract is OpenAI-shaped because it is convenient
 for tool loops, but a configured adapter must speak its provider's native
 protocol.  This module performs that boundary conversion for Anthropic
-Messages, OpenAI Responses, and Gemini generateContent.  OpenAI Chat
-Completions (including the legacy ``openai_compatible`` id) stays on the
-well-tested path in :mod:`cyrene.model_runtime.client`.
+Messages, OpenAI Responses, Gemini generateContent, and OpenAI-compatible
+Chat Completions for the editable model Provider Plugins.
 """
 
 from __future__ import annotations
@@ -514,12 +513,55 @@ def _usage(adapter: str, data: dict[str, Any]) -> dict[str, int]:
         completion = int(raw.get("candidatesTokenCount") or raw.get("thoughtsTokenCount") or 0)
         result = {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": int(raw.get("totalTokenCount") or prompt + completion)}
         if isinstance(raw.get("cachedContentTokenCount"), int):
-            result["prompt_cache_hit_tokens"] = int(raw["cachedContentTokenCount"])
+            hit = max(0, int(raw["cachedContentTokenCount"]))
+            result["prompt_cache_hit_tokens"] = hit
+            result["prompt_cache_miss_tokens"] = max(0, prompt - hit)
         return result
     raw = data.get("usage") if isinstance(data.get("usage"), dict) else {}
     prompt = int(raw.get("input_tokens") or raw.get("prompt_tokens") or 0)
     completion = int(raw.get("output_tokens") or raw.get("completion_tokens") or 0)
-    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": int(raw.get("total_tokens") or prompt + completion)}
+    result = {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": int(raw.get("total_tokens") or prompt + completion)}
+    details = raw.get("prompt_tokens_details") or raw.get("input_tokens_details")
+    details = details if isinstance(details, dict) else {}
+    hit_value = next(
+        (
+            value
+            for value in (
+                raw.get("prompt_cache_hit_tokens"),
+                raw.get("cache_hit_tokens"),
+                raw.get("cached_tokens"),
+                raw.get("cached_input_tokens"),
+                raw.get("cache_read_input_tokens"),
+                details.get("cached_tokens"),
+            )
+            if value is not None
+        ),
+        None,
+    )
+    miss_value = next(
+        (
+            value
+            for value in (
+                raw.get("prompt_cache_miss_tokens"),
+                raw.get("cache_miss_tokens"),
+                raw.get("cache_creation_input_tokens"),
+            )
+            if value is not None
+        ),
+        None,
+    )
+    if hit_value is not None:
+        hit = max(0, int(hit_value or 0))
+        result["prompt_cache_hit_tokens"] = hit
+        result["prompt_cache_miss_tokens"] = (
+            max(0, int(miss_value or 0))
+            if miss_value is not None
+            else max(0, prompt - hit)
+        )
+    elif miss_value is not None:
+        result["prompt_cache_hit_tokens"] = 0
+        result["prompt_cache_miss_tokens"] = max(0, int(miss_value or 0))
+    return result
 
 
 def parse_response(adapter_id: str, data: dict[str, Any]) -> dict[str, Any]:

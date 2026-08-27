@@ -5,13 +5,14 @@ from __future__ import annotations
 from html.parser import HTMLParser
 import re
 from typing import Any
+
+from agent.plugin import PluginContext
 from urllib.parse import urldefrag, urljoin, urlparse
 
+import httpx
+
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import (
-    truncate,
-    httpx,
-)
+from cyrene.model_runtime.messages import truncate
 
 TOOL_NAME = 'WebFetch'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -131,7 +132,7 @@ def _extract_response_text(
     return parser.text()
 
 
-async def _tool_webfetch(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+async def _tool_webfetch(args: dict[str, Any], _context: PluginContext) -> str:
     url = str(args["url"])
     async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
         response = await client.get(url)

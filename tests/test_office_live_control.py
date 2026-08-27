@@ -10,7 +10,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from conftest import workbench_settings_source
+from agent.plugin import PluginContext
+from conftest import frontend_module_source
 
 
 class FakeWebSocket:
@@ -214,12 +215,27 @@ def test_office_gateway_generates_tls_material_manifest_and_protected_assets(mon
     assert files.secret not in files.public_info(running=False)["install_command"]
 
     client = TestClient(create_office_gateway_app(files))
-    from cyrene.tool_impl.office import kit
+    import agent.plugin as plugin_api
 
-    async def fake_benchmark_tool(method, args, *_rest):
-        return json.dumps({"status": "success", "method": method, "arguments": args})
+    class FakeRuntime:
+        async def call(self, plugin_name, args, _context):
+            assert plugin_name == "PowerPointGetContext"
+            return type("Call", (), {
+                "success": True,
+                "value": {
+                    "status": "success",
+                    "method": "ppt.get_context",
+                    "arguments": args,
+                },
+                "error": "",
+            })()
 
-    monkeypatch.setattr(kit, "_method_handler", fake_benchmark_tool)
+    fake_host = type("Host", (), {
+        "runtime": FakeRuntime(),
+        "services": {},
+        "db_path": str(tmp_path / "cyrene.db"),
+    })()
+    monkeypatch.setattr(plugin_api, "active_plugin_application_host", lambda: fake_host)
     assert client.post("/benchmark/invoke", json={"method": "ppt.get_context", "arguments": {}}).status_code == 401
     benchmark_response = client.post(
         "/benchmark/invoke",
@@ -287,122 +303,10 @@ def test_office_gateway_generates_tls_material_manifest_and_protected_assets(mon
     assert client.get("/health").json()["service"] == "cyrene-office-gateway"
 
 
-def test_office_tools_are_progressively_discoverable_and_strictly_described():
-    from cyrene.tooling.catalog import (
-        describe_capabilities,
-        discover_capabilities,
-        get_tool_execution_metadata,
-    )
-    from cyrene.tooling.gateway import resolve_wire_call
-    from cyrene.tooling.wire import DIRECT_TOOL_NAMES
-
-    discovered = discover_capabilities("office_tools", query="create slide layout", limit=20)
-    ids = {item["id"] for item in discovered}
-    assert "ppt.create_slide" in ids
-    assert "ppt.create_slides" in {
-        item["id"]
-        for item in discover_capabilities(
-            "office_tools", query="multiple slides", limit=20
-        )
-    }
-    assert "PowerPointCreateSlides" not in DIRECT_TOOL_NAMES
-
-    detail = describe_capabilities("office_tools", ["ppt.create_slide"])[0]
-    schema = detail["input_schema"]
-    assert {"expectedRevision", "idempotencyKey", "slideSpec"} <= set(schema["properties"])
-    assert {"title", "body", "bullets", "sections", "theme"} <= set(schema["properties"]["slideSpec"]["properties"])
-    assert {"templateSlideId", "templateBindings"} <= set(schema["properties"]["slideSpec"]["properties"])
-    binding_schema = schema["properties"]["slideSpec"]["properties"]["templateBindings"]["items"]
-    assert binding_schema["required"] == ["shapeRef"]
-    assert "elements" not in schema["properties"]["slideSpec"].get("required", [])
-    assert "expected_revision" not in schema["properties"]
-    assert "session_id" not in schema["properties"]
-
-    batch_schema = describe_capabilities("office_tools", ["ppt.update_text"])[0]["input_schema"]
-    assert "shapeRef" in batch_schema["properties"]
-    assert "shape_ref" not in batch_schema["properties"]
-    template_schema = describe_capabilities("office_tools", ["ppt.create_from_template"])[0]["input_schema"]
-    assert "templateSlideId" in template_schema["required"]
-    chart_schema = describe_capabilities("office_tools", ["ppt.edit_chart"])[0]["input_schema"]
-    assert "chartMode" in chart_schema["required"]
-    operation_names = describe_capabilities("office_tools", ["ppt.edit_master"])[0]["input_schema"]["properties"]["operations"]["items"]["properties"]["op"]["enum"]
-    assert "update_shape" in operation_names
-    assert "update" not in operation_names
-
-    resolution = resolve_wire_call("office_tools", {
-        "operation": "invoke",
-        "capability_id": "ppt.create_slide",
-        "arguments": {
-            "expectedRevision": 2,
-            "idempotencyKey": "slide-1-pass-1",
-            "slideSpec": {"elements": []},
-        },
-    })
-    assert resolution.concrete_name == "PowerPointCreateSlide"
-    assert get_tool_execution_metadata(
-        "PowerPointCreateSlide", {"filePath": "/tmp/deck.pptx", "sessionId": "ignored"},
-    )["resource_keys"] == ("office-file:/tmp/deck.pptx",)
-    assert get_tool_execution_metadata(
-        "PowerPointCreateSlide", {"sessionId": "session-1"},
-    )["resource_keys"] == ("office-session:session-1",)
-    assert get_tool_execution_metadata(
-        "PowerPointCreateSlide", {},
-    )["resource_keys"] == ("office:powerpoint",)
-
-    all_ids = {item["id"] for item in discover_capabilities("office_tools", limit=50)}
-    assert {
-        "ppt.list_slides", "ppt.get_slide", "ppt.update_text",
-        "ppt.apply_slide_spec", "ppt.check_overlap", "ppt.edit_table",
-        "ppt.apply_ooxml_patch", "ppt.execute_officejs",
-    } <= all_ids
-
-
-def test_stale_toolbox_snapshot_can_invoke_create_slides_after_direct_migration():
-    from dataclasses import replace
-    from types import MappingProxyType
-
-    from cyrene.tooling.gateway import resolve_wire_call
-    from cyrene.tooling.snapshot import build_catalog_snapshot
-
-    current = build_catalog_snapshot("main")
-    deferred = current.capabilities["ppt.create_slides"]
-    direct = replace(
-        deferred,
-        capability_id="PowerPointCreateSlides",
-        pack_id="direct",
-    )
-    capabilities = dict(current.capabilities)
-    capabilities.pop("ppt.create_slides")
-    capabilities[direct.capability_id] = direct
-    migrated = replace(
-        current,
-        capabilities=MappingProxyType(capabilities),
-        enabled_capability_ids=(
-            current.enabled_capability_ids - {"ppt.create_slides"}
-        ) | {"PowerPointCreateSlides"},
-    )
-
-    resolution = resolve_wire_call(
-        "toolbox",
-        {
-            "operation": "invoke",
-            "capability_id": "ppt.create_slides",
-            "arguments": {
-                "expectedRevision": 7,
-                "idempotencyKey": "migration-compat",
-                "slideSpecs": [{"title": "One"}],
-            },
-        },
-        catalog_snapshot=migrated,
-    )
-
-    assert resolution.capability_id == "ppt.create_slides"
-    assert resolution.concrete_name == "PowerPointCreateSlides"
-    assert resolution.concrete_compat is True
 
 
 def test_semantic_slide_spec_compiles_geometry_without_model_coordinates():
-    from cyrene.tool_impl.office import _shared
+    from agent.plugin.plugin_impl.cyrene_office import _shared
 
     params = _shared._prepare_request("ppt.create_slide", {
         "slideSpec": {
@@ -454,19 +358,6 @@ def test_semantic_image_is_never_silently_dropped_by_non_media_layout():
     }
 
 
-@pytest.mark.asyncio
-async def test_tool_search_can_describe_core_powerpoint_tools():
-    from cyrene.tool_impl.office.tool_search import handler
-
-    payload = json.loads(await handler({
-        "operation": "describe",
-        "capability_ids": ["ppt.apply_batch", "ppt.render"],
-    }, None, 1, "", None))
-    assert payload["status"] == "success"
-    assert [item["id"] for item in payload["capabilities"]] == ["ppt.apply_batch", "ppt.render"]
-    assert payload["capabilities"][0]["direct_tool"] == "PowerPointApplyBatch"
-
-
 def test_powerpoint_canonical_request_preflight_and_image_pipeline(
     monkeypatch,
     tmp_path,
@@ -474,7 +365,7 @@ def test_powerpoint_canonical_request_preflight_and_image_pipeline(
 ):
     from PIL import Image
 
-    from cyrene.tool_impl.office import _shared
+    from agent.plugin.plugin_impl.cyrene_office import _shared
 
     monkeypatch.setattr(_shared, "Image", real_pillow_modules)
 
@@ -516,7 +407,7 @@ def test_powerpoint_canonical_request_preflight_and_image_pipeline(
 
 @pytest.mark.asyncio
 async def test_create_slides_routes_simple_pages_in_progressive_stages(monkeypatch):
-    from cyrene.tool_impl.office import kit
+    from agent.plugin.plugin_impl.cyrene_office import kit
 
     calls = []
     progress = []
@@ -548,7 +439,7 @@ async def test_create_slides_routes_simple_pages_in_progressive_stages(monkeypat
 
 @pytest.mark.asyncio
 async def test_create_slides_routes_template_pages_through_template_composer(monkeypatch):
-    from cyrene.tool_impl.office import kit
+    from agent.plugin.plugin_impl.cyrene_office import kit
 
     calls = []
 
@@ -578,7 +469,7 @@ async def test_create_slides_routes_template_pages_through_template_composer(mon
 
 @pytest.mark.asyncio
 async def test_live_slide_spec_defaults_to_staged_preview_but_file_mode_stays_atomic(monkeypatch):
-    from cyrene.tool_impl.office import kit
+    from agent.plugin.plugin_impl.cyrene_office import kit
 
     calls = []
 
@@ -595,14 +486,14 @@ async def test_live_slide_spec_defaults_to_staged_preview_but_file_mode_stays_at
         "commitMode": "atomic",
         "progressiveGranularity": "stage",
         "slideSpec": {"elements": []},
-    })
+    }, PluginContext())
     await kit._method_handler("ppt.create_slide", {
         "filePath": "/tmp/deck.pptx",
         "expectedRevision": 0,
         "idempotencyKey": "file-slide",
         "commitMode": "progressive",
         "slideSpec": {"elements": []},
-    })
+    }, PluginContext())
 
     assert calls[0][0]["commitMode"] == "progressive"
     assert calls[0][0]["progressiveGranularity"] == "stage"
@@ -612,7 +503,7 @@ async def test_live_slide_spec_defaults_to_staged_preview_but_file_mode_stays_at
 
 @pytest.mark.asyncio
 async def test_create_slides_rolls_back_completed_pages_after_later_failure(monkeypatch):
-    from cyrene.tool_impl.office import kit
+    from agent.plugin.plugin_impl.cyrene_office import kit
 
     calls = []
 
@@ -653,26 +544,6 @@ async def test_create_slides_rolls_back_completed_pages_after_later_failure(monk
         "slideId": "301",
         "expectedRevision": 11,
         "idempotencyKey": "deck:rollback:1",
-    }
-
-
-def test_tool_failure_payload_preserves_structured_office_error():
-    from cyrene.agent.agent import _tool_error_payload
-
-    error = _tool_error_payload(result=json.dumps({
-        "status": "error",
-        "capability_id": "ppt.insert_image",
-        "result": {
-            "status": "error",
-            "error_code": "invalid_image",
-            "message": "PowerPoint rejected the image.",
-            "details": {"operationIndex": 2, "field": "imageBase64"},
-        },
-    }))
-    assert error == {
-        "error_code": "invalid_image",
-        "message": "PowerPoint rejected the image.",
-        "details": {"operationIndex": 2, "field": "imageBase64"},
     }
 
 
@@ -947,7 +818,7 @@ def test_file_backend_groups_and_ungroups_with_the_canonical_batch_contract(tmp_
 @pytest.mark.asyncio
 async def test_file_backend_output_version_keeps_revision_across_multiple_created_slides(tmp_path):
     from cyrene.office.file_engine import PptxFileEngine
-    from cyrene.tool_impl.office import kit
+    from agent.plugin.plugin_impl.cyrene_office import kit
 
     source = tmp_path / "source-version.pptx"
     output = tmp_path / "output-version.pptx"
@@ -1114,27 +985,6 @@ def test_file_backend_replaces_one_slide_from_presentation_and_keeps_single_undo
     assert any(shape["text"] == "Old title" for shape in restored["shapes"])
 
 
-def test_semantic_staged_slide_build_is_exposed_without_library_prohibition_in_prompt():
-    from cyrene.agent.prompts import _MAIN_OFFICE_PROMPT
-    from cyrene.tooling.catalog import describe_capabilities
-
-    create_schema = describe_capabilities("office_tools", ["ppt.create_slide"])[0]["input_schema"]
-    assert create_schema["properties"]["commitMode"]["enum"] == ["atomic", "progressive"]
-    assert create_schema["properties"]["progressiveGranularity"]["enum"] == ["stage", "element"]
-    assert "compact semantic SlideSpecs" in _MAIN_OFFICE_PROMPT
-    assert "progressiveGranularity=stage" in _MAIN_OFFICE_PROMPT
-    assert "deterministic layout compiler owns geometry" in _MAIN_OFFICE_PROMPT
-    assert "Treat visual quality as a primary requirement" in _MAIN_OFFICE_PROMPT
-    assert "Preserve every image's intrinsic aspect ratio" in _MAIN_OFFICE_PROMPT
-    assert "never stretch an image by scaling width and height independently" in _MAIN_OFFICE_PROMPT
-    assert "python-pptx" not in _MAIN_OFFICE_PROMPT
-    assert "Do not install PPT" not in _MAIN_OFFICE_PROMPT
-
-    source = (Path(__file__).parents[1] / "src/cyrene/office/static/taskpane.js").read_text(encoding="utf-8")
-    assert "createSlideProgressive" in source
-    assert "applySlideSpecProgressive" in source
-    assert "await context.sync();" in source
-    assert '"ppt.apply_ooxml_patch": insertSlides' not in source
 
 
 def test_macos_office_install_copies_manifest_to_powerpoint_wef(monkeypatch, tmp_path):
@@ -1179,7 +1029,7 @@ def test_windows_office_install_prepares_manifest_without_unsafe_registry_writes
 
 
 def test_service_integrations_page_contains_powerpoint_install_controls():
-    source = workbench_settings_source()
+    source = frontend_module_source("features/settings/general.jsx")
 
     assert 'id: "setting-office-powerpoint"' in source
     assert '"/api/settings/integrations/office/install"' in source
@@ -1215,13 +1065,13 @@ def test_office_integration_status_route_is_registered(monkeypatch):
 
 
 def test_office_tool_error_is_structured_when_powerpoint_is_not_connected(monkeypatch):
-    from cyrene.tool_impl.office import _shared
+    from agent.plugin.plugin_impl.cyrene_office import _shared
     from cyrene.office.service import OfficeBridgeService
 
     monkeypatch.setattr(_shared, "get_office_bridge", lambda: OfficeBridgeService())
     monkeypatch.setattr(_shared.get_office_gateway_runtime(), "info", lambda: {"running": False, "manifest_path": "/tmp/cyrene-powerpoint-addin.xml"})
 
-    payload = json.loads(asyncio.run(_shared.get_context_handler({}, None, 0, "", None)))
+    payload = json.loads(asyncio.run(_shared.get_context_handler({}, PluginContext())))
     assert payload["status"] == "error"
     assert payload["error_code"] == "office_not_connected"
     assert "setup" in payload

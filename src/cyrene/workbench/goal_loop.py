@@ -7,7 +7,7 @@ adds a harness-owned loop around those bounded slices:
     -> reflect/repair on failure -> repeat within user-configured limits.
 
 SQLite is the source of truth for both loop execution and the Workbench UI
-projection. Legacy JSON files are migration/export artifacts only.
+projection.
 """
 
 from __future__ import annotations
@@ -18,13 +18,22 @@ import os
 import socket
 import uuid
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any, Callable
 
+from agent.plugin import active_plugin_service
+from agent.workbench.task_runtime import (
+    TaskAgentResult,
+    TaskAgentRuntime,
+    TaskAgentRuntimeError,
+)
 from cyrene.observability import debug
-from cyrene.agent import _AWAITING_USER_SENTINEL, interrupt_active_run
 from cyrene.runtime.run_coordinator import RunLease, run_coordinator_for
-from cyrene.workbench.notifications import append_notification
+from cyrene.workbench import (
+    artifact_runtime,
+    planning_runtime,
+    project_repository,
+    project_runtime,
+)
 from cyrene.workbench.goal_loop_repository import (
     ensure_schema,
     execute,
@@ -35,6 +44,7 @@ from cyrene.workbench.goal_loop_repository import (
     utc_iso,
     utc_now,
 )
+from cyrene.workbench.notifications import append_notification
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +52,6 @@ logger = logging.getLogger(__name__)
 # treated as stuck: the loop reflects once, then blocks instead of retrying the
 # same step until the runtime budget is burned.
 _STEP_FAILURE_CAP = 3
-# A step is only finished once the subagents it spawned settle. Cap that wait so
-# a wedged subagent can't stall the loop forever — on timeout the step proceeds
-# to verification with a warning rather than hanging.
-# A stalled subagent should become visible as timed out within a few minutes;
-# a 30-minute silent wait looked like a healthy run while producing no work.
-_SUBAGENT_SETTLE_TIMEOUT_SECONDS = 5 * 60
-_SUBAGENT_HEARTBEAT_SECONDS = 15
 _MANAGERS: dict[str, "GoalLoopManager"] = {}
 
 
@@ -69,9 +72,7 @@ def _json_loads(value: Any, fallback: Any) -> Any:
 
 
 async def _ensure_schema(db_path: str) -> None:
-    from cyrene.workbench import runtime
-
-    runtime._configure_workbench_store(str(db_path))
+    project_repository._configure_workbench_store(str(db_path))
     await ensure_schema(db_path)
 
 
@@ -131,10 +132,8 @@ async def _event(
 
 
 def _read_session(session_id: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    from cyrene.workbench import runtime as R
-
-    payload = R._read_workbench_store()
-    project, session = R._workbench_find_session(payload, session_id)
+    payload = project_repository._read_workbench_store()
+    project, session = project_repository._workbench_find_session(payload, session_id)
     if not project or not session:
         raise KeyError("session not found")
     return payload, project, session
@@ -144,21 +143,19 @@ def _write_session(
     session_id: str,
     mutator: Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], None],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    from cyrene.workbench import runtime as R
-
-    with R._WORKBENCH_STORE_LOCK:
-        payload = R._read_workbench_store()
-        project, session = R._workbench_find_session(payload, session_id)
+    with project_repository._WORKBENCH_STORE_LOCK:
+        payload = project_repository._read_workbench_store()
+        project, session = project_repository._workbench_find_session(payload, session_id)
         if not project or not session:
             raise KeyError("session not found")
         mutator(payload, project, session)
-        now = R._utc_now_iso()
+        now = project_runtime._utc_now_iso()
         session["updatedAt"] = now
         project["updatedAt"] = now
         # Goal-loop runs in the background and must not steal the user's
         # persisted project selection. Only explicit UI activation is allowed
         # to change activeProjectId / activeSessionId.
-        R._write_workbench_store(payload)
+        project_repository._write_workbench_store(payload)
         return payload, project, session
 
 
@@ -181,6 +178,17 @@ async def sync_goal_loop_projection(run: dict[str, Any], *, message: str = "") -
         if message:
             session["agentReply"] = message
         status = str(run.get("status") or "")
+        if status in {"completed", "cancelled"}:
+            session.pop("pendingQuestion", None)
+            session.pop("pendingPlanStep", None)
+            for step in session.get("plan") or []:
+                if not isinstance(step, dict):
+                    continue
+                step.pop("goalLoopResumeAnswer", None)
+                if status == "cancelled" and str(step.get("status") or "") == "running":
+                    step["status"] = "pending"
+                    step["startedAt"] = None
+                    step.pop("goalLoopAgentRunId", None)
         if status in {"running", "waiting_for_user", "paused", "blocked", "review", "completed", "cancelled"}:
             session["status"] = status
 
@@ -193,6 +201,9 @@ async def sync_goal_loop_projection(run: dict[str, Any], *, message: str = "") -
 
 class WorkbenchGoalLoopTransaction:
     """Public Workbench document/planning port used by the application service."""
+
+    def __init__(self, agent_runtime: TaskAgentRuntime) -> None:
+        self.agent_runtime = agent_runtime
 
     def read_session(self, session_id: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         return _read_session(session_id)
@@ -207,9 +218,7 @@ class WorkbenchGoalLoopTransaction:
     async def generate_plan(
         self, session: dict[str, Any], project: dict[str, Any]
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
-        from cyrene.workbench import runtime
-
-        plan, acceptance, generated, _operation = await runtime._workbench_generate_plan_steps(
+        plan, acceptance, generated, _operation = await self.agent_runtime.generate_plan(
             session,
             project,
             feedback="目标已由用户在持续执行配置中更新，请基于新目标重新生成完整计划。",
@@ -220,9 +229,7 @@ class WorkbenchGoalLoopTransaction:
     async def generate_acceptance(
         self, session: dict[str, Any], project: dict[str, Any]
     ) -> tuple[list[dict[str, Any]], bool]:
-        from cyrene.workbench import runtime
-
-        return await runtime._workbench_generate_acceptance_criteria(session, project)
+        return await self.agent_runtime.generate_acceptance_criteria(session, project)
 
     @staticmethod
     def event_id() -> str:
@@ -239,11 +246,6 @@ class WorkbenchGoalLoopTransaction:
     @staticmethod
     async def sync_projection(run: dict[str, Any], *, message: str = "") -> None:
         await sync_goal_loop_projection(run, message=message)
-
-    @staticmethod
-    def interrupt(session_id: str) -> None:
-        interrupt_active_run(session_id=session_id)
-
 
 def register_goal_loop_manager(db_path: str, manager: "GoalLoopManager") -> None:
     _MANAGERS[str(db_path)] = manager
@@ -323,6 +325,25 @@ def _next_step(plan: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
+def _recoverable_step(plan: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return an interrupted step whose durable Agent run can be rebound."""
+
+    for step in plan:
+        if (
+            isinstance(step, dict)
+            and str(step.get("status") or "") == "running"
+            and str(step.get("goalLoopAgentRunId") or "").strip()
+        ):
+            return step
+    # A narrowly-timed crash can persist ``running`` before the Agent id write.
+    # It remains runnable, but necessarily starts one new durable Agent run
+    # because no original identity exists to recover.
+    for step in plan:
+        if isinstance(step, dict) and str(step.get("status") or "") == "running":
+            return step
+    return None
+
+
 def _step_prompt(session: dict[str, Any], step: dict[str, Any]) -> str:
     lines = [
         "你正在持续执行模式中完成一个有界工作片段。",
@@ -338,23 +359,45 @@ def _step_prompt(session: dict[str, Any], step: dict[str, Any]) -> str:
     lines.extend(
         [
             "请直接使用工具完成本步骤并验证关键结果。",
-            "调用 quit 或输出最终文本只会结束当前工作片段，不代表整个目标完成。",
+            "输出最终文本只会结束当前工作片段，不代表整个目标完成。",
             "如果必须获得用户输入或权限，请使用 ask_user。",
         ]
     )
     return "\n".join(lines)
 
 
+def _project_tool_file_changes(
+    events: list[dict[str, Any]],
+    workspace_root: Any,
+) -> list[dict[str, Any]]:
+    """Attach artifact deltas to unwrapped ContextTree Plugin events."""
+
+    projected: list[dict[str, Any]] = []
+    for raw in events:
+        event = dict(raw)
+        result = event.get("result")
+        result_text = result if isinstance(result, str) else _json_dumps(result)
+        event["fileChanges"] = (
+            artifact_runtime._workbench_file_changes_from_tool_event(
+                {
+                    "tool": event.get("tool"),
+                    "args": event.get("args") or event.get("arguments") or {},
+                    "result": result_text,
+                },
+                workspace_root,
+            )
+        )
+        projected.append(event)
+    return projected
+
+
 async def _verify_step(
+    agent_runtime: TaskAgentRuntime,
     session: dict[str, Any],
     project: dict[str, Any],
     step: dict[str, Any],
     agent_reply: str,
 ) -> dict[str, Any]:
-    from cyrene.workbench import runtime as R
-
-    workspace_path = str(project.get("workspacePath") or "").strip()
-    workspace_root = Path(workspace_path).expanduser().resolve() if workspace_path else None
     prompt = (
         "你是独立步骤验收 Agent。请只根据步骤定义、工作区真实产物和必要的只读检查，"
         "判断该步骤是否已经产生足够结果，可以进入下一步骤。不要因为执行 Agent 自称完成就通过。\n\n"
@@ -365,19 +408,16 @@ async def _verify_step(
         '只返回 JSON：{"passed": true/false, "evidence": "简短依据", "retry_guidance": "未通过时下一次应如何修复"}。'
     )
     try:
-        parsed = await R._workbench_run_explore_agent(
-            workspace_root,
-            prompt,
-            max_tokens=2400,
-            timeout=90,
-            session_id=str(session.get("id") or ""),
-            clean_context=True,
-            raise_on_failure=True,
+        parsed = await agent_runtime._independent_json_agent(
+            project=project,
+            session=session,
+            prompt=prompt,
+            purpose="goal_loop_step_verification",
         )
     except Exception as exc:
         logger.warning("Goal-loop step verification unavailable", exc_info=True)
-        safe_error = R._workbench_generation_error(exc)
-        raise RuntimeError(f"步骤独立验收暂时不可用：{safe_error.message}") from exc
+        message = exc.message if isinstance(exc, TaskAgentRuntimeError) else str(exc)
+        raise RuntimeError(f"步骤独立验收暂时不可用：{message}") from exc
     if not isinstance(parsed, dict) or not isinstance(parsed.get("passed"), bool):
         raise RuntimeError("步骤独立验收没有返回有效结果。")
     return {
@@ -388,32 +428,41 @@ async def _verify_step(
 
 
 async def _reflect(
+    agent_runtime: TaskAgentRuntime,
     session_id: str,
     *,
     focus: str,
     goal_gap: str,
     trigger: str,
 ) -> dict[str, Any] | None:
-    from cyrene.workbench import runtime as R
-
-    packet = await R._workbench_run_reflection(session_id, focus=focus, goal_gap=goal_gap)
+    _payload, project, session = _read_session(session_id)
+    packet = await agent_runtime.reflect_task(
+        session,
+        project,
+        focus=focus,
+        goal_gap=goal_gap,
+    )
     if not packet:
         return None
 
     def apply(_payload: dict[str, Any], project: dict[str, Any], session: dict[str, Any]) -> None:
-        R._workbench_store_reflection(session, packet, trigger=trigger, project=project)
+        planning_runtime._workbench_store_reflection(
+            session,
+            packet,
+            trigger=trigger,
+            project=project,
+        )
 
     _write_session(session_id, apply)
     return packet
 
 
 async def _generate_repair_steps(
+    agent_runtime: TaskAgentRuntime,
     session: dict[str, Any],
     project: dict[str, Any],
     verdict: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    from cyrene.workbench import runtime as R
-
     failed = [
         item
         for item in (verdict.get("results") or [])
@@ -421,8 +470,6 @@ async def _generate_repair_steps(
     ]
     reflection = session.get("reflection") if isinstance(session.get("reflection"), dict) else {}
     packet = reflection.get("packet") if isinstance(reflection.get("packet"), dict) else {}
-    workspace_path = str(project.get("workspacePath") or "").strip()
-    workspace_root = Path(workspace_path).expanduser().resolve() if workspace_path else None
     prompt = (
         "你是持续任务的返工规划 Agent。当前计划已经执行完，但独立验收未通过。"
         "请检查工作区，并只生成修复这些失败项所需的新增步骤，不要重复已经完成且无关的步骤。\n\n"
@@ -434,14 +481,11 @@ async def _generate_repair_steps(
     )
     parsed: dict[str, Any] | None = None
     try:
-        parsed = await R._workbench_run_explore_agent(
-            workspace_root,
-            prompt,
-            max_tokens=5400,
-            timeout=120,
-            session_id=str(session.get("id") or ""),
-            clean_context=True,
-            raise_on_failure=True,
+        parsed = await agent_runtime._independent_json_agent(
+            project=project,
+            session=session,
+            prompt=prompt,
+            purpose="goal_loop_repair_planning",
         )
     except Exception:
         logger.warning("Goal-loop repair planning unavailable", exc_info=True)
@@ -455,7 +499,7 @@ async def _generate_repair_steps(
             if not title:
                 continue
             steps.append(
-                R._workbench_new_plan_step(
+                planning_runtime._workbench_new_plan_step(
                     title[:160],
                     str(raw.get("description") or "").strip()[:4000],
                     0,
@@ -465,7 +509,7 @@ async def _generate_repair_steps(
     if not steps:
         failed_text = "；".join(str(item.get("evidence") or item.get("id") or "") for item in failed)
         steps = [
-            R._workbench_new_plan_step(
+            planning_runtime._workbench_new_plan_step(
                 "修复未通过的验收项",
                 ("根据独立验收证据修复问题并重新验证。" + (f" 证据：{failed_text}" if failed_text else ""))[:4000],
                 0,
@@ -476,8 +520,9 @@ async def _generate_repair_steps(
 
 
 class GoalLoopManager:
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, agent_runtime: TaskAgentRuntime) -> None:
         self.db_path = str(db_path)
+        self.agent_runtime = agent_runtime
         self.owner = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         self.tasks: dict[str, asyncio.Task[Any]] = {}
         self.coordinator = run_coordinator_for(self.db_path)
@@ -509,19 +554,9 @@ class GoalLoopManager:
                     _project: dict[str, Any],
                     session: dict[str, Any],
                 ) -> None:
-                    # A hard crash can leave the document projection midway
-                    # through a step even though no agent owns that execution
-                    # anymore. Re-queue it so the recovered worker can inspect
-                    # existing side effects and execute idempotently.
-                    for step in session.get("plan") or []:
-                        if not isinstance(step, dict) or str(step.get("status") or "") != "running":
-                            continue
-                        step["status"] = "pending"
-                        step["startedAt"] = None
-                        step.pop("currentAction", None)
                     session["status"] = "running"
                     session["goalLoop"] = _public_run(recovered)
-                    session["agentReply"] = "检测到上次执行被中断，正在从已保存进度恢复。"
+                    session["agentReply"] = "检测到上次执行被中断，正在用原 Agent run ID 从 ContextTree 恢复。"
 
                 try:
                     _write_session(str(row["session_id"]), apply)
@@ -656,6 +691,56 @@ class GoalLoopManager:
             reason=reason,
         )
 
+    async def cancel_agent_context(
+        self,
+        session_id: str,
+        run_id: str,
+        *,
+        reason: str,
+    ) -> bool:
+        """Settle the worker, then durably cancel its exact Agent run."""
+
+        worker = self.tasks.get(str(run_id or ""))
+        if (
+            worker is not None
+            and worker is not asyncio.current_task()
+            and not worker.done()
+        ):
+            await asyncio.gather(worker, return_exceptions=True)
+        try:
+            _payload, project, session = _read_session(session_id)
+        except KeyError:
+            return False
+        agent_run_id = next(
+            (
+                str(step.get("goalLoopAgentRunId") or "").strip()
+                for step in session.get("plan") or []
+                if isinstance(step, dict)
+                and str(step.get("status") or "") == "running"
+                and str(step.get("goalLoopAgentRunId") or "").strip()
+            ),
+            "",
+        )
+        if not agent_run_id:
+            return False
+        try:
+            return await self.agent_runtime.cancel_turn(
+                project=project,
+                session=session,
+                run_id=agent_run_id,
+                reason=reason,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to persist Goal-loop Agent cancellation "
+                "[session=%s run=%s agent_run=%s]",
+                session_id,
+                run_id,
+                agent_run_id,
+                exc_info=True,
+            )
+            return False
+
     async def _lease(self, run: dict[str, Any]) -> dict[str, Any] | None:
         now = _utc_now()
         lease_until = now + timedelta(minutes=10)
@@ -681,652 +766,1006 @@ class GoalLoopManager:
     async def sync_projection(self, run: dict[str, Any], *, message: str = "") -> None:
         await sync_goal_loop_projection(run, message=message)
 
-    async def _run(self, run_id: str) -> None:
-        from cyrene.workbench import runtime as R
-
-        while not self.closed:
-            run = await _get_run_by_id(self.db_path, run_id)
-            if not run or str(run.get("status") or "") != "running":
-                return
-            run = await self._lease(run)
-            if not run:
-                return
-
-            public = _public_run(run) or {}
-            if int(public.get("activeSeconds") or 0) >= int(run.get("max_active_seconds") or 0):
-                paused = await _set_inactive_status(
-                    self.db_path,
-                    run,
-                    "paused",
-                    phase="paused",
-                    stop_reason="max_runtime",
-                )
-                if paused:
-                    await _event(self.db_path, run_id, "runtime_limit_reached")
-                    await self.sync_projection(paused, message="已达到最大运行时间，持续执行已暂停。")
-                    append_notification(
-                        title="持续执行已暂停",
-                        body="任务达到最大运行时间，可调整限制后继续。",
-                        tab="system",
-                        source="goal_loop_paused",
-                        source_label="持续执行",
-                        meta={"sessionId": str(run["session_id"]), "runId": run_id},
-                    )
-                return
-
-            try:
-                _payload, project, session = _read_session(str(run["session_id"]))
-            except KeyError:
-                cancelled = await _set_inactive_status(
-                    self.db_path, run, "cancelled", phase="cancelled", stop_reason="session_missing"
-                )
-                if cancelled:
-                    await _publish(cancelled)
-                return
-
-            plan = session.get("plan") if isinstance(session.get("plan"), list) else []
-            # A step tagged by an async answer is resumed first: the agent picks
-            # up its suspended round from the user's reply instead of starting the
-            # step from scratch (which would re-ask the same question).
-            resume_step = next(
-                (s for s in plan if isinstance(s, dict) and isinstance(s.get("goalLoopResumeAnswer"), dict)),
-                None,
+    async def _pause_run(
+        self,
+        run: dict[str, Any],
+        *,
+        stop_reason: str,
+        message: str,
+        event_type: str,
+        last_error: str = "",
+        step_id: str = "",
+    ) -> None:
+        paused = await _set_inactive_status(
+            self.db_path,
+            run,
+            "paused",
+            phase="paused",
+            stop_reason=stop_reason,
+            last_error=last_error,
+        )
+        if paused:
+            await _event(
+                self.db_path,
+                str(run["id"]),
+                event_type,
+                step_id=step_id,
+                payload=({"error": last_error} if last_error else {}),
             )
-            step = resume_step or _next_step(plan)
-            if step is not None:
-                step_id = str(step.get("id") or "")
-                resume_answer = step.get("goalLoopResumeAnswer") if isinstance(step.get("goalLoopResumeAnswer"), dict) else None
-                run = await _update_run(
-                    self.db_path,
+            await self.sync_projection(paused, message=message)
+
+    async def _with_lease_renewal(
+        self,
+        run_id: str,
+        operation: Any,
+    ) -> Any:
+        """Keep the durable goal lease alive while one Agent turn is running."""
+
+        task = asyncio.create_task(operation)
+        try:
+            while True:
+                done, _pending = await asyncio.wait({task}, timeout=60)
+                if task in done:
+                    return await task
+                current = await _get_run_by_id(self.db_path, run_id)
+                if not current or str(current.get("status") or "") != "running":
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    raise asyncio.CancelledError
+                if await self._lease(current) is None:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    raise RuntimeError("Goal-loop lease ownership was lost")
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def _reflect_safely(
+        self,
+        session_id: str,
+        *,
+        focus: str,
+        goal_gap: str,
+        trigger: str,
+    ) -> dict[str, Any] | None:
+        try:
+            return await _reflect(
+                self.agent_runtime,
+                session_id,
+                focus=focus,
+                goal_gap=goal_gap,
+                trigger=trigger,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                "Goal-loop optional reflection failed [session=%s trigger=%s]",
+                session_id,
+                trigger,
+                exc_info=True,
+            )
+            return None
+
+    async def _execute_step(
+        self,
+        run: dict[str, Any],
+        project: dict[str, Any],
+        session: dict[str, Any],
+        step: dict[str, Any],
+    ) -> bool:
+        """Execute and verify one step. Return whether the outer loop may continue."""
+
+        run_id = str(run["id"])
+        session_id = str(run["session_id"])
+        step_id = str(step.get("id") or "")
+        resume_answer = (
+            dict(step["goalLoopResumeAnswer"])
+            if isinstance(step.get("goalLoopResumeAnswer"), dict)
+            else None
+        )
+        persisted_agent_run_id = str(step.get("goalLoopAgentRunId") or "").strip()
+        agent_run_id = persisted_agent_run_id or project_runtime._short_id("goal_agent")
+        first_start = not persisted_agent_run_id
+
+        current_run = await _update_run(
+            self.db_path,
+            run_id,
+            phase="executing",
+            current_step_id=step_id,
+            lease_until=(_utc_now() + timedelta(minutes=10)).isoformat(),
+        )
+        if not current_run:
+            return False
+
+        def start_step(
+            _payload: dict[str, Any],
+            _project: dict[str, Any],
+            fresh: dict[str, Any],
+        ) -> None:
+            for candidate in fresh.get("plan") or []:
+                if not isinstance(candidate, dict) or str(candidate.get("id") or "") != step_id:
+                    continue
+                candidate["status"] = "running"
+                candidate.setdefault("startedAt", _utc_iso())
+                candidate["goalLoopAgentRunId"] = agent_run_id
+                candidate["currentAction"] = (
+                    "正在将你的回复写回原 Agent run 并继续此步骤。"
+                    if resume_answer
+                    else "正在从原 Agent run 恢复此步骤。"
+                    if persisted_agent_run_id
+                    else "持续执行模式正在处理此步骤。"
+                )
+            fresh["goalLoop"] = _public_run(current_run)
+            fresh["status"] = "running"
+
+        _write_session(session_id, start_step)
+        await _event(
+            self.db_path,
+            run_id,
+            "step_started" if first_start else "step_resumed",
+            step_id=step_id,
+            payload={"agentRunId": agent_run_id},
+        )
+        await self.sync_projection(
+            current_run,
+            message=f"持续执行中：{step.get('title') or '当前步骤'}",
+        )
+
+        _payload, current_project, current_session = _read_session(session_id)
+        current_step = next(
+            (
+                candidate
+                for candidate in current_session.get("plan") or []
+                if isinstance(candidate, dict)
+                and str(candidate.get("id") or "") == step_id
+            ),
+            step,
+        )
+        workspace_root = artifact_runtime._workbench_workspace_root(current_project)
+        git_before = artifact_runtime._workbench_git_status_snapshot(workspace_root)
+        workspace_files_before = artifact_runtime._workbench_workspace_file_snapshot(
+            workspace_root
+        )
+        workspace_text_before = artifact_runtime._workbench_workspace_text_snapshot(
+            workspace_root
+        )
+        started_at = str(current_step.get("startedAt") or _utc_iso())
+        step_prompt = _step_prompt(current_session, current_step)
+        execution_error = ""
+        agent_result: TaskAgentResult | None = None
+        try:
+            if resume_answer:
+                agent_result = await self._with_lease_renewal(
                     run_id,
-                    phase="executing",
-                    current_step_id=step_id,
-                    lease_until=(_utc_now() + timedelta(minutes=10)).isoformat(),
+                    self.agent_runtime.answer_turn(
+                        project=current_project,
+                        session=current_session,
+                        question_id=str(resume_answer.get("questionId") or ""),
+                        answer=str(resume_answer.get("answer") or ""),
+                        run_id=agent_run_id,
+                        permission_mode=str(run.get("permission_mode") or "auto"),
+                        command="workbench-goal-loop-answer",
+                        purpose="goal_loop_answer",
+                        instruction=(
+                            "Continue only the current bounded goal-loop step after "
+                            "mounting this answer into the pending Plugin call."
+                        ),
+                        metadata={
+                            "goal_loop_run_id": run_id,
+                            "step_id": step_id,
+                        },
+                        cancel_on_caller_cancel=False,
+                    ),
                 )
-                if not run:
-                    return
-
-                def start_step(_p: dict[str, Any], _project: dict[str, Any], fresh: dict[str, Any]) -> None:
-                    for candidate in fresh.get("plan") or []:
-                        if isinstance(candidate, dict) and str(candidate.get("id") or "") == step_id:
-                            candidate["status"] = "running"
-                            candidate["startedAt"] = _utc_iso()
-                            # One-shot: consume the answer tag so a retry can't
-                            # re-trigger the resume.
-                            candidate.pop("goalLoopResumeAnswer", None)
-                            candidate["currentAction"] = (
-                                "正在根据你的回复继续此步骤。" if resume_answer
-                                else "持续执行模式正在处理此步骤。"
-                            )
-                    fresh["goalLoop"] = _public_run(run)
-                    fresh["status"] = "running"
-
-                _write_session(str(run["session_id"]), start_step)
-                await _event(self.db_path, run_id, "step_started", step_id=step_id)
-                await self.sync_projection(run, message=f"持续执行中：{step.get('title') or '当前步骤'}")
-
-                _, current_project, current_session = _read_session(str(run["session_id"]))
-                workspace_root = R._workbench_workspace_root(current_project)
-                git_before = R._workbench_git_status_snapshot(workspace_root)
-                workspace_files_before = R._workbench_workspace_file_snapshot(workspace_root)
-                workspace_text_before = R._workbench_workspace_text_snapshot(workspace_root)
-                started_at = _utc_iso()
-                memory_pair = R._workbench_compose_memory_ephemeral(
-                    current_project, current_session,
+            else:
+                agent_result = await self._with_lease_renewal(
+                    run_id,
+                    self.agent_runtime.run_turn(
+                        project=current_project,
+                        session=current_session,
+                        text=step_prompt,
+                        run_id=agent_run_id,
+                        permission_mode=str(run.get("permission_mode") or "auto"),
+                        command="workbench-goal-loop-step",
+                        purpose="goal_loop_step",
+                        instruction=(
+                            "Complete only the current bounded step. Use Plugin tools "
+                            "for real work and verification. The outer Goal Loop owns "
+                            "whole-goal completion; ask the user only when genuinely blocked."
+                        ),
+                        metadata={
+                            "goal_loop_run_id": run_id,
+                            "step_id": step_id,
+                        },
+                        cancel_on_caller_cancel=False,
+                    ),
                 )
-                ephemeral = R._workbench_compose_ephemeral_system(
-                    current_project, current_session,
-                    step_id=step_id, workspace_root=workspace_root,
-                    memory_pair=memory_pair,
+        except asyncio.CancelledError:
+            raise
+        except TaskAgentRuntimeError as exc:
+            if str(exc.code).startswith("budget_"):
+                await self._pause_run(
+                    await _get_run_by_id(self.db_path, run_id) or current_run,
+                    stop_reason=str(exc.code),
+                    message=f"预算限制阻止了继续执行，持续任务已暂停：{exc.message}",
+                    event_type="budget_blocked",
+                    last_error=exc.message,
+                    step_id=step_id,
                 )
-                volatile_ephemeral = R._workbench_compose_volatile_ephemeral_system(
-                    current_project, current_session,
-                    memory_pair=memory_pair,
-                )
-                # Run-invariant — rides in the cache-stable system prefix (static
-                # extra), not the per-run ephemeral tail.
-                loop_instruction = (
-                    "\n\n## 持续执行模式\n"
-                    "本次只是目标循环中的一个有界工作片段。完成当前步骤后可以调用 quit，"
-                    "但整个目标是否完成由外部验收器决定。不要擅自结束目标循环。"
-                )
-                execution_error = ""
-                try:
-                    if resume_answer:
-                        # Resume the agent's suspended round with the user's answer
-                        # (background continuation of the same slice). Carry the
-                        # loop's permission mode so a full_access / auto run keeps
-                        # it across the resume instead of reverting to "default".
-                        reply = await R._workbench_answer_pending(
-                            str(run["session_id"]),
-                            str(resume_answer.get("questionId") or ""),
-                            str(resume_answer.get("answer") or ""),
-                            await R._workbench_resolve_workspace_dir_async(current_project),
-                            permission_mode=str(run.get("permission_mode") or "auto"),
-                        )
-                    else:
-                        reply = await R._workbench_agent_reply(
-                            _step_prompt(current_session, step),
-                            current_session,
-                            [],
-                            permission_mode=str(run.get("permission_mode") or "auto"),
-                            project_workspace=R._workbench_resolve_workspace_dir(current_project),
-                            ephemeral_system=ephemeral,
-                            volatile_ephemeral_system=volatile_ephemeral,
-                            static_system_extra=R._workbench_compose_static_system(current_project, current_session) + loop_instruction,
-                        )
-                except asyncio.CancelledError:
-                    raise
-                except R._WorkbenchAgentRunError as exc:
-                    if str(exc.code).startswith("budget_"):
-                        current_run = await _get_run_by_id(self.db_path, run_id) or run
-                        paused = await _set_inactive_status(
-                            self.db_path,
-                            current_run,
-                            "paused",
-                            phase="paused",
-                            stop_reason=str(exc.code),
-                            last_error=exc.message,
-                        )
-                        if paused:
-                            await _event(
-                                self.db_path,
-                                run_id,
-                                "budget_blocked",
-                                step_id=step_id,
-                                payload={"code": exc.code, "error": exc.message},
-                            )
-                            await self.sync_projection(
-                                paused,
-                                message=f"预算限制阻止了继续执行，持续任务已暂停：{exc.message}",
-                            )
-                        return
-                    execution_error = exc.message
-                    reply = exc.message
-                except Exception as exc:
-                    logger.exception("Goal-loop step execution failed")
-                    execution_error = f"步骤执行失败：{exc}"
-                    reply = execution_error
+                return False
+            execution_error = exc.message
+        except Exception as exc:
+            logger.exception("Goal-loop Agent step failed")
+            execution_error = f"步骤执行失败：{exc}"
 
-                latest_run = await _get_run_by_id(self.db_path, run_id)
-                if not latest_run or str(latest_run.get("status") or "") != "running":
-                    return
-                _, latest_project, latest_session = _read_session(str(run["session_id"]))
-                display_reply, awaiting = R._workbench_apply_pending(latest_session, str(run["session_id"]), reply)
-                if awaiting or reply == _AWAITING_USER_SENTINEL:
-                    def wait_for_user(_p: dict[str, Any], _project: dict[str, Any], fresh: dict[str, Any]) -> None:
-                        fresh.update({
-                            key: value
-                            for key, value in latest_session.items()
-                            if key in {"pendingQuestion", "status", "agentReply"}
-                        })
-                        fresh["pendingPlanStep"] = {"stepId": step_id, "goalLoop": True}
-                        for candidate in fresh.get("plan") or []:
-                            if isinstance(candidate, dict) and str(candidate.get("id") or "") == step_id:
-                                candidate["status"] = "running"
-                                candidate["currentAction"] = "等待用户确认后继续。"
+        latest_run = await _get_run_by_id(self.db_path, run_id)
+        if not latest_run or str(latest_run.get("status") or "") != "running":
+            return False
 
-                    _write_session(str(run["session_id"]), wait_for_user)
-                    waiting = await _set_inactive_status(
-                        self.db_path,
-                        latest_run,
-                        "waiting_for_user",
-                        phase="waiting_for_user",
-                        stop_reason="user_input",
-                    )
-                    if waiting:
-                        await _event(self.db_path, run_id, "waiting_for_user", step_id=step_id)
-                        await self.sync_projection(waiting, message=display_reply)
-                    return
+        if agent_result is not None and agent_result.awaiting_user:
+            pending_question = dict(agent_result.pending_question or {})
+            pending_question["roundId"] = agent_run_id
+            pending_question.setdefault("ownerLane", "execution")
+            display_reply = (
+                str(pending_question.get("text") or agent_result.text).strip()
+                or "需要你的回复后才能继续。"
+            )
 
-                # A step isn't finished while subagents it spawned are still
-                # running. run_agent can return before its fire-and-forget
-                # subagents settle (its own monitoring caps at ~60s, and a
-                # spawn+quit in one turn skips monitoring entirely), which used
-                # to let the loop mark a step "completed" while a subagent kept
-                # working. Block until they settle so the file snapshots and
-                # verification below see the finished work.
-                from cyrene import subagent as _subagent
-
-                last_lease = _utc_now()
-                last_heartbeat = last_lease
-
-                async def _keep_waiting() -> bool:
-                    nonlocal last_lease, last_heartbeat
-                    current = await _get_run_by_id(self.db_path, run_id)
-                    if not current or str(current.get("status") or "") != "running":
-                        return False
-                    # Renew the 10-min lease well before it lapses so a peer
-                    # worker can't steal the run during a long subagent wait.
-                    if _utc_now() - last_lease >= timedelta(minutes=5):
-                        if not await self._lease(current):
-                            return False
-                        last_lease = _utc_now()
-                    now = _utc_now()
-                    if now - last_heartbeat >= timedelta(seconds=_SUBAGENT_HEARTBEAT_SECONDS):
-                        await _subagent.publish_active_heartbeat(
-                            session_id=str(run["session_id"]),
-                            message="仍在等待子代理完成，任务尚未停止。",
-                        )
-                        last_heartbeat = now
-                    return True
-
-                leftover = await _subagent.wait_until_settled(
-                    session_id=str(run["session_id"]),
-                    timeout=_SUBAGENT_SETTLE_TIMEOUT_SECONDS,
-                    on_poll=_keep_waiting,
-                )
-                if leftover:
-                    logger.warning(
-                        "Goal-loop step %s proceeding with %d subagent(s) unsettled: %s",
-                        step_id, len(leftover), leftover,
-                    )
-                    await _subagent.timeout_subagents(
-                        leftover,
-                        reason="子代理超过 5 分钟没有完成，已标记超时并停止等待。",
-                    )
-                latest_run = await _get_run_by_id(self.db_path, run_id)
-                if not latest_run or str(latest_run.get("status") or "") != "running":
-                    return
-
-                git_after = R._workbench_git_status_snapshot(workspace_root)
-                workspace_files_after = R._workbench_workspace_file_snapshot(workspace_root)
-                workspace_text_after = R._workbench_workspace_text_snapshot(workspace_root)
-                _, latest_project, latest_session = _read_session(str(run["session_id"]))
-                if execution_error:
-                    verification = {
-                        "passed": False,
-                        "evidence": execution_error,
-                        "retry_guidance": "修复 Agent 执行错误后重新运行本步骤。",
-                    }
-                else:
-                    try:
-                        verification = await _verify_step(
-                            latest_session,
-                            latest_project,
-                            step,
-                            display_reply,
-                        )
-                    except Exception as exc:
-                        paused = await _set_inactive_status(
-                            self.db_path,
-                            latest_run,
-                            "paused",
-                            phase="paused",
-                            stop_reason="step_verification_unavailable",
-                            last_error=str(exc),
-                        )
-                        if paused:
-                            await _event(
-                                self.db_path,
-                                run_id,
-                                "step_verification_unavailable",
-                                step_id=step_id,
-                                payload={"error": str(exc)},
-                            )
-                            await self.sync_projection(
-                                paused,
-                                message=f"步骤独立验收暂时不可用，持续执行已暂停：{exc}",
-                            )
-                        return
-                activity_events = R._collect_run_activity_events(
-                    str(run["session_id"]), started_at, R._short_id("run"), workspace_root
-                )
-                tool_events = [item for item in activity_events if item.get("type") == "ToolCallEvent"]
-                step_prompt = _step_prompt(latest_session, step)
-                file_changes = R._workbench_collect_run_file_changes(
-                    tool_events,
-                    git_before,
-                    git_after,
-                    workspace_files_before,
-                    workspace_files_after,
-                    workspace_root,
-                    f"{step_prompt}\n{display_reply}",
-                    workspace_text_before=workspace_text_before,
-                    workspace_text_after=workspace_text_after,
-                )
-                run_record = {
-                    "id": R._short_id("run"),
-                    "taskId": str(run["session_id"]),
-                    "userInput": step_prompt,
-                    "agentResponse": display_reply,
-                    "status": "failed" if execution_error else "completed",
-                    "startedAt": started_at,
-                    "endedAt": _utc_iso(),
-                    "events": activity_events,
-                    "fileChanges": file_changes,
-                    "toolCalls": [
-                        {"tool": item["tool"], "argsPreview": item["argsPreview"]}
-                        for item in tool_events
-                    ],
-                    "artifacts": [],
-                    "attachments": [],
-                    "mode": str(run.get("permission_mode") or "auto"),
-                    "error": execution_error or None,
-                    "goalLoopRunId": run_id,
-                    "stepVerification": verification,
+            def wait_for_user(
+                _payload: dict[str, Any],
+                _project: dict[str, Any],
+                fresh: dict[str, Any],
+            ) -> None:
+                fresh["pendingQuestion"] = pending_question
+                fresh["pendingPlanStep"] = {
+                    "stepId": step_id,
+                    "goalLoop": True,
+                    "agentRunId": agent_run_id,
                 }
+                fresh["status"] = "waiting_for_user"
+                fresh["agentReply"] = display_reply
+                for candidate in fresh.get("plan") or []:
+                    if (
+                        isinstance(candidate, dict)
+                        and str(candidate.get("id") or "") == step_id
+                    ):
+                        candidate["status"] = "running"
+                        candidate["goalLoopAgentRunId"] = agent_run_id
+                        candidate.pop("goalLoopResumeAnswer", None)
+                        candidate["currentAction"] = "等待用户确认后继续。"
 
-                passed = bool(verification.get("passed"))
-                step_attempts = 0
-
-                # Generate step outcome before finish_step so it rides inside the
-                # same _write_session instead of requiring a second write.
-                outcome = None
-                if passed and display_reply:
-                    try:
-                        outcome = await asyncio.wait_for(
-                            R._workbench_generate_step_outcome(step, display_reply, step_prompt),
-                            timeout=10,
-                        )
-                    except (asyncio.TimeoutError, Exception):
-                        pass
-
-                def finish_step(_p: dict[str, Any], project_obj: dict[str, Any], fresh: dict[str, Any]) -> None:
-                    nonlocal step_attempts
-                    fresh.setdefault("runs", []).append(run_record)
-                    fresh.setdefault("events", []).extend(activity_events)
-                    fresh["agentReply"] = display_reply
-                    for candidate in fresh.get("plan") or []:
-                        if not isinstance(candidate, dict) or str(candidate.get("id") or "") != step_id:
-                            continue
-                        candidate["updatedAt"] = _utc_iso()
-                        candidate["toolCalls"] = run_record["toolCalls"]
-                        candidate["stepVerification"] = verification
-                        if passed:
-                            candidate["status"] = "completed"
-                            candidate["completedAt"] = _utc_iso()
-                            candidate["currentAction"] = (
-                                str((verification or {}).get("evidence") or "").strip()
-                                or "步骤执行完成；最终目标将在全部步骤后独立验收。"
-                            )
-                            if outcome:
-                                candidate["outcome"] = outcome
-                        else:
-                            candidate["status"] = "pending"
-                            candidate["startedAt"] = None
-                            step_attempts = int(candidate.get("goalLoopAttempts") or 0) + 1
-                            candidate["goalLoopAttempts"] = step_attempts
-                            candidate["currentAction"] = (
-                                str((verification or {}).get("retry_guidance") or "").strip()
-                                or str((verification or {}).get("evidence") or "").strip()
-                                or "步骤验收未通过，请继续修复。"
-                            )
-                    R._workbench_apply_step_file_changes(fresh, step_id, file_changes)
-                    R._workbench_promote_file_artifacts(fresh, file_changes, _utc_iso())
-                    fresh["status"] = "running"
-                    fresh["goalLoop"] = _public_run(latest_run)
-
-                _write_session(str(run["session_id"]), finish_step)
+            _write_session(session_id, wait_for_user)
+            waiting = await _set_inactive_status(
+                self.db_path,
+                latest_run,
+                "waiting_for_user",
+                phase="waiting_for_user",
+                stop_reason="user_input",
+            )
+            if waiting:
                 await _event(
                     self.db_path,
                     run_id,
-                    "step_verified" if passed else "step_verification_failed",
+                    "waiting_for_user",
                     step_id=step_id,
-                    payload=verification or {"passed": True, "evidence": "final verification deferred"},
+                    payload={
+                        "agentRunId": agent_run_id,
+                        "questionId": str(pending_question.get("id") or ""),
+                    },
                 )
-                if not passed and step_attempts >= _STEP_FAILURE_CAP:
-                    # The same step keeps failing independent verification. Reflect
-                    # once for a root cause, then block rather than retry until the
-                    # runtime budget runs out (and the cost with it).
-                    reflecting = await _update_run(self.db_path, run_id, phase="reflecting", current_step_id=None)
-                    if reflecting:
-                        await self.sync_projection(reflecting, message="步骤反复未通过验收，正在深度思考失败根因。")
-                    await _reflect(
-                        str(run["session_id"]),
-                        focus=str((verification or {}).get("retry_guidance") or f"步骤「{step.get('title') or ''}」反复未通过验收"),
-                        goal_gap="同一步骤连续多次独立验收未通过，需要分析根因并改变方案，而不是继续机械重试。",
-                        trigger="goal_loop_step_blocked",
-                    )
-                    blocked = await _set_inactive_status(
-                        self.db_path,
-                        await _get_run_by_id(self.db_path, run_id) or latest_run,
-                        "blocked",
-                        phase="blocked",
-                        stop_reason="step_stuck",
-                    )
-                    if blocked:
-                        await _event(
-                            self.db_path,
-                            run_id,
-                            "step_blocked",
-                            step_id=step_id,
-                            payload={"attempts": step_attempts},
-                        )
-                        await self.sync_projection(
-                            blocked,
-                            message=f"步骤「{step.get('title') or '当前步骤'}」连续 {step_attempts} 次未通过独立验收，持续执行已阻塞。请调整计划或目标后再继续。",
-                        )
-                        append_notification(
-                            title="持续执行已阻塞",
-                            body=f"步骤「{step.get('title') or '当前步骤'}」反复未通过验收，需要你介入。",
-                            tab="system",
-                            source="goal_loop_blocked",
-                            source_label="持续执行",
-                            meta={"sessionId": str(run["session_id"]), "runId": run_id},
-                        )
-                    return
-                if passed and str(run.get("reflection_mode") or "") == "frequent":
-                    await _update_run(self.db_path, run_id, phase="reflecting")
-                    await self.sync_projection(
-                        await _get_run_by_id(self.db_path, run_id) or run,
-                        message="步骤完成，正在进行深度思考。",
-                    )
-                    await _reflect(
-                        str(run["session_id"]),
-                        focus=f"步骤「{step.get('title') or ''}」完成后的方向检查",
-                        goal_gap="检查当前成果是否真正缩小了目标差距，以及后续计划是否需要调整。",
-                        trigger="goal_loop_step",
-                    )
-                elif not passed and str(run.get("reflection_mode") or "") == "frequent":
-                    await _reflect(
-                        str(run["session_id"]),
-                        focus=str((verification or {}).get("retry_guidance") or ""),
-                        goal_gap="当前步骤独立验收未通过，需要分析根因并改变执行方式。",
-                        trigger="goal_loop_step_failure",
-                    )
-                await _update_run(self.db_path, run_id, phase="executing", current_step_id=None)
-                continue
+                await self.sync_projection(waiting, message=display_reply)
+            return False
 
-            unresolved = [
-                item
-                for item in plan
-                if isinstance(item, dict)
-                and str(item.get("status") or "pending") not in {"completed", "done", "skipped"}
-            ]
-            if unresolved:
-                blocked = await _set_inactive_status(
-                    self.db_path,
-                    run,
-                    "blocked",
-                    phase="blocked",
-                    stop_reason="dependency_blocked",
-                )
-                if blocked:
-                    await _event(self.db_path, run_id, "dependency_blocked")
-                    await self.sync_projection(blocked, message="没有可执行步骤，任务被计划依赖阻塞。")
-                return
+        display_reply = (
+            str(agent_result.text or "").strip()
+            if agent_result is not None
+            else execution_error
+        )
+        git_after = artifact_runtime._workbench_git_status_snapshot(workspace_root)
+        workspace_files_after = artifact_runtime._workbench_workspace_file_snapshot(
+            workspace_root
+        )
+        workspace_text_after = artifact_runtime._workbench_workspace_text_snapshot(
+            workspace_root
+        )
+        _payload, latest_project, latest_session = _read_session(session_id)
 
-            reflection_mode = str(run.get("reflection_mode") or "proactive")
-            if reflection_mode in {"proactive", "frequent"}:
-                reflecting = await _update_run(self.db_path, run_id, phase="reflecting", current_step_id=None)
-                if reflecting:
-                    await self.sync_projection(reflecting, message="全部步骤已处理，正在最终验收前深度思考。")
-                await _reflect(
-                    str(run["session_id"]),
-                    focus="最终验收前检查遗漏、假完成和表面满足",
-                    goal_gap="全部计划步骤已执行，需要确认是否仍存在影响验收的目标差距。",
-                    trigger="goal_loop_pre_verification",
-                )
-
-            verifying = await _update_run(self.db_path, run_id, phase="verifying", current_step_id=None)
-            if not verifying:
-                return
-            await self.sync_projection(verifying, message="正在独立验收目标。")
-            _, project, session = _read_session(str(run["session_id"]))
+        if execution_error:
+            verification = {
+                "passed": False,
+                "evidence": execution_error,
+                "retry_guidance": "修复 Agent 执行错误后重新运行本步骤。",
+            }
+        else:
             try:
-                verdict = await R._workbench_verify_acceptance(session, project)
+                verification = await _verify_step(
+                    self.agent_runtime,
+                    latest_session,
+                    latest_project,
+                    current_step,
+                    display_reply,
+                )
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
-                paused = await _set_inactive_status(
-                    self.db_path,
-                    verifying,
-                    "paused",
-                    phase="paused",
-                    stop_reason="verification_unavailable",
+                await self._pause_run(
+                    latest_run,
+                    stop_reason="step_verification_unavailable",
+                    message=f"步骤独立验收暂时不可用，持续执行已暂停：{exc}",
+                    event_type="step_verification_unavailable",
                     last_error=str(exc),
+                    step_id=step_id,
                 )
-                if paused:
-                    await _event(self.db_path, run_id, "verification_unavailable", payload={"error": str(exc)})
-                    await self.sync_projection(paused, message=f"独立验收暂时不可用，持续执行已暂停：{exc}")
-                return
-            if not isinstance(verdict, dict):
-                paused = await _set_inactive_status(
-                    self.db_path,
-                    verifying,
-                    "paused",
-                    phase="paused",
-                    stop_reason="verification_unavailable",
-                )
-                if paused:
-                    await self.sync_projection(paused, message="独立验收没有返回有效结果，持续执行已暂停。")
-                return
+                return False
 
-            results = verdict.get("results") if isinstance(verdict.get("results"), list) else []
-            by_id = {str(item.get("id") or ""): item for item in results if isinstance(item, dict)}
-            any_failed = False
-            acceptance_passed = False
+        tool_events = _project_tool_file_changes(
+            list(agent_result.tool_events) if agent_result is not None else [],
+            workspace_root,
+        )
+        activity_events = [
+            *tool_events,
+            {
+                "id": project_runtime._short_id("event"),
+                "type": "AgentResponseEvent",
+                "runId": agent_run_id,
+                "createdAt": _utc_iso(),
+                "body": display_reply,
+            },
+        ]
+        file_changes = artifact_runtime._workbench_collect_run_file_changes(
+            tool_events,
+            git_before,
+            git_after,
+            workspace_files_before,
+            workspace_files_after,
+            workspace_root,
+            f"{step_prompt}\n{display_reply}",
+            workspace_text_before=workspace_text_before,
+            workspace_text_after=workspace_text_after,
+        )
+        tool_calls = [
+            {
+                "tool": str(item.get("tool") or ""),
+                "argsPreview": str(item.get("argsPreview") or ""),
+            }
+            for item in tool_events
+        ]
+        run_record = {
+            "id": agent_run_id,
+            "taskId": session_id,
+            "runType": "goal_loop",
+            "userInput": step_prompt,
+            "agentResponse": display_reply,
+            "status": "failed" if execution_error else "completed",
+            "startedAt": started_at,
+            "endedAt": _utc_iso(),
+            "events": activity_events,
+            "fileChanges": file_changes,
+            "toolCalls": tool_calls,
+            "artifacts": [],
+            "attachments": [],
+            "mode": str(run.get("permission_mode") or "auto"),
+            "error": execution_error or None,
+            "goalLoopRunId": run_id,
+            "stepVerification": verification,
+            "usage": (
+                dict(agent_result.usage) if agent_result is not None else {}
+            ),
+            "model": str(agent_result.model if agent_result is not None else ""),
+            "modelIdentity": (
+                dict(agent_result.model_identity)
+                if agent_result is not None
+                else {}
+            ),
+            "generationDurationMs": (
+                agent_result.generation_duration_ms
+                if agent_result is not None
+                else None
+            ),
+            "outputTokensPerSecond": (
+                agent_result.output_tokens_per_second
+                if agent_result is not None
+                else None
+            ),
+        }
+        passed = bool(verification.get("passed"))
+        step_attempts = 0
+        outcome = (
+            {
+                "summary": display_reply[:500],
+                "filesChanged": [
+                    str(change.get("path") or "")
+                    for change in file_changes
+                    if str(change.get("path") or "")
+                ][:30],
+                "issues": [],
+            }
+            if passed and display_reply
+            else None
+        )
 
-            def apply_verdict(_p: dict[str, Any], _project: dict[str, Any], fresh: dict[str, Any]) -> None:
-                nonlocal any_failed, acceptance_passed
-                criteria = [item for item in (fresh.get("acceptanceCriteria") or []) if isinstance(item, dict)]
-                for criterion in criteria:
-                    result = by_id.get(str(criterion.get("id") or ""))
-                    if not isinstance(result, dict):
-                        criterion["status"] = "failed"
-                        criterion["evidence"] = "验收器未返回这一项的结论。"
-                        any_failed = True
-                        continue
-                    passed = bool(result.get("passed"))
-                    criterion["status"] = "passed" if passed else "failed"
-                    criterion["evidence"] = str(result.get("evidence") or "")
-                    any_failed = any_failed or not passed
-                fresh["acceptanceCriteria"] = criteria
-                fresh["verifyReason"] = str(verdict.get("reason") or "")
-                acceptance_passed = bool(criteria) and not any_failed
-                if acceptance_passed:
-                    R._workbench_mark_completed_if_acceptance_passed(
-                        fresh,
-                        event_body="持续执行独立验收通过，所有验收标准均已通过，任务自动标记为已完成。",
+        def finish_step(
+            _payload: dict[str, Any],
+            _project: dict[str, Any],
+            fresh: dict[str, Any],
+        ) -> None:
+            nonlocal step_attempts
+            runs = fresh.setdefault("runs", [])
+            existing_index = next(
+                (
+                    index
+                    for index, item in enumerate(runs)
+                    if isinstance(item, dict)
+                    and str(item.get("id") or "") == agent_run_id
+                ),
+                None,
+            )
+            if existing_index is None:
+                runs.append(run_record)
+            else:
+                runs[existing_index] = run_record
+            known_event_ids = {
+                str(item.get("id") or "")
+                for item in fresh.setdefault("events", [])
+                if isinstance(item, dict)
+            }
+            fresh["events"].extend(
+                item
+                for item in activity_events
+                if str(item.get("id") or "") not in known_event_ids
+            )
+            fresh["agentReply"] = display_reply
+            for candidate in fresh.get("plan") or []:
+                if (
+                    not isinstance(candidate, dict)
+                    or str(candidate.get("id") or "") != step_id
+                ):
+                    continue
+                candidate["updatedAt"] = _utc_iso()
+                candidate["toolCalls"] = tool_calls
+                candidate["stepVerification"] = verification
+                candidate.pop("goalLoopResumeAnswer", None)
+                if passed:
+                    candidate["status"] = "completed"
+                    candidate["completedAt"] = _utc_iso()
+                    candidate.pop("goalLoopAgentRunId", None)
+                    candidate["currentAction"] = (
+                        str(verification.get("evidence") or "").strip()
+                        or "步骤执行完成；最终目标将在全部步骤后独立验收。"
                     )
-
-            _write_session(str(run["session_id"]), apply_verdict)
-            await _event(self.db_path, run_id, "goal_verified", payload=verdict)
-
-            if acceptance_passed:
-                completed = await _set_inactive_status(
-                    self.db_path,
-                    verifying,
-                    "completed",
-                    phase="completed",
-                    stop_reason="acceptance_passed",
-                )
-                if completed:
-                    await self.sync_projection(completed, message="自动验收通过，任务已自动标记为已完成。")
-                    try:
-                        _, final_project, final_session = _read_session(str(run["session_id"]))
-                        await R._workbench_archive_run_knowledge(
-                            final_project,
-                            final_session,
-                            {
-                                "id": run_id,
-                                "userInput": str(final_session.get("goal") or ""),
-                                "agentResponse": str(final_session.get("agentReply") or ""),
-                            },
-                            R._workbench_workspace_root(final_project),
-                            _utc_iso(),
-                        )
-                    except Exception:
-                        logger.exception("Goal-loop final artifact archive failed")
-                    append_notification(
-                        title="持续执行验收通过",
-                        body=f"任务「{session.get('title') or '未命名任务'}」已通过自动验收。",
-                        tab="comment",
-                        project_ref=project.get("id"),
-                        source="goal_loop_passed",
-                        source_label="持续执行",
-                        link_label=str(session.get("title") or ""),
-                        meta={"sessionId": str(run["session_id"]), "runId": run_id},
+                    if outcome:
+                        candidate["outcome"] = outcome
+                else:
+                    candidate["status"] = "pending"
+                    candidate["startedAt"] = None
+                    candidate.pop("goalLoopAgentRunId", None)
+                    step_attempts = int(candidate.get("goalLoopAttempts") or 0) + 1
+                    candidate["goalLoopAttempts"] = step_attempts
+                    candidate["currentAction"] = (
+                        str(verification.get("retry_guidance") or "").strip()
+                        or str(verification.get("evidence") or "").strip()
+                        or "步骤验收未通过，请继续修复。"
                     )
-                return
+            artifact_runtime._workbench_apply_step_file_changes(
+                fresh, step_id, file_changes
+            )
+            artifact_runtime._workbench_promote_file_artifacts(
+                fresh, file_changes, _utc_iso()
+            )
+            fresh["planRevision"] = int(fresh.get("planRevision") or 0) + 1
+            fresh["status"] = "running"
+            fresh["goalLoop"] = _public_run(latest_run)
 
-            repair_round = int(verifying.get("repair_round") or 0)
-            max_repairs = int(verifying.get("max_repair_rounds") or 0)
-            if repair_round >= max_repairs:
-                paused = await _set_inactive_status(
-                    self.db_path,
-                    verifying,
-                    "paused",
-                    phase="paused",
-                    stop_reason="max_repair_rounds",
+        _write_session(session_id, finish_step)
+        await _event(
+            self.db_path,
+            run_id,
+            "step_verified" if passed else "step_verification_failed",
+            step_id=step_id,
+            payload={
+                **verification,
+                "agentRunId": agent_run_id,
+            },
+        )
+
+        if not passed and step_attempts >= _STEP_FAILURE_CAP:
+            reflecting = await _update_run(
+                self.db_path, run_id, phase="reflecting", current_step_id=None
+            )
+            if reflecting:
+                await self.sync_projection(
+                    reflecting,
+                    message="步骤反复未通过验收，正在深度思考失败根因。",
                 )
-                if paused:
-                    await self.sync_projection(paused, message="已达到最大返工轮数，持续执行已暂停。")
-                    append_notification(
-                        title="持续执行已暂停",
-                        body="任务达到最大返工轮数，可调整限制后继续。",
-                        tab="system",
-                        source="goal_loop_paused",
-                        source_label="持续执行",
-                        meta={"sessionId": str(run["session_id"]), "runId": run_id},
-                    )
-                return
+            await self._reflect_safely(
+                session_id,
+                focus=str(
+                    verification.get("retry_guidance")
+                    or f"步骤「{current_step.get('title') or ''}」反复未通过验收"
+                ),
+                goal_gap=(
+                    "同一步骤连续多次独立验收未通过，需要分析根因并改变方案，"
+                    "而不是继续机械重试。"
+                ),
+                trigger="goal_loop_step_blocked",
+            )
+            blocked = await _set_inactive_status(
+                self.db_path,
+                await _get_run_by_id(self.db_path, run_id) or latest_run,
+                "blocked",
+                phase="blocked",
+                stop_reason="step_stuck",
+            )
+            if blocked:
+                await _event(
+                    self.db_path,
+                    run_id,
+                    "step_blocked",
+                    step_id=step_id,
+                    payload={"attempts": step_attempts},
+                )
+                await self.sync_projection(
+                    blocked,
+                    message=(
+                        f"步骤「{current_step.get('title') or '当前步骤'}」连续 "
+                        f"{step_attempts} 次未通过独立验收，持续执行已阻塞。"
+                        "请调整计划或目标后再继续。"
+                    ),
+                )
+                append_notification(
+                    title="持续执行已阻塞",
+                    body=(
+                        f"步骤「{current_step.get('title') or '当前步骤'}」"
+                        "反复未通过验收，需要你介入。"
+                    ),
+                    tab="system",
+                    source="goal_loop_blocked",
+                    source_label="持续执行",
+                    meta={"sessionId": session_id, "runId": run_id},
+                )
+            return False
 
+        reflection_mode = str(run.get("reflection_mode") or "")
+        if passed and reflection_mode == "frequent":
             reflecting = await _update_run(self.db_path, run_id, phase="reflecting")
             if reflecting:
-                await self.sync_projection(reflecting, message="验收未通过，正在深度思考失败原因。")
-            await _reflect(
-                str(run["session_id"]),
-                focus=str(verdict.get("reason") or "验收未通过"),
-                goal_gap="独立验收未通过，需要分析失败根因并生成新的返工路径。",
-                trigger="goal_loop_verification_failure",
+                await self.sync_projection(
+                    reflecting,
+                    message="步骤完成，正在进行深度思考。",
+                )
+            await self._reflect_safely(
+                session_id,
+                focus=f"步骤「{current_step.get('title') or ''}」完成后的方向检查",
+                goal_gap="检查当前成果是否真正缩小了目标差距，以及后续计划是否需要调整。",
+                trigger="goal_loop_step",
             )
-            _, project, session = _read_session(str(run["session_id"]))
-            repair_steps = await _generate_repair_steps(session, project, verdict)
+        elif not passed and reflection_mode == "frequent":
+            await self._reflect_safely(
+                session_id,
+                focus=str(verification.get("retry_guidance") or ""),
+                goal_gap="当前步骤独立验收未通过，需要分析根因并改变执行方式。",
+                trigger="goal_loop_step_failure",
+            )
+        await _update_run(
+            self.db_path,
+            run_id,
+            phase="executing",
+            current_step_id=None,
+        )
+        return True
 
-            def append_repairs(_p: dict[str, Any], _project: dict[str, Any], fresh: dict[str, Any]) -> None:
-                plan_items = [item for item in (fresh.get("plan") or []) if isinstance(item, dict)]
-                base_order = len(plan_items)
-                for index, repair in enumerate(repair_steps, 1):
-                    repair["order"] = base_order + index
-                    repair["goalLoopRepairRound"] = repair_round + 1
-                    plan_items.append(repair)
-                fresh["plan"] = plan_items
-                fresh["planRevision"] = int(fresh.get("planRevision") or 0) + 1
-                fresh["planDefinitionRevision"] = int(fresh.get("planDefinitionRevision") or 0) + 1
-                fresh["approvedPlanDefinitionRevision"] = fresh["planDefinitionRevision"]
-                for criterion in fresh.get("acceptanceCriteria") or []:
-                    if isinstance(criterion, dict):
-                        criterion["status"] = "pending"
-                        criterion.pop("evidence", None)
-                fresh["status"] = "running"
-                fresh["agentReply"] = f"验收未通过，已生成第 {repair_round + 1} 轮返工步骤。"
+    async def _archive_completed_goal(
+        self,
+        project: dict[str, Any],
+        session: dict[str, Any],
+        run_id: str,
+    ) -> None:
+        """Archive through the active knowledge Plugin application service."""
 
-            _, _, updated_session = _write_session(str(run["session_id"]), append_repairs)
-            repaired = await _update_run(
-                self.db_path,
-                run_id,
-                phase="repairing",
-                repair_round=repair_round + 1,
-                plan_definition_revision=int(updated_session.get("planDefinitionRevision") or 0),
-            )
-            await _event(
-                self.db_path,
-                run_id,
-                "repair_planned",
-                payload={"repairRound": repair_round + 1, "stepCount": len(repair_steps)},
-            )
-            if repaired:
-                await self.sync_projection(repaired)
+        service = active_plugin_service("knowledge")
+        if service is None:
+            return
+        await service.archive_run(
+            project,
+            session,
+            {
+                "id": run_id,
+                "userInput": str(session.get("goal") or ""),
+                "agentResponse": str(session.get("agentReply") or ""),
+            },
+            artifact_runtime._workbench_workspace_root(project),
+            _utc_iso(),
+        )
+
+    async def _run(self, run_id: str) -> None:
+        try:
+            while not self.closed:
+                run = await _get_run_by_id(self.db_path, run_id)
+                if not run or str(run.get("status") or "") != "running":
+                    return
+                run = await self._lease(run)
+                if not run:
+                    return
+
+                public = _public_run(run) or {}
+                if int(public.get("activeSeconds") or 0) >= int(
+                    run.get("max_active_seconds") or 0
+                ):
+                    paused = await _set_inactive_status(
+                        self.db_path,
+                        run,
+                        "paused",
+                        phase="paused",
+                        stop_reason="max_runtime",
+                    )
+                    if paused:
+                        await _event(
+                            self.db_path, run_id, "runtime_limit_reached"
+                        )
+                        await self.sync_projection(
+                            paused,
+                            message="已达到最大运行时间，持续执行已暂停。",
+                        )
+                        append_notification(
+                            title="持续执行已暂停",
+                            body="任务达到最大运行时间，可调整限制后继续。",
+                            tab="system",
+                            source="goal_loop_paused",
+                            source_label="持续执行",
+                            meta={
+                                "sessionId": str(run["session_id"]),
+                                "runId": run_id,
+                            },
+                        )
+                    return
+
+                try:
+                    _payload, project, session = _read_session(
+                        str(run["session_id"])
+                    )
+                except KeyError:
+                    cancelled = await _set_inactive_status(
+                        self.db_path,
+                        run,
+                        "cancelled",
+                        phase="cancelled",
+                        stop_reason="session_missing",
+                    )
+                    if cancelled:
+                        await _publish(cancelled)
+                    return
+
+                plan = (
+                    session.get("plan")
+                    if isinstance(session.get("plan"), list)
+                    else []
+                )
+                resume_step = next(
+                    (
+                        item
+                        for item in plan
+                        if isinstance(item, dict)
+                        and isinstance(item.get("goalLoopResumeAnswer"), dict)
+                    ),
+                    None,
+                )
+                step = resume_step or _recoverable_step(plan) or _next_step(plan)
+                if step is not None:
+                    if not await self._execute_step(run, project, session, step):
+                        return
+                    continue
+
+                unresolved = [
+                    item
+                    for item in plan
+                    if isinstance(item, dict)
+                    and str(item.get("status") or "pending")
+                    not in {"completed", "done", "skipped"}
+                ]
+                if unresolved:
+                    blocked = await _set_inactive_status(
+                        self.db_path,
+                        run,
+                        "blocked",
+                        phase="blocked",
+                        stop_reason="dependency_blocked",
+                    )
+                    if blocked:
+                        await _event(self.db_path, run_id, "dependency_blocked")
+                        await self.sync_projection(
+                            blocked,
+                            message="没有可执行步骤，任务被计划依赖阻塞。",
+                        )
+                    return
+
+                reflection_mode = str(
+                    run.get("reflection_mode") or "proactive"
+                )
+                if reflection_mode in {"proactive", "frequent"}:
+                    reflecting = await _update_run(
+                        self.db_path,
+                        run_id,
+                        phase="reflecting",
+                        current_step_id=None,
+                    )
+                    if reflecting:
+                        await self.sync_projection(
+                            reflecting,
+                            message="全部步骤已处理，正在最终验收前深度思考。",
+                        )
+                    await self._reflect_safely(
+                        str(run["session_id"]),
+                        focus="最终验收前检查遗漏、假完成和表面满足",
+                        goal_gap=(
+                            "全部计划步骤已执行，需要确认是否仍存在影响验收的"
+                            "目标差距。"
+                        ),
+                        trigger="goal_loop_pre_verification",
+                    )
+
+                verifying = await _update_run(
+                    self.db_path,
+                    run_id,
+                    phase="verifying",
+                    current_step_id=None,
+                )
+                if not verifying:
+                    return
+                await self.sync_projection(
+                    verifying, message="正在独立验收目标。"
+                )
+                _payload, project, session = _read_session(
+                    str(run["session_id"])
+                )
+                try:
+                    verdict = await self.agent_runtime.verify_acceptance(
+                        session, project
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    await self._pause_run(
+                        verifying,
+                        stop_reason="verification_unavailable",
+                        message=f"独立验收暂时不可用，持续执行已暂停：{exc}",
+                        event_type="verification_unavailable",
+                        last_error=str(exc),
+                    )
+                    return
+                if not isinstance(verdict, dict):
+                    await self._pause_run(
+                        verifying,
+                        stop_reason="verification_unavailable",
+                        message="独立验收没有返回有效结果，持续执行已暂停。",
+                        event_type="verification_unavailable",
+                    )
+                    return
+
+                results = (
+                    verdict.get("results")
+                    if isinstance(verdict.get("results"), list)
+                    else []
+                )
+                by_id = {
+                    str(item.get("id") or ""): item
+                    for item in results
+                    if isinstance(item, dict)
+                }
+                any_failed = False
+                acceptance_passed = False
+
+                def apply_verdict(
+                    _payload: dict[str, Any],
+                    _project: dict[str, Any],
+                    fresh: dict[str, Any],
+                ) -> None:
+                    nonlocal any_failed, acceptance_passed
+                    criteria = [
+                        item
+                        for item in fresh.get("acceptanceCriteria") or []
+                        if isinstance(item, dict)
+                    ]
+                    for criterion in criteria:
+                        result = by_id.get(str(criterion.get("id") or ""))
+                        if not isinstance(result, dict):
+                            criterion["status"] = "failed"
+                            criterion["evidence"] = (
+                                "验收器未返回这一项的结论。"
+                            )
+                            any_failed = True
+                            continue
+                        passed = bool(result.get("passed"))
+                        criterion["status"] = "passed" if passed else "failed"
+                        criterion["evidence"] = str(
+                            result.get("evidence") or ""
+                        )
+                        any_failed = any_failed or not passed
+                    fresh["acceptanceCriteria"] = criteria
+                    fresh["verifyReason"] = str(verdict.get("reason") or "")
+                    acceptance_passed = bool(criteria) and not any_failed
+                    if acceptance_passed:
+                        project_runtime._workbench_mark_completed_if_acceptance_passed(
+                            fresh,
+                            event_body=(
+                                "持续执行独立验收通过，所有验收标准均已通过，"
+                                "任务自动标记为已完成。"
+                            ),
+                        )
+
+                _write_session(str(run["session_id"]), apply_verdict)
+                await _event(
+                    self.db_path, run_id, "goal_verified", payload=verdict
+                )
+
+                if acceptance_passed:
+                    completed = await _set_inactive_status(
+                        self.db_path,
+                        verifying,
+                        "completed",
+                        phase="completed",
+                        stop_reason="acceptance_passed",
+                    )
+                    if completed:
+                        await self.sync_projection(
+                            completed,
+                            message="自动验收通过，任务已自动标记为已完成。",
+                        )
+                        try:
+                            _payload, final_project, final_session = (
+                                _read_session(str(run["session_id"]))
+                            )
+                            await self._archive_completed_goal(
+                                final_project, final_session, run_id
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Goal-loop Plugin knowledge archive failed"
+                            )
+                        append_notification(
+                            title="持续执行验收通过",
+                            body=(
+                                f"任务「{session.get('title') or '未命名任务'}」"
+                                "已通过自动验收。"
+                            ),
+                            tab="comment",
+                            project_ref=project.get("id"),
+                            source="goal_loop_passed",
+                            source_label="持续执行",
+                            link_label=str(session.get("title") or ""),
+                            meta={
+                                "sessionId": str(run["session_id"]),
+                                "runId": run_id,
+                            },
+                        )
+                    return
+
+                repair_round = int(verifying.get("repair_round") or 0)
+                max_repairs = int(verifying.get("max_repair_rounds") or 0)
+                if repair_round >= max_repairs:
+                    paused = await _set_inactive_status(
+                        self.db_path,
+                        verifying,
+                        "paused",
+                        phase="paused",
+                        stop_reason="max_repair_rounds",
+                    )
+                    if paused:
+                        await self.sync_projection(
+                            paused,
+                            message="已达到最大返工轮数，持续执行已暂停。",
+                        )
+                        append_notification(
+                            title="持续执行已暂停",
+                            body="任务达到最大返工轮数，可调整限制后继续。",
+                            tab="system",
+                            source="goal_loop_paused",
+                            source_label="持续执行",
+                            meta={
+                                "sessionId": str(run["session_id"]),
+                                "runId": run_id,
+                            },
+                        )
+                    return
+
+                reflecting = await _update_run(
+                    self.db_path, run_id, phase="reflecting"
+                )
+                if reflecting:
+                    await self.sync_projection(
+                        reflecting,
+                        message="验收未通过，正在深度思考失败原因。",
+                    )
+                await self._reflect_safely(
+                    str(run["session_id"]),
+                    focus=str(verdict.get("reason") or "验收未通过"),
+                    goal_gap=(
+                        "独立验收未通过，需要分析失败根因并生成新的返工路径。"
+                    ),
+                    trigger="goal_loop_verification_failure",
+                )
+                _payload, project, session = _read_session(
+                    str(run["session_id"])
+                )
+                repair_steps = await _generate_repair_steps(
+                    self.agent_runtime, session, project, verdict
+                )
+
+                def append_repairs(
+                    _payload: dict[str, Any],
+                    _project: dict[str, Any],
+                    fresh: dict[str, Any],
+                ) -> None:
+                    plan_items = [
+                        item
+                        for item in fresh.get("plan") or []
+                        if isinstance(item, dict)
+                    ]
+                    base_order = len(plan_items)
+                    for index, repair in enumerate(repair_steps, 1):
+                        repair["order"] = base_order + index
+                        repair["goalLoopRepairRound"] = repair_round + 1
+                        plan_items.append(repair)
+                    fresh["plan"] = plan_items
+                    fresh["planRevision"] = (
+                        int(fresh.get("planRevision") or 0) + 1
+                    )
+                    fresh["planDefinitionRevision"] = (
+                        int(fresh.get("planDefinitionRevision") or 0) + 1
+                    )
+                    fresh["approvedPlanDefinitionRevision"] = fresh[
+                        "planDefinitionRevision"
+                    ]
+                    for criterion in fresh.get("acceptanceCriteria") or []:
+                        if isinstance(criterion, dict):
+                            criterion["status"] = "pending"
+                            criterion.pop("evidence", None)
+                    fresh["status"] = "running"
+                    fresh["agentReply"] = (
+                        f"验收未通过，已生成第 {repair_round + 1} 轮返工步骤。"
+                    )
+
+                _payload, _project, updated_session = _write_session(
+                    str(run["session_id"]), append_repairs
+                )
+                repaired = await _update_run(
+                    self.db_path,
+                    run_id,
+                    phase="repairing",
+                    repair_round=repair_round + 1,
+                    plan_definition_revision=int(
+                        updated_session.get("planDefinitionRevision") or 0
+                    ),
+                )
+                await _event(
+                    self.db_path,
+                    run_id,
+                    "repair_planned",
+                    payload={
+                        "repairRound": repair_round + 1,
+                        "stepCount": len(repair_steps),
+                    },
+                )
+                if repaired:
+                    await self.sync_projection(repaired)
+        except asyncio.CancelledError:
+            # The coordinator distinguishes user cancellation from process
+            # shutdown. Agent calls use cancel_on_caller_cancel=False so their
+            # ContextTree stays resumable; the durable Goal Loop status is owned
+            # by pause/cancel/shutdown application paths.
+            raise
+        except Exception as exc:
+            logger.exception("Goal-loop worker failed [run=%s]", run_id)
+            current = await _get_run_by_id(self.db_path, run_id)
+            if current and str(current.get("status") or "") == "running":
+                await self._pause_run(
+                    current,
+                    stop_reason="goal_loop_runtime_error",
+                    message=f"持续执行发生错误并已安全暂停：{exc}",
+                    event_type="goal_loop_runtime_error",
+                    last_error=str(exc),
+                )
 
 
 async def begin_async_answer(
@@ -1357,6 +1796,29 @@ async def begin_async_answer(
     step_id = str((pending_step or {}).get("stepId") or "")
     if not step_id or not bool((pending_step or {}).get("goalLoop")):
         return False
+    pending_question = (
+        session.get("pendingQuestion")
+        if isinstance(session.get("pendingQuestion"), dict)
+        else {}
+    )
+    if str(pending_question.get("id") or "") != str(question_id or ""):
+        return False
+    target_step = next(
+        (
+            item
+            for item in session.get("plan") or []
+            if isinstance(item, dict) and str(item.get("id") or "") == step_id
+        ),
+        None,
+    )
+    agent_run_id = str(
+        (target_step or {}).get("goalLoopAgentRunId")
+        or pending_question.get("roundId")
+        or (pending_step or {}).get("agentRunId")
+        or ""
+    ).strip()
+    if not agent_run_id:
+        return False
 
     now = _utc_iso()
     run = await _update_run(
@@ -1380,6 +1842,7 @@ async def begin_async_answer(
         for step in fresh.get("plan") or []:
             if isinstance(step, dict) and str(step.get("id") or "") == step_id:
                 step["goalLoopResumeAnswer"] = {"questionId": str(question_id or ""), "answer": str(answer_text or "")}
+                step["goalLoopAgentRunId"] = agent_run_id
                 step["status"] = "running"
                 step["currentAction"] = "已收到你的回复，正在继续执行此步骤。"
         fresh["status"] = "running"

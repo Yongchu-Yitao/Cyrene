@@ -46,6 +46,32 @@ from cyrene.runtime.paths import TEMP_DIR
 
 logger = logging.getLogger(__name__)
 
+
+def _active_plugin_run_identity() -> tuple[str, str]:
+    """Return the active Plugin session/round without legacy Agent globals."""
+
+    try:
+        from agent.plugin.execution import current_plugin_execution
+        from agent.plugin.native_runtime import run_context_value
+
+        execution = current_plugin_execution()
+        if execution is None:
+            return "", ""
+        context = execution.context
+        session_id = str(
+            run_context_value(context, "session_id")
+            or context.tree_id
+            or ""
+        ).strip()
+        round_id = str(
+            run_context_value(context, "round_id")
+            or run_context_value(context, "run_id")
+            or ""
+        ).strip()
+        return session_id, round_id
+    except Exception:
+        return "", ""
+
 # ---------------------------------------------------------------------------
 # SSRF protection
 # ---------------------------------------------------------------------------
@@ -322,15 +348,7 @@ async def _electron_browser_rpc(
     if not port or not token:
         raise RuntimeError("Electron browser RPC is unavailable.")
     url = f"http://127.0.0.1:{port}/browser/rpc"
-    try:
-        from cyrene.agent.context import current_run_context
-
-        run_context = current_run_context()
-        current_session_id = run_context.session_id.strip()
-        current_round_id = run_context.round_id.strip()
-    except Exception:
-        current_session_id = ""
-        current_round_id = ""
+    current_session_id, current_round_id = _active_plugin_run_identity()
     rpc_session_id = current_session_id if session_id is None else str(session_id or "").strip()
     rpc_round_id = current_round_id if round_id is None else str(round_id or "").strip()
     payload = {
@@ -679,9 +697,8 @@ async def _emit_electron_frame(action: str, result: dict[str, Any], *, target: s
     """Publish the same lightweight browser_frame metadata for Electron tabs."""
     try:
         from cyrene.observability import debug
-        from cyrene.agent.context import current_run_context
 
-        run_context = current_run_context()
+        session_id, round_id = _active_plugin_run_identity()
         norm_box = None
         if isinstance(box, dict) and box:
             norm_box = {
@@ -692,8 +709,8 @@ async def _emit_electron_frame(action: str, result: dict[str, Any], *, target: s
             }
         await debug.publish_event({
             "type": "browser_frame",
-            "session_id": run_context.session_id,
-            "round_id": run_context.round_id,
+            "session_id": session_id,
+            "round_id": round_id,
             "url": str(result.get("url") or ""),
             "title": str(result.get("title") or ""),
             "action": action,
@@ -994,11 +1011,7 @@ class _BrowserSession:
             target = url or self._safe_url()
             await self._relaunch(headless=False, url=target)
             self._takeover_active = True
-            try:
-                from cyrene.agent.context import current_session_id
-                self._takeover_session_id = current_session_id().strip()
-            except Exception:
-                self._takeover_session_id = ""
+            self._takeover_session_id = _active_plugin_run_identity()[0]
             try:
                 self._context.on("close", self._on_headed_close)
             except Exception:
@@ -1662,12 +1675,11 @@ class _BrowserSession:
         """
         try:
             from cyrene.observability import debug
-            from cyrene.agent.context import current_run_context
 
             page = self._page
             if page is None:
                 return
-            run_context = current_run_context()
+            session_id, round_id = _active_plugin_run_identity()
             norm_box = None
             if isinstance(box, dict) and box:
                 norm_box = {
@@ -1678,8 +1690,8 @@ class _BrowserSession:
                 }
             await debug.publish_event({
                 "type": "browser_frame",
-                "session_id": run_context.session_id,
-                "round_id": run_context.round_id,
+                "session_id": session_id,
+                "round_id": round_id,
                 "url": url or page.url,
                 "title": title,
                 "action": action,
@@ -1943,9 +1955,8 @@ async def end_browser_takeover(url: str = "") -> None:
     if electron_browser_available():
         try:
             from cyrene.observability import debug
-            from cyrene.agent.context import current_session_id
             event = {"type": "browser_takeover_cancelled"}
-            session_id = current_session_id().strip()
+            session_id = _active_plugin_run_identity()[0]
             if session_id:
                 event["session_id"] = session_id
             await debug.publish_event(event)
@@ -1958,9 +1969,12 @@ async def end_browser_takeover(url: str = "") -> None:
     # Clear the panel's "waiting for login" placeholder so the live view returns.
     try:
         from cyrene.observability import debug
-        from cyrene.agent.context import current_session_id
         event = {"type": "browser_takeover_cancelled"}
-        session_id = str(current_session_id() or getattr(session, "_takeover_session_id", "") or "").strip()
+        session_id = str(
+            _active_plugin_run_identity()[0]
+            or getattr(session, "_takeover_session_id", "")
+            or ""
+        ).strip()
         if session_id:
             event["session_id"] = session_id
         await debug.publish_event(event)

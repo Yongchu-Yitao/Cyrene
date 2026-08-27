@@ -21,6 +21,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from agent.plugin import PluginContext
+
 # Patch missing optional deps before any cyrene import (mirrors test_runtime_fixes).
 try:
     _pil_missing = importlib.util.find_spec("PIL") is None
@@ -235,7 +237,7 @@ def test_html_links_resolve_text_and_image_links_and_skip_non_http():
 
 
 def test_browser_navigate_link_output_is_before_page_text():
-    from cyrene.tool_impl.browser.browser_output import page_link_lines
+    from agent.plugin.plugin_impl.cyrene_browser.browser_output import page_link_lines
 
     lines = page_link_lines(
         {"links": [{"text": "Target result", "url": "https://example.com/video/1"}]}
@@ -303,7 +305,7 @@ def test_normalize_electron_page_signal_for_python_tools():
 async def test_browser_click_ref_surfaces_bounded_access_gate_recovery(monkeypatch):
     import importlib
 
-    module = importlib.import_module("cyrene.tool_impl.browser.browser_click_ref")
+    module = importlib.import_module("agent.plugin.plugin_impl.cyrene_browser.browser_click_ref")
 
     async def fake_click_ref(_ref):
         return {
@@ -322,7 +324,7 @@ async def test_browser_click_ref_surfaces_bounded_access_gate_recovery(monkeypat
         }
 
     monkeypatch.setattr("cyrene.browser.click_ref", fake_click_ref)
-    result = await module._tool_browser_click_ref({"ref": "e1"}, None, 0, "db", None)
+    result = await module._tool_browser_click_ref({"ref": "e1"}, PluginContext())
 
     assert "PAGE_SIGNAL: access_gate" in result
     assert "make at most one recovery attempt" in result
@@ -604,77 +606,64 @@ async def test_screencast_skips_decode_and_acks_when_queue_full(monkeypatch):
 
 async def test_browser_request_takeover_pauses_with_takeover_meta(monkeypatch):
     import json
+    from types import SimpleNamespace
 
-    from cyrene.tool_impl.browser import browser_request_takeover as _tools
-    from cyrene.observability import debug as _debug
+    from agent.plugin import PluginContext
+    from agent.plugin.plugin_impl.cyrene_browser import browser_request_takeover as _tools
     from cyrene import browser as _browser
-    from cyrene.agent import state as _state
-    from cyrene.agent import session as _session
 
-    agent_token = _state._current_agent_id.set("main")
-    round_token = _state._current_round_id.set("round_1")
-    try:
-        events = []
+    events = []
+    switched = []
 
-        async def fake_publish(event):
-            events.append(event)
+    class _FakeSession:
+        async def current_url(self):
+            return "https://example.com/login"
 
-        monkeypatch.setattr(_debug, "publish_event", fake_publish)
+        async def switch_to_headed(self, url=""):
+            switched.append(url)
 
-        switched = []
+    async def fake_get_session():
+        return _FakeSession()
 
-        class _FakeSession:
-            async def current_url(self):
-                return "https://example.com/login"
+    monkeypatch.setattr(_browser, "electron_browser_available", lambda: False)
+    monkeypatch.setattr(_browser, "get_session", fake_get_session)
+    monkeypatch.setattr(
+        _tools,
+        "require_plugin_execution",
+        lambda: SimpleNamespace(call=SimpleNamespace(id="call_takeover")),
+    )
+    context = PluginContext(
+        data={
+            "run_context": {
+                "agent_id": "main",
+                "round_id": "round_1",
+                "session_id": "chat_1",
+            }
+        },
+        services={"runtime_events": events.append},
+    )
+    result = await _tools._tool_browser_request_takeover(
+        {"reason": "Please log in to Gmail"},
+        context,
+    )
 
-            async def switch_to_headed(self, url=""):
-                switched.append(url)
-
-        async def fake_get_session():
-            return _FakeSession()
-
-        monkeypatch.setattr(_browser, "get_session", fake_get_session)
-
-        captured = {}
-
-        async def fake_upsert(payload):
-            captured.update(payload)
-            return {"id": "q_123"}
-
-        monkeypatch.setattr(_session, "_upsert_pending_question", fake_upsert)
-        monkeypatch.setattr(_session, "get_session_labels", lambda rid=None: {})
-
-        result = await _tools._tool_browser_request_takeover(
-            {"reason": "Please log in to Gmail"}, None, 0, "db", None
-        )
-
-        payload = json.loads(result)
-        assert payload["status"] == "awaiting_user"
-        assert payload["question_id"] == "q_123"
-        # The native window was raised before pausing.
-        assert switched == ["https://example.com/login"]
-        # The pending question is tagged so the resume hook can restore headless.
-        assert captured["meta"] == {"kind": "browser_takeover", "url": "https://example.com/login"}
-        takeover_events = [e for e in events if e.get("type") == "browser_takeover_request"]
-        assert takeover_events
-        assert takeover_events[-1]["question_id"] == "q_123"
-    finally:
-        _state._current_agent_id.reset(agent_token)
-        _state._current_round_id.reset(round_token)
+    payload = json.loads(result)
+    assert payload["status"] == "awaiting_user"
+    assert payload["question_id"] == "question_call_takeover"
+    assert switched == ["https://example.com/login"]
+    takeover_events = [e for e in events if e.get("type") == "browser_takeover_request"]
+    assert takeover_events[-1]["question_id"] == "question_call_takeover"
 
 
 async def test_browser_request_takeover_rejects_non_main_agent(monkeypatch):
-    from cyrene.tool_impl.browser import browser_request_takeover as _tools
-    from cyrene.agent import state as _state
+    from agent.plugin import PluginContext
+    from agent.plugin.plugin_impl.cyrene_browser import browser_request_takeover as _tools
 
-    agent_token = _state._current_agent_id.set("alice")
-    round_token = _state._current_round_id.set("round_1")
-    try:
-        result = await _tools._tool_browser_request_takeover({"reason": "x"}, None, 0, "db", None)
-        assert "main agent" in result.lower()
-    finally:
-        _state._current_agent_id.reset(agent_token)
-        _state._current_round_id.reset(round_token)
+    result = await _tools._tool_browser_request_takeover(
+        {"reason": "x"},
+        PluginContext(data={"run_context": {"agent_id": "alice", "round_id": "round_1"}}),
+    )
+    assert "main agent" in result.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -918,7 +907,7 @@ async def test_tool_browser_screenshot_returns_tmp_file(monkeypatch):
     import os
     import tempfile
 
-    from cyrene.tool_impl.browser import browser_screenshot as _mod
+    from agent.plugin.plugin_impl.cyrene_browser import browser_screenshot as _mod
     from cyrene.runtime import attachments as _attachments
 
     # Create a real temp file to simulate what screenshot() returns.
@@ -934,7 +923,7 @@ async def test_tool_browser_screenshot_returns_tmp_file(monkeypatch):
     monkeypatch.setattr(_attachments, "primary_model_supports_vision", lambda: False)
 
     result = await _mod._tool_browser_screenshot(
-        {"url": "https://example.com"}, None, 0, "db", None
+        {"url": "https://example.com"}, PluginContext()
     )
 
     assert "Screenshot taken" in result
@@ -951,7 +940,7 @@ async def test_tool_browser_screenshot_returns_primary_model_visual_observation(
 
     from cyrene.runtime import attachments as _attachments
     from cyrene import browser as _browser
-    from cyrene.tool_impl.browser import browser_screenshot as _mod
+    from agent.plugin.plugin_impl.cyrene_browser import browser_screenshot as _mod
 
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     tmp.write(_VALID_PNG)
@@ -971,7 +960,7 @@ async def test_tool_browser_screenshot_returns_primary_model_visual_observation(
     monkeypatch.setattr(_attachments, "primary_model_supports_vision", lambda: True)
     monkeypatch.setattr(_attachments, "analyze_image_with_primary_model", fake_analyze)
 
-    result = await _mod._tool_browser_screenshot({}, None, 0, "db", None)
+    result = await _mod._tool_browser_screenshot({}, PluginContext())
 
     assert seen["path"] == tmp.name
     assert "untrusted data" in seen["prompt"]
@@ -1042,7 +1031,7 @@ def test_screenshot_validation_requires_png_format_and_decodability(tmp_path, re
 
 async def test_tool_browser_screenshot_rejects_invalid_artifact(monkeypatch, tmp_path):
     from cyrene import browser as _browser
-    from cyrene.tool_impl.browser import browser_screenshot as _mod
+    from agent.plugin.plugin_impl.cyrene_browser import browser_screenshot as _mod
 
     invalid = tmp_path / "invalid.png"
     invalid.touch()
@@ -1051,7 +1040,7 @@ async def test_tool_browser_screenshot_rejects_invalid_artifact(monkeypatch, tmp
         return {"ok": True, "path": str(invalid), "title": "Broken"}
 
     monkeypatch.setattr(_browser, "screenshot", fake_screenshot)
-    result = await _mod._tool_browser_screenshot({}, None, 0, "db", None)
+    result = await _mod._tool_browser_screenshot({}, PluginContext())
 
     assert "Screenshot failed: Browser screenshot validation failed" in result
     assert "Screenshot taken" not in result
@@ -1264,7 +1253,6 @@ async def test_navigate_uses_electron_rpc_when_available(monkeypatch):
 
 async def test_electron_rpc_carries_originating_session_context(monkeypatch):
     from cyrene import browser
-    from cyrene.agent import state
 
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
@@ -1292,13 +1280,12 @@ async def test_electron_rpc_carries_originating_session_context(monkeypatch):
             return _Response()
 
     monkeypatch.setattr(browser.httpx, "AsyncClient", _Client)
-    session_token = state._current_session_id.set("chat-isolated-a")
-    round_token = state._current_round_id.set("round-a")
-    try:
-        result = await browser._electron_browser_rpc("navigate", {"url": "https://example.com"})
-    finally:
-        state._current_round_id.reset(round_token)
-        state._current_session_id.reset(session_token)
+    monkeypatch.setattr(
+        browser,
+        "_active_plugin_run_identity",
+        lambda: ("chat-isolated-a", "round-a"),
+    )
+    result = await browser._electron_browser_rpc("navigate", {"url": "https://example.com"})
 
     assert result == {"ok": True}
     assert captured == {
@@ -1579,7 +1566,7 @@ async def test_electron_scroll_forwards_nested_target_options(monkeypatch):
 
 
 async def test_browser_scroll_tool_reports_actual_nested_scroll(monkeypatch):
-    from cyrene.tool_impl.browser import browser_scroll as tool
+    from agent.plugin.plugin_impl.cyrene_browser import browser_scroll as tool
 
     captured = {}
 
@@ -1597,7 +1584,7 @@ async def test_browser_scroll_tool_reports_actual_nested_scroll(monkeypatch):
     monkeypatch.setattr("cyrene.browser.scroll_page", fake_scroll_page)
 
     result = await tool._tool_browser_scroll(
-        {"delta_y": 500, "ref": "e77", "x": 174, "y": 302}, None, 0, "db", None
+        {"delta_y": 500, "ref": "e77", "x": 174, "y": 302}, PluginContext()
     )
 
     assert captured == {"delta_y": 500, "x": 174, "y": 302, "ref": "e77"}
@@ -1605,32 +1592,33 @@ async def test_browser_scroll_tool_reports_actual_nested_scroll(monkeypatch):
 
 
 async def test_browser_scroll_tool_does_not_claim_success_without_movement(monkeypatch):
-    from cyrene.tool_impl.browser import browser_scroll as tool
+    from agent.plugin.plugin_impl.cyrene_browser import browser_scroll as tool
 
     async def fake_scroll_page(**_kwargs):
         return {"ok": True, "moved": False, "actualDeltaY": 0, "x": 10, "y": 20}
 
     monkeypatch.setattr("cyrene.browser.scroll_page", fake_scroll_page)
 
-    result = await tool._tool_browser_scroll({"delta_y": 500}, None, 0, "db", None)
+    result = await tool._tool_browser_scroll({"delta_y": 500}, PluginContext())
 
     assert result.startswith("Scroll had no effect.")
 
 
 async def test_browser_tab_tools_are_registered(monkeypatch):
-    from cyrene.tooling import catalog as _rt
+    from agent.plugin.plugin_impl.cyrene_browser import plugin_pack
 
-    names = _rt.NATIVE_TOOL_MODULES
-    modules = [m for m in names if "browser_tab_" in m or "browser_scroll" in m]
-    assert any("browser_tab_list" in m for m in modules)
-    assert any("browser_tab_new" in m for m in modules)
-    assert any("browser_tab_select" in m for m in modules)
-    assert any("browser_tab_close" in m for m in modules)
-    assert any("browser_scroll" in m for m in modules)
+    names = {plugin.name for plugin in plugin_pack.plugins}
+    assert {
+        "browser_tab_list",
+        "browser_tab_new",
+        "browser_tab_select",
+        "browser_tab_close",
+        "browser_scroll",
+    } <= names
 
 
 async def test_browser_navigate_rejects_visible_target_link(monkeypatch):
-    from cyrene.tool_impl.browser import browser_navigate as tool
+    from agent.plugin.plugin_impl.cyrene_browser import browser_navigate as tool
 
     navigated = False
 
@@ -1662,10 +1650,7 @@ async def test_browser_navigate_rejects_visible_target_link(monkeypatch):
             "reason": "ui_unreachable",
             "snapshot_token": "snapshot-secret",
         },
-        None,
-        0,
-        "db",
-        None,
+        PluginContext(),
     )
     result = json.loads(raw)
 
@@ -1677,7 +1662,7 @@ async def test_browser_navigate_rejects_visible_target_link(monkeypatch):
 
 
 async def test_browser_navigate_allows_user_requested_exact_url(monkeypatch):
-    from cyrene.tool_impl.browser import browser_navigate as tool
+    from agent.plugin.plugin_impl.cyrene_browser import browser_navigate as tool
 
     guard_args = None
 
@@ -1693,7 +1678,7 @@ async def test_browser_navigate_allows_user_requested_exact_url(monkeypatch):
     monkeypatch.setattr("cyrene.browser.navigate", fake_navigate)
 
     raw = await tool._tool_browser_navigate(
-        {"url": "https://example.com/exact", "reason": "user_exact_url"}, None, 0, "db", None
+        {"url": "https://example.com/exact", "reason": "user_exact_url"}, PluginContext()
     )
 
     assert "Title: Exact" in raw
@@ -1701,7 +1686,7 @@ async def test_browser_navigate_allows_user_requested_exact_url(monkeypatch):
 
 
 async def test_browser_navigate_returns_current_url_guard_error(monkeypatch):
-    from cyrene.tool_impl.browser import browser_navigate as tool
+    from agent.plugin.plugin_impl.cyrene_browser import browser_navigate as tool
 
     async def fake_navigation_guard(url, reason, snapshot_token):
         return {
@@ -1719,7 +1704,7 @@ async def test_browser_navigate_returns_current_url_guard_error(monkeypatch):
     monkeypatch.setattr("cyrene.browser.navigate", unexpected_navigate)
 
     result = json.loads(await tool._tool_browser_navigate(
-        {"url": "https://example.com/current", "reason": "starting_page"}, None, 0, "db", None
+        {"url": "https://example.com/current", "reason": "starting_page"}, PluginContext()
     ))
 
     assert result["code"] == "ALREADY_AT_TARGET"
@@ -1729,7 +1714,7 @@ def test_browser_snapshot_prioritizes_interactive_elements_and_exposes_credentia
     import inspect
 
     from cyrene import browser
-    from cyrene.tool_impl.browser import browser_snapshot
+    from agent.plugin.plugin_impl.cyrene_browser import browser_snapshot
 
     interactive = "input,textarea,select,button,a[href]"
     assert interactive in browser._BROWSER_INSPECT_JS
@@ -1738,7 +1723,7 @@ def test_browser_snapshot_prioritizes_interactive_elements_and_exposes_credentia
 
 
 async def test_browser_click_ref_reports_popup_as_new_active_tab(monkeypatch):
-    from cyrene.tool_impl.browser import browser_click_ref as tool
+    from agent.plugin.plugin_impl.cyrene_browser import browser_click_ref as tool
 
     async def fake_click_ref(ref):
         assert ref == "e9"
@@ -1755,7 +1740,7 @@ async def test_browser_click_ref_reports_popup_as_new_active_tab(monkeypatch):
 
     monkeypatch.setattr("cyrene.browser.click_ref", fake_click_ref)
 
-    result = await tool._tool_browser_click_ref({"ref": "e9"}, None, 0, "db", None)
+    result = await tool._tool_browser_click_ref({"ref": "e9"}, PluginContext())
 
     assert "URL: https://www.bilibili.com/video/BV1test/" in result
     assert "Opened new active tab: tab_2" in result
@@ -1791,3 +1776,59 @@ async def test_screenshot_uses_electron_rpc_and_writes_png(monkeypatch, tmp_path
     result = await browser.screenshot("example.com/screen")
     assert result.get("ok") is True
     assert any(c[0] == "screenshot" for c in calls)
+
+
+async def test_browser_plugin_lifecycle_finishes_agent_owned_tabs(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from agent.hook import HookEvent, SESSION_END, STOP
+    from agent.plugin import PluginSetupContext
+    from agent.plugin.plugin_impl.cyrene_browser.lifecycle import (
+        setup_browser_lifecycle,
+    )
+    from cyrene import browser
+
+    class Hooks:
+        def __init__(self):
+            self.hooks = []
+            self.handlers = {}
+
+        def list(self):
+            return list(self.hooks)
+
+        def register(self, event, handler, *, plugin_id, hook_id, **kwargs):
+            self.hooks.append(SimpleNamespace(id=hook_id, event=event, **kwargs))
+            self.handlers[hook_id] = handler
+
+        def bind_plugin(self, plugin_id, handler, *, replace=False):
+            self.handlers[plugin_id] = handler
+
+    hooks = Hooks()
+    setup_browser_lifecycle(PluginSetupContext(
+        data_directory=tmp_path,
+        plugin_directory=tmp_path,
+        workspace=tmp_path,
+        tree=None,
+        tree_id="tree-browser",
+        root_id="root-browser",
+        hooks=hooks,
+        data={"run_context": {"session_id": "chat-browser"}},
+        services={},
+    ))
+
+    assert {hook.event for hook in hooks.hooks} == {SESSION_END, STOP}
+    finish = AsyncMock()
+    monkeypatch.setattr(browser, "finish_electron_browser_round", finish)
+    for hook in hooks.hooks:
+        await hooks.handlers[hook.id](HookEvent(
+            name=hook.event,
+            tree_id="tree-browser",
+            time=datetime.now(timezone.utc),
+            payload={"run_id": "run-browser"},
+            is_root=True,
+        ))
+
+    assert finish.await_count == 2
+    finish.assert_awaited_with("chat-browser", "run-browser")

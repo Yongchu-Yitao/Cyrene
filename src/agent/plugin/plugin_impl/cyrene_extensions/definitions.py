@@ -10,7 +10,7 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                'description': 'List enabled, installed or system-detected MCP servers, CLI tools, '
                               'and runtimes available to Cyrene. Disabled extensions are hidden. '
                               'Returns compact metadata only and does not change the system. Use '
-                              'skill_tools for Skills.',
+                              'the cyrene_skills Plugin pack for Skills.',
                'parameters': {'type': 'object',
                               'properties': {'kind': {'type': 'string',
                                                       'enum': ['all', 'mcp', 'cli', 'toolchain'],
@@ -93,7 +93,7 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                'description': 'Search available MCP servers, CLI tools, and runtimes without '
                               'installing them. Disabled extensions are hidden. Results include '
                               'installed state and a deterministic install_request that can be '
-                              'passed to the reviewed extension manager. Use skill_tools for '
+                              'passed to the reviewed environment manager. Use the cyrene_skills Plugin pack for '
                               'Skills.',
                'parameters': {'type': 'object',
                               'properties': {'query': {'type': 'string',

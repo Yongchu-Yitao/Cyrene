@@ -25,9 +25,12 @@ from openai_codex.generated.v2_all import (
 )
 from pydantic import BaseModel
 
+from agent.plugin.validation import (
+    PluginInputValidationError,
+    PluginSchemaError,
+    validate_plugin_arguments,
+)
 from cyrene.model_runtime import codex_cli
-from cyrene.tooling.results import ToolProtocolError
-from cyrene.tooling.validation import validate_schema
 
 logger = logging.getLogger(__name__)
 
@@ -1412,25 +1415,14 @@ def _provider_instructions(
             str((tool.get("function") or {}).get("name") or "").strip()
             for tool in tools
         }
-        require_action = "quit" in tool_names or len(tool_names) == 1
-        call_quantity = "one or more" if require_action else "zero or more"
-        completion_rule = (
-            "For a final answer, put the complete answer in `content` and call "
-            "`quit`. "
-            if "quit" in tool_names
-            else (
-                "When no action is needed, put the complete answer in `content` "
-                "and return an empty `tool_calls` array. "
-            )
-        )
         tool_contract = (
             "\nCyrene tools are application actions. Never claim that an action "
             "ran before Cyrene returns its tool result. Your response is constrained "
-            f"to an object with `content` and {call_quantity} `tool_calls`. For each call, "
+            "to an object with `content` and zero or more `tool_calls`. For each call, "
             "set `name` to an available tool and set `arguments_json` to a JSON-object "
             "string matching that tool's parameters. "
-            + completion_rule
-            + "For non-terminal actions, keep `content` empty. Do not wrap the object "
+            "When no action is needed, put the complete answer in `content` and return "
+            "an empty `tool_calls` array. For actions, keep `content` empty. Do not wrap the object "
             "in Markdown or add any text outside the constrained object.\n"
             "Tool schemas:\n"
             + json.dumps(tools, ensure_ascii=False, default=str)
@@ -1468,14 +1460,13 @@ def _provider_action_schema(
     ]
     if not names:
         return None
-    require_action = "quit" in names or len(names) == 1
     return {
         "type": "object",
         "properties": {
             "content": {"type": "string"},
             "tool_calls": {
                 "type": "array",
-                "minItems": 1 if require_action else 0,
+                "minItems": 0,
                 "maxItems": 16,
                 "items": {
                     "type": "object",
@@ -1593,12 +1584,6 @@ def _normalize_provider_action(
     raw_calls = payload.get("tool_calls")
     if not isinstance(raw_calls, list):
         raise CodexProtocolError("Codex action envelope tool_calls must be an array")
-    require_action = "quit" in allowed_names or len(allowed_names) == 1
-    if require_action and not raw_calls:
-        raise CodexProtocolError(
-            "Codex action envelope must contain at least one tool call"
-        )
-
     tool_calls: list[dict[str, Any]] = []
     for raw_call in raw_calls:
         if not isinstance(raw_call, dict):
@@ -1618,8 +1603,12 @@ def _normalize_provider_action(
                 f"Codex arguments for {name} must be a JSON object"
             )
         try:
-            validate_schema(arguments, parameter_schemas.get(name) or {})
-        except ToolProtocolError as exc:
+            validate_plugin_arguments(
+                name,
+                arguments,
+                parameter_schemas.get(name) or {},
+            )
+        except (PluginInputValidationError, PluginSchemaError) as exc:
             raise CodexProtocolError(
                 f"Codex returned invalid arguments for tool {name}: {exc}"
             ) from exc
@@ -1636,9 +1625,7 @@ def _normalize_provider_action(
         )
 
     visible_content = str(payload.get("content") or "")
-    if tool_calls and not any(
-        str(call["function"]["name"]) == "quit" for call in tool_calls
-    ):
+    if tool_calls:
         # Text accompanying a non-terminal action is untrusted model narration:
         # the harness has not executed anything yet, so never surface it.
         visible_content = ""

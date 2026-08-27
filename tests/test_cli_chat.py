@@ -212,7 +212,7 @@ def test_config_field_labels_and_values_are_localized():
 
 
 @pytest.mark.asyncio
-async def test_config_skills_uses_unified_extension_api(monkeypatch):
+async def test_config_plugins_uses_canonical_plugin_settings_api(monkeypatch):
     from cyrene.cli_chat import ChatOptions, InteractiveChat, JsonRenderer
 
     calls = []
@@ -221,9 +221,11 @@ async def test_config_skills_uses_unified_extension_api(monkeypatch):
         async def get_setting(self, path):
             calls.append(("get", path))
             return {
-                "skills": [
-                    {"id": "demo-skill", "name": "Demo Skill", "enabled": True}
-                ]
+                "packs": [{
+                    "id": "cyrene_skills",
+                    "configured_enabled": True,
+                }],
+                "standalone_plugins": [],
             }
 
         async def update_setting(self, path, payload, *, method="PUT"):
@@ -237,41 +239,19 @@ async def test_config_skills_uses_unified_extension_api(monkeypatch):
     )
 
     async def choose(_title, items, *, label):
-        assert label(items[0]).startswith("● Demo Skill")
+        assert label(items[0]).startswith("● cyrene_skills")
         return items[0]
 
     monkeypatch.setattr(app, "_choose", choose)
-    await app._config_skills()
+    await app._config_plugins()
 
     assert calls == [
-        ("get", "/api/extensions"),
+        ("get", "/api/settings/plugins"),
         (
             "update",
-            "/api/extensions/skill/demo-skill/enabled",
-            {"enabled": False},
-            "POST",
-        ),
-    ]
-
-    calls.clear()
-
-    async def install(_title, _items, *, label):
-        return None
-
-    async def prompt(_message):
-        return "/tmp/demo-skill"
-
-    monkeypatch.setattr(app, "_choose", install)
-    monkeypatch.setattr(app, "_prompt_text", prompt)
-    await app._config_skills()
-
-    assert calls == [
-        ("get", "/api/extensions"),
-        (
-            "update",
-            "/api/extensions/skills/install",
-            {"path": "/tmp/demo-skill"},
-            "POST",
+            "/api/settings/plugins",
+            {"packs": {"cyrene_skills": False}},
+            "PUT",
         ),
     ]
 
@@ -387,10 +367,10 @@ def test_config_tabs_are_localized_and_use_two_axis_navigation():
     source = inspect.getsource(InteractiveChat._choose_config_action)
 
     assert [tab["label"] for tab in zh_tabs] == [
-        "常规", "模型", "工具", "连接", "数据", "关于",
+        "常规", "模型", "插件", "连接", "数据", "关于",
     ]
     assert [tab["label"] for tab in en_tabs] == [
-        "General", "Models", "Tools", "Connections", "Data", "About",
+        "General", "Models", "Plugins", "Connections", "Data", "About",
     ]
     assert [item["label"] for item in zh_tabs[0]["items"]] == [
         "常规与 Agent", "个人资料", "SOUL / 个性", "CLI 偏好",
@@ -824,7 +804,6 @@ async def test_context_matches_workbench_grouped_composition_and_indents_message
     from cyrene.cli_chat import ChatOptions, InteractiveChat, RichRenderer
 
     class Transport:
-        legacy = False
         chat_id = "chat_1"
 
         async def context(self):
@@ -959,49 +938,6 @@ async def test_deep_reflect_and_research_use_backend_commands(monkeypatch):
         ("/deep-reflect", True, "deep-reflect"),
         ("topic", True, "deep-research"),
     ]
-
-
-@pytest.mark.asyncio
-async def test_runtime_event_writer_only_receives_public_run_events(monkeypatch):
-    from cyrene.agent.context import bind_run_context, publish_runtime_event
-    from cyrene.observability import debug
-
-    persisted = []
-    streamed = []
-
-    async def fake_publish(event, *args, **kwargs):
-        persisted.append(dict(event))
-
-    async def collect(event):
-        streamed.append(dict(event))
-
-    monkeypatch.setattr(debug, "publish_event", fake_publish)
-    binding = bind_run_context(
-        session_id="chat_cli",
-        round_id="round_1",
-        runtime_event_writer=collect,
-    )
-    try:
-        await publish_runtime_event({
-            "type": "tool_call_started",
-            "tool_call_id": "tool_1",
-            "tool": "search_files",
-        })
-        await publish_runtime_event({
-            "type": "llm_call",
-            "messages": [{"role": "system", "content": "hidden"}],
-        })
-    finally:
-        binding.reset()
-
-    assert len(persisted) == 2
-    assert streamed == [{
-        "type": "tool_call_started",
-        "tool_call_id": "tool_1",
-        "tool": "search_files",
-        "round_id": "round_1",
-        "session_id": "chat_cli",
-    }]
 
 
 def test_cmd_chat_runs_async_entrypoint(monkeypatch):

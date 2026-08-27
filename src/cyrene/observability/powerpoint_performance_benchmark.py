@@ -1,7 +1,7 @@
 """Model-independent, multi-round benchmark for a live PowerPoint session.
 
-The benchmark calls Cyrene's typed PowerPoint handlers directly.  It performs
-no LLM or search requests and keeps one Office session/revision chain alive
+The benchmark calls the installed PowerPoint Plugins through PluginRuntime. It
+performs no LLM or search requests and keeps one Office session/revision chain alive
 across all rounds::
 
     uv run python -m cyrene.observability.powerpoint_performance_benchmark \
@@ -26,6 +26,24 @@ from typing import Any, Awaitable, Callable
 
 
 BenchmarkCaller = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
+
+_BENCHMARK_PLUGINS = {
+    "ppt.get_context": "PowerPointGetContext",
+    "ppt.create_slide": "PowerPointCreateSlide",
+    "ppt.list_shapes": "PowerPointListShapes",
+    "ppt.apply_batch": "PowerPointApplyBatch",
+    "ppt.read_text": "PowerPointReadText",
+    "ppt.delete_slide": "PowerPointDeleteSlide",
+}
+_LOCAL_PLUGIN_RUNTIME: tuple[Any, Any] | None = None
+
+
+def _office_load_error(failures: Any) -> str:
+    return "; ".join(
+        str(item.error)
+        for item in failures
+        if getattr(getattr(item, "path", None), "name", "") == "cyrene_office"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,13 +94,51 @@ def _benchmark_spec(round_index: int) -> dict[str, Any]:
 
 
 async def _default_caller(method: str, args: dict[str, Any]) -> dict[str, Any]:
-    from cyrene.tool_impl.office import kit
+    global _LOCAL_PLUGIN_RUNTIME
+    from agent.plugin import (
+        PluginActivationState,
+        PluginContext,
+        PluginRegistry,
+        PluginRuntime,
+        default_plugin_impl_directory,
+    )
+    from agent.plugin.native_tools import seed_builtin_plugin_directory
+    from cyrene.runtime import settings_store
 
-    raw = await kit._method_handler(method, args)
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"PowerPoint returned invalid JSON for {method}: {raw[:240]}") from exc
+    plugin_name = _BENCHMARK_PLUGINS.get(method)
+    if plugin_name is None:
+        raise RuntimeError(f"unsupported PowerPoint benchmark method: {method}")
+    if _LOCAL_PLUGIN_RUNTIME is None:
+        directory = default_plugin_impl_directory()
+        seed_builtin_plugin_directory(directory)
+        registry = PluginRegistry(activation=PluginActivationState())
+        failures = registry.load_directory(directory)
+        office_error = _office_load_error(failures)
+        if office_error:
+            raise RuntimeError("PowerPoint Plugin failed to load: " + office_error)
+        registry.configure_activation(
+            plugins=settings_store.get_enabled_plugins(),
+            packs=settings_store.get_enabled_plugin_packs(),
+        )
+        _LOCAL_PLUGIN_RUNTIME = registry, PluginRuntime(registry)
+    registry, runtime = _LOCAL_PLUGIN_RUNTIME
+    failures = registry.refresh()
+    office_error = _office_load_error(failures)
+    if office_error:
+        raise RuntimeError("PowerPoint Plugin failed to refresh: " + office_error)
+    call = await runtime.call(
+        plugin_name,
+        args,
+        PluginContext(workspace=Path.cwd(), data={"source": "powerpoint_benchmark"}),
+    )
+    if not call.success:
+        raise RuntimeError(str(call.error or f"{plugin_name} failed"))
+    payload = call.value
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"PowerPoint returned invalid JSON for {method}: {payload[:240]}") from exc
     if not isinstance(payload, dict):
         raise RuntimeError(f"PowerPoint returned a non-object result for {method}")
     return payload

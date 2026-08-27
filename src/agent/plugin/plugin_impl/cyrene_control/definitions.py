@@ -66,18 +66,21 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                               "in the same turn; calling this pauses the round for the user's "
                               'decision.',
                'parameters': {'type': 'object',
-                              'properties': {'focus': {'type': 'string',
-                                                       'description': 'Optional note on what the '
-                                                                      'plan should emphasize or '
-                                                                      'any constraints to '
-                                                                      'respect.'}}}}},
- {'type': 'function',
-  'function': {'name': 'quit',
-               'description': 'Compatibility no-op retained for old prompts. Do not call this '
-                              'tool; finish by returning the final assistant response without '
-                              'another tool call.',
-               'parameters': {'type': 'object',
-                              'properties': {},
+                              'properties': {'title': {'type': 'string',
+                                                       'description': 'Short title for the proposed plan.'},
+                                             'summary': {'type': 'string',
+                                                         'description': 'Concise explanation of the approach and its constraints.'},
+                                             'steps': {'type': 'array',
+                                                       'minItems': 1,
+                                                       'maxItems': 20,
+                                                       'items': {'type': 'object',
+                                                                 'properties': {'title': {'type': 'string'},
+                                                                                'tasks': {'type': 'array',
+                                                                                          'items': {'type': 'string'},
+                                                                                          'maxItems': 20}},
+                                                                 'required': ['title'],
+                                                                 'additionalProperties': False}}},
+                              'required': ['title', 'steps'],
                               'additionalProperties': False}}},
  {'type': 'function',
   'function': {'name': 'update_plan_progress',

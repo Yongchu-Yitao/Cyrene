@@ -12,20 +12,16 @@ import hashlib
 import json
 import os
 import sqlite3
-import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from cyrene.config import DATA_DIR
-from cyrene.runtime.io import atomic_write_json, read_json_safe
 from cyrene.runtime.paths import CYRENE_DIR_NAME
 from cyrene.workbench.store import ensure_schema
 
 
-_LEGACY_STORE = DATA_DIR / "workbench_chat_changes.json"
 _IGNORED_DIRS = {
     ".git", ".hg", ".svn", ".idea", ".pytest_cache", ".mypy_cache",
     ".ruff_cache", ".tox", ".venv", "__pycache__", "node_modules",
@@ -36,11 +32,6 @@ _IGNORED_DIRS = {
 # everything Cyrene-owned now lives under the hidden .cyrene dir, any path
 # rooted there is managed.
 _CYRENE_MANAGED_ROOT_DIRS = frozenset({CYRENE_DIR_NAME})
-# A failed migration can leave signature-matching legacy folders at the
-# workspace root; those are Cyrene-owned too and must stay filtered. The
-# signature check keeps a user's own same-named folders visible.
-_LEGACY_SIGNATURE_ROOT_DIRS = frozenset({"conversations", "plan"})
-_legacy_managed_dir_cache: dict[tuple[str, str], bool] = {}
 _MAX_TEXT_FILE_BYTES = 1_000_000
 _MAX_CAPTURED_TEXT_BYTES = 32_000_000
 _MAX_CAPTURED_TEXT_FILES = 2_000
@@ -50,60 +41,24 @@ _MAX_CHANGE_SET_DIFF_CHARS = 10_000_000
 _MAX_CHANGE_SETS_PER_CHAT = 50
 _MAX_CHANGE_SETS_TOTAL = 500
 _MAX_STORED_DIFF_CHARS = 25_000_000
-_NORMALIZED_STORES: set[str] = set()
-_NORMALIZED_STORES_LOCK = threading.Lock()
 
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _looks_like_legacy_managed_dir(workspace_root: Path, root_name: str) -> bool:
-    """Whether a workspace-root folder matches Cyrene's output signature.
-
-    Cached per (root, name); once the legacy folder is migrated away it no
-    longer exists and the check short-circuits on the is_dir() probe.
-    """
-    folder = workspace_root / root_name
-    if not folder.is_dir():
-        return False
-    key = (str(workspace_root), root_name)
-    cached = _legacy_managed_dir_cache.get(key)
-    if cached is not None:
-        return cached
-    from cyrene.runtime.cyrene_migration import looks_like_cyrene_folder
-
-    result = looks_like_cyrene_folder(workspace_root, root_name)
-    _legacy_managed_dir_cache[key] = result
-    return result
-
-
 def is_cyrene_managed_workspace_path(
     path_value: Any,
     workspace_root: Any = None,
 ) -> bool:
-    """Return whether a workspace-relative path is Cyrene-owned run state.
-
-    ``workspace_root`` enables signature-based filtering of legacy root-level
-    folders (conversations/plan) that a failed migration left behind; without
-    it, only the hidden .cyrene dir is considered managed.
-    """
+    """Return whether a workspace-relative path is Cyrene-owned run state."""
     normalized = str(path_value or "").strip().replace("\\", "/")
     while normalized.startswith("./"):
         normalized = normalized[2:]
     if not normalized or normalized.startswith("/"):
         return False
     root_name = normalized.split("/", 1)[0]
-    if root_name in _CYRENE_MANAGED_ROOT_DIRS:
-        return True
-    if workspace_root and root_name in _LEGACY_SIGNATURE_ROOT_DIRS:
-        try:
-            root = Path(workspace_root).expanduser().resolve()
-        except OSError:
-            root = None
-        if root is not None and _looks_like_legacy_managed_dir(root, root_name):
-            return True
-    return False
+    return root_name in _CYRENE_MANAGED_ROOT_DIRS
 
 
 @dataclass(frozen=True)
@@ -619,77 +574,37 @@ def _load_change_sets(
 
 
 def _ensure_normalized_store(db_path: str) -> None:
-    normalized_path = str(Path(db_path).expanduser().resolve())
-    if normalized_path in _NORMALIZED_STORES:
-        return
-    with _NORMALIZED_STORES_LOCK:
-        if normalized_path in _NORMALIZED_STORES:
-            return
-        conn = _changes_connect(normalized_path)
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT payload_json FROM workbench_state WHERE key = 'chat_changes'"
-            ).fetchone()
-            count = int(
-                conn.execute(
-                    "SELECT COUNT(*) FROM workbench_chat_change_sets"
-                ).fetchone()[0]
-            )
-            legacy_items: list[Any] = []
-            if row is not None:
-                try:
-                    stored = json.loads(str(row[0]))
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    stored = None
-                if isinstance(stored, dict) and isinstance(stored.get("changeSets"), list):
-                    legacy_items = stored["changeSets"]
-            if not count:
-                for item in legacy_items:
-                    if isinstance(item, dict) and str(item.get("id") or "").strip():
-                        _write_change_set_rows(conn, item)
-            _touch_normalized_store(conn)
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-        _NORMALIZED_STORES.add(normalized_path)
+    if not str(db_path or "").strip():
+        raise ValueError("Workbench workspace changes require a database path")
+    ensure_schema(db_path)
 
 
 def _read_store(db_path: str) -> dict[str, Any]:
-    if db_path:
-        _ensure_normalized_store(db_path)
-        conn = _changes_connect(db_path)
-        try:
-            return {"changeSets": _load_change_sets(conn)}
-        finally:
-            conn.close()
-    data = read_json_safe(_LEGACY_STORE)
-    return data if isinstance(data, dict) else {"changeSets": []}
+    _ensure_normalized_store(db_path)
+    conn = _changes_connect(db_path)
+    try:
+        return {"changeSets": _load_change_sets(conn)}
+    finally:
+        conn.close()
 
 
 def _write_store(db_path: str, payload: dict[str, Any]) -> None:
-    if db_path:
-        _ensure_normalized_store(db_path)
-        conn = _changes_connect(db_path)
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute("DELETE FROM workbench_chat_change_files")
-            conn.execute("DELETE FROM workbench_chat_change_sets")
-            for item in payload.get("changeSets") or []:
-                if isinstance(item, dict) and str(item.get("id") or "").strip():
-                    _write_change_set_rows(conn, item)
-            _touch_normalized_store(conn)
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-        return
-    atomic_write_json(_LEGACY_STORE, payload)
+    _ensure_normalized_store(db_path)
+    conn = _changes_connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("DELETE FROM workbench_chat_change_files")
+        conn.execute("DELETE FROM workbench_chat_change_sets")
+        for item in payload.get("changeSets") or []:
+            if isinstance(item, dict) and str(item.get("id") or "").strip():
+                _write_change_set_rows(conn, item)
+        _touch_normalized_store(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def save_change_set(db_path: str, change_set: dict[str, Any]) -> dict[str, Any]:

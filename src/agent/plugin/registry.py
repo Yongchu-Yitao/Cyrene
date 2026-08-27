@@ -3,16 +3,25 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import os
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Literal
 from uuid import uuid4
 
+from ..observability import log_operation
+from .activation import (
+    PluginActivationState,
+    active_plugin_activation_state,
+)
 from .plugin import Plugin, PluginPack
+
+logger = logging.getLogger(__name__)
 
 
 class PluginRegistryError(RuntimeError):
@@ -21,6 +30,10 @@ class PluginRegistryError(RuntimeError):
 
 class PluginNotFoundError(PluginRegistryError):
     """Raised when no registered Plugin has the requested name."""
+
+
+class PluginUnavailableError(PluginRegistryError):
+    """Raised when activation or Agent scope prevents Plugin execution."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,12 +75,37 @@ def default_plugin_impl_directory() -> Path:
     return (base / "plugin_impl").resolve()
 
 
+def _contains_python_source(directory: Path) -> bool:
+    """Ignore empty/cache-only folders left after a managed pack is retired."""
+
+    try:
+        return any(
+            candidate.is_file()
+            for candidate in directory.rglob("*.py")
+            if "__pycache__" not in candidate.parts
+        )
+    except OSError:
+        # Let the normal loader surface an actionable failure for unreadable
+        # directories instead of silently hiding them.
+        return True
+
+
 class PluginRegistry:
     """Keep a short lock around snapshots; Plugin code never runs under it."""
 
-    def __init__(self, *, include_core: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        include_core: bool = True,
+        activation: PluginActivationState | None = None,
+    ) -> None:
         self._lock = threading.RLock()
         self._reload_lock = threading.RLock()
+        self._activation = (
+            activation
+            or active_plugin_activation_state()
+            or PluginActivationState()
+        )
         self._packs: dict[str, PluginPack] = {}
         self._plugins: dict[str, RegisteredPlugin] = {}
         self._pack_sources: dict[str, str] = {}
@@ -77,6 +115,31 @@ class PluginRegistry:
             from .core_impl import create_core_plugin_pack
 
             self.register_pack(create_core_plugin_pack(self), source="core")
+        log_operation(
+            logger,
+            "plugin.registry",
+            "initialize",
+            phase="completed",
+            include_core=include_core,
+            plugin_count=len(self._plugins),
+            pack_count=len(self._packs),
+        )
+
+    @property
+    def activation(self) -> PluginActivationState:
+        """Return the live activation state shared by sibling registries."""
+
+        return self._activation
+
+    def configure_activation(
+        self,
+        *,
+        plugins: dict[str, bool],
+        packs: dict[str, bool],
+    ) -> None:
+        """Replace persisted activation overrides without changing registrations."""
+
+        self._activation.replace(plugins=plugins, packs=packs)
 
     def register_pack(
         self,
@@ -85,6 +148,15 @@ class PluginRegistry:
         source: str,
         replace: bool = False,
     ) -> None:
+        log_operation(
+            logger,
+            "plugin.registry",
+            "register_pack",
+            phase="requested",
+            pack_id=getattr(pack, "id", None),
+            source=source,
+            replace=replace,
+        )
         if not isinstance(pack, PluginPack):
             raise TypeError("pack must be a PluginPack")
         normalized_source = str(source).strip()
@@ -137,6 +209,16 @@ class PluginRegistry:
                     pack_id=pack.id,
                     source=normalized_source,
                 )
+        log_operation(
+            logger,
+            "plugin.registry",
+            "register_pack",
+            phase="completed",
+            pack_id=pack.id,
+            source=normalized_source,
+            replace=replace,
+            plugins=[plugin.name for plugin in pack.plugins],
+        )
 
     def register_plugin(
         self,
@@ -147,6 +229,15 @@ class PluginRegistry:
     ) -> None:
         """Register one standalone Plugin without assigning it to a pack."""
 
+        log_operation(
+            logger,
+            "plugin.registry",
+            "register_plugin",
+            phase="requested",
+            plugin=getattr(plugin, "name", None),
+            source=source,
+            replace=replace,
+        )
         self._register_plugin(
             plugin,
             source=source,
@@ -189,9 +280,26 @@ class PluginRegistry:
                 pack_id=None,
                 source=normalized_source,
             )
+        log_operation(
+            logger,
+            "plugin.registry",
+            "register_plugin",
+            phase="completed",
+            plugin=plugin.name,
+            plugin_kind=plugin.kind,
+            source=normalized_source,
+            replace=replace,
+        )
 
     def unregister_pack(self, pack_id: str) -> bool:
         normalized_id = str(pack_id)
+        log_operation(
+            logger,
+            "plugin.registry",
+            "unregister_pack",
+            phase="requested",
+            pack_id=normalized_id,
+        )
         with self._lock:
             if self._pack_sources.get(normalized_id) == "core":
                 raise PluginRegistryError(
@@ -200,18 +308,50 @@ class PluginRegistry:
             pack = self._packs.pop(normalized_id, None)
             self._pack_sources.pop(normalized_id, None)
             if pack is None:
+                log_operation(
+                    logger,
+                    "plugin.registry",
+                    "unregister_pack",
+                    phase="completed",
+                    pack_id=normalized_id,
+                    removed=False,
+                )
                 return False
             for plugin in pack.plugins:
                 self._plugins.pop(plugin.name, None)
-            return True
+        log_operation(
+            logger,
+            "plugin.registry",
+            "unregister_pack",
+            phase="completed",
+            pack_id=normalized_id,
+            removed=True,
+            plugins=[plugin.name for plugin in pack.plugins],
+        )
+        return True
 
     def unregister_plugin(self, name: str) -> bool:
         """Remove one standalone Plugin while protecting pack-owned and core entries."""
 
         normalized_name = str(name)
+        log_operation(
+            logger,
+            "plugin.registry",
+            "unregister_plugin",
+            phase="requested",
+            plugin=normalized_name,
+        )
         with self._lock:
             registered = self._plugins.get(normalized_name)
             if registered is None:
+                log_operation(
+                    logger,
+                    "plugin.registry",
+                    "unregister_plugin",
+                    phase="completed",
+                    plugin=normalized_name,
+                    removed=False,
+                )
                 return False
             if registered.pack_id is not None:
                 raise PluginRegistryError(
@@ -222,7 +362,16 @@ class PluginRegistry:
                     f"Core Plugin cannot be unregistered: {normalized_name}"
                 )
             self._plugins.pop(normalized_name, None)
-            return True
+        log_operation(
+            logger,
+            "plugin.registry",
+            "unregister_plugin",
+            phase="completed",
+            plugin=normalized_name,
+            removed=True,
+            source=registered.source,
+        )
+        return True
 
     def _remove_loaded_locked(
         self,
@@ -286,40 +435,240 @@ class PluginRegistry:
                 self._pack_sources = sources_before
                 raise
 
-    def resolve(self, name: str) -> Plugin:
+    @staticmethod
+    def _main_agent(agent_id: str | None) -> bool:
+        return not str(agent_id or "main").strip() or str(
+            agent_id or "main"
+        ).strip() == "main"
+
+    @staticmethod
+    def _plugin_locked(registered: RegisteredPlugin) -> bool:
+        return registered.source == "core" or registered.plugin.kind == "model"
+
+    def _registered_value(self, name: str) -> RegisteredPlugin:
         with self._lock:
             registered = self._plugins.get(str(name))
         if registered is None:
             raise PluginNotFoundError(f"Plugin is not registered: {name}")
+        return registered
+
+    def _registered_enabled(self, registered: RegisteredPlugin) -> bool:
+        if self._plugin_locked(registered):
+            return True
+        if (
+            registered.pack_id is not None
+            and not self._activation.pack_enabled(registered.pack_id)
+        ):
+            return False
+        return self._activation.plugin_enabled(registered.plugin.name)
+
+    def plugin_locked(self, name: str) -> bool:
+        return self._plugin_locked(self._registered_value(name))
+
+    def pack_locked(self, pack_id: str) -> bool:
+        normalized_id = str(pack_id)
+        with self._lock:
+            pack = self._packs.get(normalized_id)
+            source = self._pack_sources.get(normalized_id)
+        if pack is None:
+            raise PluginNotFoundError(f"Plugin pack is not registered: {pack_id}")
+        return source == "core" or any(plugin.kind == "model" for plugin in pack.plugins)
+
+    def plugin_configured_enabled(self, name: str) -> bool:
+        registered = self._registered_value(name)
+        if self._plugin_locked(registered):
+            return True
+        return self._activation.plugin_enabled(registered.plugin.name)
+
+    def pack_configured_enabled(self, pack_id: str) -> bool:
+        if self.pack_locked(pack_id):
+            return True
+        return self._activation.pack_enabled(str(pack_id))
+
+    def plugin_enabled(self, name: str) -> bool:
+        """Return effective activation after pack and Plugin switches."""
+
+        return self._registered_enabled(self._registered_value(name))
+
+    def plugin_accessible(
+        self,
+        name: str,
+        *,
+        agent_id: str = "main",
+    ) -> bool:
+        """Return whether activation and Agent scope permit execution."""
+
+        registered = self._registered_value(name)
+        if not self._registered_enabled(registered):
+            return False
+        return not (
+            registered.plugin.main_only
+            and not self._main_agent(agent_id)
+        )
+
+    def set_plugin_enabled(self, name: str, enabled: bool) -> None:
+        """Update one non-locked Plugin override in the shared state."""
+
+        if not isinstance(enabled, bool):
+            raise TypeError("Plugin enabled value must be a boolean")
+        registered = self._registered_value(name)
+        if self._plugin_locked(registered):
+            raise PluginRegistryError(
+                f"Plugin activation is locked: {registered.plugin.name}"
+            )
+        snapshot = self._activation.snapshot()
+        snapshot.plugins[registered.plugin.name] = enabled
+        self._activation.replace(plugins=snapshot.plugins, packs=snapshot.packs)
+
+    def set_pack_enabled(self, pack_id: str, enabled: bool) -> None:
+        """Update one non-locked pack override in the shared state."""
+
+        if not isinstance(enabled, bool):
+            raise TypeError("Plugin pack enabled value must be a boolean")
+        normalized_id = str(pack_id)
+        if self.pack_locked(normalized_id):
+            raise PluginRegistryError(
+                f"Plugin pack activation is locked: {normalized_id}"
+            )
+        snapshot = self._activation.snapshot()
+        snapshot.packs[normalized_id] = enabled
+        self._activation.replace(plugins=snapshot.plugins, packs=snapshot.packs)
+
+    def resolve(self, name: str, *, agent_id: str = "main") -> Plugin:
+        with self._lock:
+            registered = self._plugins.get(str(name))
+        if registered is None:
+            log_operation(
+                logger,
+                "plugin.registry",
+                "resolve",
+                phase="failed",
+                level=logging.WARNING,
+                plugin=name,
+                error="not_registered",
+            )
+            raise PluginNotFoundError(f"Plugin is not registered: {name}")
+        if not self._registered_enabled(registered):
+            log_operation(
+                logger,
+                "plugin.registry",
+                "resolve",
+                phase="failed",
+                level=logging.WARNING,
+                plugin=name,
+                error="disabled",
+            )
+            raise PluginUnavailableError(f"Plugin is disabled: {name}")
+        if registered.plugin.main_only and not self._main_agent(agent_id):
+            log_operation(
+                logger,
+                "plugin.registry",
+                "resolve",
+                phase="failed",
+                level=logging.WARNING,
+                plugin=name,
+                agent_id=agent_id,
+                error="main_only",
+            )
+            raise PluginUnavailableError(
+                f"Plugin is only available to the main Agent: {name}"
+            )
+        log_operation(
+            logger,
+            "plugin.registry",
+            "resolve",
+            phase="completed",
+            plugin=registered.plugin.name,
+            plugin_kind=registered.plugin.kind,
+            pack_id=registered.pack_id,
+            source=registered.source,
+            agent_id=agent_id,
+        )
         return registered.plugin
 
     def registered(self, name: str) -> RegisteredPlugin:
         with self._lock:
             result = self._plugins.get(str(name))
         if result is None:
+            log_operation(
+                logger,
+                "plugin.registry",
+                "registered",
+                phase="failed",
+                level=logging.WARNING,
+                plugin=name,
+                error="not_registered",
+            )
             raise PluginNotFoundError(f"Plugin is not registered: {name}")
+        log_operation(
+            logger,
+            "plugin.registry",
+            "registered",
+            phase="completed",
+            plugin=result.plugin.name,
+            plugin_kind=result.plugin.kind,
+            pack_id=result.pack_id,
+            source=result.source,
+        )
         return result
 
     def list_plugins(self) -> tuple[RegisteredPlugin, ...]:
         with self._lock:
-            return tuple(self._plugins[name] for name in sorted(self._plugins))
+            result = tuple(self._plugins[name] for name in sorted(self._plugins))
+        log_operation(
+            logger,
+            "plugin.registry",
+            "list_plugins",
+            phase="completed",
+            count=len(result),
+            plugins=[item.plugin.name for item in result],
+        )
+        return result
 
     def list_packs(self) -> tuple[PluginPack, ...]:
         with self._lock:
-            return tuple(self._packs[pack_id] for pack_id in sorted(self._packs))
+            result = tuple(self._packs[pack_id] for pack_id in sorted(self._packs))
+        log_operation(
+            logger,
+            "plugin.registry",
+            "list_packs",
+            phase="completed",
+            count=len(result),
+            packs=[pack.id for pack in result],
+        )
+        return result
 
     def pack_source(self, pack_id: str) -> str:
         with self._lock:
             source = self._pack_sources.get(str(pack_id))
         if source is None:
+            log_operation(
+                logger,
+                "plugin.registry",
+                "pack_source",
+                phase="failed",
+                level=logging.WARNING,
+                pack_id=pack_id,
+                error="not_registered",
+            )
             raise PluginNotFoundError(f"Plugin pack is not registered: {pack_id}")
+        log_operation(
+            logger,
+            "plugin.registry",
+            "pack_source",
+            phase="completed",
+            pack_id=pack_id,
+            source=source,
+        )
         return source
 
-    def tool_definitions(self) -> tuple[dict, ...]:
+    def tool_definitions(self, *, agent_id: str = "main") -> tuple[dict, ...]:
         return tuple(
             item.plugin.tool_definition()
             for item in self.list_plugins()
             if item.plugin.kind == "tool"
+            and item.plugin.model_visible
+            and self.plugin_accessible(item.plugin.name, agent_id=agent_id)
         )
 
     def direct_tool_definitions(self) -> tuple[dict, ...]:
@@ -333,10 +682,18 @@ class PluginRegistry:
 
     @staticmethod
     def _load_module(entry: Path) -> tuple[ModuleType, str]:
+        started = time.perf_counter()
+        log_operation(
+            logger,
+            "plugin.registry",
+            "load_module",
+            phase="started",
+            path=entry,
+        )
         is_package = entry.is_dir()
         initializer = entry / "__init__.py" if is_package else entry
         if is_package and not initializer.is_file():
-            raise PluginRegistryError("tool pack must contain __init__.py")
+            raise PluginRegistryError("Plugin pack must contain __init__.py")
         if not is_package and (not entry.is_file() or entry.suffix != ".py"):
             raise PluginRegistryError("standalone Plugin must be a Python file")
         module_name = f"_cyrene_plugin_{uuid4().hex}"
@@ -354,9 +711,30 @@ class PluginRegistry:
         sys.modules[module_name] = module
         try:
             spec.loader.exec_module(module)
-        except BaseException:
+        except BaseException as exc:
             PluginRegistry._unload_module_tree(module_name)
+            log_operation(
+                logger,
+                "plugin.registry",
+                "load_module",
+                phase="failed",
+                level=logging.ERROR,
+                exc_info=True,
+                path=entry,
+                module=module_name,
+                duration_ms=round((time.perf_counter() - started) * 1_000, 3),
+                error=exc,
+            )
             raise
+        log_operation(
+            logger,
+            "plugin.registry",
+            "load_module",
+            phase="completed",
+            path=entry,
+            module=module_name,
+            duration_ms=round((time.perf_counter() - started) * 1_000, 3),
+        )
         return module, module_name
 
     @staticmethod
@@ -387,15 +765,39 @@ class PluginRegistry:
         """Implementation shared by initial loading and locked refreshes."""
 
         root = Path(directory or default_plugin_impl_directory()).expanduser().resolve()
+        started = time.perf_counter()
+        log_operation(
+            logger,
+            "plugin.registry",
+            "load_directory",
+            phase="started",
+            directory=root,
+            replace=replace,
+        )
         with self._lock:
             self._user_directories.add(root)
         if not root.exists():
+            log_operation(
+                logger,
+                "plugin.registry",
+                "load_directory",
+                phase="completed",
+                directory=root,
+                replace=replace,
+                loaded=0,
+                failures=0,
+                missing=True,
+                duration_ms=round((time.perf_counter() - started) * 1_000, 3),
+            )
             return ()
         failures: list[PluginLoadFailure] = []
+        loaded: list[dict[str, str]] = []
         for entry in sorted(root.iterdir(), key=lambda item: item.name):
             if entry.name.startswith((".", "_")) or not (
                 entry.is_dir() or (entry.is_file() and entry.suffix == ".py")
             ):
+                continue
+            if entry.is_dir() and not _contains_python_source(entry):
                 continue
             module_name = ""
             contribution_kind: Literal["pack", "plugin"]
@@ -406,7 +808,7 @@ class PluginRegistry:
                     pack = getattr(module, "plugin_pack", None)
                     if not isinstance(pack, PluginPack):
                         raise PluginRegistryError(
-                            "tool pack __init__.py must export PluginPack as plugin_pack"
+                            "Plugin pack __init__.py must export PluginPack as plugin_pack"
                         )
                     if pack.id != entry.name:
                         raise PluginRegistryError(
@@ -434,6 +836,16 @@ class PluginRegistry:
                 if module_name:
                     self._unload_module_tree(module_name)
                 failures.append(PluginLoadFailure(entry, str(exc)))
+                log_operation(
+                    logger,
+                    "plugin.registry",
+                    "load_contribution",
+                    phase="failed",
+                    level=logging.ERROR,
+                    exc_info=True,
+                    path=entry,
+                    error=exc,
+                )
             else:
                 with self._lock:
                     previous = self._user_contributions.get(entry)
@@ -444,6 +856,30 @@ class PluginRegistry:
                     )
                 if previous and previous.module_name != module_name:
                     self._unload_module_tree(previous.module_name)
+                loaded.append(
+                    {"path": str(entry), "kind": contribution_kind, "id": contribution_identity}
+                )
+                log_operation(
+                    logger,
+                    "plugin.registry",
+                    "load_contribution",
+                    phase="completed",
+                    path=entry,
+                    kind=contribution_kind,
+                    identity=contribution_identity,
+                    replaced=previous is not None,
+                )
+        log_operation(
+            logger,
+            "plugin.registry",
+            "load_directory",
+            phase="completed",
+            directory=root,
+            replace=replace,
+            loaded=loaded,
+            failures=[{"path": item.path, "error": item.error} for item in failures],
+            duration_ms=round((time.perf_counter() - started) * 1_000, 3),
+        )
         return tuple(failures)
 
     def refresh_directory(
@@ -483,6 +919,16 @@ class PluginRegistry:
                 contribution = self._user_contributions.pop(entry)
                 self._remove_loaded_locked(contribution, source)
             self._unload_module_tree(contribution.module_name)
+            log_operation(
+                logger,
+                "plugin.registry",
+                "remove_contribution",
+                phase="completed",
+                path=entry,
+                kind=contribution.kind,
+                identity=contribution.identity,
+                reason="source_deleted",
+            )
         return self._load_directory(root, replace=True)
 
     def refresh(self) -> tuple[PluginLoadFailure, ...]:
@@ -500,6 +946,13 @@ class PluginRegistry:
     def ensure_user_directory(directory: str | Path | None = None) -> Path:
         root = Path(directory or default_plugin_impl_directory()).expanduser().resolve()
         root.mkdir(parents=True, exist_ok=True)
+        log_operation(
+            logger,
+            "plugin.registry",
+            "ensure_user_directory",
+            phase="completed",
+            directory=root,
+        )
         return root
 
 
@@ -508,6 +961,7 @@ __all__ = [
     "PluginNotFoundError",
     "PluginRegistry",
     "PluginRegistryError",
+    "PluginUnavailableError",
     "RegisteredPlugin",
     "default_plugin_impl_directory",
 ]

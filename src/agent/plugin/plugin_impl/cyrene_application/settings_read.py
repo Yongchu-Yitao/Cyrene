@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from typing import Any
+from agent.plugin import PluginContext
 
 from cyrene.runtime.host_bridge import HostBridgeError, call_host
 from cyrene.runtime.settings_service import read_public
-from cyrene.tooling.runtime_api import json_result
+from agent.plugin.native_runtime import json_result
 from cyrene.workbench.app_control import envelope
 
 TOOL_NAME = "CyreneSettingsRead"
@@ -16,7 +17,7 @@ TOOL_DEF = {"type": "function", "function": {
 TOOL_METADATA = {"read_only": True, "resource_keys": ("cyrene:settings",), "requires_order": False}
 
 
-async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify: Any) -> str:
+async def handler(args: dict[str, Any], _context: PluginContext) -> str:
     if args.get("namespace") == "desktop":
         try:
             result = await call_host("desktop.settings.get", {})

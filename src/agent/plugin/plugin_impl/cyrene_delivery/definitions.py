@@ -41,7 +41,7 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
   'function': {'name': 'send_message_to_user',
                'description': 'Reply directly to the user. Only available when the user has '
                               "@mentioned you directly. Use this to respond to the user's direct "
-                              'message. Not for normal rounds — use quit for those.',
+                              'message. Not for normal rounds — return the final response normally.',
                'parameters': {'type': 'object',
                               'properties': {'text': {'type': 'string'}},
                               'required': ['text']}}},

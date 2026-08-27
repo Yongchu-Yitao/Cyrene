@@ -22,7 +22,10 @@ from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from cyrene.runtime.remote_control import RemoteControlStore, utc_iso
-from cyrene.workbench import runtime as workbench_runtime
+from cyrene.workbench.project_repository import (
+    find_workbench_project_lightweight,
+    resolve_project_workspace_dir,
+)
 
 TRANSFER_CHUNK_BYTES = 512 * 1024
 MAX_TRANSFER_CHUNK_BYTES = 1024 * 1024
@@ -59,10 +62,10 @@ class RemoteWorkspaceFiles:
 
     @staticmethod
     def _workspace(project_id: str) -> Path:
-        project = workbench_runtime._workbench_find_project_lightweight(project_id)
+        project = find_workbench_project_lightweight(project_id)
         if project is None:
             raise ValueError("authorized project no longer exists")
-        raw = workbench_runtime._workbench_resolve_workspace_dir(project)
+        raw = resolve_project_workspace_dir(project)
         if not raw:
             raise ValueError("shared project has no workspace")
         root = Path(raw).expanduser().resolve()

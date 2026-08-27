@@ -52,8 +52,23 @@ class PlanGenerationState:
 
 
 class TaskPlanningWorkflowService:
-    def __init__(self, dependencies: TaskRouteDependencies) -> None:
+    def __init__(self, dependencies: TaskRouteDependencies, agent_runtime: Any) -> None:
         self.dependencies = dependencies
+        self.agent_runtime = agent_runtime
+
+    async def _dispatch_reflection_hints(
+        self,
+        project: dict[str, Any],
+        session: dict[str, Any],
+        packet: dict[str, Any],
+    ) -> None:
+        candidates = self.dependencies.reflection_candidates(project, session)
+        matches = await self.agent_runtime.reflection_hints(
+            packet, candidates, session, project
+        )
+        self.dependencies.apply_reflection_hints(
+            project, session, packet, matches
+        )
 
     async def _prepare_generation(self, session_id: str, body: dict[str, Any]):
         deps = self.dependencies
@@ -76,16 +91,29 @@ class TaskPlanningWorkflowService:
         if goal:
             session["goal"] = goal
             merged = list(session.get("constraints") or [])
-            for item in await deps.extract_constraints(goal):
+            for item in await self.agent_runtime.extract_constraints(
+                goal, session, project
+            ):
                 if item not in merged:
                     merged.append(item)
             session["constraints"] = merged
         should_reflect = feedback and operation != "replace" and str(session.get("status") or "") in ("failed", "review")
-        if should_reflect and await deps.should_reflect(str(session.get("goal") or ""), session.get("acceptanceCriteria") or [], feedback):
-            packet = await deps.run_reflection(session_id, focus=feedback, goal_gap="用户对当前计划/结果不满意：" + feedback)
+        if should_reflect and await self.agent_runtime.should_reflect(
+            str(session.get("goal") or ""),
+            session.get("acceptanceCriteria") or [],
+            feedback,
+            session,
+            project,
+        ):
+            packet = await self.agent_runtime.reflect_task(
+                session,
+                project,
+                focus=feedback,
+                goal_gap="用户对当前计划/结果不满意：" + feedback,
+            )
             if packet:
                 deps.store_reflection(session, packet, trigger="feedback", project=project)
-                await deps.dispatch_reflection_hints(project, session, packet)
+                await self._dispatch_reflection_hints(project, session, packet)
         return PlanGenerationState(project, session, base_revision, feedback, bool(body.get("autoStart")), operation)
 
     def _persist_generated(self, session_id: str, state: PlanGenerationState, generated):
@@ -130,7 +158,13 @@ class TaskPlanningWorkflowService:
         state = await self._prepare_generation(session_id, body)
         if isinstance(state, TaskExecutionResponse):
             return state
-        generated = await self.dependencies.generate_plan(state.session, state.project, feedback=state.feedback, auto_start=state.auto_start, requested_operation=state.operation)
+        generated = await self.agent_runtime.generate_plan(
+            state.session,
+            state.project,
+            feedback=state.feedback,
+            auto_start=state.auto_start,
+            requested_operation=state.operation,
+        )
         return self._persist_generated(session_id, state, generated)
 
     async def reflect_and_fork(self, session_id: str):
@@ -139,14 +173,18 @@ class TaskPlanningWorkflowService:
         project, session = deps.find_session(payload, session_id)
         if not session or not project:
             return TaskExecutionResponse({"error": "session not found"}, 404)
-        packet = await deps.run_reflection(session_id, goal_gap="任务验收未通过，需在新任务中换思路重试。")
+        packet = await self.agent_runtime.reflect_task(
+            session,
+            project,
+            goal_gap="任务验收未通过，需在新任务中换思路重试。",
+        )
         project_id = str(project.get("id") or "")
         new_session = deps.new_session(project_id, (str(session.get("title") or "任务") + " · 反思重试")[:80], str(session.get("goal") or "").strip())
         new_session["constraints"] = list(session.get("constraints") or [])
         new_session["parentSessionId"] = session_id
         if isinstance(packet, dict) and packet:
             deps.store_reflection(new_session, packet, trigger="forked", source_session_id=session_id, project=project)
-            await deps.dispatch_reflection_hints(project, session, packet)
+            await self._dispatch_reflection_hints(project, session, packet)
         project.setdefault("sessions", []).insert(0, new_session)
         now = deps.utc_now()
         project["updatedAt"] = now
@@ -179,8 +217,9 @@ class TaskPlanningWorkflowService:
 
 
 class TaskInitializationApplicationService:
-    def __init__(self, dependencies: TaskRouteDependencies) -> None:
+    def __init__(self, dependencies: TaskRouteDependencies, agent_runtime: Any) -> None:
         self.dependencies = dependencies
+        self.agent_runtime = agent_runtime
 
     def _session(self, session_id: str):
         payload = self.dependencies.read_store()
@@ -215,7 +254,9 @@ class TaskInitializationApplicationService:
         project["context"] = context
         if not str(project.get("description") or "").strip() and goal:
             project["description"] = goal[:200]
-        task_plan, from_llm, error = await deps.generate_init_plan(project, form)
+        task_plan, from_llm, error = await self.agent_runtime.generate_init_plan(
+            project, form, session=session
+        )
         form["completed"] = False
         form.pop("planError", None)
         self._apply_generated_plan(form, task_plan, from_llm, error, now)
@@ -263,7 +304,13 @@ class TaskInitializationApplicationService:
             existing = form.get("taskPlan")
             current = existing if isinstance(existing, list) and existing else None
         feedback = str(body.get("feedback") or body.get("message") or "").strip()
-        plan, from_llm, error = await deps.generate_init_plan(project, form, feedback=feedback, current_plan=current)
+        plan, from_llm, error = await self.agent_runtime.generate_init_plan(
+            project,
+            form,
+            session=session,
+            feedback=feedback,
+            current_plan=current,
+        )
         form.pop("planError", None)
         if from_llm and plan:
             form.update(taskPlan=plan, planSource="llm")
@@ -324,8 +371,6 @@ class TaskRunCoordinationService:
         goal_loop = session.get("goalLoop") if isinstance(session, dict) and isinstance(session.get("goalLoop"), dict) else {}
         if str(goal_loop.get("status") or "") in {"running", "waiting_for_user"}:
             return self._conflict("该任务正由持续执行状态机接管，请先暂停或取消它。")
-        if self.dependencies.is_session_running(session_id):
-            return self._conflict("该任务已有正在执行的请求，请等待完成或先停止它。")
         return None
 
     def _augment(self, result: Any, session_id: str, run_id: str) -> Any:
@@ -346,6 +391,31 @@ class TaskRunCoordinationService:
         _project, session = deps.find_session(deps.read_store(), session_id)
         blocked = self._blocked(session_id, session, bypass=bypass_goal_loop_answer)
         if blocked is False:
+            # Goal Loop owns the suspended step. Mount the answer into the same
+            # durable Agent run in its background worker so the ordinary step
+            # verifier and whole-goal state machine still run afterward.
+            from cyrene.workbench.goal_loop import begin_async_answer
+
+            question_id = str(body.get("question_id") or "").strip()
+            answer_text = str(
+                body.get("answer") or body.get("selected_option") or ""
+            ).strip()
+            if await begin_async_answer(
+                self.db_path,
+                session_id,
+                question_id,
+                answer_text,
+            ):
+                payload = deps.read_store()
+                project, resumed_session = deps.find_session(payload, session_id)
+                return {
+                    "ok": True,
+                    "awaitingUser": False,
+                    "continuePlanExecution": True,
+                    "project": project,
+                    "session": resumed_session,
+                    **payload,
+                }
             return await handler()
         if blocked is not None:
             return blocked
@@ -364,7 +434,19 @@ class TaskRunCoordinationService:
             self.task_runs.finish_task_run_if_open(session_id, run_id, result=result)
             return self._augment(result, session_id, run_id)
         except asyncio.CancelledError:
-            self.task_runs.finish_task_run_if_open(session_id, run_id, status="cancelled", error="任务运行已被中断。", termination_reason="user_interrupted")
+            # A server shutdown is a hand-off, not a user cancellation.  Keep the
+            # durable run open so startup can bind the same run id and resume the
+            # Agent ContextTree.  Explicit user cancellation remains terminal.
+            if str(lease.termination_reason or "") != "server_shutdown":
+                self.task_runs.finish_task_run_if_open(
+                    session_id,
+                    run_id,
+                    status="cancelled",
+                    error="任务运行已被中断。",
+                    termination_reason=str(
+                        lease.termination_reason or "user_interrupted"
+                    ),
+                )
             raise
         except Exception as exc:
             self.task_runs.finish_task_run_if_open(session_id, run_id, status="failed", error=str(exc), termination_reason="handler_error")

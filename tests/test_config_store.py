@@ -1,4 +1,4 @@
-"""Tests for the encrypted config store and its migrations."""
+"""Tests for the encrypted canonical configuration store."""
 
 import json
 import sys
@@ -18,12 +18,9 @@ def isolated_config_store(tmp_path, monkeypatch):
     monkeypatch.setattr(config_store, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(config_store, "_ENCRYPTED_PATH", tmp_path / "data" / "config.enc")
     monkeypatch.setattr(config_store, "_KEY_PATH", tmp_path / "data" / ".config_key")
-    monkeypatch.setattr(config_store, "_LEGACY_ENV_PATH", tmp_path / ".env")
-    monkeypatch.setattr(config_store, "_LEGACY_SETTINGS_PATH", tmp_path / "data" / "web_settings.json")
     monkeypatch.setattr(config_store, "_cache", None)
-    monkeypatch.setattr(config_store, "_migrated", False)
     monkeypatch.setattr(config_store, "_fernet", None)
-    monkeypatch.setattr(config_store, "_SETTINGS_MIGRATIONS_DONE", False)
+    monkeypatch.setattr(config_store, "_initialized", False)
     return config_store
 
 
@@ -46,18 +43,9 @@ def test_config_uses_permission_restricted_local_key(isolated_config_store):
     assert isolated_config_store._KEY_PATH.stat().st_mode & 0o777 == 0o600
 
 
-def test_decryption_failure_preserves_config_instead_of_restoring_legacy_backup(
+def test_decryption_failure_preserves_existing_encrypted_config(
     isolated_config_store,
 ):
-    stale_legacy = {
-        "vision_models": [{"model": "gpt-4.1-mini"}],
-    }
-    legacy_backup = isolated_config_store._LEGACY_SETTINGS_PATH.with_suffix(
-        ".json.bak"
-    )
-    legacy_backup.parent.mkdir(parents=True, exist_ok=True)
-    legacy_backup.write_text(json.dumps(stale_legacy), encoding="utf-8")
-
     encrypted_key = Fernet.generate_key()
     wrong_local_key = Fernet.generate_key()
     encrypted = Fernet(encrypted_key).encrypt(
@@ -73,7 +61,6 @@ def test_decryption_failure_preserves_config_instead_of_restoring_legacy_backup(
         isolated_config_store._ensure_loaded()
 
     assert isolated_config_store._ENCRYPTED_PATH.read_bytes() == encrypted
-    assert json.loads(legacy_backup.read_text(encoding="utf-8")) == stale_legacy
 
 
 def test_missing_local_key_preserves_existing_config_and_starts_with_defaults(
@@ -115,40 +102,6 @@ def test_missing_local_key_uses_unique_backup_name(isolated_config_store):
     assert second_backup.read_bytes() == encrypted
 
 
-def test_migration_fixes_incomplete_model_entries(isolated_config_store):
-    """Older onboarding wrote model entries without model/base_url/api_key."""
-    config = {
-        "env": {
-            "OPENAI_API_KEY": "sk-env",
-            "OPENAI_BASE_URL": "https://api.example.com/v1",
-            "OPENAI_MODEL": "example-model",
-        },
-        "settings": {
-            "models": [
-                {"id": "qwen3", "name": "qwen3", "desc": "", "ctx": "", "price": ""},
-                {"id": "local", "name": "local-llm", "model": "local-llm", "base_url": "http://localhost:11434/v1"},
-            ],
-            "vision_models": [
-                {"id": "vision-1", "name": "gpt-4o-mini", "model": "gpt-4o-mini"},
-            ],
-        },
-    }
-    _write_encrypted(isolated_config_store, config)
-
-    loaded = isolated_config_store._ensure_loaded()
-    models = loaded["settings"]["models"]
-    vision = loaded["settings"]["vision_models"]
-
-    assert models[0]["model"] == "qwen3"
-    assert models[0]["base_url"] == "https://api.example.com/v1"
-    assert models[0]["api_key"] == "sk-env"
-    assert models[1]["model"] == "local-llm"
-    assert models[1]["base_url"] == "http://localhost:11434/v1"
-    assert models[1]["api_key"] == ""  # different endpoint, no env key backfill
-
-    assert vision[0]["model"] == "gpt-4o-mini"
-    assert vision[0]["base_url"] == "https://api.example.com/v1"
-    assert vision[0]["api_key"] == "sk-env"
 
 
 def test_removed_tool_round_setting_is_purged_and_rejected(
@@ -216,7 +169,7 @@ def test_restore_drops_removed_tool_round_setting(isolated_config_store):
         "settings": {"budget_mode": "economy", "budget_enabled": True},
     })
 
-    assert normalized["env"] == {"OPENAI_MODEL": "example-model"}
+    assert normalized["env"] == {}
     assert normalized["settings"] == {"budget_enabled": True}
 
 
@@ -353,95 +306,3 @@ def test_portable_snapshot_recursively_redacts_media_provider_credentials(
     assert exported_media["providers"]["custom"]["api_key_configured"] is True
     assert exported_media["providers"]["custom"]["api_key_requires_reentry"] is False
     assert isolated_config_store.get_setting("media") == media
-
-
-def test_unknown_model_context_uses_smallest_known_candidate_window(monkeypatch):
-    from cyrene.runtime import config_store
-
-    models = [
-        {"model": "unknown-custom"},
-        {"model": "deepseek-v4-flash", "ctx": "1M"},
-        {"model": "google/gemma-4-12b-qat", "ctx": "200K"},
-    ]
-    monkeypatch.setattr(config_store, "get_models", lambda: models)
-
-    assert config_store.effective_ctx_limit_for_model("unknown-custom") == 200_000
-
-
-def test_explicit_model_context_is_not_reduced_by_fallbacks(monkeypatch):
-    from cyrene.runtime import config_store
-
-    models = [
-        {"model": "primary", "ctx": "500K"},
-        {"model": "backup", "ctx": "200K"},
-    ]
-    monkeypatch.setattr(config_store, "get_models", lambda: models)
-
-    assert config_store.effective_ctx_limit_for_model("primary") == 500_000
-
-
-def test_known_model_default_is_not_reduced_by_fallbacks(monkeypatch):
-    from cyrene.runtime import config_store
-
-    models = [
-        {"model": "mimo-v2.5", "ctx": ""},
-        {"model": "google/gemma-4-12b-qat", "ctx": "200K"},
-    ]
-    monkeypatch.setattr(config_store, "get_models", lambda: models)
-
-    assert config_store.effective_ctx_limit_for_model("mimo-v2.5") == 1_000_000
-
-
-def test_unknown_context_preserves_zero_without_known_candidates():
-    from cyrene.runtime import config_store
-
-    assert config_store.effective_ctx_limit_for_model("custom", []) == 0
-
-
-def test_parallel_model_settings_migrate_from_legacy_candidate_order(
-    isolated_config_store,
-):
-    custom = {
-        "id": "custom-primary",
-        "model": "deepseek-chat",
-        "provider": "openai_compatible",
-    }
-    codex = {
-        "id": "codex-primary",
-        "model": "gpt-5.6-sol",
-        "provider": "codex_oauth",
-    }
-    isolated_config_store._cache = {
-        "env": {},
-        "settings": {"models": [codex, custom]},
-    }
-
-    assert isolated_config_store.get_model_source() == "codex"
-    assert isolated_config_store.get_codex_model()["model"] == codex["model"]
-    assert [item["model"] for item in isolated_config_store.get_custom_models()] == [
-        custom["model"]
-    ]
-    assert "models" not in isolated_config_store.export_snapshot()["settings"]
-
-
-def test_legacy_parallel_model_writes_commit_only_as_one_graph(isolated_config_store):
-    custom = [{"model": "deepseek-chat", "provider": "openai_compatible"}]
-    codex = {"model": "gpt-5.6-sol", "provider": "codex_oauth"}
-
-    isolated_config_store.save_custom_models(custom)
-    isolated_config_store.save_codex_model(codex)
-    isolated_config_store.save_model_source("codex")
-    isolated_config_store.save_models([codex])
-
-    assert [item["model"] for item in isolated_config_store.get_custom_models()] == [
-        custom[0]["model"]
-    ]
-    assert isolated_config_store.get_codex_model()["model"] == codex["model"]
-    assert isolated_config_store.get_model_source() == "codex"
-    settings = isolated_config_store.export_snapshot()["settings"]
-    assert {
-        "models",
-        "custom_models",
-        "codex_model",
-        "model_source",
-    }.isdisjoint(settings)

@@ -84,13 +84,12 @@ def test_subagent_context_replaces_session_task_with_subtask_prompt():
 
 def test_subagent_outcome_append_is_visible_to_sibling_session(tmp_path):
     db_path = tmp_path / "workbench.db"
-    export_path = tmp_path / "workbench_projects.json"
     payload = {
         "projects": [_project()],
         "activeProjectId": "project_1",
         "activeSessionId": "session_a",
     }
-    write_document(db_path, "projects", payload, lambda: {"projects": []}, export_path=export_path)
+    write_document(db_path, "projects", payload, lambda: {"projects": []})
 
     entry = append_shared_outcome(
         db_path=db_path,
@@ -98,7 +97,6 @@ def test_subagent_outcome_append_is_visible_to_sibling_session(tmp_path):
         agent_id="worker_1",
         source="subagent",
         text="已完成上下文模块和写回逻辑。",
-        export_path=export_path,
     )
 
     assert entry is not None
@@ -113,11 +111,10 @@ def test_subagent_outcome_append_is_visible_to_sibling_session(tmp_path):
 
 def test_shared_context_ignores_non_task_sessions(tmp_path):
     db_path = tmp_path / "workbench.db"
-    export_path = tmp_path / "workbench_projects.json"
     project = _project()
     project["sessions"][0]["kind"] = "init"
     payload = {"projects": [project], "activeProjectId": "project_1", "activeSessionId": "session_a"}
-    write_document(db_path, "projects", payload, lambda: {"projects": []}, export_path=export_path)
+    write_document(db_path, "projects", payload, lambda: {"projects": []})
 
     entry = append_shared_outcome(
         db_path=db_path,
@@ -125,7 +122,6 @@ def test_shared_context_ignores_non_task_sessions(tmp_path):
         agent_id="worker_1",
         source="subagent",
         text="不应写入。",
-        export_path=export_path,
     )
 
     assert entry is None
@@ -134,17 +130,13 @@ def test_shared_context_ignores_non_task_sessions(tmp_path):
 
 def test_shared_context_does_not_create_store_for_non_workbench_session(tmp_path):
     db_path = tmp_path / "plain_agent.db"
-    legacy_path = tmp_path / "missing_workbench_projects.json"
 
     payload, project, session = resolve_task_scope(
         "ordinary_session",
         db_path=db_path,
-        legacy_path=legacy_path,
     )
     entry = append_shared_outcome(
         db_path=db_path,
-        legacy_path=legacy_path,
-        export_path=legacy_path,
         session_id="ordinary_session",
         agent_id="worker_1",
         source="subagent",
@@ -154,4 +146,3 @@ def test_shared_context_does_not_create_store_for_non_workbench_session(tmp_path
     assert (payload, project, session) == (None, None, None)
     assert entry is None
     assert not db_path.exists()
-    assert not legacy_path.exists()

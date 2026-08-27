@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from typing import Any
+from agent.plugin import PluginContext
 
 from cyrene.runtime.host_bridge import HostBridgeError, call_host
-from cyrene.tooling.runtime_api import json_result
+from agent.plugin.native_runtime import json_result
 from cyrene.workbench.app_control import audit, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
 
 TOOL_NAME = "CyreneWindowControl"
@@ -28,7 +29,7 @@ TOOL_DEF = {"type": "function", "function": {
 TOOL_METADATA = {"read_only": False, "resource_keys": ("cyrene:current-window",), "requires_order": True}
 
 
-async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify: Any) -> str:
+async def handler(args: dict[str, Any], _context: PluginContext) -> str:
     action = str(args.get("action") or "")
     mutation = action not in {"status", "quick_chat_status"}
     op_args = {key: value for key, value in args.items() if key not in {"reason", "idempotency_key"}}

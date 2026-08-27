@@ -278,7 +278,7 @@ def register_pdf_routes(router: APIRouter) -> None:
         """Standalone PDF viewer page with PDF.js rendering + text selection.
 
         Query params:
-          url  – URL to the PDF file (e.g. /api/chat/upload/filename.pdf)
+          url  – URL to the PDF file (e.g. /api/workbench/uploads/filename.pdf)
           name – Display name (optional)
         """
         pdf_url = request.query_params.get("url", "")
@@ -305,17 +305,20 @@ def register_pdf_routes(router: APIRouter) -> None:
         if not inventory["page_previews"]:
             return JSONResponse({"error": "no PDF page index provided"}, status_code=400)
 
-        from cyrene.call_llm import call_llm as _call_llm
+        from agent.plugin import active_plugin_service
+        from cyrene.model_runtime.messages import assistant_text
 
         try:
-            result = await _call_llm(
+            gateway = active_plugin_service("model")
+            if gateway is None:
+                raise RuntimeError("Model Provider Plugins are not available")
+            response = await gateway.complete(
                 _pdf_context_plan_messages(selected_text, pdf_name, inventory, language_name),
-                model_type="primary",
-                thinking="auto",
-                publish_events=False,
-                record_usage=False,
-                return_text=True,
+                route="primary",
+                caller="pdf_context_planner",
+                session_id="pdf-context-plan",
             )
+            result = assistant_text(response)
             return _parse_pdf_context_plan(result, inventory)
         except Exception as exc:
             logger.error("PDF context planning LLM call failed: %s", exc, exc_info=True)
@@ -340,19 +343,21 @@ def register_pdf_routes(router: APIRouter) -> None:
         if not selected_text:
             return JSONResponse({"error": "no text provided"}, status_code=400)
 
-        from cyrene.call_llm import call_llm as _call_llm
+        from agent.plugin import active_plugin_service
+        from cyrene.model_runtime.messages import assistant_text
 
         messages = _pdf_analysis_messages(selected_text, pdf_name, body.get("context"), language_name)
         try:
-            result = await _call_llm(
+            gateway = active_plugin_service("model")
+            if gateway is None:
+                raise RuntimeError("Model Provider Plugins are not available")
+            response = await gateway.complete(
                 messages,
-                model_type="primary",
-                thinking="disabled",
-                publish_events=False,
-                record_usage=False,
-                return_text=True,
+                route="primary",
+                caller="pdf_analysis",
+                session_id="pdf-analysis",
             )
-            return {"result": str(result)}
+            return {"result": assistant_text(response)}
         except Exception as exc:
             logger.error("PDF analysis LLM call failed: %s", exc, exc_info=True)
             return JSONResponse({"error": "Analysis temporarily unavailable"}, status_code=500)

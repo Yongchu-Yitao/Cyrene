@@ -303,6 +303,7 @@ _TOOL_DEFS_BY_NAME = {
     str(item["function"]["name"]): item
     for item in _TOOL_DEFS
 }
+MEMORY_TOOL_NAMES = frozenset(_TOOL_DEFS_BY_NAME)
 
 
 def get_native_tool_def(name: str) -> dict[str, Any]:
@@ -316,4 +317,4 @@ def get_native_tool_def(name: str) -> dict[str, Any]:
     return deepcopy(definition)
 
 
-__all__ = ["get_native_tool_def"]
+__all__ = ["MEMORY_TOOL_NAMES", "get_native_tool_def"]

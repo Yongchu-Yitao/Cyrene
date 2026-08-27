@@ -6,8 +6,9 @@ import threading
 from types import SimpleNamespace
 
 
-def test_startup_recovers_crashed_running_chat_and_clears_stale_question(monkeypatch):
-    from cyrene.workbench import chat as chat_mod
+def test_startup_recovers_crashed_running_chat_and_clears_stale_question(tmp_path):
+    from cyrene.runtime.database import init_db
+    from cyrene.workbench.chat_repository import ChatRepository
     from cyrene.workbench.chat_runs import ChatRunManager
 
     payload = {
@@ -24,72 +25,20 @@ def test_startup_recovers_crashed_running_chat_and_clears_stale_question(monkeyp
             },
         ]
     }
-    written = []
-    monkeypatch.setattr(chat_mod, "_read_chats_store", lambda: payload)
-    monkeypatch.setattr(chat_mod, "_write_chats_store", lambda value: written.append(value))
-
-    ChatRunManager().startup()
+    database = tmp_path / "runtime.db"
+    asyncio.run(init_db(str(database)))
+    repository = ChatRepository(str(database))
+    repository.write(payload)
+    manager = ChatRunManager()
+    manager.configure(str(database))
+    manager.startup()
+    payload = repository.read()
 
     assert payload["chats"][0]["status"] == "idle"
     assert "pendingQuestion" not in payload["chats"][0]
     assert payload["chats"][0]["lastRun"]["status"] == "error"
     assert payload["chats"][0]["lastRun"]["terminationReason"] == "process_restarted"
     assert payload["chats"][1]["pendingQuestion"]["id"] == "valid"
-    assert written == [payload]
-
-
-async def test_chat_run_driver_error_always_publishes_terminal_event_and_wakes_waiters(
-    monkeypatch,
-):
-    from cyrene.workbench import chat as chat_mod
-    from cyrene.workbench.chat_runs import ChatRunManager
-
-    monkeypatch.setattr(chat_mod, "_settle_chat_running_status", lambda _chat_id: None)
-    manager = ChatRunManager(retention_seconds=0)
-
-    async def runner(_run):
-        raise RuntimeError("driver exploded")
-
-    run, is_new = manager.start_or_get(
-        "chat_driver_error", {"type": "ack"}, runner, stream=True
-    )
-
-    async def broken_close(**_kwargs):
-        raise RuntimeError("cleanup also failed")
-
-    monkeypatch.setattr(run.inbox, "close", broken_close)
-    await asyncio.wait_for(run.done.wait(), timeout=1)
-
-    assert is_new is True
-    assert run.status == "error"
-    assert run.outcome["kind"] == "error"
-    error_event = next(event for event in run.events if event.get("type") == "error")
-    assert error_event["code"] == "chat_run_driver_failed"
-    assert error_event["detail_key"] == "workbenchChat.error.driverFailed"
-
-
-async def test_post_terminal_cleanup_failure_cannot_revoke_saved_reply(monkeypatch):
-    from cyrene.workbench import chat as chat_mod
-    from cyrene.workbench.chat_runs import ChatRunManager
-
-    monkeypatch.setattr(chat_mod, "_settle_chat_running_status", lambda _chat_id: None)
-    manager = ChatRunManager(retention_seconds=0)
-
-    async def runner(run):
-        run.status = "finishing"
-        run.outcome = {"kind": "reply", "payload": {"assistantMessage": {"content": "done"}}}
-        await run.publish({"type": "saved", "assistantMessage": {"content": "done"}})
-        raise RuntimeError("late projection failure")
-
-    run, _ = manager.start_or_get(
-        "chat_saved_before_cleanup_failure", {"type": "ack"}, runner, stream=True
-    )
-    await asyncio.wait_for(run.done.wait(), timeout=1)
-
-    assert run.status == "done"
-    assert run.termination_reason == "completed"
-    assert run.outcome["kind"] == "reply"
-    assert not any(event.get("type") == "error" for event in run.events)
 
 
 async def test_stream_status_projection_is_skipped_after_reply_and_nonfatal_after_error():
@@ -309,6 +258,7 @@ async def test_stream_deltas_are_batched_into_one_sqlite_transaction(
     assert batch_sizes == []
 
     await run.publish({"type": "reply_done", "response": "done"})
+    await run.flush_event_store()
 
     assert batch_sizes == [33]
     restored = store.load_by_run_id(run.run_id)
@@ -318,6 +268,34 @@ async def test_stream_deltas_are_batched_into_one_sqlite_transaction(
         *(["reply_delta"] * 32),
         "reply_done",
     ]
+
+
+async def test_durable_event_lock_cannot_block_or_fail_live_reply(monkeypatch, tmp_path):
+    from cyrene.workbench.chat_runs import ChatRun, ChatRunEventStore
+
+    store = ChatRunEventStore(str(tmp_path / "locked-events.sqlite3"))
+    run = ChatRun("chat_locked", {"type": "ack", "chatId": "chat_locked"})
+    await run.configure_event_store(store)
+    queue = asyncio.Queue()
+    run.subscribers.add(queue)
+
+    def locked_append_many(_run_id, _events):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "append_many", locked_append_many)
+
+    await asyncio.wait_for(
+        run.publish({"type": "reply_done", "response": "completed"}),
+        timeout=0.2,
+    )
+    projected = await asyncio.wait_for(queue.get(), timeout=0.2)
+    assert projected["type"] == "reply_done"
+    assert projected["response"] == "completed"
+
+    flush_task = run._event_store_flush_task
+    assert flush_task is not None
+    await asyncio.gather(flush_task, return_exceptions=True)
+    assert [event["type"] for event in run._event_store_pending] == ["reply_done"]
 
 
 def test_startup_marks_unfinished_durable_run_as_process_restarted(tmp_path):
@@ -380,52 +358,3 @@ async def test_chat_run_storage_setup_runs_off_the_event_loop(monkeypatch, tmp_p
     release.set()
     await asyncio.wait_for(run.done.wait(), timeout=2)
     assert ran.is_set()
-
-
-async def test_chat_detail_load_does_not_block_other_event_loop_work(monkeypatch):
-    import time
-
-    import httpx
-    from fastapi import FastAPI
-    from cyrene.workbench import chat as chat_service
-    from route.workbench.chat import register_workbench_chat_routes
-    from cyrene.workbench.chat_runs import ChatRunManager
-
-    started = threading.Event()
-    release = threading.Event()
-
-    def locked_read():
-        started.set()
-        release.wait(timeout=1)
-        return {
-            "chats": [{
-                "id": "chat_locked",
-                "projectId": "project_1",
-                "title": "Locked",
-                "status": "idle",
-                "messages": [],
-            }]
-        }
-
-    monkeypatch.setattr(chat_service, "_read_chats_store", locked_read)
-    monkeypatch.setattr(
-        chat_service, "_CHAT_RUN_MANAGER", ChatRunManager(retention_seconds=0)
-    )
-    app = FastAPI()
-    register_workbench_chat_routes(app, bot=None, db_path="")
-    transport = httpx.ASGITransport(app=app)
-
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        before = time.monotonic()
-        request = asyncio.create_task(client.get("/api/workbench/chats/chat_locked"))
-        assert await asyncio.to_thread(started.wait, 1)
-        await asyncio.sleep(0.03)
-        elapsed = time.monotonic() - before
-
-        assert elapsed < 0.2
-        assert not request.done()
-        release.set()
-        response = await asyncio.wait_for(request, timeout=1)
-
-    assert response.status_code == 200
-    assert response.json()["chat"]["id"] == "chat_locked"

@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from route.workbench.chat_routes.attachment_routes import register_attachment_routes
 from route.workbench.chat_routes.agent_config_routes import register_agent_config_routes
 from route.workbench.chat_routes.collection_routes import register_collection_routes
 from route.workbench.chat_routes.context_catalog_routes import register_context_catalog_routes
@@ -24,6 +25,7 @@ def register_chat_routes(
     *,
     send_chat_detached,
 ) -> dict[str, Any]:
+    register_attachment_routes(router)
     register_pinned_routes(router, context)
     register_context_catalog_routes(router)
     handlers: dict[str, Any] = {}

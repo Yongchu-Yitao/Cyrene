@@ -301,8 +301,7 @@ function wbcModelAccessLabel(chat) {
 }
 
 // Hide usage statistics for Agents that do not report token usage instead of
-// painting fake zeros (handoff §9). Legacy chats without an Agent binding keep
-// the historical always-visible summary.
+// painting fake zeros (handoff §9).
 function wbcUsageReported(usage) {
   usage = usage || {};
   return !!(
@@ -316,8 +315,8 @@ function wbcUsageReported(usage) {
 
 // Slash commands are capability/command driven (handoff §13): when an Agent
 // chat snapshot exists, only commands declared by the Agent are offered.
-// The built-in Cyrene Agent (and legacy chats without a snapshot) keep the
-// historical command list — external Agents never inherit Cyrene-only commands.
+// The built-in Cyrene Agent keeps its native command list; external Agents
+// never inherit Cyrene-only commands.
 function wbcComposerSlashCommands(chat) {
   if (!wbcHasAgentCapabilitySnapshot(chat)) return null;
   if (wbcIsBuiltinAgent(wbcChatAgent(chat))) return null;
@@ -368,8 +367,8 @@ function wbcDefaultAgentBinding() {
   };
 }
 
-// Ask the Settings overlay to open the Extension Center on this Agent's
-// installed detail. The overlay mounts only inside the Workbench shell, so a
+// Ask the Settings overlay to open this external Agent's installed detail.
+// The overlay mounts only inside the Workbench shell, so a
 // no-op here simply leaves the composer submenu's disabled row in place.
 function wbcOpenAgentDetail(agent) {
   agent = agent || {};

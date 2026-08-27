@@ -18,6 +18,7 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
+from agent.plugin import PluginContext
 
 from cyrene.runtime.remote_control import (
     BASE_REMOTE_CAPABILITIES,
@@ -43,10 +44,10 @@ from cyrene.runtime.remote_pairing import (
     connect_by_address,
     normalize_pairing_address,
 )
-from cyrene.tool_impl.remote.list_devices import handler as list_remote_devices
-from cyrene.tool_impl.remote.harness import handler as remote_harness
-from cyrene.tool_impl.remote.run import handler as run_remote_cyrene
-from cyrene.tool_impl.remote.status import handler as remote_cyrene_status
+from agent.plugin.plugin_impl.cyrene_remote.list_devices import handler as list_remote_devices
+from agent.plugin.plugin_impl.cyrene_remote.harness import handler as remote_harness
+from agent.plugin.plugin_impl.cyrene_remote.run import handler as run_remote_cyrene
+from agent.plugin.plugin_impl.cyrene_remote.status import handler as remote_cyrene_status
 from route.remote import register_remote_routes
 
 
@@ -182,7 +183,7 @@ def test_default_pairing_grant_completes_remote_agent_approval_loop(
     assert "approval:respond" in peer["received_capabilities"]
 
 
-def test_remote_tool_pack_grants_are_valid_but_remote_pack_is_not(monkeypatch, tmp_path):
+def test_remote_plugin_pack_grants_are_valid_but_remote_pack_is_not(monkeypatch, tmp_path):
     monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
     store = RemoteControlStore(str(tmp_path / "tool-pack-grants.sqlite3"))
     controller = RemoteControlStore(str(tmp_path / "tool-pack-controller.sqlite3"))
@@ -191,8 +192,8 @@ def test_remote_tool_pack_grants_are_valid_but_remote_pack_is_not(monkeypatch, t
     invitation = store.create_pairing_invitation(
         capabilities=[
             *DEFAULT_REMOTE_CAPABILITIES,
-            "toolpack:desktop_tools",
-            "toolpack:integration_tools",
+            "pluginpack:cyrene_desktop",
+            "pluginpack:cyrene_extensions",
         ],
         project_scopes=["project_1"],
     )
@@ -200,101 +201,14 @@ def test_remote_tool_pack_grants_are_valid_but_remote_pack_is_not(monkeypatch, t
     accepted = controller.accept_pairing_invitation(invitation["invitation"])
     assert accepted["peer"]["received_capabilities"] == sorted([
         *DEFAULT_REMOTE_CAPABILITIES,
-        "toolpack:desktop_tools",
-        "toolpack:integration_tools",
+        "pluginpack:cyrene_desktop",
+        "pluginpack:cyrene_extensions",
     ])
     with pytest.raises(ValueError, match="unsupported remote capabilities"):
         store.create_pairing_invitation(
-            capabilities=["toolpack:remote_tools"],
+            capabilities=["pluginpack:cyrene_remote"],
             project_scopes=["project_1"],
         )
-
-
-def test_remote_store_migrates_out_of_runtime_database(monkeypatch, tmp_path):
-    monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
-    logical_path = tmp_path / "legacy-runtime.sqlite3"
-    original = RemoteControlStore(str(logical_path))
-    original.update_settings(
-        enabled=True,
-        relay_url="",
-        device_name="Migrated device",
-    )
-    with sqlite3.connect(original.remote_db_path) as source:
-        with sqlite3.connect(logical_path) as legacy:
-            source.backup(legacy)
-    for suffix in ("", "-wal", "-shm"):
-        path = tmp_path / f"legacy-runtime.sqlite3.remote-control{suffix}"
-        path.unlink(missing_ok=True)
-
-    migrated = RemoteControlStore(str(logical_path))
-
-    assert migrated.remote_db_path != migrated.db_path
-    assert migrated.get_settings()["device_name"] == "Migrated device"
-    with sqlite3.connect(migrated.remote_db_path) as conn:
-        marker = conn.execute(
-            """
-            SELECT migration_id FROM remote_store_migrations
-            WHERE migration_id = 'split_remote_control_store_v1'
-            """
-        ).fetchone()
-    assert marker == ("split_remote_control_store_v1",)
-
-
-def test_existing_grants_gain_required_compatibility_capabilities(
-    monkeypatch,
-    tmp_path,
-):
-    monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
-    target_path = str(tmp_path / "target-upgrade.sqlite3")
-    controller_path = str(tmp_path / "controller-upgrade.sqlite3")
-    target = RemoteControlStore(target_path)
-    controller = RemoteControlStore(controller_path)
-    target.update_settings(enabled=True, relay_url="", device_name="Target")
-    invitation = target.create_pairing_invitation(
-        project_scopes=["project_1"],
-    )
-    accepted = controller.accept_pairing_invitation(invitation["invitation"])
-    target.complete_pairing_response(accepted["response"])
-    legacy_caps = ["toolpack:desktop_tools"]
-    with sqlite3.connect(controller.remote_db_path) as conn:
-        conn.execute(
-            """
-            UPDATE remote_peers
-            SET received_capabilities_json = ?
-            WHERE device_id = ?
-            """,
-            (json.dumps(legacy_caps), target.identity.device_id),
-        )
-
-    reopened = RemoteControlStore(controller_path)
-    peer = reopened.get_peer(target.identity.device_id)
-
-    assert peer is not None
-    assert peer["received_capabilities"] == sorted([
-        *BASE_REMOTE_CAPABILITIES,
-        "toolpack:desktop_tools",
-    ])
-    assert "workspace_file:write" not in peer["received_capabilities"]
-
-
-def test_remote_tool_pack_defaults_are_persisted(monkeypatch, tmp_path):
-    monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
-    db_path = str(tmp_path / "tool-pack-defaults.sqlite3")
-    store = RemoteControlStore(db_path)
-
-    updated = store.update_settings(
-        enabled=True,
-        relay_url="",
-        device_name="Target",
-        default_tool_packs=["desktop_tools", "code_tools"],
-    )
-    reopened = RemoteControlStore(db_path)
-
-    assert updated["default_tool_packs"] == ["code_tools", "desktop_tools"]
-    assert reopened.get_settings()["default_tool_packs"] == [
-        "code_tools",
-        "desktop_tools",
-    ]
 
 
 def test_runtime_database_write_lock_does_not_block_remote_command(
@@ -1142,7 +1056,7 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
     asyncio.run(scenario())
 
 
-def test_remote_harness_filters_by_granted_tool_pack_and_uses_bound_context(
+def test_remote_harness_filters_by_granted_plugin_pack_and_uses_bound_context(
     paired_stores,
     monkeypatch,
     tmp_path,
@@ -1152,40 +1066,84 @@ def test_remote_harness_filters_by_granted_tool_pack_and_uses_bound_context(
         controller = paired_stores["controller"]
         target.update_peer_grant(
             controller.identity.device_id,
-            capabilities=["toolpack:desktop_tools"],
+            capabilities=["pluginpack:cyrene_desktop"],
             project_scopes=["project_1"],
         )
         monkeypatch.setattr(
-            "cyrene.runtime.remote_commands.workbench_runtime._workbench_find_project_lightweight",
+            "cyrene.runtime.remote_commands._remote_project",
             lambda project_id: {
                 "id": project_id,
                 "workspacePath": str(tmp_path),
             },
         )
         monkeypatch.setattr(
-            "cyrene.runtime.remote_commands.workbench_runtime._workbench_resolve_workspace_dir",
+            "cyrene.runtime.remote_commands._remote_project_workspace",
             lambda _project: str(tmp_path),
         )
-        observed = {}
+        observed = {"calls": []}
 
-        async def execute_remote_pack(wire_name, arguments, context):
-            from cyrene.agent.context import current_run_context
+        class PluginRuntime:
+            async def call(self, name, arguments, context, *, call_id=""):
+                observed["calls"].append((name, dict(arguments), call_id))
+                observed.update({
+                    "name": name,
+                    "arguments": arguments,
+                    "context": context,
+                    "call_id": call_id,
+                })
+                if arguments.get("operation") == "list":
+                    return SimpleNamespace(
+                        success=True,
+                        error="",
+                        value={
+                            "operation": "list",
+                            "packs": ["cyrene_desktop"],
+                            "standalone_tools": [],
+                        },
+                    )
+                if arguments.get("operation") == "describe":
+                    return SimpleNamespace(
+                        success=True,
+                        error="",
+                        value={
+                            "operation": "describe",
+                            "plugins": [{
+                                "name": "app_use",
+                                "description": "Desktop control",
+                                "input_schema": {"type": "object"},
+                                "pack": "cyrene_desktop",
+                            }],
+                        },
+                    )
+                return SimpleNamespace(
+                    success=True,
+                    error="",
+                    value={
+                        "operation": "invoke",
+                        "name": "app_use",
+                        "pack": "cyrene_desktop",
+                        "result": {
+                            "status": "success",
+                            "result": "remote desktop inspected",
+                        },
+                    },
+                )
 
-            observed.update({
-                "wire_name": wire_name,
-                "arguments": arguments,
-                "context": context,
-                "run_context": current_run_context(),
-            })
-            return json.dumps({
-                "status": "success",
-                "capability_id": "desktop.use",
-                "result": "remote desktop inspected",
-            })
-
+        host = SimpleNamespace(
+            registry=SimpleNamespace(
+                list_plugins=lambda: [
+                    SimpleNamespace(
+                        plugin=SimpleNamespace(name="app_use"),
+                        pack_id="cyrene_desktop",
+                    )
+                ]
+            ),
+            runtime=PluginRuntime(),
+            services={},
+        )
         monkeypatch.setattr(
-            "cyrene.runtime.remote_commands.execute_wire_tool_in_context",
-            execute_remote_pack,
+            "cyrene.runtime.remote_commands.active_plugin_application_host",
+            lambda: host,
         )
         executor = RemoteCommandExecutor(
             store=target,
@@ -1194,16 +1152,22 @@ def test_remote_harness_filters_by_granted_tool_pack_and_uses_bound_context(
 
         denied = await executor(
             controller.identity.device_id,
-            "harness.discover",
-            {"tool_pack": "code_tools"},
+            "harness.list",
+            {"plugin_pack": "cyrene_code"},
+            "project_1",
+        )
+        discovered = await executor(
+            controller.identity.device_id,
+            "harness.list",
+            {"plugin_pack": "cyrene_desktop", "query": "desktop"},
             "project_1",
         )
         invocation_arguments = {
             "device_id": target.identity.device_id,
             "project_id": "project_1",
-            "tool_pack": "desktop_tools",
+            "plugin_pack": "cyrene_desktop",
             "operation": "invoke",
-            "capability_id": "desktop.use",
+            "capability_id": "app_use",
             "arguments": {"operation": "list_targets"},
         }
         authorization_hash = hashlib.sha256(
@@ -1218,8 +1182,8 @@ def test_remote_harness_filters_by_granted_tool_pack_and_uses_bound_context(
             controller.identity.device_id,
             "harness.invoke",
             {
-                "tool_pack": "desktop_tools",
-                "capability_id": "desktop.use",
+                "plugin_pack": "cyrene_desktop",
+                "capability_id": "app_use",
                 "arguments": {"operation": "list_targets"},
                 "call_id": "remote-call-1",
                 "authorization": {
@@ -1235,8 +1199,8 @@ def test_remote_harness_filters_by_granted_tool_pack_and_uses_bound_context(
             controller.identity.device_id,
             "harness.invoke",
             {
-                "tool_pack": "desktop_tools",
-                "capability_id": "desktop.use",
+                "plugin_pack": "cyrene_desktop",
+                "capability_id": "app_use",
                 "arguments": {"operation": "list_targets"},
             },
             "project_1",
@@ -1245,7 +1209,7 @@ def test_remote_harness_filters_by_granted_tool_pack_and_uses_bound_context(
             controller.identity.device_id,
             "harness.invoke",
             {
-                "tool_pack": "desktop_tools",
+                "plugin_pack": "cyrene_desktop",
                 "capability_id": "desktop.shell",
                 "arguments": {
                     "command": "base64 -d > payload.bin " + ("A" * 300),
@@ -1254,17 +1218,22 @@ def test_remote_harness_filters_by_granted_tool_pack_and_uses_bound_context(
             "project_1",
         )
 
-        assert denied["code"] == "remote_tool_pack_denied"
+        assert denied["code"] == "remote_plugin_pack_denied"
+        assert discovered["result"]["plugins"][0]["name"] == "app_use"
+        assert [call[1]["operation"] for call in observed["calls"][:2]] == [
+            "list",
+            "describe",
+        ]
         assert missing_receipt["code"] == "remote_authorization_invalid"
         assert manual_file_tunnel["code"] == "remote_file_channel_required"
         assert invoked["ok"] is True
-        assert observed["wire_name"] == "desktop_tools"
-        assert observed["arguments"]["capability_id"] == "desktop.use"
-        assert observed["context"].permission_mode == "auto"
-        assert observed["run_context"].caller == "remote_harness"
-        assert observed["run_context"].permission_mode == "auto"
-        assert observed["run_context"].temporary_full_access is False
-        assert observed["run_context"].bounded_remote_authorization is True
+        assert observed["name"] == "toolbox"
+        assert observed["arguments"]["name"] == "app_use"
+        run_context = observed["context"].data["run_context"]
+        assert run_context["caller"] == "remote_harness"
+        assert run_context["permission_mode"] == "auto"
+        assert run_context["temporary_full_access"] is False
+        assert run_context["bounded_remote_authorization"] is True
         assert invoked["authorization"]["scope"] == "single_invocation"
 
     asyncio.run(scenario())
@@ -1280,11 +1249,11 @@ def test_remote_shell_is_direct_project_scoped_and_device_owned(
         controller = paired_stores["controller"]
         target.update_peer_grant(
             controller.identity.device_id,
-            capabilities=["toolpack:code_tools"],
+            capabilities=["pluginpack:cyrene_code"],
             project_scopes=["project_1"],
         )
         monkeypatch.setattr(
-            "cyrene.runtime.remote_commands.workbench_runtime._workbench_find_project_lightweight",
+            "cyrene.runtime.remote_commands._remote_project",
             lambda project_id: {
                 "id": project_id,
                 "name": "Authorized project",
@@ -1292,7 +1261,7 @@ def test_remote_shell_is_direct_project_scoped_and_device_owned(
             },
         )
         monkeypatch.setattr(
-            "cyrene.runtime.remote_commands.workbench_runtime._workbench_resolve_workspace_dir",
+            "cyrene.runtime.remote_commands._remote_project_workspace",
             lambda _project: str(tmp_path),
         )
         observed = {}
@@ -1381,79 +1350,69 @@ def test_remote_shell_is_direct_project_scoped_and_device_owned(
     asyncio.run(scenario())
 
 
-def test_remote_harness_approves_invoke_locally_but_not_discovery(monkeypatch):
+def test_remote_harness_sends_list_and_exact_authorized_invoke(monkeypatch):
     async def scenario():
         device = {
             "device_id": "device_target",
             "received_capabilities": [
-                "toolpack:desktop_tools",
+                "pluginpack:cyrene_desktop",
                 "workspace_file:metadata",
             ],
         }
-        approvals = []
         commands = []
         monkeypatch.setattr(
-            "cyrene.tool_impl.remote.harness.resolve_selected_remote_device",
+            "agent.plugin.plugin_impl.cyrene_remote.harness.resolve_selected_remote_device",
             lambda *_args, **_kwargs: ({}, device),
         )
-
-        async def approve(**kwargs):
-            approvals.append(kwargs)
-            return None
 
         async def send(args, *_rest, **_kwargs):
             commands.append(args)
             return {"ok": True, "result": {"status": "success"}}
-
         monkeypatch.setattr(
-            "cyrene.tool_impl.remote.harness.request_scope_elevation",
-            approve,
-        )
-        monkeypatch.setattr(
-            "cyrene.tool_impl.remote.harness.request_remote_command",
+            "agent.plugin.plugin_impl.cyrene_remote.harness.request_remote_command",
             send,
         )
 
+        context = PluginContext(data={
+            "db_path": "runtime.sqlite3",
+            "remote_device_ids": ["device_target"],
+            "run_context": {
+                "session_id": "chat_local",
+                "permission_mode": "auto",
+            },
+        })
         discovered = json.loads(await remote_harness(
             {
                 "project_id": "project_1",
-                "tool_pack": "toolpack:desktop_tools",
-                "operation": "discover",
+                "plugin_pack": "cyrene_desktop",
+                "operation": "list",
                 "query": "desktop",
             },
-            None,
-            "chat_local",
-            "runtime.sqlite3",
-            None,
+            context,
         ))
         invoked = json.loads(await remote_harness(
             {
                 "project_id": "project_1",
-                "tool_pack": "desktop_tools",
+                "plugin_pack": "cyrene_desktop",
                 "operation": "invoke",
                 "capability_id": "desktop.use",
                 "arguments": {"operation": "list_targets"},
                 "reason": "Inspect the selected remote desktop",
             },
-            None,
-            "chat_local",
-            "runtime.sqlite3",
-            None,
+            context,
         ))
 
         assert discovered["ok"] is True
         assert invoked["ok"] is True
-        assert len(approvals) == 1
-        assert approvals[0]["permission_kind"] == "remote_harness_invoke"
-        assert approvals[0]["meta_extra"]["capability_id"] == "desktop.use"
         assert [item["command"] for item in commands] == [
-            "harness.discover",
+            "harness.list",
             "harness.invoke",
         ]
-        assert [item["payload"]["tool_pack"] for item in commands] == [
-            "desktop_tools",
-            "desktop_tools",
+        assert [item["payload"]["plugin_pack"] for item in commands] == [
+            "cyrene_desktop",
+            "cyrene_desktop",
         ]
+        assert commands[1]["payload"]["authorization"]["approved"] is True
 
     asyncio.run(scenario())
 
@@ -1652,7 +1611,7 @@ def test_remote_status_assembles_chunks_into_local_attachment(
     async def scenario():
         from cyrene import config as cyrene_config
         from cyrene.runtime import attachments as managed_attachments
-        from cyrene.tool_impl.remote import status as remote_status
+        from agent.plugin.plugin_impl.cyrene_remote import status as remote_status
 
         data_dir = tmp_path / "data"
         exports = data_dir / "exports"
@@ -1660,8 +1619,7 @@ def test_remote_status_assembles_chunks_into_local_attachment(
         monkeypatch.setattr(cyrene_config, "DATA_DIR", data_dir)
         monkeypatch.setattr(managed_attachments, "EXPORTS_DIR", exports)
 
-        async def fake_request(args, _db_path, *, fallback_chat_id):
-            del fallback_chat_id
+        async def fake_request(args, _context):
             payload = dict(args.get("payload") or {})
             offset = int(payload.get("offset") or 0)
             limit = int(payload.get("limit") or 1)
@@ -1685,6 +1643,9 @@ def test_remote_status_assembles_chunks_into_local_attachment(
             "request_remote_command",
             fake_request,
         )
+        async def no_progress(**_kwargs):
+            return None
+        monkeypatch.setattr(remote_status, "publish_tool_progress", no_progress)
         raw = await remote_status.handler(
             {
                 "command": "attachments.read",
@@ -1694,10 +1655,7 @@ def test_remote_status_assembles_chunks_into_local_attachment(
                     "attachment_id": "large-result",
                 },
             },
-            None,
-            1,
-            str(tmp_path / "runtime.sqlite3"),
-            None,
+            PluginContext(data={"db_path": str(tmp_path / "runtime.sqlite3")}),
         )
         result = json.loads(raw)
         assert result["ok"] is True
@@ -1992,245 +1950,6 @@ def test_remote_context_accepts_only_trusted_controller_grants(
         assert rejected.json()["code"] == "remote_context_device_invalid"
 
 
-def test_agent_status_tool_only_controls_device_selected_in_chat(
-    paired_stores,
-    monkeypatch,
-):
-    async def scenario():
-        target = paired_stores["target"]
-        controller = paired_stores["controller"]
-        relay = InMemoryRemoteRelay()
-
-        async def target_handler(peer_id, command, payload, project_id):
-            assert peer_id == controller.identity.device_id
-            return {
-                "ok": True,
-                "command": command,
-                "project_id": project_id,
-                "payload": payload,
-            }
-
-        async def controller_handler(peer_id, command, payload, project_id):
-            raise AssertionError("controller must not receive a command")
-
-        target_gateway = RemoteGateway(target, relay, target_handler)
-        controller_gateway = RemoteGateway(
-            controller,
-            relay,
-            controller_handler,
-        )
-        chats = {
-            "chats": [
-                {
-                    "id": "chat_local",
-                    "projectId": "local_project",
-                    "remoteDeviceIds": [target.identity.device_id],
-                }
-            ]
-        }
-        from cyrene.workbench import chat as chat_service
-
-        monkeypatch.setattr(
-            chat_service,
-            "get_workbench_chat",
-            lambda chat_id: next(
-                (chat for chat in chats["chats"] if chat["id"] == chat_id),
-                None,
-            ),
-        )
-        await target_gateway.start()
-        await controller_gateway.start()
-        register_remote_gateway(controller.db_path, controller_gateway)
-        try:
-            listed = await list_remote_devices(
-                {},
-                None,
-                "chat_local",
-                controller.db_path,
-                None,
-            )
-            status = await remote_cyrene_status(
-                {
-                    "device_id": target.identity.device_id,
-                    "command": "projects.list",
-                    "payload": {},
-                },
-                None,
-                "chat_local",
-                controller.db_path,
-                None,
-            )
-            denied = await remote_cyrene_status(
-                {
-                    "device_id": "dev_not_selected",
-                    "command": "projects.list",
-                    "payload": {},
-                },
-                None,
-                "chat_local",
-                controller.db_path,
-                None,
-            )
-        finally:
-            unregister_remote_gateway(
-                controller.db_path,
-                controller_gateway,
-            )
-            await controller_gateway.stop()
-            await target_gateway.stop()
-
-        assert target.identity.device_id in listed
-        assert '"command": "projects.list"' in status
-        assert "未添加到当前对话上下文" in denied
-
-    asyncio.run(scenario())
-
-
-def test_run_remote_cyrene_creates_chat_and_starts_remote_agent(
-    monkeypatch,
-    tmp_path,
-):
-    async def scenario():
-        monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
-        target = RemoteControlStore(str(tmp_path / "run-target.sqlite3"))
-        controller = RemoteControlStore(
-            str(tmp_path / "run-controller.sqlite3")
-        )
-        target.update_settings(enabled=True, relay_url="", device_name="Target")
-        controller.update_settings(
-            enabled=True,
-            relay_url="",
-            device_name="Controller",
-        )
-        invitation = target.create_pairing_invitation(
-            capabilities=["chat:create", "chat:send"],
-            project_scopes=["project_1"],
-        )
-        accepted = controller.accept_pairing_invitation(
-            invitation["invitation"]
-        )
-        target.complete_pairing_response(accepted["response"])
-        relay = InMemoryRemoteRelay()
-        received = []
-        remote_chat = {
-            "id": "chat_remote_1",
-            "projectId": "project_1",
-            "title": "Inspect remote desktop",
-            "messages": [],
-        }
-
-        async def create_chat(body):
-            received.append(("create", body["project"], body["title"]))
-            return {"ok": True, "chat": dict(remote_chat)}
-
-        async def get_chat(chat_id):
-            assert chat_id == remote_chat["id"]
-            return {"ok": True, "chat": dict(remote_chat)}
-
-        async def send_chat_detached(chat_id, body):
-            received.append(("send", chat_id, dict(body), True))
-            return {
-                "run_id": "run_remote_1",
-                "chat_id": chat_id,
-                "status": "running",
-                "created_at": "2026-07-27T08:00:00+00:00",
-                "event_cursor": 0,
-            }
-
-        target_executor = RemoteCommandExecutor(
-            store=target,
-            chat=SimpleNamespace(
-                create=create_chat,
-                get=get_chat,
-                send=send_chat_detached,
-            ),
-        )
-
-        async def controller_handler(*_args):
-            return {"ok": True}
-
-        chats = {
-            "chats": [
-                {
-                    "id": "chat_local",
-                    "projectId": "project_local",
-                    "remoteDeviceIds": [target.identity.device_id],
-                }
-            ]
-        }
-        from cyrene.workbench import chat as chat_service
-
-        monkeypatch.setattr(
-            chat_service,
-            "get_workbench_chat",
-            lambda chat_id: next(
-                (chat for chat in chats["chats"] if chat["id"] == chat_id),
-                None,
-            ),
-        )
-
-        async def allow_remote_action(**_kwargs):
-            return None
-
-        monkeypatch.setattr(
-            "cyrene.tool_impl.remote.run.request_scope_elevation",
-            allow_remote_action,
-        )
-        target_gateway = RemoteGateway(target, relay, target_executor)
-        controller_gateway = RemoteGateway(
-            controller,
-            relay,
-            controller_handler,
-        )
-        await target_gateway.start()
-        await controller_gateway.start()
-        register_remote_gateway(controller.db_path, controller_gateway)
-        try:
-            raw = await run_remote_cyrene(
-                {
-                    "device_id": target.identity.device_id,
-                    "project_id": "project_1",
-                    "title": "Inspect remote desktop",
-                    "message": "Use your local tools to inspect the desktop.",
-                    "permission_mode": "default",
-                    "language": "en",
-                    "idempotency_key": "remote_run_test_1",
-                    "reason": "User requested remote work",
-                },
-                None,
-                "chat_local",
-                controller.db_path,
-                None,
-            )
-        finally:
-            unregister_remote_gateway(
-                controller.db_path,
-                controller_gateway,
-            )
-            await controller_gateway.stop()
-            await target_gateway.stop()
-
-        result = json.loads(raw)
-        assert result["ok"] is True
-        assert result["chat"]["id"] == "chat_remote_1"
-        assert result["run_id"] == "run_remote_1"
-        assert received[0] == (
-            "create",
-            "project_1",
-            "Inspect remote desktop",
-        )
-        assert received[1][0:2] == ("send", "chat_remote_1")
-        assert received[1][2] == {
-            "message": "Use your local tools to inspect the desktop.",
-            "mode": "default",
-            "lang": "en",
-            "stream": True,
-        }
-        assert received[1][3] is True
-
-    asyncio.run(scenario())
-
-
 def test_real_websocket_relay_connects_two_encrypted_gateways(paired_stores):
     async def scenario():
         from websockets.asyncio.server import serve
@@ -2313,7 +2032,7 @@ def test_websocket_relay_rejects_unsigned_device_registration():
                     json.dumps(
                         {
                             "type": "register",
-                            "protocol_version": 1,
+                            "protocol_version": 2,
                             "device_id": "dev_unsigned",
                         }
                     )
@@ -2384,7 +2103,7 @@ def test_websocket_relay_enforces_per_connection_message_rate(
             ) as connection:
                 registration = {
                     "type": "register",
-                    "protocol_version": 1,
+                    "protocol_version": 2,
                     "device_id": identity.device_id,
                     "signing_public_key": identity.signing_public_key,
                     "timestamp": int(time.time()),
@@ -2423,34 +2142,42 @@ def test_remote_relay_requires_tls_except_on_localhost():
 
 def test_mobile_model_copy_exports_api_key_but_never_codex_oauth(monkeypatch):
     monkeypatch.setattr(
-        "cyrene.runtime.settings_store.get_custom_models",
-        lambda: [{
-            "id": "deepseek",
-            "name": "DeepSeek",
-            "model": "deepseek-chat",
-            "provider": "openai_compatible",
-            "base_url": "https://api.deepseek.com",
-            "api_key": "mobile-copy-key",
-        }],
-    )
-    monkeypatch.setattr(
-        "cyrene.runtime.settings_store.get_codex_model",
+        "cyrene.runtime.model_configuration.get_model_configuration",
         lambda: {
-            "id": "codex",
-            "model": "gpt-codex",
-            "provider": "codex_oauth",
-            "api_key": "must-not-leave-desktop",
+            "version": 10,
+            "connections": [
+                {
+                    "id": "deepseek",
+                    "name": "DeepSeek",
+                    "adapter": "openai",
+                    "base_url": "https://api.deepseek.com/v1",
+                    "api_key": "mobile-copy-key",
+                    "options": {"provider_preset": "deepseek"},
+                },
+                {
+                    "id": "codex",
+                    "name": "Codex",
+                    "adapter": "codex_oauth",
+                    "base_url": "codex://oauth",
+                    "api_key": "",
+                    "options": {"provider_preset": "codex_oauth"},
+                },
+            ],
+            "profiles": [],
+            "routes": {
+                "primary": [],
+                "secondary": [],
+                "vision": [],
+                "embedding": [],
+            },
         },
     )
-    monkeypatch.setattr("cyrene.runtime.settings_store.get_model_source", lambda: "custom")
-    monkeypatch.setattr("cyrene.runtime.settings_store.get_secondary_model", lambda: {})
-    monkeypatch.setattr("cyrene.runtime.settings_store.get_vision_models", lambda: [])
 
     copied = RemoteCommandExecutor._settings_models_copy({})["models"]
 
-    assert copied["custom_models"][0]["api_key"] == "mobile-copy-key"
-    assert "api_key" not in copied["codex_model"]
-    assert "must-not-leave-desktop" not in str(copied)
+    connections = {item["id"]: item for item in copied["connections"]}
+    assert connections["deepseek"]["api_key"] == "mobile-copy-key"
+    assert connections["codex"]["api_key"] == ""
 
     with pytest.raises(ValueError, match="does not accept fields"):
         RemoteCommandExecutor._settings_models_copy({"unexpected": True})

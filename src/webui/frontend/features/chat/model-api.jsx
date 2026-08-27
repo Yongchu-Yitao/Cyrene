@@ -21,9 +21,8 @@ import { wbcErrorText } from "./errors.jsx"
     return createChatWithBinding(projectId, title, null);
   }
 
-  // Create a chat with an optional draft Agent binding (handoff §8.4). Absent
-  // binding keeps the legacy create path exactly as before — the backend
-  // normalizes missing agent fields to the built-in Cyrene Agent.
+  // Create a chat with an optional draft Agent binding (handoff §8.4). The
+  // backend normalizes a missing binding to the built-in Cyrene Agent.
   function createChatWithBinding(projectId, title, binding) {
     var body = { project: projectId, title: title || "" };
     if (binding && typeof binding === "object") {
@@ -55,7 +54,7 @@ import { wbcErrorText } from "./errors.jsx"
   }
 
   function listSideAgents(chatId) {
-    if (!chatId || String(chatId).indexOf("legacy:") === 0) {
+    if (!chatId) {
       return Promise.resolve([]);
     }
     return apiJson(
@@ -82,7 +81,7 @@ import { wbcErrorText } from "./errors.jsx"
   }
 
   function getSubagents(chatId, roundId, options) {
-    if (!chatId || String(chatId).indexOf("legacy:") === 0) {
+    if (!chatId) {
       return Promise.resolve({ rounds: [], activeRoundId: "", agents: [], messages: [] });
     }
     var query = roundId ? ("?round_id=" + encodeURIComponent(roundId)) : "";
@@ -90,7 +89,7 @@ import { wbcErrorText } from "./errors.jsx"
   }
 
   function getChanges(chatId, options) {
-    if (!chatId || String(chatId).indexOf("legacy:") === 0) {
+    if (!chatId) {
       return Promise.resolve({ changeSets: [], fileCount: 0, additions: 0, deletions: 0 });
     }
     return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/changes", options);
@@ -106,7 +105,7 @@ import { wbcErrorText } from "./errors.jsx"
   }
 
   function getInbox(chatId, options) {
-    if (!chatId || String(chatId).indexOf("legacy:") === 0) {
+    if (!chatId) {
       return Promise.resolve({
         active: false,
         runStatus: "idle",
@@ -174,7 +173,7 @@ import { wbcErrorText } from "./errors.jsx"
 
   function listChatGroups(projectId) {
     if (!String(projectId || "").trim()) {
-      return Promise.resolve({ groups: [], migrationRequired: false });
+      return Promise.resolve({ groups: [] });
     }
     return apiJson("/api/workbench/chat-groups?project=" + encodeURIComponent(projectId || ""), {
       toast: false,
@@ -184,15 +183,6 @@ import { wbcErrorText } from "./errors.jsx"
   function replaceChatGroups(input) {
     return apiJson("/api/workbench/chat-groups", {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input || {}),
-      toast: false,
-    });
-  }
-
-  function migrateChatGroups(input) {
-    return apiJson("/api/workbench/chat-groups/migrate", {
-      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input || {}),
       toast: false,
@@ -227,7 +217,7 @@ import { wbcErrorText } from "./errors.jsx"
   }
 
   function interrupt(chatId) {
-    return fetch("/api/chat/interrupt?session_id=" + encodeURIComponent(chatId), { method: "POST" })
+    return fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/interrupt", { method: "POST" })
       .then(function (response) {
         if (!response.ok) throw new Error("HTTP " + response.status);
         return response;
@@ -241,7 +231,7 @@ import { wbcErrorText } from "./errors.jsx"
     list.forEach(function (f) { form.append("files", f); });
     // Uploads can be large — give a generous budget rather than the 30s default,
     // and let the caller surface failures (the composer toasts on upload error).
-    return workbenchServices.api().fetch("/api/chat/upload", { method: "POST", body: form, timeout: 120000 }).then(function (r) {
+    return workbenchServices.api().fetch("/api/workbench/uploads", { method: "POST", body: form, timeout: 120000 }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (payload) {
         if (!r.ok) throw new Error(payload.error || ("HTTP " + r.status));
         return Array.isArray(payload.files) ? payload.files : [];
@@ -495,7 +485,6 @@ import { wbcErrorText } from "./errors.jsx"
     generateChatGroupMetadata: generateChatGroupMetadata,
     listChatGroups: listChatGroups,
     replaceChatGroups: replaceChatGroups,
-    migrateChatGroups: migrateChatGroups,
     deleteChat: deleteChat,
     toTask: toTask,
     compactChat: compactChat,

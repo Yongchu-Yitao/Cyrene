@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+from ._native import create_tool, service as memory_service
 from .definitions import get_native_tool_def
-from cyrene.runtime.memory.conversations import recall_conversations, recall_workspace_conversations
-from cyrene.tooling.runtime_api import json_result
+from .archive import recall_conversations, recall_workspace_conversations
+from agent.plugin.native_runtime import json_result
 
 TOOL_NAME = "RecallConversation"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -14,10 +16,7 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 async def _tool_recall_conversation(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
     """Search archived conversation rounds by keyword, session, or date."""
     query = str(args.get("query", "") or "").strip()
@@ -25,9 +24,8 @@ async def _tool_recall_conversation(
     date = str(args.get("date", "") or "").strip()
     limit = max(1, min(int(args.get("limit", 5) or 5), 10))
 
-    from cyrene.agent.context import workspace_override
-
-    workspace_dir = str(workspace_override() or "").strip()
+    memory = memory_service(context)
+    workspace_dir = str(memory.workspace or "").strip()
     if workspace_dir:
         matches = recall_workspace_conversations(
             workspace_dir=workspace_dir,
@@ -44,7 +42,7 @@ async def _tool_recall_conversation(
             date=date,
             limit=limit,
         )
-        scope = "legacy_archive"
+        scope = "global_archive"
     payload: dict[str, Any] = {
         "query": query,
         "session_id": session_id,
@@ -73,10 +71,12 @@ async def _tool_recall_conversation(
 
 
 handler = _tool_recall_conversation
+plugin = create_tool(TOOL_DEF, handler, allow_parallel=True)
 
 __all__ = [
     "TOOL_NAME",
     "TOOL_DEF",
     "handler",
+    "plugin",
     "_tool_recall_conversation",
 ]

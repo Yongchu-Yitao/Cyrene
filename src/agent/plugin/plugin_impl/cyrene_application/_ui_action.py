@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+
 from cyrene.runtime.host_bridge import HostBridgeError, call_host
-from cyrene.tooling.runtime_api import json_result
+from agent.plugin.native_runtime import json_result
 from cyrene.workbench.app_control import audit, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
 
 def _find_node(node: Any, node_id: str) -> dict[str, Any] | None:
@@ -20,16 +22,17 @@ def _find_node(node: Any, node_id: str) -> dict[str, Any] | None:
 
 async def execute_action(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify: Any,
+    _context: PluginContext,
     *,
     operation_family: str,
     allowed_kinds: frozenset[str] | None = None,
     required_gesture_aliases: frozenset[str] | None = None,
 ) -> str:
-    op_args = {key: value for key, value in args.items() if key not in {"reason", "idempotency_key", "delegation_quote", "delegation_operations"}}
+    op_args = {
+        key: value
+        for key, value in args.items()
+        if key not in {"reason", "idempotency_key"}
+    }
     key = str(args.get("idempotency_key") or "")
     # A renderer can complete an action even when its acknowledgement is lost.
     # Resolve an exact retry before touching the live tree so a successful
@@ -118,8 +121,6 @@ async def execute_action(
     approval = await authorize(
         operation_id, op_args,
         reason=str(args.get("reason") or ""),
-        delegation_quote=str(args.get("delegation_quote") or ""),
-        delegation_operations=args.get("delegation_operations"),
     )
     if approval:
         return approval

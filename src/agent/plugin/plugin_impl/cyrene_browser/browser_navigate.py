@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from agent.plugin import PluginContext
 
 from .definitions import get_native_tool_def
 
@@ -11,7 +12,7 @@ TOOL_NAME = 'browser_navigate'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
-async def _tool_browser_navigate(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+async def _tool_browser_navigate(args: dict[str, Any], _context: PluginContext) -> str:
     from cyrene.browser import navigate, navigation_guard
     url = str(args.get("url") or "").strip()
     if not url:

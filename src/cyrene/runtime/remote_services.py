@@ -11,7 +11,8 @@ import httpx
 from cyrene.runtime.remote_control import (
     DEFAULT_REMOTE_CAPABILITIES,
     REMOTE_CAPABILITIES,
-    REMOTE_TOOL_PACK_WIRE_NAMES,
+    REMOTE_PLUGIN_PACK_IDS,
+    REMOTE_PLUGIN_PACK_PREFIX,
     RemoteControlStore,
 )
 from cyrene.runtime.remote_pairing import connect_by_address, local_pairing_addresses
@@ -65,9 +66,12 @@ class RemoteDeviceProjectionService:
             "identity": await asyncio.to_thread(self.store.public_identity),
             "supported_capabilities": sorted(REMOTE_CAPABILITIES),
             "default_capabilities": list(DEFAULT_REMOTE_CAPABILITIES),
-            "remote_tool_packages": [
-                {"id": name, "wire_name": name, "grant": f"toolpack:{name}"}
-                for name in REMOTE_TOOL_PACK_WIRE_NAMES
+            "remote_plugin_packs": [
+                {
+                    "id": pack_id,
+                    "grant": REMOTE_PLUGIN_PACK_PREFIX + pack_id,
+                }
+                for pack_id in REMOTE_PLUGIN_PACK_IDS
             ],
             "projects": [
                 {"id": str(item.get("id") or ""), "name": str(item.get("name") or "")}

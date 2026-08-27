@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import sqlite3
 import threading
 from collections import OrderedDict
@@ -17,12 +18,15 @@ from uuid import uuid4
 from ..hook import ContextUsed, Hook, HookRegistration, HookSet, PluginRegistry
 from ..hook.hook import HookPlugin
 from ..hook.storage import QueuedHookEvent
+from ..observability import log_operation
 from .errors import ContextError, TreeNotFoundError
 from .tree import ContextChange, ContextNode, ContextTree
 from .publisher import ChangeListener, ChangePublisher
 from .schema import connect, ensure_index_schema, transaction
 from .serialization import Clock, normalize_time, utc_now
 from .store import ContextTreeStore, TokenCounter, default_token_counter
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -120,6 +124,15 @@ class ContextStoreRouter:
         self._closed = False
         self._index = connect(self.directory / "index.sqlite3")
         ensure_index_schema(self._index)
+        log_operation(
+            logger,
+            "context.router",
+            "initialize",
+            phase="completed",
+            directory=self.directory,
+            max_open_trees=self._max_open_trees,
+            token_limit=self._token_limit,
+        )
 
     def __enter__(self) -> ContextStoreRouter:
         return self
@@ -137,6 +150,15 @@ class ContextStoreRouter:
 
     def _ensure_open(self) -> None:
         if self._closed:
+            log_operation(
+                logger,
+                "context.router",
+                "availability_check",
+                phase="failed",
+                level=logging.ERROR,
+                directory=self.directory,
+                reason="closed",
+            )
             raise ContextError("context store router is closed")
 
     def _now(self) -> datetime:
@@ -156,6 +178,15 @@ class ContextStoreRouter:
             (tree_id,),
         ).fetchone()
         if row is None:
+            log_operation(
+                logger,
+                "context.router",
+                "lookup_tree",
+                phase="failed",
+                level=logging.WARNING,
+                tree_id=tree_id,
+                reason="not_found",
+            )
             raise TreeNotFoundError(f"context tree not found: {tree_id}")
         return row
 
@@ -163,7 +194,16 @@ class ContextStoreRouter:
         with self._condition:
             self._ensure_open()
             row = self._index_row_locked(str(tree_id))
-            return self.directory / str(row["database_path"])
+            result = self.directory / str(row["database_path"])
+        log_operation(
+            logger,
+            "context.router",
+            "tree_database_path",
+            phase="completed",
+            tree_id=tree_id,
+            database=result,
+        )
+        return result
 
     def subscribe(
         self,
@@ -195,7 +235,16 @@ class ContextStoreRouter:
         with self._condition:
             self._ensure_open()
             row = self._index_row_locked(str(tree_id))
-            return self._hooks_for_row_locked(row)
+            hooks = self._hooks_for_row_locked(row)
+        log_operation(
+            logger,
+            "context.router",
+            "hooks_for",
+            phase="completed",
+            tree_id=tree_id,
+            root_id=hooks.root_id,
+        )
+        return hooks
 
     get_hooks = hooks_for
 
@@ -204,11 +253,29 @@ class ContextStoreRouter:
 
         self._publisher.publish(change)
         hooks.wake()
+        log_operation(
+            logger,
+            "context.router",
+            "publish_change",
+            phase="completed",
+            tree_id=change.tree_id,
+            node_id=change.node_id,
+            context_action=change.action,
+            change=change,
+        )
 
     def _open_store_locked(self, tree_id: str) -> _CachedTree:
         cached = self._cache.get(tree_id)
         if cached is not None:
             self._cache.move_to_end(tree_id)
+            log_operation(
+                logger,
+                "context.router",
+                "open_store",
+                phase="cache_hit",
+                tree_id=tree_id,
+                users=cached.users,
+            )
             return cached
         row = self._index_row_locked(tree_id)
         store = ContextTreeStore(
@@ -223,6 +290,15 @@ class ContextStoreRouter:
         cached = _CachedTree(store)
         self._cache[tree_id] = cached
         self._cache.move_to_end(tree_id)
+        log_operation(
+            logger,
+            "context.router",
+            "open_store",
+            phase="completed",
+            tree_id=tree_id,
+            database=store.database,
+            cache_size=len(self._cache),
+        )
         return cached
 
     def _evict_locked(self) -> None:
@@ -238,6 +314,14 @@ class ContextStoreRouter:
             if victim_id is None:
                 return
             self._cache.pop(victim_id).store.close()
+            log_operation(
+                logger,
+                "context.router",
+                "evict_store",
+                phase="completed",
+                tree_id=victim_id,
+                cache_size=len(self._cache),
+            )
 
     @contextmanager
     def _lease(
@@ -279,8 +363,19 @@ class ContextStoreRouter:
     ) -> ContextTree:
         tree_id = str(tree_id or self._new_tree_id())
         root_id = str(root_id or self._new_node_id())
+        initial_hooks = tuple(initial_hooks)
         relative_path = self._relative_database_path(tree_id)
         database = self.directory / relative_path
+        log_operation(
+            logger,
+            "context.router",
+            "create_tree",
+            phase="requested",
+            tree_id=tree_id,
+            root_id=root_id,
+            root_value=root_value,
+            database=database,
+        )
         with self._condition:
             self._ensure_open()
             store: ContextTreeStore | None = None
@@ -360,15 +455,41 @@ class ContextStoreRouter:
             ContextChange(tree.id, tree.root_id, "mount", tree.created_at),
             hooks,
         )
+        log_operation(
+            logger,
+            "context.router",
+            "create_tree",
+            phase="completed",
+            tree_id=tree.id,
+            root_id=tree.root_id,
+            database=database,
+            initial_hook_count=len(initial_hooks),
+        )
         return tree
 
     def get_tree(self, tree_id: str) -> ContextTree:
         with self._lease(tree_id) as store:
-            return store.tree
+            tree = store.tree
+        log_operation(
+            logger,
+            "context.router",
+            "get_tree",
+            phase="completed",
+            tree_id=tree.id,
+            root_id=tree.root_id,
+        )
+        return tree
 
     def delete_tree(self, tree_id: str) -> None:
         tree_id = str(tree_id)
         deleted_at = self._now()
+        log_operation(
+            logger,
+            "context.router",
+            "delete_tree",
+            phase="requested",
+            tree_id=tree_id,
+        )
         with self._condition:
             self._ensure_open()
             if tree_id in self._deleting:
@@ -427,6 +548,16 @@ class ContextStoreRouter:
             deleted_node_ids=deleted_ids,
         )
         self._publisher.publish(change)
+        log_operation(
+            logger,
+            "context.router",
+            "delete_tree",
+            phase="completed",
+            tree_id=tree_id,
+            root_id=root_id,
+            deleted_node_ids=deleted_ids,
+            database=database,
+        )
 
     @staticmethod
     def _remove_database_files(database: Path) -> None:
@@ -458,6 +589,16 @@ class ContextStoreRouter:
             ),
             hooks,
         )
+        log_operation(
+            logger,
+            "context.router",
+            "mount",
+            phase="completed",
+            tree_id=tree_id,
+            parent_id=parent_id,
+            node_id=node.id,
+            value=value,
+        )
         return node
 
     def update_node(self, tree_id: str, node_id: str, value: Any) -> ContextNode:
@@ -473,6 +614,15 @@ class ContextStoreRouter:
                 parent_id=node.parent_id,
             ),
             hooks,
+        )
+        log_operation(
+            logger,
+            "context.router",
+            "update_node",
+            phase="completed",
+            tree_id=tree_id,
+            node_id=node_id,
+            value=value,
         )
         return node
 
@@ -509,6 +659,16 @@ class ContextStoreRouter:
         with self._lease(tree_id) as store:
             change = store.delete_node(node_id, recursive=recursive)
         self._publish_change(change, hooks)
+        log_operation(
+            logger,
+            "context.router",
+            "delete_node",
+            phase="completed",
+            tree_id=tree_id,
+            node_id=node_id,
+            recursive=recursive,
+            change=change,
+        )
 
     def report_context_used(
         self,
@@ -550,6 +710,18 @@ class ContextStoreRouter:
         with self._lease(tree_id) as store:
             store.enqueue_context_used(usage)
         hooks.wake()
+        log_operation(
+            logger,
+            "context.router",
+            "report_context_used",
+            phase="completed",
+            tree_id=tree_id,
+            node_id=node_id,
+            tokens=tokens,
+            token_limit=token_limit,
+            node_tokens=normalized_node_tokens,
+            usage_ratio=usage.usage_ratio,
+        )
         return usage
 
     def close(self) -> None:
@@ -569,3 +741,12 @@ class ContextStoreRouter:
             for tree_id in idle_ids:
                 self._cache.pop(tree_id).store.close()
             self._index.close()
+        log_operation(
+            logger,
+            "context.router",
+            "close",
+            phase="completed",
+            directory=self.directory,
+            closed_hook_sets=len(hook_sets),
+            closed_idle_trees=len(idle_ids),
+        )

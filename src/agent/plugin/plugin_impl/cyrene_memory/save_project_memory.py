@@ -10,23 +10,22 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+from ._native import create_tool, service as memory_service
 from .definitions import get_native_tool_def
-from cyrene.workbench.context import resolve_workbench_project_id_for_session
 
-TOOL_NAME = 'save_project_memory'
+TOOL_NAME = "save_project_memory"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
 async def _tool_save_project_memory(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
     """Persist one durable fact into the current project's memory store."""
-    from cyrene.agent.context import get_current_session_id
-
+    memory = memory_service(context)
+    if not memory.is_main:
+        return "Not saved: subagents must report durable findings to the main Agent."
     content = str(args.get("content", "") or "").strip()
     if len(content) < 4:
         return "Nothing saved: 'content' is empty or too short."
@@ -34,20 +33,27 @@ async def _tool_save_project_memory(
     category = str(args.get("category", "fact") or "fact").strip().lower()
     tags = args.get("tags")
 
-    project_id = resolve_workbench_project_id_for_session(get_current_session_id())
+    project_id = memory.project_id
     if not project_id:
-        # Not inside a Workbench project (e.g. legacy chat / scheduler run).
+        # Not inside a Workbench project (for example a channel or scheduler run).
         return "Not saved: project memory is only available inside a Workbench project task/chat."
 
-    # Lazy import: the store lives in the webui layer (loaded in the server
-    # process); importing it here at module load would invert package layering.
-    from cyrene.workbench.memory import add_agent_memory_checked, configure_store
+    # Keep the storage implementation lazy so importing the Plugin declaration
+    # has no database side effects.
+    from .structured import add_agent_memory_checked
 
-    configure_store(_db_path)
+    memory.configure_stores()
 
     # Resolves textual duplicates (reinforce) and asks an LLM whether this fact
     # contradicts/supersedes existing memories — retiring the outdated ones.
-    saved, retired = await add_agent_memory_checked(project_id, content, category=category, tags=tags)
+    saved, retired = await add_agent_memory_checked(
+        project_id,
+        content,
+        category=category,
+        tags=tags,
+        model_gateway=memory.model_gateway,
+        session_id=memory.session_id,
+    )
     if not saved:
         return "Not saved (blank, too short, or out of project scope)."
     cat_label = str(saved.get("category_label") or saved.get("category") or "")
@@ -59,5 +65,6 @@ async def _tool_save_project_memory(
 
 
 handler = _tool_save_project_memory
+plugin = create_tool(TOOL_DEF, handler)
 
-__all__ = ["TOOL_NAME", "TOOL_DEF", "handler", "_tool_save_project_memory"]
+__all__ = ["TOOL_NAME", "TOOL_DEF", "handler", "plugin", "_tool_save_project_memory"]

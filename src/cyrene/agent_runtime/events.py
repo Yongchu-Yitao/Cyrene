@@ -1,11 +1,4 @@
-"""Unified Agent Event envelope foundation.
-
-All drivers normalize their protocol output into this envelope before anything
-reaches the Workbench UI (handoff §12).  This module defines the core event
-types, a sanitizing payload allowlist, and the built-in Cyrene Agent legacy
-event → unified envelope compatibility mapping (phase 1 foundation; the full
-registered event router lands with the frontend migration).
-"""
+"""Unified Agent Event envelope foundation."""
 
 from __future__ import annotations
 
@@ -38,22 +31,6 @@ CORE_EVENT_TYPES = frozenset({
     "session.updated",
 })
 
-_ENVELOPE_KEYS = frozenset({
-    "schemaVersion",
-    "eventId",
-    "timestamp",
-    "agentId",
-    "installationId",
-    "chatId",
-    "runId",
-    "sessionId",
-    "actorId",
-    "parentRunId",
-    "type",
-    "payload",
-    "extensions",
-})
-
 _SECRET_KEY_PATTERNS = (
     "token",
     "api_key",
@@ -66,21 +43,6 @@ _SECRET_KEY_PATTERNS = (
     "cookie",
     "oauth",
 )
-
-# Legacy cyrene.agent stream event types → unified core event types.
-_LEGACY_EVENT_MAP: dict[str, str] = {
-    "reply_start": "message.started",
-    "reply_delta": "message.delta",
-    "reply_done": "message.completed",
-    "intermediate_message": "message.delta",
-    "reasoning_start": "reasoning.started",
-    "reasoning_delta": "reasoning.delta",
-    "reasoning_done": "reasoning.completed",
-    "awaiting_user": "run.awaiting_input",
-    "error": "run.failed",
-    "run_finalizing": "run.completed",
-}
-
 
 def _sanitize_event_value(value: Any) -> Any:
     """Recursively remove credential-shaped keys from driver-owned data."""
@@ -113,7 +75,6 @@ def _is_secret_event_key(key: Any) -> bool:
         "apikey", "xapikey", "authorization", "clientsecret", "password",
         "credential", "credentials", "cookie", "oauth",
     }
-
 
 def sanitize_event_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     """Recursively redact credential-shaped fields from event data.
@@ -157,44 +118,3 @@ def event_envelope(
         "payload": sanitize_event_payload(payload),
         "extensions": sanitize_event_payload(extensions),
     }
-
-
-def normalize_builtin_event(
-    event: dict[str, Any] | None,
-    *,
-    chat_id: str = "",
-    run_id: str = "",
-    installation_id: str = "",
-    agent_id: str = "",
-) -> dict[str, Any] | None:
-    """Map a legacy cyrene.agent stream event to the unified envelope.
-
-    Returns ``None`` for unknown legacy event types so the router can safely
-    ignore them (handoff §12.2); payloads are sanitized before leaving the
-    backend.
-    """
-    if not isinstance(event, dict):
-        return None
-    legacy_type = str(event.get("type") or "").strip()
-    unified_type = _LEGACY_EVENT_MAP.get(legacy_type)
-    if unified_type is None:
-        return None
-    payload = {
-        key: value
-        for key, value in event.items()
-        if key not in _ENVELOPE_KEYS and key != "type"
-    }
-    return event_envelope(
-        type=unified_type,
-        payload=payload,
-        event_id=str(event.get("eventId") or event.get("id") or ""),
-        timestamp=str(event.get("timestamp") or event.get("createdAt") or ""),
-        agent_id=agent_id or str(event.get("agentId") or ""),
-        installation_id=installation_id or str(event.get("installationId") or ""),
-        chat_id=chat_id or str(event.get("chatId") or ""),
-        run_id=run_id or str(event.get("runId") or ""),
-        session_id=str(event.get("sessionId") or ""),
-        actor_id=str(event.get("actorId") or "primary"),
-        parent_run_id=event.get("parentRunId"),
-        extensions=event.get("extensions") if isinstance(event.get("extensions"), dict) else None,
-    )

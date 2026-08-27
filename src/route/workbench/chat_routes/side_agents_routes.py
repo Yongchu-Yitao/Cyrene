@@ -24,8 +24,6 @@ def register_side_agents_routes(router: APIRouter, context: ChatRouteContext) ->
 
     @router.get("/api/workbench/chats/{chat_id}/side-agents")
     async def api_workbench_list_side_agents(chat_id: str):
-        if chat_id.startswith("legacy:"):
-            return {"agents": []}
         payload = await asyncio.to_thread(_read_chats_store)
         parent = _find_chat(payload, chat_id)
         if not parent:
@@ -36,11 +34,6 @@ def register_side_agents_routes(router: APIRouter, context: ChatRouteContext) ->
 
     @router.post("/api/workbench/chats/{chat_id}/side-agents")
     async def api_workbench_create_side_agent(chat_id: str, body_model: api_models.SideAgentCreateBody):
-        if chat_id.startswith("legacy:"):
-            return JSONResponse(
-                {"error": "legacy chats cannot create side agents"},
-                status_code=403,
-            )
         body = api_models.body_dict(body_model)
         quote = str(body.get("quote") or "").strip()
         if not quote:

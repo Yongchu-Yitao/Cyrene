@@ -1480,7 +1480,6 @@ function useWbcConversationProjection(chat, runtime, retryClearingMessageIds, re
     activityTraceKeys: activityTraceKeys,
     displayMessages: displayMessages,
     durableMessages: durableMessages,
-    isLegacy: !!(chat && chat.legacy),
     lastAssistantId: lastMessageIds.assistant,
     lastUserId: lastMessageIds.user,
     latestAssistantReplyId: latestAssistantReply.id,
@@ -1504,10 +1503,9 @@ function wbcRenderHistoryMessage(msg, context) {
       </WbcThreadItem>
     );
   }
-  var canRetryAssistant = !context.isLegacy && !context.running && String(msg.id || "") === context.lastAssistantId;
-  var canRetryUser = !context.isLegacy && !context.running && msg.role === "user" && String(msg.id || "") === context.lastUserId;
-  var canEdit = !context.isLegacy
-    && !context.running
+  var canRetryAssistant = !context.running && String(msg.id || "") === context.lastAssistantId;
+  var canRetryUser = !context.running && msg.role === "user" && String(msg.id || "") === context.lastUserId;
+  var canEdit = !context.running
     && msg.role === "user"
     && !!context.onEditMessage
     && (!wbcChatAgent(context.chat) || wbcIsBuiltinAgent(wbcChatAgent(context.chat)) || wbcCapabilityEnabled(context.chat, "session", "fork", { strictUnknown: true }));
@@ -1777,7 +1775,6 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
   var latestAssistantReplyText = projection.latestAssistantReplyText;
   var displayMessages = projection.displayMessages;
   var activityTraceKeys = projection.activityTraceKeys;
-  var isLegacy = projection.isLegacy;
   var lastAssistantId = projection.lastAssistantId;
   var lastUserId = projection.lastUserId;
   var historyActionsRef = useWbcRef({});
@@ -1805,7 +1802,6 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
         answerHistoryQuestion: answerHistoryQuestion,
         chat: chat,
         editHistoryMessage: editHistoryMessage,
-        isLegacy: isLegacy,
         lastAssistantId: lastAssistantId,
         lastUserId: lastUserId,
         onAnswer: onAnswer,
@@ -1818,7 +1814,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
         running: running,
       });
     });
-  }, [displayMessages, retryClearingIds, isLegacy, running, lastAssistantId, lastUserId, chat, activityTraceKeys, !!onAnswer, !!onEditMessage, !!onOpenFile, !!onRetryMessage, answerHistoryQuestion, editHistoryMessage, openHistoryFile, retryHistoryMessage]);
+  }, [displayMessages, retryClearingIds, running, lastAssistantId, lastUserId, chat, activityTraceKeys, !!onAnswer, !!onEditMessage, !!onOpenFile, !!onRetryMessage, answerHistoryQuestion, editHistoryMessage, openHistoryFile, retryHistoryMessage]);
   var pendingQuestionId = String(chat && chat.pendingQuestion && chat.pendingQuestion.id || "");
   var pendingQuestionInTimeline = useWbcMemo(function () {
     if (!pendingQuestionId) return false;
@@ -2115,7 +2111,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
 
   useWbcEffect(function () {
     var thread = scrollRef.current;
-    if (!thread || !onAskSelection || isLegacy) {
+    if (!thread || !onAskSelection) {
       setSelectionMenu(null);
       return undefined;
     }
@@ -2184,7 +2180,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
       document.removeEventListener("pointerdown", closeOutside, true);
       window.removeEventListener("resize", closeMenu);
     };
-  }, [chat && chat.id, onAskSelection, isLegacy]);
+  }, [chat && chat.id, onAskSelection]);
 
   function askAboutSelection() {
     if (!selectionMenu || sideAgentCreating) return;

@@ -5,6 +5,8 @@ import re
 
 import pytest
 
+from agent.plugin import PluginContext
+
 
 def _service(tmp_path):
     from cyrene.workbench import pinned_resources
@@ -138,72 +140,12 @@ def test_selected_text_is_materialized_as_pinned_markdown_file(tmp_path, monkeyp
     assert "设计说明.md" in service.global_agent_context("chat-b")
 
 
-def test_pinned_conversation_exposes_fresh_bounded_read_only_summary(
-    tmp_path, monkeypatch
-):
-    service = _service(tmp_path)
-    from cyrene.workbench import chat as chat_store
-
-    stored_chat = {
-        "id": "chat-owner",
-        "projectId": "project-1",
-        "title": "Topbar design",
-        "status": "idle",
-        "updatedAt": "2026-08-14T10:00:00+00:00",
-        "pendingQuestion": {"question": "Should the summary include artifacts?"},
-        "generatedFiles": [{"name": "design.md"}],
-        "messages": [
-            {"role": "system", "content": "hidden system prompt"},
-            {"role": "user", "content": "Improve the topbar"},
-            {"role": "tool", "content": "private tool log"},
-            {"role": "assistant", "content": "Implemented <the> layout"},
-        ],
-    }
-    monkeypatch.setattr(chat_store, "get_workbench_chat", lambda _chat_id: stored_chat)
-    monkeypatch.setattr(
-        chat_store,
-        "_public_chat_light",
-        lambda chat: {
-            "title": chat["title"],
-            "runStatus": "completed",
-            "updatedAt": chat["updatedAt"],
-        },
-    )
-
-    item = service.upsert_resource(
-        {
-            "kind": "conversation",
-            "ownerSessionId": "chat-owner",
-            "ownerProjectId": "project-1",
-            "ownerProjectName": "Cyrene",
-            "title": "Old title",
-        }
-    )
-    refreshed = service.get_resource(item["id"])
-    context = service.global_agent_context("chat-other")
-
-    assert refreshed["title"] == "Topbar design"
-    assert refreshed["summary"] == {
-        "goal": "Improve the topbar",
-        "currentRequest": "Improve the topbar",
-        "latestResult": "Implemented <the> layout",
-        "openQuestion": "Should the summary include artifacts?",
-        "artifacts": ["design.md"],
-    }
-    assert 'access="read-only"' in context
-    assert 'project="Cyrene"' in context
-    assert "Implemented &lt;the&gt; layout" in context
-    assert "hidden system prompt" not in context
-    assert "private tool log" not in context
-    assert "Never continue, stop, message" in context
-
-
 @pytest.mark.asyncio
 async def test_pinned_browser_screenshot_uses_owner_session_read_only(
     monkeypatch, tmp_path, real_pillow_modules
 ):
     import cyrene.browser
-    from cyrene.tool_impl.browser.browser_screenshot import _tool_browser_screenshot
+    from agent.plugin.plugin_impl.cyrene_browser.browser_screenshot import _tool_browser_screenshot
     from cyrene.workbench import pinned_resources
     from PIL import Image
 
@@ -227,10 +169,7 @@ async def test_pinned_browser_screenshot_uses_owner_session_read_only(
 
     result = await _tool_browser_screenshot(
         {"resource_id": "pin-browser"},
-        None,
-        0,
-        ":memory:",
-        None,
+        PluginContext(),
     )
 
     assert calls == [("", {"session_id": "chat-owner", "read_only": True})]

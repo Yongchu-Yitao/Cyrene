@@ -37,7 +37,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     RecallConversation: { en: "Recall chat", zh: "回忆对话" },
     recall_conversation: { en: "Recall chat", zh: "回忆对话" },
     search_project_memory: { en: "Search memory", zh: "搜索记忆" },
-    schedule_task: { en: "Schedule", zh: "计划任务" },
+    "schedule.create": { en: "Schedule", zh: "计划任务" },
     send_message_to_user: { en: "Message", zh: "发消息" },
   };
 

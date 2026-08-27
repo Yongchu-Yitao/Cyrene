@@ -533,7 +533,9 @@ def test_project_memory_editor_and_manual_chat_trigger_are_wired_end_to_end():
     assert 'no_completed_context: "workbenchChat.error.memoryContextUnavailable"' in error_mapping
     assert 'wbcNotifyBrowserWindowInteraction(false, "context-menu"' in chat_page
 
-    from route.workbench.project_memory import register_project_memory_routes
+    from agent.plugin.plugin_impl.cyrene_memory.routes_project import (
+        register_project_memory_routes,
+    )
 
     class MemoryService:
         calls = []

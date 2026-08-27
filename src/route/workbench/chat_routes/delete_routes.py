@@ -15,7 +15,11 @@ from route.workbench.chat_routes.context import ChatRouteContext
 logger = logging.getLogger(__name__)
 
 
-async def _cleanup_deleted_chat(service, removed_chat_id: str) -> None:
+async def _cleanup_deleted_chat(
+    service,
+    removed_chat_id: str,
+    memory_service=None,
+) -> None:
     from cyrene.agent_runtime.model_gateway import revoke_model_gateway_scope
 
     revoke_model_gateway_scope(chat_id=removed_chat_id)
@@ -29,19 +33,18 @@ async def _cleanup_deleted_chat(service, removed_chat_id: str) -> None:
         await close_electron_browser_session(removed_chat_id)
     except Exception:
         logger.exception("Failed to close Electron browser for chat %s", removed_chat_id)
-    try:
-        from cyrene.workbench.project_memory_prompt import cancel_chat_jobs, delete_chat_context
-
-        await cancel_chat_jobs(removed_chat_id)
-        await asyncio.to_thread(delete_chat_context, removed_chat_id)
-    except Exception:
-        logger.exception("Failed to delete project-memory context for chat %s", removed_chat_id)
+    if memory_service is not None:
+        try:
+            await memory_service.delete_chat(removed_chat_id)
+        except Exception:
+            logger.exception(
+                "Failed to delete project-memory context for chat %s",
+                removed_chat_id,
+            )
 
 
 def register_delete_routes(router: APIRouter, context: ChatRouteContext) -> dict[str, Any] | None:
     service = context.service
-    _routes = context.runtime
-    _project_data_key = context.project_data_key
     _clear_fork_metadata = service.clear_fork_metadata
     _read_chats_store = service.repository.read
     _write_chats_store = service.repository.write
@@ -49,21 +52,6 @@ def register_delete_routes(router: APIRouter, context: ChatRouteContext) -> dict
 
     @router.delete("/api/workbench/chats/{chat_id}")
     async def api_workbench_delete_chat(chat_id: str):
-        if chat_id.startswith("legacy:"):
-            _prefix, project_id, session_id = (chat_id.split(":", 2) + ["", ""])[:3]
-            if not project_id or not session_id or _project_data_key(project_id) != "default":
-                return JSONResponse({"error": "chat not found"}, status_code=404)
-            payload, status_code = await _routes().delete_chat_session(session_id)
-            if status_code != 200:
-                return JSONResponse(payload, status_code=status_code)
-            try:
-                from cyrene.browser import close_electron_browser_session
-
-                await close_electron_browser_session(session_id)
-            except Exception:
-                logger.exception("Failed to close Electron browser for chat %s", session_id)
-            await publish_chat_changed(chat_id, project_id, "deleted")
-            return {"ok": True}
         payload = await asyncio.to_thread(_read_chats_store)
         chats = payload.get("chats", [])
         removed_root = next(
@@ -103,7 +91,7 @@ def register_delete_routes(router: APIRouter, context: ChatRouteContext) -> dict
         await asyncio.to_thread(_write_chats_store, payload)
         await publish_chat_changed(chat_id, removed_project_id, "deleted")
         for removed_chat_id in removed_chat_ids:
-            await _cleanup_deleted_chat(service, removed_chat_id)
+            await _cleanup_deleted_chat(service, removed_chat_id, context.memory)
         return {"ok": True}
 
     return {"delete_chat": api_workbench_delete_chat}

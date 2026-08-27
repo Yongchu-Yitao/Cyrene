@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from cyrene.runtime.io import atomic_write_json
 from cyrene.workbench.persistence.document_merge import (
     baseline,
     entity_id as _entity_id,
@@ -38,7 +37,6 @@ _TASK_SESSION_SUMMARY_FIELDS = (
 @dataclass(frozen=True, slots=True)
 class ProjectPorts:
     document_write_lock: Any
-    initial_value: Any
     load_row: Any
     write_row: Any
 
@@ -132,32 +130,23 @@ class ProjectRepository:
         payload['projects'] = projects
         return payload
 
-    def _load_project_bundle_locked(self, conn: sqlite3.Connection, default_factory: Callable[[], dict[str, Any]], summarize_session: Callable[[dict[str, Any]], dict[str, Any]], *, legacy_path: Path | None, migrate: bool=True) -> tuple[dict[str, Any], dict[str, Any], bool]:
-        """Load and, when necessary, atomically normalize the legacy project row."""
-        stored_raw = self.ports.load_row(conn, 'projects')
-        raw = stored_raw
-        if raw is None:
-            raw = self.ports.initial_value(default_factory, legacy_path)
+    def _load_project_bundle_locked(self, conn: sqlite3.Connection, default_factory: Callable[[], dict[str, Any]], summarize_session: Callable[[dict[str, Any]], dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Load the current SQLite project index and its task-session rows."""
+        stored = self.ports.load_row(conn, 'projects')
+        raw = stored
         if not isinstance(raw, dict) or not isinstance(raw.get('projects'), list):
             raw = default_factory()
         session_rows = self._load_task_session_rows(conn)
         full = self._hydrate_project_bundle(raw, session_rows)
         shell, sessions = self._split_project_bundle(full, summarize_session)
-        migrated = False
         for session_id, session in sessions.items():
             if session_id not in session_rows:
-                if migrate:
-                    self._write_task_session_row(conn, session)
-                migrated = True
-        if raw != shell or stored_raw is None:
-            if migrate:
-                self.ports.write_row(conn, 'projects', shell)
-            migrated = True
-        if migrated:
-            pass
-        return (shell, full, migrated)
+                self._write_task_session_row(conn, session)
+        if stored != shell:
+            self.ports.write_row(conn, 'projects', shell)
+        return (shell, full)
 
-    def read_project_bundle(self, db_path: str | Path, default_factory: Callable[[], dict[str, Any]], summarize_session: Callable[[dict[str, Any]], dict[str, Any]], *, legacy_path: Path | None=None, lightweight: bool=False) -> dict[str, Any]:
+    def read_project_bundle(self, db_path: str | Path, default_factory: Callable[[], dict[str, Any]], summarize_session: Callable[[dict[str, Any]], dict[str, Any]], *, lightweight: bool=False) -> dict[str, Any]:
         """Read normalized Workbench projects, hydrating task sessions on demand.
     
         The ``projects`` document is a lightweight index. Complete task-session
@@ -166,13 +155,11 @@ class ProjectRepository:
         """
         conn = _connect(db_path)
         try:
-            conn.execute('BEGIN')
-            shell, full, migration_required = self._load_project_bundle_locked(conn, default_factory, summarize_session, legacy_path=legacy_path, migrate=False)
-            conn.commit()
-            if migration_required:
-                conn.execute('BEGIN IMMEDIATE')
-                shell, full, _ = self._load_project_bundle_locked(conn, default_factory, summarize_session, legacy_path=legacy_path)
-                conn.commit()
+            stored = self.ports.load_row(conn, 'projects')
+            raw = stored if isinstance(stored, dict) and isinstance(stored.get('projects'), list) else default_factory()
+            session_rows = self._load_task_session_rows(conn)
+            full = self._hydrate_project_bundle(raw, session_rows)
+            shell, _sessions = self._split_project_bundle(full, summarize_session)
             if lightweight:
                 value = _plain(shell)
                 active_project_id = str(value.get('activeProjectId') or '')
@@ -189,13 +176,10 @@ class ProjectRepository:
             else:
                 value = full
             return _tracked(value, 'projects')
-        except Exception:
-            conn.rollback()
-            raise
         finally:
             conn.close()
 
-    def write_project_bundle(self, db_path: str | Path, value: dict[str, Any], default_factory: Callable[[], dict[str, Any]], summarize_session: Callable[[dict[str, Any]], dict[str, Any]], *, legacy_path: Path | None=None, export_path: Path | None=None, base_value: dict[str, Any] | None=None) -> dict[str, Any]:
+    def write_project_bundle(self, db_path: str | Path, value: dict[str, Any], default_factory: Callable[[], dict[str, Any]], summarize_session: Callable[[dict[str, Any]], dict[str, Any]], *, base_value: dict[str, Any] | None=None) -> dict[str, Any]:
         """Merge and atomically persist a project index plus changed task rows."""
         local = _plain(value)
         base = _plain(base_value) if base_value is not None else baseline(value)
@@ -203,7 +187,7 @@ class ProjectRepository:
             conn = _connect(db_path)
             try:
                 conn.execute('BEGIN IMMEDIATE')
-                _remote_shell, remote, _ = self._load_project_bundle_locked(conn, default_factory, summarize_session, legacy_path=legacy_path)
+                _remote_shell, remote = self._load_project_bundle_locked(conn, default_factory, summarize_session)
                 merged = local if base is None else _three_way_merge(base, local, remote)
                 if not isinstance(merged, dict):
                     raise TypeError('Workbench projects bundle is not an object')
@@ -222,18 +206,16 @@ class ProjectRepository:
                 raise
             finally:
                 conn.close()
-        if export_path is not None:
-            atomic_write_json(export_path, merged)
         return _tracked(merged, 'projects')
 
-    def patch_project_bundle_fields(self, db_path: str | Path, fields: dict[str, Any], default_factory: Callable[[], dict[str, Any]], summarize_session: Callable[[dict[str, Any]], dict[str, Any]], *, legacy_path: Path | None=None, export_path: Path | None=None) -> dict[str, Any]:
+    def patch_project_bundle_fields(self, db_path: str | Path, fields: dict[str, Any], default_factory: Callable[[], dict[str, Any]], summarize_session: Callable[[dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
         """Patch project-index scalars without hydrating task rows for the write."""
         updates = _plain(fields)
         with self.ports.document_write_lock:
             conn = _connect(db_path)
             try:
                 conn.execute('BEGIN IMMEDIATE')
-                shell, _full, _ = self._load_project_bundle_locked(conn, default_factory, summarize_session, legacy_path=legacy_path)
+                shell, _full = self._load_project_bundle_locked(conn, default_factory, summarize_session)
                 shell.update(updates)
                 self.ports.write_row(conn, 'projects', shell)
                 full = self._hydrate_project_bundle(shell, self._load_task_session_rows(conn))
@@ -243,6 +225,4 @@ class ProjectRepository:
                 raise
             finally:
                 conn.close()
-        if export_path is not None:
-            atomic_write_json(export_path, full)
         return {name: _plain(full.get(name)) for name in updates}

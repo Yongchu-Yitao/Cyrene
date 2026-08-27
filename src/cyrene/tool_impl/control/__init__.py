@@ -1,1 +1,0 @@
-"""Agent-control tool implementations."""

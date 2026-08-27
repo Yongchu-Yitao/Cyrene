@@ -1,18 +1,48 @@
-"""Editable Cyrene knowledge Plugin pack."""
+"""Editable knowledge Plugin pack with Agent and application integrations."""
 
-from ._runtime import create_plugin_pack
+from __future__ import annotations
 
-plugin_pack = create_plugin_pack(
-    package_name=__name__,
-    pack_id="cyrene_knowledge",
-    description="Search and manage project knowledge and library documents.",
-    native_module_names=(
-        "list_knowledge_documents", "search_knowledge",
-        "list_library_items", "search_library", "update_library_metadata",
-    ),
-    registration_providers=(),
+from agent.plugin import (
+    PluginApplicationContext,
+    PluginPack,
+    PluginSetupContext,
 )
-if len(plugin_pack.plugins) != 5:
-    raise RuntimeError("knowledge pack must contain exactly 5 Plugins")
 
-__all__ = ["plugin_pack"]
+from .list_knowledge_documents import plugin as list_knowledge_documents
+from .list_library_items import plugin as list_library_items
+from .search_knowledge import plugin as search_knowledge
+from .search_library import plugin as search_library
+from .update_library_metadata import plugin as update_library_metadata
+
+
+def setup(context: PluginSetupContext) -> None:
+    from .service import create_knowledge_service
+
+    if context.services.get("knowledge") is None:
+        context.provide(
+            "knowledge",
+            create_knowledge_service(context.data_directory / "plugin_data" / "cyrene_knowledge"),
+        )
+
+
+def application_setup(context: PluginApplicationContext) -> None:
+    from .application import setup_application
+
+    setup_application(context)
+
+
+plugin_pack = PluginPack(
+    id="cyrene_knowledge",
+    description="Search, manage, index, and present project knowledge and library documents.",
+    plugins=(
+        list_knowledge_documents,
+        search_knowledge,
+        list_library_items,
+        search_library,
+        update_library_metadata,
+    ),
+    setup=setup,
+    application_setup=application_setup,
+)
+
+__all__ = ["application_setup", "plugin_pack", "setup"]

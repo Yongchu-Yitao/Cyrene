@@ -4,18 +4,9 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
-from cyrene.agent import (
-    _AWAITING_USER_SENTINEL,
-    answer_pending_question,
-    clear_session_id,
-    get_pending_question,
-    get_session_labels,
-    run_agent,
-)
-from cyrene.agent.context import with_run_context
-from cyrene.runtime.memory.conversations import archive_exchange
-from cyrene.config import ASSISTANT_NAME, DB_PATH, OWNER_ID, TELEGRAM_BOT_TOKEN
+from cyrene.config import ASSISTANT_NAME, DATA_DIR, DB_PATH, OWNER_ID, TELEGRAM_BOT_TOKEN
 from cyrene.runtime.scheduler import reset_lottery, setup_scheduler
+from cyrene.workbench.channel_chat_service import get_channel_chat_service
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +49,17 @@ async def _start(update: Update, context) -> None:
 async def _clear(update: Update, context) -> None:
     if not _is_owner(update):
         return
-    await clear_session_id()
+    if update.effective_chat is None:
+        return
+    chat_id = update.effective_chat.id
+    service = get_channel_chat_service(
+        str(DB_PATH),
+        channel="telegram",
+        identity=str(chat_id),
+        bot=context.bot,
+        host_chat_id=chat_id,
+    )
+    await service.clear()
     await update.message.reply_text("Session cleared. Starting fresh!")
 
 
@@ -69,7 +70,6 @@ async def _send_response(update: Update, bot, chat_id: int, response: str) -> No
         await update.message.reply_text(chunk)
 
 
-@with_run_context(conversation_source="telegram")
 async def _handle_message(update: Update, context) -> None:
     if not _is_owner(update) or not update.message or not update.message.text:
         return
@@ -82,67 +82,63 @@ async def _handle_message(update: Update, context) -> None:
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    # If there is a pending question, route this message as the answer
-    pending = get_pending_question()
-    if pending and str(pending.get("id", "")).strip():
-        question_id = str(pending["id"]).strip()
-        # Map numeric replies to option labels
-        options = pending.get("options") or []
-        answer_text = user_text.strip()
-        if options and answer_text.isdigit():
-            idx = int(answer_text) - 1
-            if 0 <= idx < len(options):
-                opt = options[idx]
-                answer_text = str(opt.get("label", opt) if isinstance(opt, dict) else opt).strip()
-        try:
-            response = await answer_pending_question(
-                question_id, answer_text, context.bot, chat_id, str(DB_PATH)
-            )
-        except Exception as exc:
-            logger.warning("answer_pending_question failed: %s", exc)
-            response = f"处理回答时出错：{exc}"
-    else:
-        response = await run_agent(user_text, context.bot, chat_id, str(DB_PATH))
-
-    # If the agent is now waiting for user input, send the question
-    if response == _AWAITING_USER_SENTINEL:
-        new_pending = get_pending_question()
-        if new_pending:
-            question_text = _format_pending_question(new_pending)
-            await update.message.reply_text(question_text)
-        return
-
-    # Archive to conversations/ for long-term memory
-    labels = get_session_labels()
-    await archive_exchange(
-        user_text,
-        response,
-        chat_id,
-        session_title=labels.get("session_title", ""),
-        round_title=labels.get("round_title", ""),
-        round_id=labels.get("round_id", ""),
+    service = get_channel_chat_service(
+        str(DB_PATH),
+        channel="telegram",
+        identity=str(chat_id),
+        bot=context.bot,
+        host_chat_id=chat_id,
     )
-
-    await _send_response(update, context.bot, chat_id, response)
+    try:
+        result = await service.turn(user_text)
+    except Exception as exc:
+        logger.exception("Telegram Agent turn failed")
+        await update.message.reply_text(f"处理消息时出错：{exc}")
+        return
+    if result.awaiting_user and result.pending_question is not None:
+        await update.message.reply_text(
+            _format_pending_question(result.pending_question)
+        )
+        return
+    await _send_response(update, context.bot, chat_id, result.text)
 
 
 async def _post_init(application: Application) -> None:
+    from fastapi import APIRouter, FastAPI
+    from agent.plugin import (
+        PluginApplicationHost,
+        set_active_plugin_application_host,
+    )
     from cyrene.runtime.bootstrap import start_external_services
 
-    await start_external_services(search=False, mcp=False, custom_tools=True)
+    plugin_host = PluginApplicationHost.load_user_plugins(
+        app=FastAPI(),
+        bot=application.bot,
+        db_path=str(DB_PATH),
+        data_directory=DATA_DIR,
+    )
+    plugin_host.attach(APIRouter())
+    set_active_plugin_application_host(plugin_host)
+    await plugin_host.startup()
+    application.bot_data["plugin_application_host"] = plugin_host
+    await start_external_services(search=False, mcp=False)
     scheduler = setup_scheduler(application.bot, str(DB_PATH))
     scheduler.start()
     logger.info("Scheduler started")
 
 
-async def _post_shutdown(_application: Application) -> None:
+async def _post_shutdown(application: Application) -> None:
+    from agent.plugin import set_active_plugin_application_host
     from cyrene.runtime.bootstrap import stop_external_services_async
 
     await stop_external_services_async(
         search=False,
         mcp=False,
-        custom_tools=True,
     )
+    plugin_host = application.bot_data.pop("plugin_application_host", None)
+    if plugin_host is not None:
+        await plugin_host.shutdown()
+    set_active_plugin_application_host(None)
 
 
 def setup_bot() -> Application:

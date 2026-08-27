@@ -2,24 +2,32 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
+from agent.plugin import PluginContext
+from agent.plugin.native_runtime import run_context_value
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import json
 
 TOOL_NAME = "GetLearnedSkill"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
-async def _tool_get_learned_skill(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+async def _tool_get_learned_skill(
+    args: dict[str, Any],
+    context: PluginContext,
+) -> str:
     name = str(args.get("name") or "").strip()
     if not name:
         return json.dumps({"ok": False, "error": "name is required"}, ensure_ascii=False)
 
     try:
-        from cyrene.learning import engine as _bl
+        import cyrene.learning.orchestrator as learning
 
-        skill = await _bl.get_learned_skill_by_name(name)
+        skill = await learning.get_learned_skill_by_name(
+            name,
+            session_id=str(run_context_value(context, "session_id") or ""),
+        )
         if skill is None:
             return json.dumps({"ok": False, "error": f"no active learned skill named '{name}'"}, ensure_ascii=False)
 

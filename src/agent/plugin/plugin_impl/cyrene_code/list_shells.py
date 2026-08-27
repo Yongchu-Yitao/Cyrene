@@ -4,21 +4,23 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+from agent.plugin.native_runtime import json_result
+
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import json_result
+from .services import terminal_service
 
 TOOL_NAME = 'ListShells'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
-async def _tool_list_shells(_args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    from cyrene.tooling.backends.terminals import (
-        list_agent_terminals,
-        list_visible_terminals,
-    )
-
-    bound_shells = await list_agent_terminals(include_exited=True)
-    visible_shells = await list_visible_terminals()
+async def _tool_list_shells(
+    _args: dict[str, Any],
+    context: PluginContext,
+) -> str:
+    terminals = terminal_service(context)
+    bound_shells = await terminals.list_owned(context, include_exited=True)
+    visible_shells = await terminals.list_visible(context)
     bound_ids = {str(item.get("id") or "") for item in bound_shells}
     visible_by_id = {
         str(item.get("id") or ""): item for item in visible_shells

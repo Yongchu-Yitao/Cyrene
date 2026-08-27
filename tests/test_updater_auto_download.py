@@ -164,10 +164,7 @@ async def test_auto_download_failure_keeps_retryable_state(fresh_auto_state, mon
 async def test_run_update_check_once_auto_downloads_and_notifies(fresh_auto_state, monkeypatch, tmp_path):
     from cyrene.workbench import notifications
 
-    store = tmp_path / "workbench_notifications.json"
-    monkeypatch.setattr(notifications, "_NOTIFICATIONS_STORE", store)
-    monkeypatch.setattr(notifications, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(notifications, "_STORE_DB_PATH", "")
+    notifications.configure_store(str(tmp_path / "workbench.sqlite3"))
     monkeypatch.setattr(updater, "download_update", _fake_download(size=11))
 
     async def _fake_fetch(client, include_prerelease):

@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from cyrene.agent.budget import BudgetUsageQueryError, get_budget_state
+from cyrene.runtime.budget import BudgetUsageQueryError, get_budget_state
 from cyrene.model_runtime.pricing import cost_from_cny
 from cyrene.runtime import config_store, settings_store
 from cyrene.runtime.data_reset import DataResetApplicationService

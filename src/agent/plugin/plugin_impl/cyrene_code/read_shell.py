@@ -6,8 +6,11 @@ import base64
 import re
 from typing import Any
 
+from agent.plugin import PluginContext
+from agent.plugin.native_runtime import json_result
+
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import json_result
+from .services import terminal_service
 
 TOOL_NAME = "ReadShell"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -28,24 +31,24 @@ def _plain_scrollback_text(data: bytes) -> str:
     return text
 
 
-async def _tool_read_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    from cyrene.terminal.client import get_terminal_daemon_client
-    from cyrene.tooling.backends.terminals import resolve_terminal
-
-    terminal = await resolve_terminal(
+async def _tool_read_shell(
+    args: dict[str, Any],
+    context: PluginContext,
+) -> str:
+    terminals = terminal_service(context)
+    terminal = await terminals.resolve(
+        context,
         terminal_id=str(args.get("shell_id") or ""),
         name=str(args.get("name") or ""),
-        access="read",
     )
     view = str(args.get("view") or "screen").strip().lower()
     if view not in {"screen", "scrollback", "commands", "command_output"}:
         raise ValueError(
             "view must be 'screen', 'scrollback', 'commands', or 'command_output'"
         )
-    client = get_terminal_daemon_client()
     terminal_id = str(terminal.get("id") or "")
     if view == "commands":
-        payload = await client.commands(terminal_id)
+        payload = await terminals.commands(terminal_id)
         return json_result({
             "shell_id": terminal_id,
             "terminal_id": terminal_id,
@@ -57,7 +60,7 @@ async def _tool_read_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_p
         command_id = str(args.get("command_id") or "").strip()
         if not command_id:
             raise ValueError("command_id is required for view=command_output")
-        payload = await client.command_output(terminal_id, command_id)
+        payload = await terminals.command_output(terminal_id, command_id)
         return json_result({
             "shell_id": terminal_id,
             "terminal_id": terminal_id,
@@ -68,7 +71,7 @@ async def _tool_read_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_p
         })
     if view == "scrollback":
         requested_cursor = args.get("cursor")
-        snap = await client.scrollback(
+        snap = await terminals.scrollback(
             terminal_id,
             cursor=(int(requested_cursor) if requested_cursor is not None else None),
             max_bytes=int(args.get("max_bytes") or 64 * 1024),
@@ -105,7 +108,7 @@ async def _tool_read_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_p
             "tmux_session": terminal_state.get("tmuxSession", ""),
         })
 
-    snap = await client.screen(terminal_id)
+    snap = await terminals.screen(terminal_id)
     terminal_state = snap.get("terminal") or {}
     screen_text = snap.get("screenText", "")
     rendered_lines = str(screen_text).splitlines()

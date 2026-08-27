@@ -7,7 +7,55 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from agent.workbench.task_runtime import (
+    TaskAgentResult,
+    TaskAgentRuntime,
+    TaskAgentRuntimeError,
+)
 from route.registry import register_routes
+
+
+class _FakeAgentRuntime:
+    def __init__(self, *, reply="已完成登录接口", run_error=None, verdict=None):
+        self.reply = reply
+        self.run_error = run_error
+        self.verdict = verdict or {
+            "results": [{"id": "accept_1", "passed": True, "evidence": "ok"}],
+            "recommend_reflection": False,
+            "reason": "ok",
+        }
+        self.run_ids = []
+        self.answer_calls = []
+
+    def _result(self, run_id, text=None):
+        return TaskAgentResult(
+            text=text or self.reply,
+            awaiting_user=False,
+            pending_question=None,
+            tool_events=(),
+            usage={},
+            model="fake-model",
+            model_identity={"provider": "fake"},
+            snapshot={"run_id": run_id, "status": "idle", "nodes": []},
+        )
+
+    async def run_turn(self, *, run_id, **_kwargs):
+        self.run_ids.append(run_id)
+        if self.run_error:
+            raise self.run_error
+        return self._result(run_id)
+
+    async def answer_turn(self, *, run_id, question_id, answer, **_kwargs):
+        self.answer_calls.append((run_id, question_id, answer))
+        if self.run_error:
+            raise self.run_error
+        return self._result(run_id, "已根据你的回复用纯色方案完成此步")
+
+    async def verify_acceptance(self, _session, _project):
+        return self.verdict
+
+    async def reflect_task(self, *_args, **_kwargs):
+        return {"objective": "test", "next_step": "continue"}
 
 
 def _store(tmp_path, *, status="planning", revision=3):
@@ -69,14 +117,12 @@ def _store(tmp_path, *, status="planning", revision=3):
 
 
 def _app(monkeypatch, tmp_path):
-    from cyrene.workbench import runtime as routes
     from cyrene.workbench import goal_loop as goal_loop
+    from cyrene.workbench import project_repository as routes
 
-    data_dir, store_path = _store(tmp_path)
+    _data_dir, store_path = _store(tmp_path)
     db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
     monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
-    monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
     monkeypatch.setattr(goal_loop, "append_notification", lambda **_kwargs: {})
     monkeypatch.setattr(goal_loop.GoalLoopManager, "wake", lambda self, run_id: None)
     app = FastAPI()
@@ -85,12 +131,14 @@ def _app(monkeypatch, tmp_path):
 
 
 def test_goal_loop_preview_and_start_without_changing_goal(monkeypatch, tmp_path):
-    from cyrene.workbench import runtime as routes
-
     async def unexpected_generation(*_args, **_kwargs):
         raise AssertionError("existing user acceptance criteria must be preserved")
 
-    monkeypatch.setattr(routes, "_workbench_generate_acceptance_criteria", unexpected_generation)
+    monkeypatch.setattr(
+        TaskAgentRuntime,
+        "generate_acceptance_criteria",
+        unexpected_generation,
+    )
     app, db_path, store_path = _app(monkeypatch, tmp_path)
     client = TestClient(app)
 
@@ -210,12 +258,11 @@ async def test_goal_loop_start_rolls_back_run_when_projection_write_fails(monkey
 
 async def test_goal_loop_startup_recovers_hard_crash_state_and_stale_lease(monkeypatch, tmp_path):
     """Persisted running state is the exact state left by SIGKILL/power loss."""
-    from cyrene.workbench import runtime as routes
     from cyrene.workbench import goal_loop as goal_loop
+    from cyrene.workbench import project_repository as routes
 
-    data_dir, store_path = _store(tmp_path, status="running")
+    _data_dir, store_path = _store(tmp_path, status="running")
     db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
     monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
     await goal_loop._ensure_schema(db_path)
     payload = routes._read_workbench_store()
@@ -223,6 +270,7 @@ async def test_goal_loop_startup_recovers_hard_crash_state_and_stale_lease(monke
         status="running",
         startedAt="2026-07-11T00:00:00+00:00",
         currentAction="旧进程正在执行",
+        goalLoopAgentRunId="goal_agent_original",
     )
     routes._write_workbench_store(payload)
     now = goal_loop._utc_iso()
@@ -241,7 +289,8 @@ async def test_goal_loop_startup_recovers_hard_crash_state_and_stale_lease(monke
         ("run_crashed", "session_1", "project_1", "完成账号登录功能", 3, now, now, now, now),
     )
 
-    manager = goal_loop.GoalLoopManager(db_path)
+    runtime = _FakeAgentRuntime()
+    manager = goal_loop.GoalLoopManager(db_path, runtime)
     awakened = []
     monkeypatch.setattr(manager, "wake", awakened.append)
     await manager.startup()
@@ -258,18 +307,24 @@ async def test_goal_loop_startup_recovers_hard_crash_state_and_stale_lease(monke
     step = session["plan"][0]
     assert session["status"] == "running"
     assert session["goalLoop"]["phase"] == "recovering"
-    assert step["status"] == "pending"
-    assert step["startedAt"] is None
-    assert "currentAction" not in step
+    assert step["status"] == "running"
+    assert step["startedAt"] == "2026-07-11T00:00:00+00:00"
+    assert step["goalLoopAgentRunId"] == "goal_agent_original"
+
+    async def pass_step(*_args, **_kwargs):
+        return {"passed": True, "evidence": "recovered", "retry_guidance": ""}
+
+    monkeypatch.setattr(goal_loop, "_verify_step", pass_step)
+    await manager._run("run_crashed")
+    assert runtime.run_ids == ["goal_agent_original"]
 
 
 async def test_goal_loop_graceful_restart_pauses_then_recovers(monkeypatch, tmp_path):
-    from cyrene.workbench import runtime as routes
     from cyrene.workbench import goal_loop as goal_loop
+    from cyrene.workbench import project_repository as routes
 
-    data_dir, store_path = _store(tmp_path, status="running")
+    _data_dir, store_path = _store(tmp_path, status="running")
     db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
     monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
     await goal_loop._ensure_schema(db_path)
     now = goal_loop._utc_iso()
@@ -287,13 +342,13 @@ async def test_goal_loop_graceful_restart_pauses_then_recovers(monkeypatch, tmp_
         ("run_restart", "session_1", "project_1", "完成账号登录功能", 3, now, now, now),
     )
 
-    old_manager = goal_loop.GoalLoopManager(db_path)
+    old_manager = goal_loop.GoalLoopManager(db_path, _FakeAgentRuntime())
     await old_manager.shutdown()
     paused = await goal_loop._get_run_by_id(db_path, "run_restart")
     assert paused["status"] == "paused"
     assert paused["stop_reason"] == "server_shutdown"
 
-    new_manager = goal_loop.GoalLoopManager(db_path)
+    new_manager = goal_loop.GoalLoopManager(db_path, _FakeAgentRuntime())
     awakened = []
     monkeypatch.setattr(new_manager, "wake", awakened.append)
     await new_manager.startup()
@@ -305,9 +360,7 @@ async def test_goal_loop_graceful_restart_pauses_then_recovers(monkeypatch, tmp_
 
 
 def test_goal_loop_changed_goal_regenerates_plan_and_requires_full_access_confirmation(monkeypatch, tmp_path):
-    from cyrene.workbench import runtime as routes
-
-    async def fake_plan(session, project, feedback="", requested_operation="auto", **_kwargs):
+    async def fake_plan(self, session, project, feedback="", requested_operation="auto", **_kwargs):
         assert session["goal"] == "改为实现短信登录"
         assert requested_operation == "replace"
         return (
@@ -317,7 +370,7 @@ def test_goal_loop_changed_goal_regenerates_plan_and_requires_full_access_confir
             "replace",
         )
 
-    monkeypatch.setattr(routes, "_workbench_generate_plan_steps", fake_plan)
+    monkeypatch.setattr(TaskAgentRuntime, "generate_plan", fake_plan)
     app, _db_path, _store_path = _app(monkeypatch, tmp_path)
     client = TestClient(app)
 
@@ -388,15 +441,13 @@ def test_acceptance_patch_auto_completes_task_when_all_criteria_pass(monkeypatch
 
 
 def test_independent_verification_auto_completes_task(monkeypatch, tmp_path):
-    from cyrene.workbench import runtime as routes
-
-    async def fake_verify(_session, _project):
+    async def fake_verify(self, _session, _project):
         return {
             "results": [{"id": "accept_1", "passed": True, "evidence": "测试通过"}],
             "reason": "全部通过",
         }
 
-    monkeypatch.setattr(routes, "_workbench_verify_acceptance", fake_verify)
+    monkeypatch.setattr(TaskAgentRuntime, "verify_acceptance", fake_verify)
     app, _db_path, _store_path = _app(monkeypatch, tmp_path)
     client = TestClient(app)
 
@@ -413,7 +464,6 @@ def test_goal_loop_preview_returns_service_unavailable_before_generation_when_st
     monkeypatch,
     tmp_path,
 ):
-    from cyrene.workbench import runtime as routes
     from cyrene.workbench.goal_loop_repository import SqliteGoalLoopRepository
 
     generation_called = False
@@ -426,7 +476,7 @@ def test_goal_loop_preview_returns_service_unavailable_before_generation_when_st
     async def locked_delete(_repository, _expires_before):
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr(routes, "_workbench_generate_plan_steps", fake_plan)
+    monkeypatch.setattr(TaskAgentRuntime, "generate_plan", fake_plan)
     monkeypatch.setattr(SqliteGoalLoopRepository, "delete_expired_drafts", locked_delete)
     app, _db_path, _store_path = _app(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -449,34 +499,26 @@ def test_goal_loop_preview_returns_service_unavailable_before_generation_when_st
 
 
 async def test_goal_loop_runner_completes_after_independent_verification(monkeypatch, tmp_path):
-    from cyrene.workbench import runtime as routes
     from cyrene.workbench import goal_loop as goal_loop
+    from cyrene.workbench import project_repository as routes
 
-    data_dir, store_path = _store(tmp_path)
+    _data_dir, store_path = _store(tmp_path)
     db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
     monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
     monkeypatch.setattr(goal_loop, "append_notification", lambda **_kwargs: {})
-    monkeypatch.setattr(routes, "_workbench_git_status_snapshot", lambda _root: {})
-    monkeypatch.setattr(routes, "_workbench_git_status_delta", lambda *_args: [])
-    monkeypatch.setattr(routes, "_collect_run_activity_events", lambda *_args: [])
-
-    async def fake_agent(*_args, **_kwargs):
-        return "已完成登录接口"
-
     async def fake_step_verify(*_args, **_kwargs):
         return {"passed": True, "evidence": "认证模块已更新", "retry_guidance": ""}
 
-    async def fake_goal_verify(session, project):
-        return {
-            "results": [{"id": "accept_1", "passed": True, "evidence": "认证测试通过"}],
+    monkeypatch.setattr(goal_loop, "_verify_step", fake_step_verify)
+    runtime = _FakeAgentRuntime(
+        verdict={
+            "results": [
+                {"id": "accept_1", "passed": True, "evidence": "认证测试通过"}
+            ],
             "recommend_reflection": False,
             "reason": "全部通过",
         }
-
-    monkeypatch.setattr(routes, "_workbench_agent_reply", fake_agent)
-    monkeypatch.setattr(goal_loop, "_verify_step", fake_step_verify)
-    monkeypatch.setattr(routes, "_workbench_verify_acceptance", fake_goal_verify)
+    )
 
     await goal_loop._ensure_schema(db_path)
     now = goal_loop._utc_iso()
@@ -492,7 +534,7 @@ async def test_goal_loop_runner_completes_after_independent_verification(monkeyp
         """,
         ("run_1", "session_1", "project_1", "完成账号登录功能", 3, now, now, now),
     )
-    manager = goal_loop.GoalLoopManager(db_path)
+    manager = goal_loop.GoalLoopManager(db_path, runtime)
     await manager._run("run_1")
 
     run = await goal_loop._get_run_by_id(db_path, "run_1")
@@ -515,34 +557,30 @@ async def test_goal_loop_runner_completes_after_independent_verification(monkeyp
 async def test_goal_loop_pauses_when_execution_infrastructure_is_unavailable(
     monkeypatch, tmp_path, failure_kind, expected_reason
 ):
-    from cyrene.workbench import runtime as routes
     from cyrene.workbench import goal_loop as goal_loop
+    from cyrene.workbench import project_repository as routes
 
-    data_dir, store_path = _store(tmp_path)
+    _data_dir, store_path = _store(tmp_path)
     db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
     monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
     monkeypatch.setattr(goal_loop, "append_notification", lambda **_kwargs: {})
-    monkeypatch.setattr(routes, "_workbench_git_status_snapshot", lambda _root: {})
-    monkeypatch.setattr(routes, "_workbench_git_status_delta", lambda *_args: [])
-    monkeypatch.setattr(routes, "_collect_run_activity_events", lambda *_args: [])
-
-    async def fake_agent(*_args, **_kwargs):
-        if failure_kind == "budget":
-            raise routes._WorkbenchAgentRunError(
-                "budget_monthly_exhausted",
-                "Monthly budget exhausted",
-                status_code=403,
-            )
-        return "已完成登录接口"
-
     async def fake_step_verify(*_args, **_kwargs):
         if failure_kind == "verification":
             raise RuntimeError("步骤独立验收暂时不可用")
         raise AssertionError("budget block must stop before verification")
 
-    monkeypatch.setattr(routes, "_workbench_agent_reply", fake_agent)
     monkeypatch.setattr(goal_loop, "_verify_step", fake_step_verify)
+    runtime = _FakeAgentRuntime(
+        run_error=(
+            TaskAgentRuntimeError(
+                "Monthly budget exhausted",
+                code="budget_monthly_exhausted",
+                status_code=403,
+            )
+            if failure_kind == "budget"
+            else None
+        )
+    )
 
     await goal_loop._ensure_schema(db_path)
     now = goal_loop._utc_iso()
@@ -559,7 +597,7 @@ async def test_goal_loop_pauses_when_execution_infrastructure_is_unavailable(
         ("run_1", "session_1", "project_1", "完成账号登录功能", 3, now, now, now),
     )
 
-    manager = goal_loop.GoalLoopManager(db_path)
+    manager = goal_loop.GoalLoopManager(db_path, runtime)
     await manager._run("run_1")
 
     run = await goal_loop._get_run_by_id(db_path, "run_1")
@@ -584,22 +622,14 @@ def test_goal_loop_skipped_prerequisite_blocks_dependent_step():
 
 
 async def test_goal_loop_runner_blocks_after_repeated_step_verification_failure(monkeypatch, tmp_path):
-    from cyrene.workbench import runtime as routes
     from cyrene.workbench import goal_loop as goal_loop
+    from cyrene.workbench import project_repository as routes
 
-    data_dir, store_path = _store(tmp_path)
+    _data_dir, store_path = _store(tmp_path)
     db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
     monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
     monkeypatch.setattr(goal_loop, "append_notification", lambda **_kwargs: {})
-    monkeypatch.setattr(routes, "_workbench_git_status_snapshot", lambda _root: {})
-    monkeypatch.setattr(routes, "_workbench_git_status_delta", lambda *_args: [])
-    monkeypatch.setattr(routes, "_collect_run_activity_events", lambda *_args: [])
-
     verify_calls = {"n": 0}
-
-    async def fake_agent(*_args, **_kwargs):
-        return "尝试修改认证模块"
 
     async def always_fail_step(*_args, **_kwargs):
         verify_calls["n"] += 1
@@ -612,10 +642,10 @@ async def test_goal_loop_runner_blocks_after_repeated_step_verification_failure(
     async def fail_goal_verify(session, project):
         raise AssertionError("goal verification should not run while a step is stuck")
 
-    monkeypatch.setattr(routes, "_workbench_agent_reply", fake_agent)
     monkeypatch.setattr(goal_loop, "_verify_step", always_fail_step)
     monkeypatch.setattr(goal_loop, "_reflect", fake_reflect)
-    monkeypatch.setattr(routes, "_workbench_verify_acceptance", fail_goal_verify)
+    runtime = _FakeAgentRuntime()
+    runtime.verify_acceptance = fail_goal_verify
 
     await goal_loop._ensure_schema(db_path)
     now = goal_loop._utc_iso()
@@ -631,7 +661,7 @@ async def test_goal_loop_runner_blocks_after_repeated_step_verification_failure(
         """,
         ("run_1", "session_1", "project_1", "完成账号登录功能", 3, now, now, now),
     )
-    manager = goal_loop.GoalLoopManager(db_path)
+    manager = goal_loop.GoalLoopManager(db_path, runtime)
     await manager._run("run_1")
 
     run = await goal_loop._get_run_by_id(db_path, "run_1")
@@ -650,12 +680,11 @@ async def test_resume_after_answer_does_not_re_execute_the_answered_step(monkeyp
     """Answering a goal-loop clarification must resume the loop WITHOUT resetting
     the answered step back to pending — otherwise the runner re-executes the same
     step and the agent re-asks the same question."""
-    from cyrene.workbench import runtime as routes
     from cyrene.workbench import goal_loop as goal_loop
+    from cyrene.workbench import project_repository as routes
 
-    data_dir, store_path = _store(tmp_path, status="running")
+    _data_dir, store_path = _store(tmp_path, status="running")
     db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
     monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
 
     # The answer endpoint has already marked the step complete and cleared
@@ -693,12 +722,11 @@ async def test_resume_after_answer_does_not_re_execute_the_answered_step(monkeyp
 
 
 async def test_resume_after_answer_pauses_on_permission_denied(monkeypatch, tmp_path):
-    from cyrene.workbench import runtime as routes
     from cyrene.workbench import goal_loop as goal_loop
+    from cyrene.workbench import project_repository as routes
 
-    data_dir, store_path = _store(tmp_path, status="running")
+    _data_dir, store_path = _store(tmp_path, status="running")
     db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
     monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
 
     await goal_loop._ensure_schema(db_path)
@@ -728,20 +756,29 @@ async def test_resume_after_answer_pauses_on_permission_denied(monkeypatch, tmp_
 
 
 async def test_begin_async_answer_tags_step_and_resumes_run(monkeypatch, tmp_path):
-    from cyrene.workbench import runtime as routes
     from cyrene.workbench import goal_loop as goal_loop
+    from cyrene.workbench import project_repository as routes
 
-    data_dir, store_path = _store(tmp_path, status="waiting_for_user")
+    _data_dir, store_path = _store(tmp_path, status="waiting_for_user")
     db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
     monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
 
     # A goal-loop step is waiting on a clarification question.
     payload = json.loads(store_path.read_text(encoding="utf-8"))
     session = payload["projects"][0]["sessions"][0]
     session["plan"][0]["status"] = "running"
-    session["pendingQuestion"] = {"id": "q1", "text": "用纯色方案吗？", "options": ["同意", "再想想"]}
-    session["pendingPlanStep"] = {"stepId": "step_1", "goalLoop": True}
+    session["plan"][0]["goalLoopAgentRunId"] = "goal_agent_original"
+    session["pendingQuestion"] = {
+        "id": "q1",
+        "text": "用纯色方案吗？",
+        "options": ["同意", "再想想"],
+        "roundId": "goal_agent_original",
+    }
+    session["pendingPlanStep"] = {
+        "stepId": "step_1",
+        "goalLoop": True,
+        "agentRunId": "goal_agent_original",
+    }
     store_path.write_text(json.dumps(payload), encoding="utf-8")
 
     await goal_loop._ensure_schema(db_path)
@@ -778,50 +815,40 @@ async def test_begin_async_answer_tags_step_and_resumes_run(monkeypatch, tmp_pat
 
 
 async def test_goal_loop_worker_resumes_via_answer_pending_and_completes(monkeypatch, tmp_path):
-    from cyrene.workbench import runtime as routes
+    from cyrene.workbench import artifact_runtime
     from cyrene.workbench import goal_loop as goal_loop
+    from cyrene.workbench import project_repository as routes
 
-    data_dir, store_path = _store(tmp_path, status="running")
+    _data_dir, store_path = _store(tmp_path, status="running")
     db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
     monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
     monkeypatch.setattr(goal_loop, "append_notification", lambda **_kwargs: {})
-    monkeypatch.setattr(routes, "_workbench_git_status_snapshot", lambda _root: {})
-    monkeypatch.setattr(routes, "_workbench_git_status_delta", lambda *_args: [])
-    monkeypatch.setattr(routes, "_collect_run_activity_events", lambda *_args: [])
+    monkeypatch.setattr(
+        artifact_runtime, "_workbench_git_status_snapshot", lambda _root: {}
+    )
+    monkeypatch.setattr(
+        artifact_runtime, "_workbench_workspace_file_snapshot", lambda _root: {}
+    )
+    monkeypatch.setattr(
+        artifact_runtime, "_workbench_workspace_text_snapshot", lambda _root: {}
+    )
 
     # The step carries an async-answer tag → must resume via answer_pending.
     payload = json.loads(store_path.read_text(encoding="utf-8"))
     payload["projects"][0]["sessions"][0]["plan"][0]["goalLoopResumeAnswer"] = {
         "questionId": "q1", "answer": "用纯色方案",
     }
+    payload["projects"][0]["sessions"][0]["plan"][0]["goalLoopAgentRunId"] = (
+        "goal_agent_original"
+    )
     payload["projects"][0]["sessions"][0]["plan"][0]["status"] = "running"
     store_path.write_text(json.dumps(payload), encoding="utf-8")
-
-    calls = {"answer": 0, "fresh": 0}
-
-    async def fake_answer_pending(session_id, question_id, answer_text, workspace_dir, permission_mode="default"):
-        calls["answer"] += 1
-        assert question_id == "q1"
-        assert answer_text == "用纯色方案"
-        # The run's permission mode must carry into the resumed slice, not revert.
-        assert permission_mode == "auto"
-        return "已根据你的回复用纯色方案完成此步"
-
-    async def fake_fresh(*_args, **_kwargs):
-        calls["fresh"] += 1
-        return "fresh execution (should not happen)"
 
     async def fake_step_verify(*_args, **_kwargs):
         return {"passed": True, "evidence": "已完成", "retry_guidance": ""}
 
-    async def fake_goal_verify(session, project):
-        return {"results": [{"id": "accept_1", "passed": True, "evidence": "ok"}], "reason": "ok"}
-
-    monkeypatch.setattr(routes, "_workbench_answer_pending", fake_answer_pending)
-    monkeypatch.setattr(routes, "_workbench_agent_reply", fake_fresh)
     monkeypatch.setattr(goal_loop, "_verify_step", fake_step_verify)
-    monkeypatch.setattr(routes, "_workbench_verify_acceptance", fake_goal_verify)
+    runtime = _FakeAgentRuntime()
 
     await goal_loop._ensure_schema(db_path)
     now = goal_loop._utc_iso()
@@ -837,11 +864,13 @@ async def test_goal_loop_worker_resumes_via_answer_pending_and_completes(monkeyp
         """,
         ("run_1", "session_1", "project_1", "完成账号登录功能", 3, now, now, now),
     )
-    manager = goal_loop.GoalLoopManager(db_path)
+    manager = goal_loop.GoalLoopManager(db_path, runtime)
     await manager._run("run_1")
 
-    assert calls["answer"] == 1   # resumed via answer_pending
-    assert calls["fresh"] == 0    # did NOT re-execute from scratch
+    assert runtime.answer_calls == [
+        ("goal_agent_original", "q1", "用纯色方案")
+    ]
+    assert runtime.run_ids == []  # did NOT start a second Agent turn
     run = await goal_loop._get_run_by_id(db_path, "run_1")
     assert run["status"] == "completed"
     stored = json.loads(store_path.read_text(encoding="utf-8"))

@@ -2,47 +2,31 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
-from pathlib import Path
 from typing import Any
 
 from cyrene.config import DB_PATH, WORKSPACE_DIR
-from cyrene.runtime.io import atomic_write_json, read_json_safe
 from cyrene.workbench import artifact_runtime, planning_runtime, project_runtime, task_context
 from cyrene.workbench.store import patch_project_bundle_fields, read_project_bundle, summarize_task_session, write_project_bundle
 
 logger = logging.getLogger(__name__)
-_WORKBENCH_STORE = WORKSPACE_DIR / "workbench_projects.json"
 _WORKBENCH_STORE_LOCK = threading.RLock()
-_WORKBENCH_LEGACY_DATA_KEY = "default"
-_CONFIGURED_WORKBENCH_STORE: Path | None = None
-_db_path = ""
+_db_path = str(DB_PATH)
 
 def _configure_workbench_store(db_path: str) -> None:
-    global _db_path, _CONFIGURED_WORKBENCH_STORE
-    _db_path = str(db_path)
-    _CONFIGURED_WORKBENCH_STORE = Path(_WORKBENCH_STORE)
-
-def _workbench_store_uses_sqlite() -> bool:
-    return bool(_db_path and _CONFIGURED_WORKBENCH_STORE is not None and (Path(_WORKBENCH_STORE) == _CONFIGURED_WORKBENCH_STORE))
+    global _db_path
+    _db_path = str(db_path or DB_PATH)
 
 def _read_workbench_store() -> dict[str, Any]:
     with _WORKBENCH_STORE_LOCK:
-        if not _workbench_store_uses_sqlite():
-            raw = read_json_safe(_WORKBENCH_STORE)
-            if isinstance(raw, dict) and isinstance(raw.get('projects'), list):
-                if not raw['projects']:
-                    raw = project_runtime._workbench_default_project()
-                _workbench_ensure_invariants(raw)
-                return raw
-            return project_runtime._workbench_default_project()
         try:
-            raw = read_project_bundle(_db_path or str(DB_PATH), project_runtime._workbench_default_project, _workbench_session_summary, legacy_path=_WORKBENCH_STORE)
+            raw = read_project_bundle(_db_path, project_runtime._workbench_default_project, _workbench_session_summary)
             if not isinstance(raw, dict) or not isinstance(raw.get('projects'), list):
-                raw = write_project_bundle(_db_path or str(DB_PATH), project_runtime._workbench_default_project(), project_runtime._workbench_default_project, _workbench_session_summary, legacy_path=_WORKBENCH_STORE, export_path=_WORKBENCH_STORE)
+                raw = write_project_bundle(_db_path, project_runtime._workbench_default_project(), project_runtime._workbench_default_project, _workbench_session_summary)
             if not raw['projects']:
-                raw = write_project_bundle(_db_path or str(DB_PATH), project_runtime._workbench_default_project(), project_runtime._workbench_default_project, _workbench_session_summary, legacy_path=_WORKBENCH_STORE, export_path=_WORKBENCH_STORE, base_value=getattr(raw, '_workbench_base', None))
+                raw = write_project_bundle(_db_path, project_runtime._workbench_default_project(), project_runtime._workbench_default_project, _workbench_session_summary, base_value=getattr(raw, '_workbench_base', None))
             _workbench_ensure_invariants(raw)
             return raw
         except Exception:
@@ -50,31 +34,15 @@ def _read_workbench_store() -> dict[str, Any]:
             raise
 
 def _read_workbench_store_lightweight() -> dict[str, Any]:
-    """Read project/task state without running workspace repair scans.
-
-    Project rails, chat entry, and other list surfaces only need the already
-    persisted metadata.  The full reader also enforces historical invariants
-    and scans project workspaces for artifact backfills; on a populated
-    workspace that made the tiny ``?detail=summary`` response take seconds.
-    Invalid or empty legacy state still falls back to the full repair path.
-    """
+    """Read project/task state without hydrating every session payload."""
     with _WORKBENCH_STORE_LOCK:
-        if not _workbench_store_uses_sqlite():
-            raw = read_json_safe(_WORKBENCH_STORE)
-        else:
-            raw = read_project_bundle(_db_path or str(DB_PATH), project_runtime._workbench_default_project, _workbench_session_summary, legacy_path=_WORKBENCH_STORE, lightweight=True)
+        raw = read_project_bundle(_db_path, project_runtime._workbench_default_project, _workbench_session_summary, lightweight=True)
         if isinstance(raw, dict) and isinstance(raw.get('projects'), list) and raw['projects']:
             return raw
     return _read_workbench_store()
 
-def _workbench_find_project_lightweight(project_id: str) -> dict[str, Any] | None:
-    """Look up one project without running read-time repair/backfill work.
-
-    Chat creation and chat-list scoping only need stable project metadata. The
-    normal ``_read_workbench_store`` path also enforces task invariants and
-    scans project workspaces for historical file artifacts; doing that work for
-    a foreign-key check makes a tiny chat request scale with every task and file.
-    """
+def find_workbench_project_lightweight(project_id: str) -> dict[str, Any] | None:
+    """Look up one project without hydrating unrelated task sessions."""
     target_id = str(project_id or '').strip()
     if not target_id:
         return None
@@ -88,16 +56,38 @@ def _workbench_find_project_lightweight(project_id: str) -> dict[str, Any] | Non
         result['workspacePath'] = str(relocated_root)
     return result
 
+
+def resolve_project_workspace_dir(project: dict[str, Any] | None) -> str:
+    """Resolve and create the workspace owned by one Workbench project."""
+
+    root = artifact_runtime._workbench_workspace_root(project)
+    if root is None:
+        return ""
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        logger.warning(
+            "Workbench workspace unavailable, using global: %s",
+            str((project or {}).get("workspacePath") or ""),
+        )
+        return ""
+    return str(root)
+
+
+async def resolve_project_workspace_dir_async(
+    project: dict[str, Any] | None,
+) -> str:
+    """Resolve a project workspace without blocking the HTTP event loop."""
+
+    return await asyncio.to_thread(resolve_project_workspace_dir, project)
+
 def _write_workbench_store(payload: dict[str, Any], *, base_value: dict[str, Any] | None=None) -> None:
     with _WORKBENCH_STORE_LOCK:
-        if not _workbench_store_uses_sqlite():
-            atomic_write_json(_WORKBENCH_STORE, payload)
-        else:
-            merged = write_project_bundle(_db_path or str(DB_PATH), payload, project_runtime._workbench_default_project, _workbench_session_summary, legacy_path=_WORKBENCH_STORE, export_path=_WORKBENCH_STORE, base_value=base_value)
-            payload.clear()
-            payload.update(merged)
-            if hasattr(payload, '_workbench_base'):
-                payload._workbench_base = getattr(merged, '_workbench_base', dict(merged))
+        merged = write_project_bundle(_db_path, payload, project_runtime._workbench_default_project, _workbench_session_summary, base_value=base_value)
+        payload.clear()
+        payload.update(merged)
+        if hasattr(payload, '_workbench_base'):
+            payload._workbench_base = getattr(merged, '_workbench_base', dict(merged))
     from cyrene.observability.debug import publish_event_sync
     publish_event_sync({'type': 'task_board_changed'})
 
@@ -111,14 +101,7 @@ def _persist_workbench_selection(project_id: str | None, session_id: str | None)
     if not fields:
         return {}
     with _WORKBENCH_STORE_LOCK:
-        if not _workbench_store_uses_sqlite():
-            payload = read_json_safe(_WORKBENCH_STORE)
-            if not isinstance(payload, dict) or not isinstance(payload.get('projects'), list):
-                payload = project_runtime._workbench_default_project()
-            payload.update(fields)
-            atomic_write_json(_WORKBENCH_STORE, payload)
-            return fields
-        return patch_project_bundle_fields(_db_path or str(DB_PATH), fields, project_runtime._workbench_default_project, _workbench_session_summary, legacy_path=_WORKBENCH_STORE, export_path=_WORKBENCH_STORE)
+        return patch_project_bundle_fields(_db_path, fields, project_runtime._workbench_default_project, _workbench_session_summary)
 
 def _workbench_ensure_invariants(payload: dict[str, Any]) -> bool:
     changed = False
@@ -132,6 +115,7 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> bool:
         project.setdefault('color', '')
         project.setdefault('template', 'blank')
         project.setdefault('workspacePath', str(WORKSPACE_DIR))
+        project.setdefault('workspacePathSource', 'user')
         project.setdefault('status', 'active')
         project.setdefault('model', project_runtime._get_model())
         project.setdefault('accountTier', 'Pro')
@@ -143,18 +127,7 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> bool:
         if relocated_root is not None and str(project.get('workspacePath') or '') != str(relocated_root):
             project['workspacePath'] = str(relocated_root)
             changed = True
-        if not project.get('dataKey'):
-            is_legacy_default = str(project.get('name') or '').strip().lower() == 'workspace' and str(project.get('workspacePath') or '') == str(WORKSPACE_DIR) and str((project.get('context') or {}).get('summary') or '').startswith('Workspace at ')
-            project['dataKey'] = _WORKBENCH_LEGACY_DATA_KEY if is_legacy_default else project_runtime._safe_workbench_data_key(project.get('id'))
-            changed = True
-        if project_runtime._workbench_project_data_key(project) == _WORKBENCH_LEGACY_DATA_KEY:
-            default_name = project_runtime._workbench_default_project_name()
-            if str(project.get('name') or '') in ('', 'Workspace', 'workspace'):
-                project['name'] = default_name
-                changed = True
-            if not str(project.get('workspacePath') or '').strip():
-                project['workspacePath'] = str(WORKSPACE_DIR)
-                changed = True
+        project.setdefault('dataKey', project_runtime._safe_workbench_data_key(project.get('id')))
         sessions = project.setdefault('sessions', [])
         if not sessions:
             sessions.append(project_runtime._workbench_new_session(project['id'], '新任务', '', now))
@@ -187,12 +160,6 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> bool:
                 if step.get('order') != index + 1:
                     step['order'] = index + 1
                     changed = True
-            if artifact_runtime._workbench_prune_non_file_artifacts(session):
-                changed = True
-            if artifact_runtime._workbench_prune_invalid_file_records(project, session):
-                changed = True
-            if artifact_runtime._workbench_backfill_file_artifacts(session, now, artifact_runtime._workbench_workspace_root(project)):
-                changed = True
     if projects and (not payload.get('activeProjectId')):
         payload['activeProjectId'] = projects[0].get('id')
         changed = True
@@ -369,4 +336,9 @@ def update_task_plan_for_session(session_id: str, operation: str, *, step_id: st
         _write_workbench_store(payload)
         return {'ok': True, 'project': project, 'session': session, 'plan': plan, 'planRevision': session.get('planRevision'), 'planDefinitionRevision': session.get('planDefinitionRevision'), **payload}
 
-__all__ = ['_configure_workbench_store', '_persist_workbench_selection', '_read_workbench_store', '_read_workbench_store_lightweight', '_task_plan_event_body', '_workbench_ensure_invariants', '_workbench_find_project', '_workbench_find_project_lightweight', '_workbench_find_session', '_workbench_lightweight_store', '_workbench_project_shell', '_workbench_session_summary', '_workbench_store_uses_sqlite', '_write_workbench_store', 'update_task_plan_for_session']
+configure_workbench_store = _configure_workbench_store
+read_workbench_store = _read_workbench_store
+find_workbench_project = _workbench_find_project
+
+
+__all__ = ['configure_workbench_store', 'find_workbench_project', 'find_workbench_project_lightweight', 'read_workbench_store', 'resolve_project_workspace_dir', 'resolve_project_workspace_dir_async', 'update_task_plan_for_session']

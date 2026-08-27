@@ -22,7 +22,7 @@ var SEARCH_COMMANDS = [
   { id: "new-project", labelKey: "search.command.newProject", hintKey: "search.command.newProjectHint", keywords: ["新项目", "项目", "project", "new project"] },
   { id: "open-settings", labelKey: "search.command.openSettings", hintKey: "search.command.openSettingsHint", keywords: ["设置", "settings", "偏好"] },
   { id: "open-shortcuts", labelKey: "search.command.openShortcuts", hintKey: "search.command.openShortcutsHint", keywords: ["快捷键", "shortcuts", "按键"] },
-  { id: "open-extensions", labelKey: "search.command.openExtensions", hintKey: "search.command.openExtensionsHint", keywords: ["扩展", "extensions", "插件"] },
+  { id: "open-plugin-registry", labelKey: "search.command.openPluginRegistry", hintKey: "search.command.openPluginRegistryHint", keywords: ["插件", "plugin", "registry", "MCP"] },
   { id: "open-budget", labelKey: "search.command.openBudget", hintKey: "search.command.openBudgetHint", keywords: ["预算", "budget", "额度"] },
   { id: "open-about", labelKey: "search.command.openAbout", hintKey: "search.command.openAboutHint", keywords: ["关于", "about", "版本", "更新"] },
   { id: "toggle-theme", labelKey: "search.command.toggleTheme", hintKey: "search.command.toggleThemeHint", keywords: ["主题", "theme", "深色", "浅色"] },
@@ -63,11 +63,28 @@ var NEW_ACTION_ICONS = {
 
 function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
   var { t, lang } = workbenchServices.i18n().use();
+  var dataStore = workbenchServices.data();
+  dataStore.useVersion();
+  var pluginModules = Array.isArray(dataStore.state.pluginModules)
+    ? dataStore.state.pluginModules : [];
+  var knowledgeEnabled = pluginModules.indexOf("knowledge") >= 0;
+  var memoryEnabled = pluginModules.indexOf("memory") >= 0;
+  var scheduleEnabled = pluginModules.indexOf("schedule") >= 0;
+  var searchTypes = SEARCH_TYPES.filter(function (item) {
+    return (item.id !== "knowledge" || knowledgeEnabled)
+      && (item.id !== "memory" || memoryEnabled)
+      && (item.id !== "schedule" || scheduleEnabled);
+  });
+  var searchTypeOrder = SEARCH_TYPE_ORDER.filter(function (type) {
+    return (type !== "knowledge" || knowledgeEnabled)
+      && (type !== "memory" || memoryEnabled)
+      && (type !== "schedule" || scheduleEnabled);
+  });
   var inputRef = useRefSr(null);
   var resultsRef = useRefSr(null);
   var [query, setQuery] = useStateSr("");
   var [activeType, setActiveType] = useStateSr("all");
-  var [legacyMode, setLegacyMode] = useStateSr(false);
+  var [archiveMode, setArchiveMode] = useStateSr(false);
   var [results, setResults] = useStateSr([]);
   var [groups, setGroups] = useStateSr({});
   var [status, setStatus] = useStateSr("idle"); // idle | loading | done | error
@@ -75,6 +92,12 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
   var abortRef = useRefSr(null);
   var requestSeqRef = useRefSr(0);
   var flatListRef = useRefSr([]); // flat list of the last committed render (see Enter handler)
+
+  useEffectSr(function () {
+    if (!knowledgeEnabled && activeType === "knowledge") setActiveType("all");
+    if (!memoryEnabled && activeType === "memory") setActiveType("all");
+    if (!scheduleEnabled && activeType === "schedule") setActiveType("all");
+  }, [knowledgeEnabled, memoryEnabled, scheduleEnabled, activeType]);
 
   // Auto-focus input on mount and restore focus on close.
   useEffectSr(function () {
@@ -143,7 +166,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
     }
     window.addEventListener("keydown", onKeyDown);
     return function () { window.removeEventListener("keydown", onKeyDown); };
-  }, [onClose, status, groups, results, legacyMode]);
+  }, [onClose, status, groups, results, archiveMode]);
 
   // Debounced search with request cancellation.
   useEffectSr(function () {
@@ -173,8 +196,8 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
         controller.abort();
       }, SEARCH_REQUEST_TIMEOUT_MS);
       abortRef.current = controller;
-      if (legacyMode) {
-        doLegacySearch(q, controller, requestId);
+      if (archiveMode) {
+        doConversationSearch(q, controller, requestId);
       } else {
         doWorkbenchSearch(q, controller, requestId);
       }
@@ -190,7 +213,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
         abortRef.current = null;
       }
     };
-  }, [query, activeType, legacyMode]);
+  }, [query, activeType, archiveMode]);
 
   function finishSearchRequest(controller) {
     if (controller.__cyreneTimeoutId) {
@@ -241,7 +264,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
     }
   }
 
-  async function doLegacySearch(q, controller, requestId) {
+  async function doConversationSearch(q, controller, requestId) {
     var signal = controller.signal;
     try {
       var r = await fetch("/api/search/conversations?q=" + encodeURIComponent(q) + "&limit=50", { signal: signal });
@@ -270,7 +293,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
 
   function flattenGroups(g) {
     var out = [];
-    SEARCH_TYPE_ORDER.forEach(function (type) {
+    searchTypeOrder.forEach(function (type) {
       var arr = g[type];
       if (Array.isArray(arr)) {
         arr.forEach(function (item) { out.push(item); });
@@ -428,7 +451,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
     return parts.join(" · ");
   }
 
-  function renderLegacyResult(result, index) {
+  function renderArchiveResult(result, index) {
     var isLast = index === results.length - 1;
     var assistantLabel = t("search.assistantLabel", { name: DATA.assistantName || "Cyrene" });
     var snippet = result.snippet;
@@ -489,7 +512,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
 
   function renderGroupedResults() {
     var out = [];
-    SEARCH_TYPE_ORDER.forEach(function (type) {
+    searchTypeOrder.forEach(function (type) {
       var arr = groups[type];
       if (!Array.isArray(arr) || !arr.length) return;
       out.push(
@@ -614,12 +637,12 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
   flatListRef.current = []
     .concat(paletteCommands)
     .concat(paletteSettings)
-    .concat(legacyMode ? results : flattenGroups(groups));
+    .concat(archiveMode ? results : flattenGroups(groups));
 
   var totalCount = results.length;
-  var placeholder = legacyMode ? t("search.placeholderLegacy") : t("search.placeholder");
-  var emptyText = legacyMode ? t("search.emptyStateLegacy") : t("search.emptyState");
-  var noResultsText = legacyMode ? t("search.noResultsLegacy") : t("search.noResults");
+  var placeholder = archiveMode ? t("search.placeholderArchive") : t("search.placeholder");
+  var emptyText = archiveMode ? t("search.emptyStateArchive") : t("search.emptyState");
+  var noResultsText = archiveMode ? t("search.noResultsArchive") : t("search.noResults");
 
   return React.createElement("div", { className: "search-overlay", onClick: function (e) { if (e.target === e.currentTarget) onClose && onClose(); } },
     React.createElement("div", { className: "search-overlay-panel", onClick: function (e) { e.stopPropagation(); } },
@@ -645,8 +668,8 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
       ),
 
       // Type filters (Workbench mode)
-      !legacyMode && React.createElement("div", { className: "search-overlay-filters", role: "tablist", "aria-label": t("search.filterLabel"), key: "filters" },
-        SEARCH_TYPES.map(function (item) {
+      !archiveMode && React.createElement("div", { className: "search-overlay-filters", role: "tablist", "aria-label": t("search.filterLabel"), key: "filters" },
+        searchTypes.map(function (item) {
           return React.createElement("button", {
             type: "button",
             role: "tab",
@@ -659,20 +682,20 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
         React.createElement("span", { className: "search-filter-separator" }),
         React.createElement("button", {
           type: "button",
-          className: "search-legacy-toggle" + (legacyMode ? " active" : ""),
-          onClick: function () { setLegacyMode(!legacyMode); },
-          title: t("search.legacyToggleHint"),
-        }, t("search.legacyToggle"))
+          className: "search-archive-toggle" + (archiveMode ? " active" : ""),
+          onClick: function () { setArchiveMode(!archiveMode); },
+          title: t("search.archiveToggleHint"),
+        }, t("search.archiveToggle"))
       ),
 
-      // Legacy mode filter bar
-      legacyMode && React.createElement("div", { className: "search-overlay-filters legacy", key: "filters-legacy" },
+      // Plugin-owned conversation archive filter bar
+      archiveMode && React.createElement("div", { className: "search-overlay-filters archive", key: "filters-archive" },
         React.createElement("button", {
           type: "button",
-          className: "search-legacy-toggle active",
-          onClick: function () { setLegacyMode(false); },
-        }, "← " + t("search.legacyToggle")),
-        React.createElement("span", { className: "search-filter-note" }, t("search.legacyToggleHint"))
+          className: "search-archive-toggle active",
+          onClick: function () { setArchiveMode(false); },
+        }, "← " + t("search.archiveToggle")),
+        React.createElement("span", { className: "search-filter-note" }, t("search.archiveToggleHint"))
       ),
 
       // Body
@@ -728,11 +751,11 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
         // Results
         status === "done" && renderCommandPaletteGroups(paletteCommands, paletteSettings),
 
-        status === "done" && legacyMode && results.map(function (result, index) {
-          return renderLegacyResult(result, index);
+        status === "done" && archiveMode && results.map(function (result, index) {
+          return renderArchiveResult(result, index);
         }),
 
-        status === "done" && !legacyMode && renderGroupedResults()
+        status === "done" && !archiveMode && renderGroupedResults()
       )
     )
   );

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
 from .common import selected_remote_devices
-from cyrene.tooling.runtime_api import json_result
+from agent.plugin.native_runtime import json_result
 
 TOOL_NAME = "ListRemoteDevices"
 TOOL_DEF = {
@@ -33,16 +34,10 @@ TOOL_METADATA = {
 
 async def handler(
     _args: dict[str, Any],
-    _bot: Any,
-    chat_id: int,
-    db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
     try:
-        _chat, devices = selected_remote_devices(
-            db_path,
-            fallback_chat_id=chat_id,
-        )
+        _chat, devices = selected_remote_devices(context)
         return json_result(
             {
                 "devices": [

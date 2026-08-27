@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
-from cyrene.tooling.result_store import ToolResultReferenceError, read_tool_result
+from agent.plugin import PluginContext
+
+from .tool_result_store import ToolResultReferenceError, read_tool_result
 
 TOOL_NAME = "read_tool_result"
 TOOL_DEF = {
@@ -41,18 +44,32 @@ TOOL_METADATA = {"read_only": True, "resource_keys": ("tool-result:{content_ref}
 
 async def _tool_read_tool_result(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
+    run_context = context.data.get("run_context")
+    nested_session_id = (
+        str(run_context.get("session_id") or "")
+        if isinstance(run_context, Mapping)
+        else ""
+    )
+    session_id = str(
+        context.data.get("session_id")
+        or context.data.get("chat_id")
+        or nested_session_id
+        or ""
+    )
+    service = context.services.get("tool_results")
+    reader = getattr(service, "read", None)
     try:
-        return read_tool_result(
-            str(args.get("content_ref") or ""),
-            offset=int(args.get("offset") or 0),
-            limit=int(args.get("limit") or 4000),
-            query=str(args.get("query") or ""),
-        )
+        options = {
+            "session_id": session_id,
+            "offset": int(args.get("offset") or 0),
+            "limit": int(args.get("limit") or 4000),
+            "query": str(args.get("query") or ""),
+        }
+        if callable(reader):
+            return str(reader(str(args.get("content_ref") or ""), **options))
+        return read_tool_result(str(args.get("content_ref") or ""), **options)
     except (TypeError, ValueError, ToolResultReferenceError) as exc:
         return f"Tool failed: {exc}"
 

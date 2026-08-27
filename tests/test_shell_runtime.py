@@ -1,4 +1,4 @@
-from cyrene.tooling.backends import shell_runtime
+from cyrene.terminal import shell_runtime
 
 
 def _set_windows(monkeypatch) -> None:

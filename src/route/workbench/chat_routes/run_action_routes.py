@@ -30,9 +30,6 @@ async def _prepare_action_send(
         return JSONResponse({"error": "invalid action_id"}, status_code=400)
     if len(value) > 256:
         return JSONResponse({"error": "value too long"}, status_code=400)
-    if chat_id.startswith("legacy:"):
-        return JSONResponse({"error": "legacy chats cannot run actions"}, status_code=403)
-
     service = context.service
     chat = await asyncio.to_thread(service.repository.get, chat_id)
     if not chat:

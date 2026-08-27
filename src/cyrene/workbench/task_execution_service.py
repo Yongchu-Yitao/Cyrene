@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from agent.workbench.task_runtime import (
+    TaskAgentResult,
+    TaskAgentRuntime,
+    TaskAgentRuntimeError,
+    persist_session_model_preference,
+)
 from cyrene.runtime.attachments import build_public_attachment_payload
 
 
@@ -19,116 +26,78 @@ class TaskExecutionResponse:
 
 @dataclass(frozen=True, slots=True)
 class TaskExecutionDependencies:
-    """Explicit ports used by task execution orchestration."""
+    """Task-domain ports; model/tool execution is owned by ``TaskAgentRuntime``."""
 
-    task_reply_directive: str
-    agent_run_error: Any
-    check_budget_gate: Any
-    collect_run_activity_events: Any
-    collect_run_tool_events: Any
     read_store: Any
-    schedule_task_report: Any
     short_id: Any
     utc_now: Any
     acceptance_from_session: Any
-    acceptance_repair_directive: Any
-    agent_reply: Any
-    answer_pending: Any
-    apply_pending: Any
     apply_step_file_changes: Any
-    archive_run_knowledge: Any
-    capture_task_meta: Any
-    classify_intent: Any
     collect_run_file_changes: Any
-    compose_ephemeral_system: Any
-    compose_memory_ephemeral: Any
-    compose_static_system: Any
-    compose_volatile_ephemeral_system: Any
     derive_title: Any
-    extract_constraints: Any
-    finalize_directive: Any
+    file_changes_from_tool_event: Any
     find_session: Any
-    generate_plan_steps: Any
-    generate_step_outcome: Any
     git_status_snapshot: Any
     is_blank_goal: Any
     is_default_title: Any
-    normalize_attachments: Any
     plan_from_input: Any
-    project_memory_key: Any
     promote_file_artifacts: Any
-    register_attachments_kb: Any
-    resolve_workspace_async: Any
     step_dependencies_satisfied: Any
-    sync_agent_task_meta: Any
     workspace_file_snapshot: Any
     workspace_root: Any
     workspace_text_snapshot: Any
     write_store: Any
     append_notification: Any
-    schedule_capture: Any
 
     @classmethod
-    def from_runtime(cls, runtime: Any) -> "TaskExecutionDependencies":
+    def from_task_routes(cls, dependencies: Any) -> "TaskExecutionDependencies":
+        """Build from explicit Task route ports and pure Task domain modules."""
+
+        from cyrene.workbench import artifact_runtime, planning_runtime, project_runtime
+
         return cls(
-            task_reply_directive=runtime._WORKBENCH_TASK_REPLY_DIRECTIVE,
-            agent_run_error=runtime._WorkbenchAgentRunError,
-            check_budget_gate=runtime._check_budget_gate,
-            collect_run_activity_events=runtime._collect_run_activity_events,
-            collect_run_tool_events=runtime._collect_run_tool_events,
-            read_store=runtime._read_workbench_store,
-            schedule_task_report=runtime._schedule_task_report,
-            short_id=runtime._short_id,
-            utc_now=runtime._utc_now_iso,
-            acceptance_from_session=runtime._workbench_acceptance_from_session,
-            acceptance_repair_directive=runtime._workbench_acceptance_repair_directive,
-            agent_reply=runtime._workbench_agent_reply,
-            answer_pending=runtime._workbench_answer_pending,
-            apply_pending=runtime._workbench_apply_pending,
-            apply_step_file_changes=runtime._workbench_apply_step_file_changes,
-            archive_run_knowledge=runtime._workbench_archive_run_knowledge,
-            capture_task_meta=runtime._workbench_capture_task_meta,
-            classify_intent=runtime._workbench_classify_intent,
-            collect_run_file_changes=runtime._workbench_collect_run_file_changes,
-            compose_ephemeral_system=runtime._workbench_compose_ephemeral_system,
-            compose_memory_ephemeral=runtime._workbench_compose_memory_ephemeral,
-            compose_static_system=runtime._workbench_compose_static_system,
-            compose_volatile_ephemeral_system=runtime._workbench_compose_volatile_ephemeral_system,
-            derive_title=runtime._workbench_derive_title,
-            extract_constraints=runtime._workbench_extract_constraints,
-            finalize_directive=runtime._workbench_finalize_directive,
-            find_session=runtime._workbench_find_session,
-            generate_plan_steps=runtime._workbench_generate_plan_steps,
-            generate_step_outcome=runtime._workbench_generate_step_outcome,
-            git_status_snapshot=runtime._workbench_git_status_snapshot,
-            is_blank_goal=runtime._workbench_is_blank_goal,
-            is_default_title=runtime._workbench_is_default_title,
-            normalize_attachments=runtime._workbench_normalize_attachments,
-            plan_from_input=runtime._workbench_plan_from_input,
-            project_memory_key=runtime._workbench_project_memory_key,
-            promote_file_artifacts=runtime._workbench_promote_file_artifacts,
-            register_attachments_kb=runtime._workbench_register_attachments_kb,
-            resolve_workspace_async=runtime._workbench_resolve_workspace_dir_async,
-            step_dependencies_satisfied=runtime._workbench_step_dependencies_satisfied,
-            sync_agent_task_meta=runtime._workbench_sync_agent_task_meta,
-            workspace_file_snapshot=runtime._workbench_workspace_file_snapshot,
-            workspace_root=runtime._workbench_workspace_root,
-            workspace_text_snapshot=runtime._workbench_workspace_text_snapshot,
-            write_store=runtime._write_workbench_store,
-            append_notification=runtime.append_notification,
-            schedule_capture=runtime.schedule_capture,
+            read_store=dependencies.read_store,
+            short_id=dependencies.short_id,
+            utc_now=dependencies.utc_now,
+            acceptance_from_session=planning_runtime._workbench_acceptance_from_session,
+            apply_step_file_changes=artifact_runtime._workbench_apply_step_file_changes,
+            collect_run_file_changes=artifact_runtime._workbench_collect_run_file_changes,
+            derive_title=project_runtime._workbench_derive_title,
+            file_changes_from_tool_event=(
+                artifact_runtime._workbench_file_changes_from_tool_event
+            ),
+            find_session=dependencies.find_session,
+            git_status_snapshot=artifact_runtime._workbench_git_status_snapshot,
+            is_blank_goal=project_runtime._workbench_is_blank_goal,
+            is_default_title=project_runtime._workbench_is_default_title,
+            plan_from_input=planning_runtime._workbench_plan_from_input,
+            promote_file_artifacts=artifact_runtime._workbench_promote_file_artifacts,
+            step_dependencies_satisfied=planning_runtime._workbench_step_dependencies_satisfied,
+            workspace_file_snapshot=artifact_runtime._workbench_workspace_file_snapshot,
+            workspace_root=dependencies.workspace_root,
+            workspace_text_snapshot=artifact_runtime._workbench_workspace_text_snapshot,
+            write_store=dependencies.write_store,
+            append_notification=dependencies.notify,
         )
 
 
 class TaskExecutionApplicationService:
-    def __init__(self, *, dependencies: TaskExecutionDependencies, task_runs: Any, db_path: str) -> None:
+    def __init__(
+        self,
+        *,
+        dependencies: TaskExecutionDependencies,
+        agent_runtime: TaskAgentRuntime,
+        task_runs: Any,
+        db_path: str,
+    ) -> None:
         self.dependencies = dependencies
+        self.agent_runtime = agent_runtime
         self.task_runs = task_runs
         self.db_path = db_path
         self.logger = logging.getLogger(__name__)
 
     @staticmethod
-    def agent_run_error_response(exc: Any) -> TaskExecutionResponse:
+    def agent_run_error_response(exc: TaskAgentRuntimeError) -> TaskExecutionResponse:
         return TaskExecutionResponse({"error": exc.message, "code": exc.code}, exc.status_code)
 
     @staticmethod
@@ -146,16 +115,152 @@ class TaskExecutionApplicationService:
         selected_candidate = next((candidate for candidate in selectable_model_candidates() if selected_key in {str(candidate.get("id") or "").strip(), str(candidate.get("model") or "").strip(), str(candidate.get("name") or "").strip()}), None)
         if selected_candidate is None:
             return TaskExecutionResponse({"error": "configured model not found"}, 400) if requested_model else None
-        from cyrene.model_runtime.client import set_session_model_preference
         requested_effort = str(body.get("reasoningEffort") or "").strip().lower()
         selected_effort = requested_effort or str(session.get("reasoningEffort") or selected_candidate.get("reasoning_effort") or "").strip().lower()
         selected_model_id = str(selected_candidate.get("id") or selected_key).strip()
         selected_model_name = str(selected_candidate.get("model") or selected_candidate.get("name") or selected_key).strip()
-        set_session_model_preference(session_id, selected_candidate, selected_effort)
+        persist_session_model_preference(session_id, selected_candidate, selected_effort)
         session["modelSelectionId"] = selected_model_id
         session["model"] = selected_model_name
         session["reasoningEffort"] = selected_effort
         return None
+
+    @staticmethod
+    def normalize_attachments(attachments: Any) -> list[dict[str, Any]]:
+        values = attachments if isinstance(attachments, list) else []
+        normalized: list[dict[str, Any]] = []
+        for raw in values:
+            if not isinstance(raw, dict) or not str(raw.get("path") or "").strip():
+                continue
+            item = {
+                "id": str(raw.get("id") or "").strip(),
+                "name": str(raw.get("name") or "file"),
+                "path": str(raw.get("path") or ""),
+                "content_type": str(
+                    raw.get("content_type") or "application/octet-stream"
+                ),
+                "size": int(raw.get("size") or 0),
+                "kind": str(raw.get("kind") or "file"),
+            }
+            for field in ("width", "height"):
+                try:
+                    if raw.get(field) is not None:
+                        item[field] = int(raw[field])
+                except (TypeError, ValueError):
+                    pass
+            normalized.append(item)
+        return normalized
+
+    @staticmethod
+    def _agent_instruction(
+        *,
+        kind: str,
+        step: dict[str, Any] | None = None,
+        pending_question: dict[str, Any] | None = None,
+    ) -> str:
+        if step is not None:
+            return (
+                "Execute exactly this approved plan step, using tools as needed, then "
+                "report concrete changes and verification:\n"
+                + json.dumps(step, ensure_ascii=False, default=str)
+            )
+        if kind == "answer":
+            return "Answer the user's question directly. Do not create a plan unless asked."
+        if kind == "finalize":
+            return (
+                "Review the existing task work, verify what is practical, summarize the "
+                "deliverables and remaining risks, and prepare it for user acceptance."
+            )
+        if kind == "repair":
+            return (
+                "Use the current acceptance results to repair the task. Make concrete "
+                "changes and report how they address the failed criteria."
+            )
+        if kind == "pending_answer":
+            return (
+                "The user is answering the pending clarification or approval below. "
+                "Continue the same task from the existing ContextTree and either finish "
+                "or ask one new question.\n"
+                + json.dumps(pending_question or {}, ensure_ascii=False, default=str)
+            )
+        return "Execute the user's instruction now and report concrete results."
+
+    async def _register_attachments(
+        self, session_id: str, attachments: list[dict[str, Any]]
+    ) -> None:
+        if not attachments:
+            return
+        try:
+            from agent.plugin import active_plugin_service
+
+            service = active_plugin_service("knowledge")
+            if service is not None:
+                await service.register_attachments(session_id, attachments)
+        except Exception:
+            self.logger.exception(
+                "Failed to register Task attachments [session=%s]", session_id
+            )
+
+    def _merge_agent_task_edits(
+        self,
+        payload: dict[str, Any],
+        session_id: str,
+        session: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        """Keep task metadata written by Plugins during an Agent turn."""
+
+        latest_payload = self.dependencies.read_store()
+        latest_project, latest_session = self.dependencies.find_session(
+            latest_payload, session_id
+        )
+        if not latest_project or not latest_session:
+            project, _ = self.dependencies.find_session(payload, session_id)
+            return payload, project or {}, session
+        for field in ("goal", "title", "summary", "titleLocked", "constraints"):
+            if field in latest_session:
+                session[field] = latest_session[field]
+        project, _ = self.dependencies.find_session(payload, session_id)
+        return payload, project or latest_project, session
+
+    def _project_tool_events(
+        self,
+        events: Any,
+        workspace_root: Any,
+    ) -> list[dict[str, Any]]:
+        """Attach Task artifact projections to ContextTree Plugin events."""
+
+        projected: list[dict[str, Any]] = []
+        for raw in events or ():
+            if not isinstance(raw, dict):
+                continue
+            event = dict(raw)
+            result = event.get("result")
+            result_text = (
+                result
+                if isinstance(result, str)
+                else json.dumps(result, ensure_ascii=False, default=str)
+            )
+            event["fileChanges"] = self.dependencies.file_changes_from_tool_event(
+                {
+                    "tool": event.get("tool"),
+                    "args": event.get("args") or event.get("arguments") or {},
+                    "result": result_text,
+                },
+                workspace_root,
+            )
+            projected.append(event)
+        return projected
+
+    @staticmethod
+    def _apply_agent_pending(
+        session: dict[str, Any], result: TaskAgentResult
+    ) -> tuple[str, bool]:
+        if result.pending_question is not None:
+            session["pendingQuestion"] = dict(result.pending_question)
+            session["status"] = "waiting_for_user"
+            return result.text or "需要你确认后才能继续。", True
+        session.pop("pendingQuestion", None)
+        return result.text, False
 
     def _prepare_step_run(
         self, session: dict[str, Any], body: dict[str, Any]
@@ -272,7 +377,6 @@ class TaskExecutionApplicationService:
         model_error = self.apply_task_model_preference(session_id, body, session)
         if model_error is not None:
             return model_error
-        task_meta_before = self.dependencies.capture_task_meta(session)
         validation_error, step_id, run_meta, is_step_run, step = self._prepare_step_run(
             session, body
         )
@@ -280,7 +384,9 @@ class TaskExecutionApplicationService:
             return validation_error
         run_started_at = self.dependencies.utc_now()
         if not is_step_run:
-            constraints = await self.dependencies.extract_constraints(user_input)
+            constraints = await self.agent_runtime.extract_constraints(
+                user_input, session, project
+            )
             merged_constraints = list(session.get('constraints') or [])
             for item in constraints:
                 if item not in merged_constraints:
@@ -292,47 +398,58 @@ class TaskExecutionApplicationService:
             session['acceptanceCriteria'] = self.dependencies.acceptance_from_session(session)
         else:
             constraints = []
-        run_start_ts = run_started_at
         workspace_root = self.dependencies.workspace_root(project)
         git_status_before = self.dependencies.git_status_snapshot(workspace_root)
         workspace_files_before = self.dependencies.workspace_file_snapshot(workspace_root)
         workspace_text_before = self.dependencies.workspace_text_snapshot(workspace_root)
-        memory_pair = self.dependencies.compose_memory_ephemeral(project, session)
-        ephemeral_system = self.dependencies.compose_ephemeral_system(project, session, step_id=step_id if is_step_run else '', workspace_root=workspace_root, memory_pair=memory_pair)
-        volatile_ephemeral_system = self.dependencies.compose_volatile_ephemeral_system(project, session, memory_pair=memory_pair)
+        normalized_attachments = self.normalize_attachments(attachments)
+        public_attachments = [
+            build_public_attachment_payload(item) for item in normalized_attachments
+        ]
+        run_id = self.task_runs.current_task_run_id() or self.dependencies.short_id('run')
         agent_error = None
         try:
-            agent_reply = await self.dependencies.agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=await self.dependencies.resolve_workspace_async(project), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=self.dependencies.compose_static_system(project, session), conversation_source='' if ui_instance_id else 'webui', ui_instance_id=ui_instance_id, client_request_id=client_request_id)
-        except self.dependencies.agent_run_error as exc:
+            agent_result = await self.agent_runtime.run_turn(
+                project=project,
+                session=session,
+                text=user_input,
+                run_id=run_id,
+                permission_mode=mode,
+                command=command,
+                client_request_id=client_request_id,
+                ui_instance_id=ui_instance_id,
+                attachments=normalized_attachments,
+                purpose='step_execution' if is_step_run else 'task_execution',
+                instruction=self._agent_instruction(
+                    kind='direct', step=step if is_step_run else None
+                ),
+                metadata={'step_id': step_id} if is_step_run else None,
+            )
+            agent_reply, awaiting_user = self._apply_agent_pending(
+                session, agent_result
+            )
+            tool_call_events = self._project_tool_events(
+                agent_result.tool_events, workspace_root
+            )
+        except TaskAgentRuntimeError as exc:
             agent_error = exc
             agent_reply = exc.message
+            awaiting_user = False
+            tool_call_events = []
         git_status_after = self.dependencies.git_status_snapshot(workspace_root)
         workspace_files_after = self.dependencies.workspace_file_snapshot(workspace_root)
         workspace_text_after = self.dependencies.workspace_text_snapshot(workspace_root)
-        if agent_error is None:
-            agent_reply, awaiting_user = self.dependencies.apply_pending(session, session_id, agent_reply)
-        else:
-            awaiting_user = False
         if is_step_run and awaiting_user:
             session['pendingPlanStep'] = {'stepId': step_id, 'continueAll': bool(run_meta.get('continueAll'))}
         elif is_step_run:
             session.pop('pendingPlanStep', None)
-        self.dependencies.sync_agent_task_meta(session, session_id, task_meta_before)
+        payload, project, session = self._merge_agent_task_edits(
+            payload, session_id, session
+        )
         session['agentReply'] = agent_reply
-        if is_step_run and (not awaiting_user) and (agent_error is None) and step:
-            try:
-                await asyncio.wait_for(self.dependencies.generate_step_outcome(step, agent_reply, user_input), timeout=10)
-            except (asyncio.TimeoutError, Exception):
-                pass
-        if not command and (not awaiting_user) and (agent_error is None):
-            self.dependencies.schedule_capture(self.dependencies.project_memory_key(project), user_input, agent_reply)
-        normalized_attachments = self.dependencies.normalize_attachments(attachments)
-        public_attachments = [build_public_attachment_payload(item) for item in normalized_attachments]
         if normalized_attachments:
-            await self.dependencies.register_attachments_kb(session_id, normalized_attachments)
-        run_id = self.task_runs.current_task_run_id() or self.dependencies.short_id('run')
-        activity_events = self.dependencies.collect_run_activity_events(session_id, run_start_ts, run_id, workspace_root)
-        tool_call_events = [event for event in activity_events if event.get('type') == 'ToolCallEvent']
+            await self._register_attachments(session_id, normalized_attachments)
+        activity_events = tool_call_events
         file_changes = self.dependencies.collect_run_file_changes(tool_call_events, git_status_before, git_status_after, workspace_files_before, workspace_files_after, workspace_root, f'{user_input}\n{agent_reply}', workspace_text_before=workspace_text_before, workspace_text_after=workspace_text_after)
         finished_at = self.dependencies.utc_now()
         self._update_create_run_status(
@@ -341,12 +458,10 @@ class TaskExecutionApplicationService:
         events = [{'id': self.dependencies.short_id('event'), 'type': 'UserMessageEvent', 'runId': run_id, 'createdAt': run_started_at, 'body': user_input or '[附件]', 'attachments': public_attachments}, *activity_events, {'id': self.dependencies.short_id('event'), 'type': 'AgentErrorEvent' if agent_error else 'AgentResponseEvent', 'runId': run_id, 'createdAt': finished_at, 'body': agent_reply}, {'id': self.dependencies.short_id('event'), 'type': 'PlanUpdatedEvent', 'runId': run_id, 'createdAt': finished_at, 'stepCount': len(session.get('plan') or [])}]
         if is_step_run and (not awaiting_user) and step:
             events.append({'id': self.dependencies.short_id('event'), 'type': 'ExecutionFailed' if agent_error else 'ExecutionFinished', 'runId': run_id, 'stepId': step_id, 'createdAt': finished_at, 'body': f"步骤「{step.get('title') or step_id}」执行失败：{agent_error.message}" if agent_error else f"步骤「{step.get('title') or step_id}」执行完成。"})
-        run = {'id': run_id, 'taskId': session_id, 'userInput': user_input, 'agentResponse': agent_reply, 'status': 'failed' if agent_error else 'awaiting_user' if awaiting_user else 'completed', 'startedAt': run_started_at, 'endedAt': finished_at, 'contextPackId': self.dependencies.short_id('ctx'), 'events': events, 'fileChanges': file_changes, 'toolCalls': [{'tool': e['tool'], 'argsPreview': e['argsPreview']} for e in tool_call_events], 'artifacts': [], 'attachments': public_attachments, 'mode': mode, 'error': agent_error.message if agent_error else None}
+        run = {'id': run_id, 'taskId': session_id, 'userInput': user_input, 'agentResponse': agent_reply, 'status': 'failed' if agent_error else 'awaiting_user' if awaiting_user else 'completed', 'startedAt': run_started_at, 'endedAt': finished_at, 'contextPackId': self.dependencies.short_id('ctx'), 'events': events, 'fileChanges': file_changes, 'toolCalls': [{'tool': e['tool'], 'argsPreview': e['argsPreview']} for e in tool_call_events], 'artifacts': [], 'attachments': public_attachments, 'mode': mode, 'error': agent_error.message if agent_error else None, 'usage': dict(agent_result.usage) if agent_error is None else {}, 'model': agent_result.model if agent_error is None else '', 'modelIdentity': dict(agent_result.model_identity) if agent_error is None else {}, 'generationDurationMs': agent_result.generation_duration_ms if agent_error is None else None, 'outputTokensPerSecond': agent_result.output_tokens_per_second if agent_error is None else None}
         self.task_runs.upsert_task_run(session, run)
         session.setdefault('events', []).extend(events)
         self.dependencies.promote_file_artifacts(session, file_changes, finished_at)
-        if not awaiting_user and agent_error is None:
-            await self.dependencies.archive_run_knowledge(project, session, run, workspace_root, finished_at)
         session['updatedAt'] = finished_at
         project['updatedAt'] = finished_at
         payload['activeSessionId'] = session_id
@@ -367,9 +482,6 @@ class TaskExecutionApplicationService:
         client_request_id = str(body.get('clientRequestId') or '').strip()
         if not message and (not attachments):
             return TaskExecutionResponse({'error': 'message is required'}, status_code=400)
-        _bgt = await self.dependencies.check_budget_gate(session_id)
-        if _bgt:
-            return TaskExecutionResponse(_bgt, status_code=403)
         payload = self.dependencies.read_store()
         project, session = self.dependencies.find_session(payload, session_id)
         if not session or not project:
@@ -377,38 +489,49 @@ class TaskExecutionApplicationService:
         model_error = self.apply_task_model_preference(session_id, body, session)
         if model_error is not None:
             return model_error
-        task_meta_before = self.dependencies.capture_task_meta(session)
         chat_run_start_ts = self.dependencies.utc_now()
         workspace_root = self.dependencies.workspace_root(project)
         git_status_before = self.dependencies.git_status_snapshot(workspace_root)
         workspace_files_before = self.dependencies.workspace_file_snapshot(workspace_root)
         workspace_text_before = self.dependencies.workspace_text_snapshot(workspace_root)
-        memory_pair = self.dependencies.compose_memory_ephemeral(project, session)
-        ephemeral_system = self.dependencies.compose_ephemeral_system(project, session, workspace_root=workspace_root, memory_pair=memory_pair)
-        ephemeral_system = (ephemeral_system + '\n\n' + self.dependencies.task_reply_directive).strip()
-        volatile_ephemeral_system = self.dependencies.compose_volatile_ephemeral_system(project, session, memory_pair=memory_pair)
+        normalized_attachments = self.normalize_attachments(attachments)
+        chat_run_id = self.task_runs.current_task_run_id() or self.dependencies.short_id('run')
         agent_command = command or 'workbench-task-reply'
         try:
-            agent_reply = await self.dependencies.agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=await self.dependencies.resolve_workspace_async(project), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=self.dependencies.compose_static_system(project, session), conversation_source='' if ui_instance_id else 'webui', ui_instance_id=ui_instance_id, client_request_id=client_request_id)
-        except self.dependencies.agent_run_error as exc:
+            agent_result = await self.agent_runtime.run_turn(
+                project=project,
+                session=session,
+                text=message,
+                run_id=chat_run_id,
+                permission_mode=mode,
+                command=agent_command,
+                client_request_id=client_request_id,
+                ui_instance_id=ui_instance_id,
+                attachments=normalized_attachments,
+                purpose='task_chat',
+                instruction=self._agent_instruction(kind='answer'),
+            )
+        except TaskAgentRuntimeError as exc:
             return self.agent_run_error_response(exc)
         git_status_after = self.dependencies.git_status_snapshot(workspace_root)
         workspace_files_after = self.dependencies.workspace_file_snapshot(workspace_root)
         workspace_text_after = self.dependencies.workspace_text_snapshot(workspace_root)
-        agent_reply, awaiting_user = self.dependencies.apply_pending(session, session_id, agent_reply)
-        self.dependencies.sync_agent_task_meta(session, session_id, task_meta_before)
+        agent_reply, awaiting_user = self._apply_agent_pending(session, agent_result)
+        payload, project, session = self._merge_agent_task_edits(
+            payload, session_id, session
+        )
         session['agentReply'] = agent_reply
-        if not command and (not awaiting_user):
-            self.dependencies.schedule_capture(self.dependencies.project_memory_key(project), message, agent_reply)
         session['status'] = 'waiting_for_user' if awaiting_user else 'answered'
         now = self.dependencies.utc_now()
         session['updatedAt'] = now
         project['updatedAt'] = now
-        chat_run_id = self.task_runs.current_task_run_id() or self.dependencies.short_id('run')
-        chat_tool_events = self.dependencies.collect_run_tool_events(session_id, chat_run_start_ts, chat_run_id, workspace_root)
+        chat_tool_events = self._project_tool_events(
+            agent_result.tool_events, workspace_root
+        )
+        await self._register_attachments(session_id, normalized_attachments)
         file_changes = self.dependencies.collect_run_file_changes(chat_tool_events, git_status_before, git_status_after, workspace_files_before, workspace_files_after, workspace_root, f'{message}\n{agent_reply}', workspace_text_before=workspace_text_before, workspace_text_after=workspace_text_after)
         chat_events = [{'id': self.dependencies.short_id('event'), 'type': 'UserMessageEvent', 'runId': chat_run_id, 'createdAt': chat_run_start_ts, 'body': message or '[附件]'}, *chat_tool_events, {'id': self.dependencies.short_id('event'), 'type': 'AgentResponseEvent', 'runId': chat_run_id, 'createdAt': now, 'body': agent_reply}]
-        run = {'id': chat_run_id, 'taskId': session_id, 'userInput': message, 'agentResponse': agent_reply, 'status': 'awaiting_user' if awaiting_user else 'completed', 'startedAt': chat_run_start_ts, 'endedAt': now, 'contextPackId': self.dependencies.short_id('ctx'), 'events': chat_events, 'fileChanges': file_changes, 'toolCalls': [{'tool': event.get('tool'), 'argsPreview': event.get('argsPreview', '')} for event in chat_tool_events if isinstance(event, dict) and event.get('type') == 'ToolCallEvent'], 'artifacts': [], 'attachments': [build_public_attachment_payload(item) for item in self.dependencies.normalize_attachments(attachments)], 'mode': mode, 'error': None}
+        run = {'id': chat_run_id, 'taskId': session_id, 'userInput': message, 'agentResponse': agent_reply, 'status': 'awaiting_user' if awaiting_user else 'completed', 'startedAt': chat_run_start_ts, 'endedAt': now, 'contextPackId': self.dependencies.short_id('ctx'), 'events': chat_events, 'fileChanges': file_changes, 'toolCalls': [{'tool': event.get('tool'), 'argsPreview': event.get('argsPreview', '')} for event in chat_tool_events if isinstance(event, dict) and event.get('type') == 'ToolCallEvent'], 'artifacts': [], 'attachments': [build_public_attachment_payload(item) for item in normalized_attachments], 'mode': mode, 'error': None, 'usage': dict(agent_result.usage), 'model': agent_result.model, 'modelIdentity': dict(agent_result.model_identity), 'generationDurationMs': agent_result.generation_duration_ms, 'outputTokensPerSecond': agent_result.output_tokens_per_second}
         self.task_runs.upsert_task_run(session, run)
         session.setdefault('events', []).extend(chat_events)
         self.dependencies.promote_file_artifacts(session, file_changes, now)
@@ -419,7 +542,11 @@ class TaskExecutionApplicationService:
         return {'ok': True, 'project': project, 'session': session, 'run': run, **payload}
 
     async def _maybe_generate_title(
-        self, session_id: str, session: dict[str, Any], user_input: str
+        self,
+        session_id: str,
+        session: dict[str, Any],
+        project: dict[str, Any],
+        user_input: str,
     ) -> None:
         should_generate = bool(
             user_input and not session.get('titleLocked')
@@ -428,22 +555,16 @@ class TaskExecutionApplicationService:
         )
         if not should_generate:
             return
-        from cyrene.model_runtime.client import resolve_session_model_candidate
-        from cyrene.workbench.session_naming import generate_session_title
-
         session['titleNamingStatus'] = 'pending'
         session['titleNamingStartedAt'] = self.dependencies.utc_now()
-        candidate = resolve_session_model_candidate(session_id)
-        candidate_id = str((candidate or {}).get('id') or '')
-        candidate_model = str((candidate or {}).get('model') or '')
         try:
-            if candidate is None:
-                raise RuntimeError('no configured model candidate for task session')
-            generated = await generate_session_title(user_input, limit=80, candidate=candidate)
+            generated = await self.agent_runtime.generate_title(
+                user_input, session, project
+            )
         except Exception as exc:
             self.logger.exception(
-                'Workbench task session naming failed [session=%s candidate=%s model=%s error_type=%s]',
-                session_id, candidate_id or 'unresolved', candidate_model or 'unresolved',
+                'Workbench task session naming failed [session=%s error_type=%s]',
+                session_id,
                 type(exc).__name__,
             )
             generated = ''
@@ -470,7 +591,7 @@ class TaskExecutionApplicationService:
                 return TaskExecutionResponse(
                     {'error': '计划已发生变化，请基于最新计划重试。', 'code': 'stale_plan_revision'}, 409
                 )
-        steps, acceptance, from_llm, operation = await self.dependencies.generate_plan_steps(
+        steps, acceptance, from_llm, operation = await self.agent_runtime.generate_plan(
             session, project, feedback=user_input if revising else ''
         )
         payload = self.dependencies.read_store()
@@ -540,15 +661,13 @@ class TaskExecutionApplicationService:
         model_error = self.apply_task_model_preference(session_id, body, session)
         if model_error is not None:
             return model_error
-        _bgt = await self.dependencies.check_budget_gate(session_id)
-        if _bgt:
-            return TaskExecutionResponse(_bgt, status_code=403)
-        task_meta_before = self.dependencies.capture_task_meta(session)
-        await self._maybe_generate_title(session_id, session, user_input)
+        await self._maybe_generate_title(session_id, session, project, user_input)
         if command or (not user_input and attachments):
             kind = 'direct'
         else:
-            kind = await self.dependencies.classify_intent(user_input, session)
+            kind = await self.agent_runtime.classify_intent(
+                user_input, session, project
+            )
         now = self.dependencies.utc_now()
         if kind not in ('answer', 'finalize') and self.dependencies.is_blank_goal(session.get('goal')) and user_input:
             session['goal'] = user_input
@@ -556,7 +675,9 @@ class TaskExecutionApplicationService:
                 session['title'] = self.dependencies.derive_title(user_input)
         if kind in ('plan', 'direct') and user_input:
             merged = list(session.get('constraints') or [])
-            for item in await self.dependencies.extract_constraints(user_input):
+            for item in await self.agent_runtime.extract_constraints(
+                user_input, session, project
+            ):
                 if item not in merged:
                     merged.append(item)
             session['constraints'] = merged
@@ -571,47 +692,51 @@ class TaskExecutionApplicationService:
         git_status_before = self.dependencies.git_status_snapshot(workspace_root)
         workspace_files_before = self.dependencies.workspace_file_snapshot(workspace_root)
         workspace_text_before = self.dependencies.workspace_text_snapshot(workspace_root)
-        memory_pair = self.dependencies.compose_memory_ephemeral(project, session)
-        ephemeral_system = self.dependencies.compose_ephemeral_system(project, session, workspace_root=workspace_root, memory_pair=memory_pair)
-        if finalizing:
-            ephemeral_system = (ephemeral_system + '\n\n' + self.dependencies.finalize_directive(session)).strip()
-        elif repairing_acceptance:
-            ephemeral_system = (ephemeral_system + '\n\n' + self.dependencies.acceptance_repair_directive(session)).strip()
-        elif kind == 'answer':
-            ephemeral_system = (ephemeral_system + '\n\n' + self.dependencies.task_reply_directive).strip()
-        volatile_ephemeral_system = self.dependencies.compose_volatile_ephemeral_system(project, session, memory_pair=memory_pair)
+        normalized_attachments = self.normalize_attachments(attachments)
+        public_attachments = [
+            build_public_attachment_payload(item) for item in normalized_attachments
+        ]
+        run_id = self.task_runs.current_task_run_id() or self.dependencies.short_id('run')
         agent_command = command or ('workbench-task-reply' if kind == 'answer' else '')
         try:
-            agent_reply = await self.dependencies.agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=await self.dependencies.resolve_workspace_async(project), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=self.dependencies.compose_static_system(project, session), conversation_source='' if ui_instance_id else 'webui', ui_instance_id=ui_instance_id, client_request_id=client_request_id)
-        except self.dependencies.agent_run_error as exc:
+            agent_result = await self.agent_runtime.run_turn(
+                project=project,
+                session=session,
+                text=user_input,
+                run_id=run_id,
+                permission_mode=mode,
+                command=agent_command,
+                client_request_id=client_request_id,
+                ui_instance_id=ui_instance_id,
+                attachments=normalized_attachments,
+                purpose='task_' + ('repair' if repairing_acceptance else kind),
+                instruction=self._agent_instruction(
+                    kind='repair' if repairing_acceptance else kind
+                ),
+            )
+        except TaskAgentRuntimeError as exc:
             return self.agent_run_error_response(exc)
         git_status_after = self.dependencies.git_status_snapshot(workspace_root)
         workspace_files_after = self.dependencies.workspace_file_snapshot(workspace_root)
         workspace_text_after = self.dependencies.workspace_text_snapshot(workspace_root)
-        agent_reply, awaiting_user = self.dependencies.apply_pending(session, session_id, agent_reply)
-        self.dependencies.sync_agent_task_meta(session, session_id, task_meta_before)
+        agent_reply, awaiting_user = self._apply_agent_pending(session, agent_result)
+        payload, project, session = self._merge_agent_task_edits(
+            payload, session_id, session
+        )
         session['agentReply'] = agent_reply
-        if not command and (not awaiting_user):
-            self.dependencies.schedule_capture(self.dependencies.project_memory_key(project), user_input, agent_reply)
-        if finalizing and (not awaiting_user):
-            self.dependencies.schedule_task_report(project, session)
         session['status'] = 'waiting_for_user' if awaiting_user else 'review' if finalizing or repairing_acceptance else 'acted' if kind == 'direct' else 'answered'
-        normalized_attachments = self.dependencies.normalize_attachments(attachments)
-        public_attachments = [build_public_attachment_payload(item) for item in normalized_attachments]
-        if normalized_attachments:
-            await self.dependencies.register_attachments_kb(session_id, normalized_attachments)
-        run_id = self.task_runs.current_task_run_id() or self.dependencies.short_id('run')
-        activity_events = self.dependencies.collect_run_activity_events(session_id, run_start_ts, run_id, workspace_root)
-        tool_call_events = [event for event in activity_events if event.get('type') == 'ToolCallEvent']
+        await self._register_attachments(session_id, normalized_attachments)
+        tool_call_events = self._project_tool_events(
+            agent_result.tool_events, workspace_root
+        )
+        activity_events = tool_call_events
         file_changes = self.dependencies.collect_run_file_changes(tool_call_events, git_status_before, git_status_after, workspace_files_before, workspace_files_after, workspace_root, f'{user_input}\n{agent_reply}', workspace_text_before=workspace_text_before, workspace_text_after=workspace_text_after)
         finished_at = self.dependencies.utc_now()
         events = [{'id': self.dependencies.short_id('event'), 'type': 'UserMessageEvent', 'runId': run_id, 'createdAt': run_start_ts, 'body': user_input or '[附件]', 'attachments': public_attachments}, *activity_events, {'id': self.dependencies.short_id('event'), 'type': 'AgentResponseEvent', 'runId': run_id, 'createdAt': finished_at, 'body': agent_reply}]
-        run = {'id': run_id, 'taskId': session_id, 'userInput': user_input, 'agentResponse': agent_reply, 'status': 'awaiting_user' if awaiting_user else 'completed', 'startedAt': run_start_ts, 'endedAt': finished_at, 'contextPackId': self.dependencies.short_id('ctx'), 'events': events, 'fileChanges': file_changes, 'toolCalls': [{'tool': e['tool'], 'argsPreview': e['argsPreview']} for e in tool_call_events], 'artifacts': [], 'attachments': public_attachments, 'mode': mode, 'error': None}
+        run = {'id': run_id, 'taskId': session_id, 'userInput': user_input, 'agentResponse': agent_reply, 'status': 'awaiting_user' if awaiting_user else 'completed', 'startedAt': run_start_ts, 'endedAt': finished_at, 'contextPackId': self.dependencies.short_id('ctx'), 'events': events, 'fileChanges': file_changes, 'toolCalls': [{'tool': e['tool'], 'argsPreview': e['argsPreview']} for e in tool_call_events], 'artifacts': [], 'attachments': public_attachments, 'mode': mode, 'error': None, 'usage': dict(agent_result.usage), 'model': agent_result.model, 'modelIdentity': dict(agent_result.model_identity), 'generationDurationMs': agent_result.generation_duration_ms, 'outputTokensPerSecond': agent_result.output_tokens_per_second}
         self.task_runs.upsert_task_run(session, run)
         session.setdefault('events', []).extend(events)
         self.dependencies.promote_file_artifacts(session, file_changes, finished_at)
-        if not awaiting_user:
-            await self.dependencies.archive_run_knowledge(project, session, run, workspace_root, finished_at)
         session['updatedAt'] = finished_at
         project['updatedAt'] = finished_at
         payload['activeSessionId'] = session_id
@@ -711,10 +836,7 @@ class TaskExecutionApplicationService:
         return continue_execution
 
     async def answer(self, session_id: str, body: dict[str, Any]):
-        """Answer a paused run's permission / clarification question and resume
-            the SAME round inside the project scope. The continued reply (or a follow-up
-            question) replaces the question card. Mirrors the legacy chat answer flow,
-            but session-scoped to this Workbench task."""
+        """Continue the same durable Task ContextTree with the user's answer."""
         question_id = str(body.get('question_id') or '').strip()
         answer_text = str(body.get('answer') or body.get('selected_option') or '').strip()
         ui_instance_id = str(body.get('uiInstanceId') or '').strip()
@@ -733,47 +855,71 @@ class TaskExecutionApplicationService:
         normalized_answer = answer_text.strip().casefold()
         explicit_denial = normalized_answer == str(pending_options[-1]).strip().casefold() if pending_options else normalized_answer in {'拒绝', '不允许', '否', 'reject', 'deny', 'no'}
         permission_denied = str(pending.get('kind') or '') in permission_kinds and explicit_denial
-        if pending_plan_step and bool(pending_plan_step.get('goalLoop')) and (not permission_denied):
-            from cyrene.workbench.goal_loop import begin_async_answer
-            if await begin_async_answer(self.db_path, session_id, question_id, answer_text):
-                payload = self.dependencies.read_store()
-                project, session = self.dependencies.find_session(payload, session_id)
-                return {'ok': True, 'awaitingUser': False, 'continuePlanExecution': False, 'project': project, 'session': session, 'run': None, **payload}
         now = self.dependencies.utc_now()
         run_start_ts = now
         workspace_root = self.dependencies.workspace_root(project)
-        workspace_dir = await self.dependencies.resolve_workspace_async(project)
         git_status_before = self.dependencies.git_status_snapshot(workspace_root)
         workspace_files_before = self.dependencies.workspace_file_snapshot(workspace_root)
         workspace_text_before = self.dependencies.workspace_text_snapshot(workspace_root)
-        from cyrene.runtime.host_bridge import resolve_conversation_source
-        conversation_source = await resolve_conversation_source(ui_instance_id)
+        run_id = self.task_runs.current_task_run_id() or self.dependencies.short_id('run')
+        agent_run_id = str(pending.get('roundId') or '').strip()
+        if not agent_run_id:
+            return TaskExecutionResponse(
+                {'error': 'pending Agent run id is missing', 'code': 'task_answer_run_missing'},
+                status_code=409,
+            )
         try:
-            agent_reply = await self.dependencies.answer_pending(session_id, question_id, answer_text, workspace_dir, ui_instance_id=ui_instance_id, conversation_source=conversation_source)
+            agent_result = await self.agent_runtime.answer_turn(
+                project=project,
+                session=session,
+                question_id=question_id,
+                answer=answer_text,
+                run_id=agent_run_id,
+                permission_mode='auto',
+                command='workbench-task-answer',
+                ui_instance_id=ui_instance_id,
+                purpose='task_answer',
+                instruction=self._agent_instruction(
+                    kind='pending_answer', pending_question=pending
+                ),
+                metadata={
+                    'question_id': question_id,
+                    'answers_run_id': agent_run_id,
+                },
+            )
         except asyncio.CancelledError:
+            lease = self.task_runs.coordinator_for(self.db_path).get(
+                "task", session_id
+            )
+            if lease is not None and str(lease.termination_reason or "") == "server_shutdown":
+                # Preserve the pending question and running audit.  Startup will
+                # bind this exact run id and continue the same Agent ContextTree.
+                raise
             cancelled = self._cancelled_answer_response(session_id, answer_text, run_start_ts)
             if cancelled is not None:
                 return cancelled
             raise
-        except Exception:
-            self.logger.exception('Workbench answer-resume failed for session %s', session_id)
-            return TaskExecutionResponse({'error': 'answer resume failed'}, status_code=502)
+        except TaskAgentRuntimeError as exc:
+            return self.agent_run_error_response(exc)
         git_status_after = self.dependencies.git_status_snapshot(workspace_root)
         workspace_files_after = self.dependencies.workspace_file_snapshot(workspace_root)
         workspace_text_after = self.dependencies.workspace_text_snapshot(workspace_root)
-        agent_reply, awaiting_user = self.dependencies.apply_pending(session, session_id, agent_reply)
+        agent_reply, awaiting_user = self._apply_agent_pending(session, agent_result)
+        payload, project, session = self._merge_agent_task_edits(
+            payload, session_id, session
+        )
         session['agentReply'] = agent_reply
         if not awaiting_user:
             session.pop('pendingQuestion', None)
             session['status'] = 'acted'
-            self.dependencies.schedule_capture(self.dependencies.project_memory_key(project), answer_text, agent_reply)
-        run_id = self.task_runs.current_task_run_id() or self.dependencies.short_id('run')
-        activity_events = self.dependencies.collect_run_activity_events(session_id, run_start_ts, run_id, workspace_root)
-        tool_call_events = [e for e in activity_events if e.get('type') == 'ToolCallEvent']
+        tool_call_events = self._project_tool_events(
+            agent_result.tool_events, workspace_root
+        )
+        activity_events = tool_call_events
         file_changes = self.dependencies.collect_run_file_changes(tool_call_events, git_status_before, git_status_after, workspace_files_before, workspace_files_after, workspace_root, f'{answer_text}\n{agent_reply}', workspace_text_before=workspace_text_before, workspace_text_after=workspace_text_after)
         finished_at = self.dependencies.utc_now()
         events = [{'id': self.dependencies.short_id('event'), 'type': 'UserMessageEvent', 'runId': run_id, 'createdAt': now, 'body': f'[确认] {answer_text}'}, *activity_events, {'id': self.dependencies.short_id('event'), 'type': 'AgentResponseEvent', 'runId': run_id, 'createdAt': finished_at, 'body': agent_reply}]
-        run = {'id': run_id, 'taskId': session_id, 'userInput': answer_text, 'agentResponse': agent_reply, 'status': 'awaiting_user' if awaiting_user else 'completed', 'startedAt': run_start_ts, 'endedAt': finished_at, 'contextPackId': self.dependencies.short_id('ctx'), 'events': events, 'fileChanges': file_changes, 'toolCalls': [{'tool': e['tool'], 'argsPreview': e['argsPreview']} for e in tool_call_events], 'artifacts': [], 'attachments': [], 'mode': 'auto', 'error': None}
+        run = {'id': run_id, 'taskId': session_id, 'userInput': answer_text, 'agentResponse': agent_reply, 'status': 'awaiting_user' if awaiting_user else 'completed', 'startedAt': run_start_ts, 'endedAt': finished_at, 'contextPackId': self.dependencies.short_id('ctx'), 'events': events, 'fileChanges': file_changes, 'toolCalls': [{'tool': e['tool'], 'argsPreview': e['argsPreview']} for e in tool_call_events], 'artifacts': [], 'attachments': [], 'mode': 'auto', 'error': None, 'usage': dict(agent_result.usage), 'model': agent_result.model, 'modelIdentity': dict(agent_result.model_identity), 'generationDurationMs': agent_result.generation_duration_ms, 'outputTokensPerSecond': agent_result.output_tokens_per_second}
         self.task_runs.upsert_task_run(session, run)
         session.setdefault('events', []).extend(events)
         self.dependencies.promote_file_artifacts(session, file_changes, finished_at)
@@ -782,8 +928,6 @@ class TaskExecutionApplicationService:
             permission_denied=permission_denied, tool_events=tool_call_events,
             file_changes=file_changes, finished_at=finished_at,
         )
-        if not awaiting_user:
-            await self.dependencies.archive_run_knowledge(project, session, run, workspace_root, finished_at)
         session['updatedAt'] = finished_at
         project['updatedAt'] = finished_at
         payload['activeSessionId'] = session_id

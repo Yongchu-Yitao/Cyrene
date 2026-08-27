@@ -35,7 +35,6 @@
     "cyrene_operation_approved",
     "cyrene_operation_completed",
     "cyrene_operation_failed",
-    "custom_tools_changed",
     "settings_changed",
     "ui_snapshot_status",
     "ui_gesture_status",

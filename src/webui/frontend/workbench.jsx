@@ -81,6 +81,11 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var dataStore = workbenchServices.data();
   dataStore.useVersion();
   var dataState = dataStore.state;
+  var pluginModules = Array.isArray(dataState.pluginModules) ? dataState.pluginModules : [];
+  var enabledModules = ["schedule", "board", "work", "knowledge", "memory"].filter(function (module) {
+    return ["schedule", "knowledge", "memory"].indexOf(module) < 0
+      || pluginModules.indexOf(module) >= 0;
+  });
   var workbenchI18n = workbenchServices.i18n().use();
   var t = workbenchI18n.t;
   var model = workbenchServices.model();
@@ -118,7 +123,6 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     catch (e) { return ""; }
   });
   var [settingsScrollTo, setSettingsScrollTo] = useWorkbenchState(null);
-  var pythonPromptCheckedRef = useWorkbenchRef(false);
   var [newProjectOpen, setNewProjectOpen] = useWorkbenchState(false);
   var [newTaskOpen, setNewTaskOpen] = useWorkbenchState(false);
   var [newChatRequestId, setNewChatRequestId] = useWorkbenchState(0);
@@ -151,11 +155,19 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var menuActionsRef = useWorkbenchRef({ createProject: function () {}, createSession: function () {}, createChat: function () {}, onToggleTheme: function () {} });
   var navigationActions = createWorkbenchNavigationActions(
     fullPage, taskView, setFullPage, setTaskView, setSettingsTab, setSettingsScrollTo,
-    setRailCollapsed, sidebarModuleWheelRef, function () { return activeDestination; }
+    setRailCollapsed, sidebarModuleWheelRef, function () { return activeDestination; },
+    enabledModules
   );
   var handleOpenPage = navigationActions.openPage;
   var toggleWorkspaceSidebar = navigationActions.toggleSidebar;
   var handleSidebarModuleWheel = navigationActions.onModuleWheel;
+
+  useWorkbenchEffect(function () {
+    if (["schedule", "knowledge", "memory"].indexOf(fullPage) >= 0
+        && enabledModules.indexOf(fullPage) < 0) {
+      setFullPage(null);
+    }
+  }, [fullPage, enabledModules.join("|")]);
 
   useWorkbenchEffect(function () {
     function openSettings(event) {
@@ -191,6 +203,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     setExpandedStepId: setExpandedStepId, setTaskView: setTaskView,
     setFullPage: setFullPage, setTaskOpenRequest: setTaskOpenRequest,
     setSettingsTab: setSettingsTab, setSettingsScrollTo: setSettingsScrollTo,
+    enabledModules: enabledModules,
     getSelectProject: function () { return selectProject; },
   });
   var navigateFromSearch = shellNavigation.navigateFromSearch;
@@ -230,8 +243,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   );
 
   useWorkbenchLaunchOverlayLifecycle(
-    loading, launchReadyRef, dataStore, pythonPromptCheckedRef, t,
-    setSettingsTab, setSettingsScrollTo, setFullPage, searchOpen
+    loading, launchReadyRef, dataStore, searchOpen
   );
 
   useWorkbenchNativeMenuLifecycle(
@@ -374,7 +386,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
 
   useWorkbenchNavigationSurface(
     fullPage, taskView, settingsTab, railCollapsed, t, handleOpenPage,
-    toggleWorkspaceSidebar, setSearchOpen, setSettingsTab, setSettingsScrollTo, setFullPage
+    toggleWorkspaceSidebar, setSearchOpen, setSettingsTab, setSettingsScrollTo, setFullPage,
+    enabledModules
   );
 
   function renderSidebarCollapseControl() {
@@ -416,7 +429,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     fullPage, setFullPage, taskView, mountedPages, setMountedPages, store, activeChatId,
     recentChatsByProject, {
       recent: recentOpenedSessionKeys, pinned: pinnedSessionKeys, hidden: hiddenSessionKeys,
-    }, chatRuntimes, sessionActivityLive, dataState, t
+    }, chatRuntimes, sessionActivityLive, dataState, t, enabledModules
   );
   var isKnowledge = modulePresentation.isKnowledge;
   var isSchedule = modulePresentation.isSchedule;
@@ -474,6 +487,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     presentation: modulePresentation,
     navigation: {
       fullPage: fullPage, railCollapsed: railCollapsed,
+      enabledModules: enabledModules,
       openPage: handleOpenPage, closePage: function () { setFullPage(null); },
       openSettings: openSettings, navigate: navigateFromSearch,
       navigateNotification: navigateFromNotification,
@@ -573,6 +587,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             activePage={fullPage}
             activeDestination={activeDestination}
             onOpenPage={handleOpenPage}
+            enabledModules={enabledModules}
             onSettings={function () { setSettingsTab(""); setSettingsScrollTo(null); setFullPage("settings"); }}
           />
           <WorkbenchModuleSurfaces context={shellContext} />

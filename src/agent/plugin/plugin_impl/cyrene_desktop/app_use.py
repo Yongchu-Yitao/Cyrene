@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+
 TOOL_NAME = "app_use"
 TOOL_DEF = {
     "type": "function",
@@ -63,12 +65,9 @@ TOOL_METADATA = {
 
 async def _tool_app_use(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict[str, bool] | None,
+    _context: PluginContext,
 ) -> str:
-    from cyrene.tooling.backends.app_use import execute_app_use, format_app_use_result
+    from ._app_use_backend import execute_app_use, format_app_use_result
 
     return format_app_use_result(await execute_app_use(args))
 

@@ -12,22 +12,37 @@ from __future__ import annotations
 
 from typing import Any
 
-from .definitions import get_native_tool_def
+from agent.plugin import PluginContext
+from agent.plugin.native_runtime import run_context_value
 
 TOOL_NAME = 'set_task_goal'
-TOOL_DEF = get_native_tool_def(TOOL_NAME)
+TOOL_DEF = {
+    "type": "function",
+    "function": {
+        "name": TOOL_NAME,
+        "description": (
+            "Set or correct the current Workbench task's goal, short title, "
+            "and/or one-line summary. Provide at least one field. A title "
+            "manually locked by the user is preserved."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "goal": {"type": "string"},
+                "title": {"type": "string"},
+                "summary": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+    },
+}
 
 
 async def _tool_set_task_goal(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
     """Set/correct the current Workbench task's goal, title, and/or summary."""
-    from cyrene.agent.context import get_current_session_id
-
     goal = str(args.get("goal", "") or "").strip()
     title = str(args.get("title", "") or "").strip()
     summary = str(args.get("summary", "") or "").strip()
@@ -36,13 +51,13 @@ async def _tool_set_task_goal(
     if goal and len(goal) < 3:
         return "Not set: 'goal' is too short."
 
-    session_id = str(get_current_session_id() or "").strip()
+    session_id = str(run_context_value(context, "session_id", "") or "").strip()
     if not session_id:
         return "Not set: set_task_goal is only available inside a Workbench task."
 
     # Lazy import: the store lives in the webui layer (loaded in the server
     # process); importing it at module load would invert package layering.
-    from cyrene.workbench.runtime import set_task_goal_for_session
+    from cyrene.workbench.task_goal_service import set_task_goal_for_session
 
     result = await set_task_goal_for_session(session_id, goal, title, summary)
     if not result.get("ok"):

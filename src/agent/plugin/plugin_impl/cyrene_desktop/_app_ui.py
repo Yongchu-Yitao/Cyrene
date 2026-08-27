@@ -29,7 +29,7 @@ def action_tool_def(
 
 
 async def run_action(family: str, args: dict[str, Any]) -> str:
-    from cyrene.tooling.backends.app_semantic import execute_action, format_result
+    from ._app_semantic_backend import execute_action, format_result
     return format_result(await execute_action(family, dict(args or {})))
 
 

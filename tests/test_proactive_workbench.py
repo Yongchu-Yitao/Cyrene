@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 
@@ -61,32 +62,17 @@ def test_silence_detection_includes_workbench_user_activity(monkeypatch, tmp_pat
             "messages": [],
         }
     ])
-    conversations = tmp_path / "conversations"
-    conversations.mkdir()
     monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(scheduler, "CONVERSATIONS_DIR", conversations)
+    monkeypatch.setattr(
+        scheduler,
+        "_memory_service",
+        lambda: SimpleNamespace(latest_archived_user_message_time=lambda: None),
+    )
     monkeypatch.setattr(scheduler, "STATE_FILE", tmp_path / "missing-state.json")
 
     assert scheduler._last_user_message_time() == datetime(
         2026, 6, 18, 2, 3, 4, tzinfo=timezone.utc
     )
-
-
-def test_mark_user_activity_resets_lottery(monkeypatch):
-    from cyrene.runtime import scheduler
-    from cyrene.workbench import chat as routes_workbench_chat
-
-    reset = MagicMock()
-    monkeypatch.setattr(scheduler, "reset_lottery", reset)
-    chat = {}
-
-    routes_workbench_chat._mark_user_activity(
-        chat, "2026-06-18T02:03:04+00:00"
-    )
-
-    assert chat["lastUserMessageAt"] == "2026-06-18T02:03:04+00:00"
-    assert chat["updatedAt"] == "2026-06-18T02:03:04+00:00"
-    reset.assert_called_once_with()
 
 
 async def test_proactive_skips_when_latest_workbench_chat_is_running(
@@ -105,9 +91,13 @@ async def test_proactive_skips_when_latest_workbench_chat_is_running(
     monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
     monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
-    monkeypatch.setattr(scheduler, "is_session_running", lambda session_id: session_id == "chat_busy")
+    monkeypatch.setattr(
+        scheduler,
+        "_is_workbench_conversation_running",
+        lambda _db_path, session_id: session_id == "chat_busy",
+    )
     run = AsyncMock()
-    monkeypatch.setattr(scheduler, "run_heartbeat_agent", run)
+    monkeypatch.setattr(scheduler, "_run_plugin_proactive_turn", run)
     scheduler._LOTTERY_STATE.update(
         consecutive_unanswered=0,
         cooldown_until=0.0,
@@ -126,7 +116,6 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
 ):
     from cyrene.observability import debug
     from cyrene.runtime import scheduler
-    from cyrene.workbench import chat as routes_workbench_chat
 
     chats_path = tmp_path / "workbench_chats.json"
     workspace = tmp_path / "workspace"
@@ -164,24 +153,18 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
 
     captured = {}
 
-    async def run_agent(
-        prompt,
-        bot,
-        chat_id,
-        db_path,
-        session_id="",
-        on_reply=None,
-        lang="",
-        workspace_dir="",
-    ):
+    async def run_agent(prompt, **kwargs):
+        session_id = kwargs.get("session_id", "")
         assert session_id.startswith("wbchat_")
         assert session_id != "chat_latest"
-        assert on_reply is not None
         captured["session_id"] = session_id
-        captured["lang"] = lang
-        captured["workspace_dir"] = workspace_dir
-        await on_reply("How did the launch go?")
-        return "How did the launch go?"
+        captured["lang"] = kwargs.get("lang", "")
+        captured["workspace_dir"] = kwargs.get("workspace_dir", "")
+        return SimpleNamespace(
+            text="How did the launch go?",
+            model="test-model",
+            pending_question=None,
+        )
 
     import cyrene.runtime.settings_store as settings_store
     monkeypatch.setattr(
@@ -189,14 +172,17 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
         lambda key, default=None: "zh" if key == "app_language" else default,
     )
     monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(routes_workbench_chat, "_CHATS_STORE", chats_path)
     monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_save_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
     monkeypatch.setattr(scheduler, "_assemble_proactive_context", AsyncMock(return_value=""))
-    monkeypatch.setattr(scheduler, "is_session_running", lambda _session_id: False)
-    monkeypatch.setattr(scheduler, "run_heartbeat_agent", run_agent)
+    monkeypatch.setattr(
+        scheduler,
+        "_is_workbench_conversation_running",
+        lambda _db_path, _session_id: False,
+    )
+    monkeypatch.setattr(scheduler, "_run_plugin_proactive_turn", run_agent)
     monkeypatch.setattr(scheduler, "notify", AsyncMock())
     monkeypatch.setattr(scheduler, "append_notification", lambda **_kwargs: {})
     monkeypatch.setattr(debug, "publish_event", publish)
@@ -207,7 +193,10 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
         probability=0.0,
     )
 
-    await scheduler._heartbeat_proactive_check(None, "db.sqlite3")
+    await scheduler._heartbeat_proactive_check(
+        None,
+        str(tmp_path / "runtime.sqlite3"),
+    )
 
     saved = json.loads(chats_path.read_text(encoding="utf-8"))
     assert len(saved["chats"]) == 2
@@ -234,179 +223,6 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
     # The persisted UI language must be threaded into the proactive agent run.
     assert captured["lang"] == "zh"
     assert captured["workspace_dir"] == str(workspace)
-
-
-async def test_proactive_public_persistence_strips_internal_awaiting_marker(
-    monkeypatch, tmp_path
-):
-    from cyrene.observability import debug
-    from cyrene.workbench import chat as routes_workbench_chat
-
-    chats_path = tmp_path / "workbench_chats.json"
-    _write_chats(chats_path, [{
-        "id": "chat_existing",
-        "projectId": "project_1",
-        "title": "Existing",
-        "messages": [],
-    }])
-    monkeypatch.setattr(routes_workbench_chat, "_CHATS_STORE", chats_path)
-    monkeypatch.setattr(debug, "publish_event", AsyncMock())
-
-    result = await routes_workbench_chat.create_proactive_chat(
-        "project_1",
-        "**[[cyrene.awaiting_user]]**",
-        chat_id="wbchat_proactive_new",
-    )
-
-    assert result is None
-    saved = json.loads(chats_path.read_text(encoding="utf-8"))
-    assert len(saved["chats"]) == 1
-    assert "[[cyrene.awaiting_user]]" not in chats_path.read_text(encoding="utf-8")
-
-
-async def test_heartbeat_agent_does_not_preempt_busy_target_session():
-    from cyrene.agent import coordinator
-    from cyrene.agent import state
-
-    ctx = state._ensure_session("chat_busy_proactive_test")
-    await ctx.lock.acquire()
-    try:
-        result = await coordinator.run_heartbeat_agent(
-            "hidden prompt",
-            None,
-            0,
-            "db.sqlite3",
-            session_id="chat_busy_proactive_test",
-        )
-    finally:
-        ctx.lock.release()
-
-    assert result == ""
-
-
-async def test_proactive_lang_is_pinned_in_ephemeral_system(monkeypatch):
-    from cyrene.agent import coordinator
-
-    captured = {}
-
-    async def fake_run_chat_agent(prompt, bot, chat_id, db_path, **kwargs):
-        captured["ephemeral_system"] = kwargs.get("ephemeral_system", "")
-        captured["behavior_user_message"] = kwargs.get("behavior_user_message")
-        captured["behavior_system_initiated"] = kwargs.get("behavior_system_initiated")
-        return ""
-
-    monkeypatch.setattr(coordinator, "_run_chat_agent", fake_run_chat_agent)
-
-    # An explicit language pins the reply; no soft "guess from past messages".
-    await coordinator.run_heartbeat_agent(
-        "hidden", None, 0, "db.sqlite3", session_id="lang_pin_zh", lang="zh",
-    )
-    assert "简体中文" in captured["ephemeral_system"]
-    assert "based on their past messages" not in captured["ephemeral_system"]
-    assert captured["behavior_user_message"] == "Scheduled proactive check-in"
-    assert captured["behavior_system_initiated"] is True
-    assert "DECISION RULE — autonomous work, not conversation" in captured["ephemeral_system"]
-    assert "use tools and complete it now" in captured["ephemeral_system"]
-    assert "Never greet the user, make small talk" in captured["ephemeral_system"]
-    assert "This scheduler event is not user activity" in captured["ephemeral_system"]
-    assert "Never imply the user just woke up" in captured["ephemeral_system"]
-
-    # No persisted language falls back to inferring from past messages.
-    await coordinator.run_heartbeat_agent(
-        "hidden", None, 0, "db.sqlite3", session_id="lang_pin_none", lang="",
-    )
-    assert "based on their past messages" in captured["ephemeral_system"]
-
-
-async def test_proactive_write_allows_only_new_files(monkeypatch, tmp_path):
-    from cyrene.agent import state
-    from cyrene.tool_impl.core.write import _tool_write
-    import cyrene.runtime.settings_store as settings_store
-
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    existing = workspace / "existing.md"
-    existing.write_text("keep", encoding="utf-8")
-
-    monkeypatch.setattr(settings_store, "is_workspace_active", lambda: True)
-    workspace_token = state._active_workspace_dir.set(str(workspace))
-    meta_token = state._ui_round_assistant_meta.set({"system_initiated": True})
-    try:
-        result = await _tool_write(
-            {"path": "notes/new.md", "content": "hello"},
-            None,
-            0,
-            "db.sqlite3",
-            None,
-        )
-        assert "Wrote" in result
-        assert (workspace / "notes" / "new.md").read_text(encoding="utf-8") == "hello"
-
-        result = await _tool_write(
-            {"path": "existing.md", "content": "replace"},
-            None,
-            0,
-            "db.sqlite3",
-            None,
-        )
-        assert "may only create new files" in result
-        assert existing.read_text(encoding="utf-8") == "keep"
-    finally:
-        state._ui_round_assistant_meta.reset(meta_token)
-        state._active_workspace_dir.reset(workspace_token)
-
-
-async def test_write_skill_md_reminds_agent_to_register_after_generation(monkeypatch, tmp_path):
-    from cyrene.agent import state
-    from cyrene.tool_impl.core.write import _tool_write
-    import cyrene.runtime.settings_store as settings_store
-
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    monkeypatch.setattr(settings_store, "is_workspace_active", lambda: True)
-    workspace_token = state._active_workspace_dir.set(str(workspace))
-    try:
-        result = await _tool_write(
-            {"path": "skills/demo/SKILL.md", "content": "# Demo"},
-            None,
-            0,
-            "db.sqlite3",
-            None,
-        )
-        assert "not registered yet" in result
-        assert "skill.install" in result
-        assert str(workspace / "skills" / "demo") in result
-    finally:
-        state._active_workspace_dir.reset(workspace_token)
-
-
-async def test_proactive_rejects_edit_and_shell_file_mutations(monkeypatch):
-    from cyrene.agent import state
-    from cyrene.tooling.executor import _execute_tool
-
-    meta_token = state._ui_round_assistant_meta.set({"system_initiated": True})
-    try:
-        edit_result = await _execute_tool(
-            "Edit",
-            {"path": "existing.md", "old_string": "a", "new_string": "b"},
-            None,
-            0,
-            "db.sqlite3",
-            None,
-        )
-        assert "Editing existing files is forbidden" in edit_result
-
-        shell_result = await _execute_tool(
-            "Bash",
-            {"command": "echo hello > existing.md"},
-            None,
-            0,
-            "db.sqlite3",
-            None,
-        )
-        assert "cannot run shell commands that write" in shell_result
-    finally:
-        state._ui_round_assistant_meta.reset(meta_token)
 
 
 def test_workbench_frontend_handles_proactive_sse():

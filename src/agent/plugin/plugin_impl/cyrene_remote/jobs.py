@@ -7,13 +7,13 @@ import json
 from typing import Any
 from uuid import uuid4
 
-from cyrene.agent.context import current_run_context
+from agent.plugin import PluginContext
 from .common import (
     remote_tool_error,
     request_remote_command,
     resolve_selected_remote_device,
 )
-from cyrene.tooling.runtime_api import json_result, request_scope_elevation
+from agent.plugin.native_runtime import json_result, run_context_value
 
 TOOL_NAME = "RemoteCyreneJobs"
 TOOL_DEF = {
@@ -48,7 +48,7 @@ TOOL_DEF = {
     },
 }
 TOOL_METADATA = {
-    "read_only": True,
+    "read_only": False,
     "resource_keys": ("remote:{device_id}",),
     "requires_order": True,
 }
@@ -56,13 +56,10 @@ TOOL_METADATA = {
 
 async def handler(
     args: dict[str, Any],
-    _bot: Any,
-    chat_id: int,
-    db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
     try:
-        _chat, device = resolve_selected_remote_device(args, db_path, fallback_chat_id=chat_id)
+        _chat, device = resolve_selected_remote_device(args, context)
         operation = str(args.get("operation") or "")
         project_id = str(args.get("project_id") or "").strip()
         if not project_id:
@@ -77,47 +74,15 @@ async def handler(
                 or any(_is_absolute_path(item) for item in args.get("artifact_paths") or [])
             )
         )
-        if operation in {"start", "interrupt", "cancel"}:
-            exact_operation = json.dumps(
-                {
-                    "device_id": str(device["device_id"]),
-                    "project_id": project_id,
-                    "operation": operation,
-                    "job_id": str(args.get("job_id") or ""),
-                    "argv": list(args.get("argv") or []),
-                    "cwd": str(args.get("cwd") or "."),
-                    "env": dict(args.get("env") or {}),
-                    "artifact_paths": list(args.get("artifact_paths") or []),
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            permission = await request_scope_elevation(
-                tool_name=TOOL_NAME,
-                path_hint=f"{device['device_id']}:{project_id}:{str(args.get('cwd') or '.')}",
-                operation=f"远程作业 {operation}",
-                reason=(
-                    str(args.get("reason") or "执行用户请求的远程作业")
-                    + "\n精确操作："
-                    + exact_operation[:8000]
-                    + "\nSHA-256："
-                    + hashlib.sha256(exact_operation.encode()).hexdigest()
-                ),
-                permission_kind="remote_job_operation",
-                options=["允许执行这一次", "拒绝"],
-                scope_hint="远程项目中的 ",
-                meta_extra={"device_id": str(device["device_id"]), "project_id": project_id, "operation": operation},
-            )
-            if permission is not None:
-                return permission
         payload = {
             key: args[key]
             for key in ("job_id", "argv", "cwd", "env", "artifact_paths", "cursor", "limit", "timeout_seconds")
             if key in args
         }
         if operation == "start":
-            origin_chat_id = current_run_context().session_id or str(chat_id or "")
+            origin_chat_id = str(
+                run_context_value(context, "session_id", "") or ""
+            )
             exact = {
                 "device_id": str(device["device_id"]),
                 "project_id": project_id,
@@ -148,7 +113,10 @@ async def handler(
         payload["_authorization"] = {
             "version": 1,
             "approved": True,
-            "permission_mode": current_run_context().permission_mode,
+            "permission_mode": str(
+                run_context_value(context, "permission_mode", "default")
+                or "default"
+            ),
             "scope": "single_operation",
             "outside_workspace": outside_workspace,
             "arguments_sha256": authorization_hash,
@@ -162,8 +130,7 @@ async def handler(
                 "idempotency_key": f"remote-job:{payload.get('job_id') or uuid4().hex}:{operation}:{payload.get('cursor') or 0}",
                 "timeout_seconds": args.get("timeout_seconds") or 30,
             },
-            db_path,
-            fallback_chat_id=chat_id,
+            context,
         )
         return json_result(result)
     except Exception as exc:

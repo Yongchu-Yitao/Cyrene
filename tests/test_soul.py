@@ -1,11 +1,11 @@
-"""ensure_soul must never replace a legacy root-level SOUL.md with a default."""
+"""Plugin-owned SOUL storage has no direct dependency on the retired backend."""
 
 from pathlib import Path
 
 import pytest
 
-from cyrene.runtime.memory import soul as soul_module
-from cyrene.runtime.memory.soul import ensure_soul
+from agent.plugin.plugin_impl.cyrene_memory import soul as soul_module
+from agent.plugin.plugin_impl.cyrene_memory.soul import ensure_soul
 
 _LEGACY_SOUL = "# Old Soul\n\n## SELF:IDENTITY\n- I am the user's persona\n"
 
@@ -25,13 +25,14 @@ def _write_legacy(workspace: Path) -> Path:
     return legacy
 
 
-def test_ensure_soul_migrates_legacy_root_soul(soul_env):
+def test_ensure_soul_ignores_root_level_soul(soul_env):
     workspace, cyrene = soul_env["workspace"], soul_env["cyrene"]
     legacy = _write_legacy(workspace)
     ensure_soul()
     target = cyrene / "SOUL.md"
-    assert target.read_text(encoding="utf-8") == _LEGACY_SOUL
-    assert not legacy.exists()
+    assert target.read_text(encoding="utf-8") != _LEGACY_SOUL
+    assert "## SELF:IDENTITY" in target.read_text(encoding="utf-8")
+    assert legacy.exists()
 
 
 def test_ensure_soul_writes_default_when_no_legacy(soul_env):
@@ -49,19 +50,6 @@ def test_ensure_soul_skips_unrelated_root_file(soul_env):
     ensure_soul()
     assert legacy.exists()
     assert "## SELF:IDENTITY" in (cyrene / "SOUL.md").read_text(encoding="utf-8")
-
-
-def test_ensure_soul_does_not_write_default_when_move_fails(soul_env, monkeypatch):
-    workspace, cyrene = soul_env["workspace"], soul_env["cyrene"]
-    legacy = _write_legacy(workspace)
-
-    def fail_move(source, destination):
-        raise OSError("file locked")
-
-    monkeypatch.setattr(soul_module.shutil, "move", fail_move)
-    ensure_soul()
-    assert legacy.exists()
-    assert not (cyrene / "SOUL.md").exists()
 
 
 def test_ensure_soul_keeps_existing_cyrene_soul(soul_env):

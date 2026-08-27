@@ -1,4 +1,4 @@
-"""Invoke an explicitly granted tool package on a paired Cyrene."""
+"""Invoke an explicitly granted Plugin pack on a paired Cyrene."""
 
 from __future__ import annotations
 
@@ -6,19 +6,17 @@ import json
 import hashlib
 from typing import Any
 
-from cyrene.runtime.remote_control import REMOTE_TOOL_PACK_PREFIX
+from agent.plugin import PluginContext
+from cyrene.runtime.remote_control import (
+    REMOTE_PLUGIN_PACK_IDS,
+    REMOTE_PLUGIN_PACK_PREFIX,
+)
 from .common import (
     remote_tool_error,
     request_remote_command,
     resolve_selected_remote_device,
 )
-from cyrene.tooling.runtime_api import (
-    classify_destructive_shell_command,
-    json_result,
-    request_destructive_confirmation,
-    request_scope_elevation,
-)
-from cyrene.agent.context import current_run_context
+from agent.plugin.native_runtime import json_result, run_context_value
 
 TOOL_NAME = "RemoteHarness"
 TOOL_DEF = {
@@ -26,10 +24,9 @@ TOOL_DEF = {
     "function": {
         "name": TOOL_NAME,
         "description": (
-            "Preferred way to control a paired Cyrene: discover, describe, or "
-            "directly invoke a capability from a remotely granted tool package. "
-            "This does not create a remote chat or start a second Agent. Use "
-            "RemoteCyreneAction/RunRemoteCyrene only as compatibility fallbacks. "
+            "List, describe, or directly invoke a Plugin from an explicitly "
+            "granted Plugin pack on a paired Cyrene. This does not create a "
+            "remote chat or start a second Agent. "
             "Never split or base64-encode files through a remote shell; use "
             "RemoteCyreneFiles for every file or directory transfer."
         ),
@@ -41,16 +38,14 @@ TOOL_DEF = {
                     "type": "string",
                     "description": "A project explicitly shared by the remote device.",
                 },
-                "tool_pack": {
+                "plugin_pack": {
                     "type": "string",
-                    "description": (
-                        "Granted package wire name, such as desktop_tools. "
-                        "The toolpack:desktop_tools grant form is also accepted."
-                    ),
+                    "enum": list(REMOTE_PLUGIN_PACK_IDS),
+                    "description": "Exact granted Plugin pack id, such as cyrene_desktop.",
                 },
                 "operation": {
                     "type": "string",
-                    "enum": ["discover", "describe", "invoke"],
+                    "enum": ["list", "describe", "invoke"],
                 },
                 "query": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50},
@@ -71,15 +66,15 @@ TOOL_DEF = {
                     "maximum": 120,
                 },
             },
-            "required": ["project_id", "tool_pack", "operation"],
+            "required": ["project_id", "plugin_pack", "operation"],
             "additionalProperties": False,
         },
     },
 }
 TOOL_METADATA = {
-    # Discovery is read-only. Invoke performs its own exact, argument-bound
-    # controller-side elevation before crossing the device boundary.
-    "read_only": True,
+    # The operation is polymorphic; marking the plugin mutable ensures invoke
+    # always passes through the host's central PreToolUse review.
+    "read_only": False,
     "resource_keys": ("remote:{device_id}",),
     "requires_order": False,
 }
@@ -87,29 +82,26 @@ TOOL_METADATA = {
 
 async def handler(
     args: dict[str, Any],
-    _bot: Any,
-    chat_id: int,
-    db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
     try:
         _chat, device = resolve_selected_remote_device(
-            args, db_path, fallback_chat_id=chat_id
+            args, context
         )
         project_id = str(args.get("project_id") or "").strip()
-        tool_pack = str(args.get("tool_pack") or "").strip()
-        if tool_pack.startswith(REMOTE_TOOL_PACK_PREFIX):
-            tool_pack = tool_pack[len(REMOTE_TOOL_PACK_PREFIX):]
+        plugin_pack = str(args.get("plugin_pack") or "").strip()
         operation = str(args.get("operation") or "").strip()
-        if not project_id or not tool_pack:
-            raise ValueError("project_id and tool_pack are required")
-        grant = REMOTE_TOOL_PACK_PREFIX + tool_pack
+        if not project_id or not plugin_pack:
+            raise ValueError("project_id and plugin_pack are required")
+        if plugin_pack not in REMOTE_PLUGIN_PACK_IDS:
+            raise ValueError(f"unsupported remote Plugin pack: {plugin_pack}")
+        grant = REMOTE_PLUGIN_PACK_PREFIX + plugin_pack
         if grant not in (device.get("received_capabilities") or []):
             raise PermissionError(
-                f"远程设备未授权直接调用工具包 {tool_pack}"
+                f"远程设备未授权直接调用插件包 {plugin_pack}"
             )
 
-        destructive_approved = False
+        destructive_approved = operation == "invoke"
         if operation == "invoke":
             capability_id = str(args.get("capability_id") or "").strip()
             if not capability_id:
@@ -124,66 +116,6 @@ async def handler(
                 raise PermissionError(
                     "远程设备不支持 remote_authorization_v1；请升级并重新授权后再直接调用"
                 )
-            rendered_arguments = json.dumps(
-                args.get("arguments") or {},
-                ensure_ascii=False,
-                sort_keys=True,
-                default=str,
-            )
-            capability_lower = capability_id.lower()
-            invoke_arguments = dict(args.get("arguments") or {})
-            shell_text = str(
-                invoke_arguments.get("input")
-                or invoke_arguments.get("command")
-                or invoke_arguments.get("cmd")
-                or ""
-            )
-            destructive = classify_destructive_shell_command(shell_text)
-            if destructive is None and any(
-                marker in capability_lower
-                for marker in (".delete", ".delete_", ".remove", ".uninstall", ".format")
-            ):
-                destructive = {
-                    "operation": f"远程破坏性能力 {capability_id}",
-                    "kind": "remote_destructive_capability",
-                    "detail": rendered_arguments[:4000],
-                }
-            common_reason = (
-                str(args.get("reason") or "执行用户请求的远程操作")
-                + "\n工具包："
-                + tool_pack
-                + "\n参数："
-                + rendered_arguments[:4000]
-            )
-            if destructive is not None:
-                permission = await request_destructive_confirmation(
-                    tool_name=TOOL_NAME,
-                    operation=str(destructive.get("operation") or f"远程调用 {capability_id}"),
-                    detail=common_reason + "\n" + str(destructive.get("detail") or ""),
-                    path_hint=str(device["device_id"]),
-                    destructive_kind=str(destructive.get("kind") or "remote_destructive_capability"),
-                )
-                destructive_approved = permission is None
-            else:
-                permission = await request_scope_elevation(
-                    tool_name=TOOL_NAME,
-                    path_hint=str(device["device_id"]),
-                    operation=f"在远程设备直接调用 {capability_id}",
-                    reason=common_reason,
-                    permission_kind="remote_harness_invoke",
-                    options=["允许执行这一次", "拒绝"],
-                    scope_hint="远程工具调用的 ",
-                    meta_extra={
-                        "device_id": str(device["device_id"]),
-                        "project_id": project_id,
-                        "tool_pack": tool_pack,
-                        "capability_id": capability_id,
-                        "arguments": invoke_arguments,
-                    },
-                )
-            if permission is not None:
-                return permission
-
         payload = {
             key: args[key]
             for key in (
@@ -196,11 +128,11 @@ async def handler(
             )
             if key in args
         }
-        payload["tool_pack"] = tool_pack
+        payload["plugin_pack"] = plugin_pack
         authorization_arguments = {
             "device_id": str(device["device_id"]),
             "project_id": project_id,
-            "tool_pack": tool_pack,
+            "plugin_pack": plugin_pack,
             "operation": operation,
             "capability_id": str(args.get("capability_id") or ""),
             "arguments": dict(args.get("arguments") or {}),
@@ -218,7 +150,10 @@ async def handler(
         payload["authorization"] = {
             "version": 1,
             "approved": True,
-            "permission_mode": current_run_context().permission_mode,
+            "permission_mode": str(
+                run_context_value(context, "permission_mode", "default")
+                or "default"
+            ),
             "arguments_sha256": authorization_hash,
             "destructive_approved": destructive_approved,
         }
@@ -230,8 +165,7 @@ async def handler(
                 "payload": payload,
                 "timeout_seconds": args.get("timeout_seconds"),
             },
-            db_path,
-            fallback_chat_id=chat_id,
+            context,
         )
         return json_result({
             **result,

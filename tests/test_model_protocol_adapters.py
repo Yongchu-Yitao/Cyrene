@@ -540,6 +540,38 @@ def test_gemini_thought_parts_are_reasoning_not_visible_answer_text() -> None:
     assert parsed["reasoning_content"] == "internal analysis"
 
 
+def test_parse_response_preserves_provider_cache_usage() -> None:
+    anthropic = parse_response(
+        "anthropic",
+        {
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 120,
+                "output_tokens": 12,
+                "cache_read_input_tokens": 90,
+                "cache_creation_input_tokens": 30,
+            },
+        },
+    )
+    gemini = parse_response(
+        "gemini",
+        {
+            "candidates": [{"content": {"parts": [{"text": "ok"}]}}],
+            "usageMetadata": {
+                "promptTokenCount": 50,
+                "candidatesTokenCount": 5,
+                "cachedContentTokenCount": 20,
+            },
+        },
+    )
+
+    assert anthropic["usage"]["prompt_cache_hit_tokens"] == 90
+    assert anthropic["usage"]["prompt_cache_miss_tokens"] == 30
+    assert gemini["usage"]["prompt_cache_hit_tokens"] == 20
+    assert gemini["usage"]["prompt_cache_miss_tokens"] == 30
+
+
 def _sse_response(events: list[dict[str, object]]) -> httpx.Response:
     body = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
     return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())

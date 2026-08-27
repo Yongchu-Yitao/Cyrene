@@ -54,6 +54,6 @@ if __name__ == "__main__":
         raise SystemExit(0)
     if "--cyrene-prepare-settings" in sys.argv:
         raise SystemExit(_prepare_settings())
-    from cyrene.tooling.backends.simplexng_child import main
+    from agent.plugin.plugin_impl.cyrene_content.simplexng_child import main
 
     main()

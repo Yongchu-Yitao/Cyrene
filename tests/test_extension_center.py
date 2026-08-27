@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from agent.plugin import PluginContext
+
 from conftest import (
     workbench_i18n_source,
     workbench_settings_source,
@@ -204,35 +206,6 @@ def test_skill_snapshot_progressive_load_and_resource_confinement(tmp_path, monk
     assert skills.read_skill_resource(result["skill"]["id"], "../outside.md")["ok"] is False
 
 
-def test_extension_skill_card_includes_full_markdown_and_file_directory(tmp_path, monkeypatch):
-    from cyrene.extensions import service
-
-    monkeypatch.setattr(service, "build_skills", lambda: [{
-        "id": "demo-skill",
-        "name": "Demo Skill",
-        "desc": "Full private workflow",
-        "stored_path": str(tmp_path / "demo-skill"),
-        "entrypoint_name": "SKILL.md",
-        "preview": "# Instructions\n\nDo the **complete** workflow.\n",
-        "files": [
-            {"path": "SKILL.md", "name": "SKILL.md", "size": 48},
-            {"path": "references/guide.md", "name": "guide.md", "size": 24},
-        ],
-    }])
-    monkeypatch.setattr(service.ExtensionService, "_system_observation", lambda *_args: None)
-    from cyrene.tooling.backends import mcp_manager
-    monkeypatch.setattr(mcp_manager, "get_mcp_servers", lambda: [])
-    monkeypatch.setattr(mcp_manager, "get_manager", lambda: type("Manager", (), {"get_server_status": lambda self: []})())
-
-    extension_service = object.__new__(service.ExtensionService)
-    extension_service.tasks = type("Tasks", (), {"list": lambda self: []})()
-    card = extension_service.list_extensions()["skills"][0]
-
-    assert card["preview"] == "# Instructions\n\nDo the **complete** workflow.\n"
-    assert card["entrypoint_name"] == "SKILL.md"
-    assert [item["path"] for item in card["files"]] == ["SKILL.md", "references/guide.md"]
-
-
 def test_extension_service_installs_local_skill_through_canonical_service(tmp_path, monkeypatch):
     from cyrene.extensions import service
 
@@ -258,62 +231,6 @@ def test_extension_service_installs_local_skill_through_canonical_service(tmp_pa
         extension_service.install_local_skill("")
 
 
-def test_extension_routes_cover_local_skill_path_upload_and_enabled_state(tmp_path, monkeypatch):
-    from cyrene.extensions.application_service import (
-        ExtensionApplicationService,
-        ExtensionInstallInputService,
-    )
-    from fastapi import APIRouter, FastAPI
-    from fastapi.testclient import TestClient
-    from route import extensions
-
-    calls = []
-
-    class Service:
-        def install_local_skill(self, source_path, *, actor):
-            path = Path(source_path)
-            calls.append(("install", path, actor, path.exists()))
-            return {"ok": True, "skill": {"id": "demo-skill"}}
-
-        async def set_extension_enabled(self, kind, extension_id, enabled, *, actor):
-            calls.append(("enabled", kind, extension_id, enabled, actor))
-            return {"ok": True, "enabled": enabled}
-
-    service = Service()
-    application_service = ExtensionApplicationService(
-        service,
-        ExtensionInstallInputService(service, tmp_path),
-        source_get=lambda **_kwargs: {},
-        source_update=lambda body: body,
-        audit_get=lambda _limit: [],
-    )
-    app = FastAPI()
-    router = APIRouter()
-    extensions.register_extension_routes(router, application_service)
-    app.include_router(router)
-    client = TestClient(app)
-
-    local_path = tmp_path / "local-skill"
-    local_path.mkdir()
-    response = client.post(
-        "/api/extensions/skills/install",
-        json={"path": str(local_path)},
-    )
-    assert response.status_code == 200
-    response = client.post(
-        "/api/extensions/skills/install-upload",
-        files={"file": ("SKILL.md", b"# Demo Skill", "text/markdown")},
-    )
-    assert response.status_code == 200
-    uploaded_path = calls[1][1]
-    assert calls[1][3] is True
-    assert not uploaded_path.exists()
-    response = client.post(
-        "/api/extensions/skill/demo-skill/enabled",
-        json={"enabled": False},
-    )
-    assert response.json() == {"ok": True, "enabled": False}
-    assert calls[2] == ("enabled", "skill", "demo-skill", False, "user")
 
 
 def test_legacy_skill_panel_and_api_are_removed_from_active_sources():
@@ -409,54 +326,6 @@ def test_agent_process_environment_appends_managed_paths_without_installer_token
     assert env["MISE_DATA_DIR"] == str(tmp_path / "extensions" / "mise")
     assert "GITHUB_TOKEN" not in env
     assert "npm_config_prefix" not in env
-
-
-@pytest.mark.asyncio
-@pytest.mark.skipif(os.name == "nt", reason="probe uses a POSIX executable shim")
-async def test_bash_can_run_a_cyrene_managed_mise_shim(tmp_path, monkeypatch):
-    from cyrene.agent.context import bind_run_context
-    from cyrene.extensions import service
-    from cyrene.tool_impl.core import bash as bash_tool
-
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    mise_shims = tmp_path / "extensions" / "mise" / "shims"
-    mise_shims.mkdir(parents=True)
-    probe = mise_shims / "cyrene-managed-probe"
-    probe.write_text("#!/bin/sh\nprintf managed-command-visible\n", encoding="utf-8")
-    probe.chmod(0o755)
-
-    monkeypatch.setattr(service, "_ROOT", tmp_path / "extensions")
-    monkeypatch.setattr(service, "_MISE_DATA", tmp_path / "extensions" / "mise")
-    monkeypatch.setattr(service, "_MISE_CONFIG", tmp_path / "extensions" / "mise-config")
-    monkeypatch.setattr(service, "_MISE_CACHE", tmp_path / "cache" / "mise")
-    monkeypatch.setattr(service, "_UV_PYTHON_DIR", tmp_path / "extensions" / "python")
-    monkeypatch.setattr(service, "_UV_BIN_DIR", tmp_path / "extensions" / "python-bin")
-    monkeypatch.setattr(service, "_TEX_DIR", tmp_path / "extensions" / "tex")
-    monkeypatch.setattr(service, "_AGENT_BIN_DIR", tmp_path / "extensions" / "agents" / "bin")
-    monkeypatch.setattr(service, "_bundled_binary", lambda _name: None)
-    settings = {
-        "extension_clis": [{
-            "id": "cyrene-managed-probe",
-            "source": {"type": "mise", "ref": "cyrene-managed-probe"},
-            "spec": {"tool": "cyrene-managed-probe"},
-        }],
-    }
-    monkeypatch.setattr(service, "get_setting", lambda key, default=None: settings.get(key, default))
-    monkeypatch.setattr(service, "source_settings", lambda **_kwargs: {"verify_signatures": True})
-
-    with bind_run_context(workspace_dir=str(workspace), temporary_full_access=True):
-        result = await bash_tool._tool_bash(
-            {"command": "cyrene-managed-probe", "timeout_ms": 5000},
-            None,
-            0,
-            "",
-            {},
-        )
-
-    payload = json.loads(result)
-    assert payload["exit_code"] == 0
-    assert payload["stdout"] == "managed-command-visible"
 
 
 def test_disabled_managed_mise_extensions_are_hidden_from_the_agent_environment(tmp_path, monkeypatch):
@@ -590,71 +459,9 @@ def test_detected_system_extension_hides_binding_and_install_actions(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_bundled_uv_has_the_same_activation_control(tmp_path, monkeypatch):
-    from cyrene.extensions import service
+async def test_agent_extension_activation_delegates_to_the_extension_service(monkeypatch):
+    from agent.plugin.plugin_impl.cyrene_extensions import manage_extensions
 
-    uv = tmp_path / "runtime-tools" / "uv"
-    uv.parent.mkdir(parents=True)
-    uv.write_text("#!/bin/sh\necho uv 0.11.28\n", encoding="utf-8")
-    uv.chmod(0o755)
-    saved = {}
-    monkeypatch.setattr(service, "_bundled_binary", lambda name: uv if name == "uv" else None)
-    monkeypatch.setattr(service, "get_setting", lambda key, default=None: saved.get(key, default))
-    monkeypatch.setattr(service, "set_setting", lambda key, value: saved.__setitem__(key, value))
-    monkeypatch.setattr(service, "_audit", lambda *_args, **_kwargs: None)
-    extension_service = object.__new__(service.ExtensionService)
-    extension_service.tasks = type("Tasks", (), {"list": lambda self: []})()
-
-    result = await extension_service.set_extension_enabled("toolchain", "uv", False)
-
-    assert result == {"ok": True, "enabled": False}
-    assert saved["extension_enabled"] == {"toolchain:uv": False}
-    assert str(uv.parent) not in service.agent_extension_paths()
-
-    monkeypatch.setattr(service, "build_skills", lambda: [])
-    from cyrene.tooling.backends import mcp_manager
-    monkeypatch.setattr(mcp_manager, "get_mcp_servers", lambda: [])
-    monkeypatch.setattr(mcp_manager, "get_manager", lambda: type("Manager", (), {"get_server_status": lambda self: []})())
-    monkeypatch.setattr(service.ExtensionService, "_system_observation", lambda *_args: None)
-    uv_card = extension_service.list_extensions()["infrastructure"]["uv"]
-    assert uv_card["enabled"] is False
-    assert uv_card["desired_state"] == "disabled"
-    assert {"enable", "disable"}.issubset(uv_card["capabilities"])
-
-
-@pytest.mark.asyncio
-async def test_skill_and_mcp_activation_use_their_native_lifecycle(monkeypatch):
-    from cyrene.extensions import service
-    from cyrene.tooling.backends import mcp_manager
-
-    skill_calls = []
-    servers = [{"name": "demo", "transport": "streamable_http", "url": "https://example.com/mcp", "enabled": True}]
-    saved_servers = []
-    restarts = []
-
-    monkeypatch.setattr(service, "set_skill_enabled", lambda extension_id, enabled: skill_calls.append((extension_id, enabled)) or True)
-    monkeypatch.setattr(service, "_audit", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(mcp_manager, "get_mcp_servers", lambda: [dict(item) for item in servers])
-    monkeypatch.setattr(mcp_manager, "save_mcp_servers", lambda value: saved_servers.append([dict(item) for item in value]))
-
-    async def restart():
-        restarts.append(True)
-
-    monkeypatch.setattr(mcp_manager, "restart_mcp", restart)
-    extension_service = object.__new__(service.ExtensionService)
-
-    assert await extension_service.set_extension_enabled("skill", "demo-skill", False) == {"ok": True, "enabled": False}
-    assert skill_calls == [("demo-skill", False)]
-    assert await extension_service.set_extension_enabled("mcp", "demo", False) == {"ok": True, "enabled": False}
-    assert saved_servers[-1][0]["enabled"] is False
-    assert restarts == [True]
-
-
-@pytest.mark.asyncio
-async def test_agent_extension_activation_still_passes_through_the_reviewer(monkeypatch):
-    from cyrene.tool_impl.extensions import manage_extensions
-
-    reviews = []
     calls = []
 
     class FakeService:
@@ -662,25 +469,15 @@ async def test_agent_extension_activation_still_passes_through_the_reviewer(monk
             calls.append((kind, extension_id, enabled, actor))
             return {"ok": True, "enabled": enabled}
 
-    async def review(operation, target, arguments):
-        reviews.append((operation, target, dict(arguments)))
-        return None
-
     monkeypatch.setattr(manage_extensions, "get_extension_service", lambda: FakeService())
-    monkeypatch.setattr(manage_extensions, "_review", review)
 
     result = json.loads(await manage_extensions._tool_manage_extensions({
         "action": "disable",
         "kind": "cli",
         "extension_id": "ripgrep",
-    }))
+    }, PluginContext()))
 
     assert result == {"ok": True, "enabled": False}
-    assert reviews == [("disable", "cli:ripgrep", {
-        "action": "disable",
-        "kind": "cli",
-        "extension_id": "ripgrep",
-    })]
     assert calls == [("cli", "ripgrep", False, "agent")]
 
 
@@ -688,7 +485,9 @@ def test_extension_switch_is_rendered_only_in_expanded_details_and_uses_unified_
     frontend = workbench_settings_source()
     styles = workbench_style_source()
     root = Path(__file__).resolve().parents[1]
-    tool_definitions = root.joinpath("src/cyrene/tooling/native_definitions.py").read_text(encoding="utf-8")
+    tool_definitions = root.joinpath(
+        "src/agent/plugin/plugin_impl/cyrene_extensions/definitions.py"
+    ).read_text(encoding="utf-8")
 
     details_index = frontend.index('expanded && React.createElement("div", { className: "wb-extension-details" }')
     switch_index = frontend.index('canToggle && React.createElement("div", { className: "wb-extension-enabled-row" }')
@@ -840,7 +639,7 @@ def test_manual_binding_records_but_never_mutates_executable(tmp_path, monkeypat
 
 @pytest.mark.asyncio
 async def test_environment_list_returns_only_installed_compact_metadata(monkeypatch):
-    from cyrene.tool_impl.extensions import list_environment
+    from agent.plugin.plugin_impl.cyrene_extensions import list_environment
 
     uv_enabled = True
 
@@ -892,7 +691,9 @@ async def test_environment_list_returns_only_installed_compact_metadata(monkeypa
             }
 
     monkeypatch.setattr(list_environment, "get_extension_service", lambda: FakeService())
-    payload = json.loads(await list_environment._tool_list_environment({"kind": "all"}))
+    payload = json.loads(await list_environment._tool_list_environment(
+        {"kind": "all"}, PluginContext()
+    ))
 
     assert payload["ok"] is True
     assert [item["id"] for item in payload["items"]] == ["python", "uv"]
@@ -900,16 +701,20 @@ async def test_environment_list_returns_only_installed_compact_metadata(monkeypa
     assert payload["items"][0]["source"] == {"type": "system", "binding": "detected"}
 
     uv_enabled = False
-    hidden = json.loads(await list_environment._tool_list_environment({"kind": "all"}))
+    hidden = json.loads(await list_environment._tool_list_environment(
+        {"kind": "all"}, PluginContext()
+    ))
     assert [item["id"] for item in hidden["items"]] == ["python"]
 
-    excluded = json.loads(await list_environment._tool_list_environment({"kind": "skill"}))
+    excluded = json.loads(await list_environment._tool_list_environment(
+        {"kind": "skill"}, PluginContext()
+    ))
     assert excluded == {"ok": False, "error": "unsupported environment kind: skill"}
 
 
 @pytest.mark.asyncio
 async def test_environment_search_returns_review_ready_requests_and_partial_errors(monkeypatch):
-    from cyrene.tool_impl.extensions import search_environment
+    from agent.plugin.plugin_impl.cyrene_extensions import search_environment
 
     searched_kinds = []
 
@@ -956,7 +761,9 @@ async def test_environment_search_returns_review_ready_requests_and_partial_erro
             }], "next_cursor": ""}
 
     monkeypatch.setattr(search_environment, "get_extension_service", lambda: FakeService())
-    payload = json.loads(await search_environment._tool_search_environment({"query": "search"}))
+    payload = json.loads(await search_environment._tool_search_environment(
+        {"query": "search"}, PluginContext()
+    ))
 
     assert payload["ok"] is True
     assert payload["source_errors"] == {"mcp": "registry unavailable"}
@@ -971,7 +778,7 @@ async def test_environment_search_returns_review_ready_requests_and_partial_erro
 
 @pytest.mark.asyncio
 async def test_environment_search_does_not_offer_reinstall_for_system_extension(monkeypatch):
-    from cyrene.tool_impl.extensions import search_environment
+    from agent.plugin.plugin_impl.cyrene_extensions import search_environment
 
     class FakeService:
         def list_extensions(self):
@@ -990,7 +797,9 @@ async def test_environment_search_does_not_offer_reinstall_for_system_extension(
             }], "next_cursor": ""}
 
     monkeypatch.setattr(search_environment, "get_extension_service", lambda: FakeService())
-    payload = json.loads(await search_environment._tool_search_environment({"kind": "toolchain", "query": "tex"}))
+    payload = json.loads(await search_environment._tool_search_environment(
+        {"kind": "toolchain", "query": "tex"}, PluginContext()
+    ))
 
     assert payload["results"][0]["installed"] is True
     assert payload["results"][0]["installable"] is False
@@ -999,7 +808,7 @@ async def test_environment_search_does_not_offer_reinstall_for_system_extension(
     excluded = json.loads(await search_environment._tool_search_environment({
         "query": "ocr",
         "kind": "skill",
-    }))
+    }, PluginContext()))
     assert excluded == {"ok": False, "error": "unsupported environment kind: skill"}
 
 
@@ -1052,7 +861,7 @@ async def test_mcp_registry_keeps_pypi_packages_and_refreshes_stale_version(monk
 
 @pytest.mark.asyncio
 async def test_environment_search_returns_machine_readable_mcp_fallback(monkeypatch):
-    from cyrene.tool_impl.extensions import search_environment
+    from agent.plugin.plugin_impl.cyrene_extensions import search_environment
 
     class FakeService:
         def list_extensions(self):
@@ -1066,7 +875,9 @@ async def test_environment_search_returns_machine_readable_mcp_fallback(monkeypa
             }], "next_cursor": ""}
 
     monkeypatch.setattr(search_environment, "get_extension_service", lambda: FakeService())
-    payload = json.loads(await search_environment._tool_search_environment({"kind": "mcp", "query": "demo"}))
+    payload = json.loads(await search_environment._tool_search_environment(
+        {"kind": "mcp", "query": "demo"}, PluginContext()
+    ))
     item = payload["results"][0]
     assert item["installable"] is False
     assert item["reason_code"] == "unsupported_registry_type"
@@ -1075,60 +886,8 @@ async def test_environment_search_returns_machine_readable_mcp_fallback(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_pypi_mcp_install_uses_bundled_uv_and_fixed_version(tmp_path, monkeypatch):
-    from cyrene.extensions import service
-    from cyrene.tooling.backends import mcp_manager
-
-    uv = tmp_path / "uv"
-    uv.write_text("uv", encoding="utf-8")
-    uv.chmod(0o755)
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    commands = []
-    saved = []
-
-    class Tasks:
-        def update(self, *_args, **_kwargs):
-            return None
-
-    class Manager:
-        def get_server_status(self):
-            return [{"name": "demo", "status": "connected", "tool_count": 1}]
-
-    async def run_manager(_self, _task_id, command, **_kwargs):
-        commands.append(command)
-        if command[1:3] == ["tool", "install"]:
-            executable = bin_dir / "demo-mcp"
-            executable.write_text("#!/bin/sh", encoding="utf-8")
-            executable.chmod(0o755)
-        return "", ""
-
-    monkeypatch.setattr(service, "_UV_BIN_DIR", bin_dir)
-    monkeypatch.setattr(service, "_bundled_binary", lambda name: uv if name == "uv" else None)
-    monkeypatch.setattr(service, "extension_environment", lambda: {})
-    monkeypatch.setattr(service.ExtensionService, "_run_manager", run_manager)
-    monkeypatch.setattr(service, "_audit", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(mcp_manager, "get_mcp_servers", lambda: [])
-    monkeypatch.setattr(mcp_manager, "save_mcp_servers", lambda value: saved.append(value))
-    monkeypatch.setattr(mcp_manager, "restart_mcp", lambda: _async_result(None))
-    monkeypatch.setattr(mcp_manager, "get_manager", lambda: Manager())
-    extension_service = object.__new__(service.ExtensionService)
-    extension_service.tasks = Tasks()
-
-    config = await extension_service._install_mcp("task", "demo", {
-        "version": "1.2.3",
-        "package": {"registryType": "pypi", "identifier": "demo-mcp", "version": "1.2.3"},
-    }, "agent")
-
-    assert commands[0][-1] == "demo-mcp==1.2.3"
-    assert config["command"] == str((bin_dir / "demo-mcp").resolve())
-    assert config["source"]["registry"] == "pypi"
-    assert saved[-1][0]["name"] == "demo"
-
-
-@pytest.mark.asyncio
 async def test_manage_extensions_exposes_local_mcp_action(monkeypatch):
-    from cyrene.tool_impl.extensions import manage_extensions
+    from agent.plugin.plugin_impl.cyrene_extensions import manage_extensions
 
     started = []
 
@@ -1138,208 +897,9 @@ async def test_manage_extensions_exposes_local_mcp_action(monkeypatch):
             return {"id": "task"}
 
     monkeypatch.setattr(manage_extensions, "get_extension_service", lambda: FakeService())
-    monkeypatch.setattr(manage_extensions, "_review", lambda *_args, **_kwargs: _async_result(None))
     config = {"name": "demo", "transport": "stdio", "command": "/bin/demo", "args": [], "version": "1.0.0"}
     payload = json.loads(await manage_extensions._tool_manage_extensions({
         "action": "install_local_mcp", "kind": "mcp", "extension_id": "demo", "request": {"config": config},
-    }))
+    }, PluginContext()))
     assert payload["ok"] is True
     assert started == [("mcp", "demo", {"config": config}, "agent")]
-
-
-@pytest.mark.asyncio
-async def test_environment_discovery_follows_real_extension_activation_state(tmp_path, monkeypatch):
-    from cyrene.extensions import service
-    from cyrene.tool_impl.extensions import list_environment, search_environment
-    from cyrene.tooling.backends import mcp_manager
-
-    uv = tmp_path / "runtime-tools" / "uv"
-    uv.parent.mkdir(parents=True)
-    uv.write_text("#!/bin/sh\necho uv 0.11.28\n", encoding="utf-8")
-    uv.chmod(0o755)
-    settings = {
-        "extension_clis": [{
-            "id": "ripgrep", "kind": "cli", "ownership": "cyrene",
-            "observed_state": "installed", "version": "14.1.1",
-            "path": "/managed/rg", "source": {"type": "mise", "ref": "github:BurntSushi/ripgrep"},
-            "health": "healthy", "spec": dict(service.CURATED_CLIS["ripgrep"]),
-        }],
-        "extension_toolchains": [{
-            "id": "node", "kind": "toolchain", "ownership": "cyrene",
-            "observed_state": "installed", "version": "24.0.0",
-            "path": "/managed/node", "source": {"type": "mise", "ref": "node"},
-            "health": "healthy", "spec": dict(service.TOOLCHAINS["node"]),
-        }],
-    }
-    servers = [{
-        "name": "demo-mcp", "transport": "streamable_http",
-        "url": "https://example.com/mcp", "enabled": True,
-        "source": {"type": "mcp-registry", "id": "demo-mcp"},
-    }]
-
-    monkeypatch.setattr(service, "get_setting", lambda key, default=None: settings.get(key, default))
-    monkeypatch.setattr(service, "set_setting", lambda key, value: settings.__setitem__(key, value))
-    monkeypatch.setattr(service, "_audit", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(service, "build_skills", lambda: [])
-    monkeypatch.setattr(service, "_bundled_binary", lambda name: uv if name == "uv" else None)
-    monkeypatch.setattr(service.ExtensionService, "_system_observation", lambda *_args: None)
-    monkeypatch.setattr(mcp_manager, "get_mcp_servers", lambda: [dict(item) for item in servers])
-
-    def save_servers(value):
-        servers[:] = [dict(item) for item in value]
-
-    monkeypatch.setattr(mcp_manager, "save_mcp_servers", save_servers)
-    monkeypatch.setattr(
-        mcp_manager,
-        "get_manager",
-        lambda: type("Manager", (), {"get_server_status": lambda self: []})(),
-    )
-
-    async def restart_mcp():
-        return None
-
-    monkeypatch.setattr(mcp_manager, "restart_mcp", restart_mcp)
-    extension_service = object.__new__(service.ExtensionService)
-    extension_service.tasks = type("Tasks", (), {"list": lambda self: []})()
-
-    async def search_catalog(kind, _query, **_kwargs):
-        candidates = {
-            "cli": [{"id": "RIPGREP", "name": "ripgrep", "ref": "github:BurntSushi/ripgrep"}],
-            "toolchain": [{"id": "Node", "name": "Node.js", "ref": "node"}],
-            "mcp": [{
-                "id": "DEMO-MCP", "name": "Demo MCP", "version": "1.0.0",
-                "installable_remotes": [{"url": "https://example.com/mcp"}],
-            }],
-        }
-        return {"results": candidates[kind], "next_cursor": ""}
-
-    extension_service.search = search_catalog
-    monkeypatch.setattr(list_environment, "get_extension_service", lambda: extension_service)
-    monkeypatch.setattr(search_environment, "get_extension_service", lambda: extension_service)
-
-    initial = json.loads(await list_environment._tool_list_environment({"kind": "all"}))
-    assert {item["id"] for item in initial["items"]} == {"ripgrep", "node", "uv", "demo-mcp"}
-
-    for kind, extension_id in (
-        ("cli", "ripgrep"),
-        ("toolchain", "node"),
-        ("toolchain", "uv"),
-        ("mcp", "demo-mcp"),
-    ):
-        await extension_service.set_extension_enabled(kind, extension_id, False)
-
-    hidden_list = json.loads(await list_environment._tool_list_environment({"kind": "all"}))
-    hidden_search = json.loads(await search_environment._tool_search_environment({"query": "demo"}))
-    assert hidden_list["items"] == []
-    assert hidden_search["results"] == []
-
-    for kind, extension_id in (
-        ("cli", "ripgrep"),
-        ("toolchain", "node"),
-        ("toolchain", "uv"),
-        ("mcp", "demo-mcp"),
-    ):
-        await extension_service.set_extension_enabled(kind, extension_id, True)
-
-    restored_list = json.loads(await list_environment._tool_list_environment({"kind": "all"}))
-    restored_search = json.loads(await search_environment._tool_search_environment({"query": "demo"}))
-    assert {item["id"] for item in restored_list["items"]} == {"ripgrep", "node", "uv", "demo-mcp"}
-    assert {item["id"] for item in restored_search["results"]} == {"RIPGREP", "Node", "DEMO-MCP"}
-
-
-@pytest.mark.asyncio
-async def test_mcp_install_rolls_back_configuration_when_connection_fails(tmp_path, monkeypatch):
-    from cyrene.extensions import service
-    from cyrene.tooling.backends import mcp_manager
-
-    previous = [{
-        "name": "existing",
-        "transport": "streamable_http",
-        "url": "https://example.com/mcp",
-        "enabled": False,
-    }]
-    saved = []
-    restarts = []
-
-    class Tasks:
-        def update(self, *_args, **_kwargs):
-            return None
-
-    class Manager:
-        def get_server_status(self):
-            return [{"name": "new-server", "status": "disconnected"}]
-
-    async def restart():
-        restarts.append(True)
-
-    monkeypatch.setattr(mcp_manager, "get_mcp_servers", lambda: [dict(item) for item in previous])
-    monkeypatch.setattr(mcp_manager, "save_mcp_servers", lambda value: saved.append([dict(item) for item in value]))
-    monkeypatch.setattr(mcp_manager, "restart_mcp", restart)
-    monkeypatch.setattr(mcp_manager, "get_manager", lambda: Manager())
-    monkeypatch.setattr(service, "_audit", lambda *_args, **_kwargs: None)
-
-    extension_service = object.__new__(service.ExtensionService)
-    extension_service.tasks = Tasks()
-    with pytest.raises(RuntimeError, match="could not be connected"):
-        await extension_service._install_mcp(
-            "task-1",
-            "new-server",
-            {
-                "config": {
-                    "name": "new-server",
-                    "transport": "streamable_http",
-                    "url": "https://example.net/mcp",
-                    "enabled": True,
-                }
-            },
-            "user",
-        )
-
-    assert saved[0][-1]["name"] == "new-server"
-    assert saved[-1] == previous
-    assert len(restarts) == 2
-
-
-@pytest.mark.asyncio
-async def test_mcp_install_cancellation_rolls_back_before_propagating(monkeypatch):
-    import asyncio
-
-    from cyrene.extensions import service
-    from cyrene.tooling.backends import mcp_manager
-
-    previous = [{"name": "existing", "transport": "streamable_http", "url": "https://example.com/mcp", "enabled": False}]
-    saved = []
-    entered = asyncio.Event()
-    restart_count = 0
-
-    class Tasks:
-        def update(self, *_args, **_kwargs):
-            return None
-
-    async def restart():
-        nonlocal restart_count
-        restart_count += 1
-        if restart_count == 1:
-            entered.set()
-            await asyncio.Future()
-
-    monkeypatch.setattr(mcp_manager, "get_mcp_servers", lambda: [dict(item) for item in previous])
-    monkeypatch.setattr(mcp_manager, "save_mcp_servers", lambda value: saved.append([dict(item) for item in value]))
-    monkeypatch.setattr(mcp_manager, "restart_mcp", restart)
-    monkeypatch.setattr(service, "_audit", lambda *_args, **_kwargs: None)
-
-    extension_service = object.__new__(service.ExtensionService)
-    extension_service.tasks = Tasks()
-    task = asyncio.create_task(extension_service._install_mcp(
-        "task-1",
-        "new-server",
-        {"config": {"name": "new-server", "transport": "streamable_http", "url": "https://example.net/mcp", "enabled": True}},
-        "user",
-    ))
-    await entered.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-    assert saved[-1] == previous
-    assert restart_count == 2

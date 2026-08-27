@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from cyrene.runtime.memory import short_term
+from agent.plugin import PluginContext
+from .short_term import retire_entry
+from ._native import create_tool, service as memory_service
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import json_result
+from agent.plugin.native_runtime import json_result
 
 TOOL_NAME = "retire_short_term_memory"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -14,12 +16,15 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 async def _tool_retire_short_term_memory(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
     """Retire one short-term memory entry by exact id."""
+    if not memory_service(context).is_main:
+        return json_result({
+            "status": "error",
+            "type": "permission_denied",
+            "message": "Only the main Agent can retire memory.",
+        })
     memory_id = str(args.get("memory_id", "") or "").strip()
     if not memory_id:
         return json_result({
@@ -28,7 +33,7 @@ async def _tool_retire_short_term_memory(
             "message": "memory_id is required",
         })
 
-    retired, changed = short_term.retire_entry(
+    retired, changed = retire_entry(
         memory_id,
         reason=str(args.get("reason", "") or "").strip(),
     )
@@ -55,10 +60,12 @@ async def _tool_retire_short_term_memory(
 
 
 handler = _tool_retire_short_term_memory
+plugin = create_tool(TOOL_DEF, handler)
 
 __all__ = [
     "TOOL_NAME",
     "TOOL_DEF",
     "handler",
+    "plugin",
     "_tool_retire_short_term_memory",
 ]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Any
+from agent.plugin import PluginContext
 
 TOOL_NAME = "AppUIInspect"
 TOOL_DEF = {"type": "function", "function": {
@@ -15,8 +16,8 @@ TOOL_DEF = {"type": "function", "function": {
 }}
 TOOL_METADATA = {"read_only": True, "resource_keys": ("desktop:app-semantic",), "requires_order": True}
 
-async def handler(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify: Any) -> str:
-    from cyrene.tooling.backends.app_semantic import execute_inspect, format_result
+async def handler(args: dict[str, Any], _context: PluginContext) -> str:
+    from ._app_semantic_backend import execute_inspect, format_result
     return format_result(await execute_inspect(dict(args or {})))
 
 __all__ = ["TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler"]

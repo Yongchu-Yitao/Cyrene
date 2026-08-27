@@ -360,11 +360,9 @@ class TerminalDaemonClient:
             if requested_cwd
             else ""
         )
-        from importlib import import_module
+        from cyrene.terminal.shell_runtime import interactive_argv
 
-        shell, argv = import_module(
-            "cyrene.tooling.backends.shell_runtime"
-        ).interactive_argv()
+        shell, argv = interactive_argv()
         payload: dict[str, Any] = dict(
             projectId=project_id, title=title, cwd=resolved_cwd,
             defaultCwd=project_cwd,
@@ -405,9 +403,7 @@ class TerminalDaemonClient:
         one_shot = bool(
             not managed_ssh and wake_on_exit and str(command or "").strip()
         )
-        from importlib import import_module
-
-        shell_runtime = import_module("cyrene.tooling.backends.shell_runtime")
+        from cyrene.terminal import shell_runtime
         if one_shot:
             shell, _executable = shell_runtime.resolve_shell(unix_fallback="/bin/bash")
             argv = shell_runtime.command_argv(str(command))

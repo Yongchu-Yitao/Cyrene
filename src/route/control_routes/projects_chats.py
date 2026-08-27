@@ -37,7 +37,7 @@ def register_project_chat_routes(
         result = await control_call(service.list_chats(project_id))
         if isinstance(result, JSONResponse):
             return result
-        return ControlChatListResponse(chats=[chat_summary(raw, run_manager) for raw in result if not str(raw.get("id") or "").startswith("legacy:")])
+        return ControlChatListResponse(chats=[chat_summary(raw, run_manager) for raw in result])
 
     @router.post("/v1/control/chats", response_model=ControlChatResponse, status_code=201, responses=COMMON_ERRORS, tags=["Control"], operation_id="control_v1_create_chat")
     async def control_create_chat(request: ControlChatCreateRequest):

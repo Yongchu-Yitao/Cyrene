@@ -69,9 +69,11 @@ def register_workbench_schedule_routes(
     async def wb_create_task(
         body_model: api_models.ScheduleCreateBody, workspace: str = "default"
     ):
-        """Create a scheduled task. Mirrors the REST policy: workspace_only only
-        (full-access scheduled tasks must be created via the chat agent's
-        ``schedule_task`` tool, which shows a confirmation dialog)."""
+        """Create a workspace-only scheduled task through the schedule Plugin.
+
+        Full-access schedules must be created through ``schedule.create`` in
+        chat, where the exact Plugin call is reviewed before execution.
+        """
         return await _invoke(
             application_service.create(CreateScheduleCommand(workspace, api_models.body_dict(body_model))),
             failure_message="Create failed", failure_code="schedule_create_failed",

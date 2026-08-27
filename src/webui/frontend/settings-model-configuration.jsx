@@ -11,12 +11,6 @@ var MODEL_CONFIGURATION_ERROR_KEYS = {
   "model discovery failed": ["settings.modelDiscoveryFailed", "Model discovery failed."],
   "model discovery is unavailable": ["settings.modelDiscoveryUnavailable", "Model discovery is currently unavailable."],
 };
-var LEGACY_USER_ADAPTERS = {
-  anthropic: "Anthropic", anthropic_messages: "Anthropic",
-  openai: "OpenAI", openai_chat: "OpenAI", openai_compatible: "OpenAI",
-  openai_responses: "OpenAI Responses",
-  gemini: "Gemini", gemini_api: "Gemini", google_gemini: "Gemini",
-};
 var ROUTE_META = {
   primary: { title: "默认模型顺位", description: "对话与 Agent 的主要模型，按顺序自动回退。", capability: "chat", ordered: true },
   secondary: { title: "次要模型", description: "用于摘要、标题和低成本辅助任务。", capability: "chat", ordered: false },
@@ -114,12 +108,25 @@ function renderModelDetailPane(v) {
     !v.isLocalConnection(selected) ? h("section", { className: "wb-mcfg-form-section", "aria-labelledby": "wb-mcfg-profiles-heading" },
       h("div", { className: "wb-mcfg-section-head" },
         h("h4", { id: "wb-mcfg-profiles-heading" }, "模型列表"),
-        h("button", { type: "button", className: "wb-btn", onClick: function () { v.addProfile(); } }, v.browserIcon("plus", 15), "添加模型")
+        h("div", { className: "wb-mcfg-section-actions" },
+          v.discovery && v.discovery.error ? h("span", { className: "wb-mcfg-discovery-error", title: v.discovery.error }, "获取模型失败") : null,
+          h("button", {
+            type: "button",
+            className: "wb-btn",
+            disabled: !!(v.discovery && v.discovery.loading),
+            onClick: function () { v.discoverConnection({ notify: true, force: true }); },
+          }, v.discovery && v.discovery.loading ? h("span", { className: "wb-spinner small" }) : v.browserIcon("reload", 15), v.discovery && v.discovery.loading ? "正在获取" : "刷新模型"),
+          h("button", { type: "button", className: "wb-btn", onClick: function () { v.addProfile(); } }, v.browserIcon("plus", 15), "添加模型")
+        )
       ),
-      !v.profiles.length ? h("div", { className: "wb-mcfg-inline-empty" }, "还没有模型档案。请手动添加模型。") : null,
+      !v.profiles.length ? h("div", { className: "wb-mcfg-inline-empty" }, "还没有模型档案。添加后可从服务商模型中选择，也可以手动输入模型 ID。") : null,
       v.profiles.length ? h("div", { className: "wb-mcfg-profile-list", "aria-label": "模型列表" }, v.profiles.map(function (profile) {
         return h(v.ProfileEditor, { key: profile.id, profile: profile, t: v.props.t,
           onChange: function (key, value) { v.updateProfile(profile.id, key, value); },
+          onModelSelect: function (item) { v.applyDiscoveredModel(profile.id, item); },
+          modelOptions: v.discovery && v.discovery.models || [],
+          modelsLoading: !!(v.discovery && v.discovery.loading),
+          modelsError: v.discovery && v.discovery.error || "",
           onRemove: function () { v.removeProfile(profile.id); },
           onTest: function () { v.testProfile(profile); }, testing: v.busy === "test:" + profile.id });
       })) : null
@@ -313,12 +320,8 @@ function renderModelDetailPane(v) {
     var output = "";
     var cache = "";
     if (parts.length >= 3) {
-      var middle = Number(parts[1]);
-      var last = Number(parts[2]);
-      var legacyOrder = parts[1] !== "" && parts[2] !== ""
-        && Number.isFinite(middle) && Number.isFinite(last) && middle > last;
-      output = legacyOrder ? parts[1] : parts[2];
-      cache = legacyOrder ? parts[2] : parts[1];
+      cache = parts[1];
+      output = parts[2];
     } else {
       output = parts[1] || "";
     }
@@ -358,12 +361,12 @@ function renderModelDetailPane(v) {
 
   function normalizeAdapter(raw, index) {
     raw = raw || {};
-    var id = String(raw.id || raw.adapter_id || raw.type || raw.slug || ("adapter-" + index)).trim();
+    var id = String(raw.id || ("adapter-" + index)).trim();
     return Object.assign({}, raw, {
       id: id,
-      name: String(raw.name || raw.label || raw.display_name || id).trim(),
-      description: String(raw.description || raw.desc || "").trim(),
-      capabilities: normalizedCapabilities(raw.capabilities || raw.supports),
+      name: String(raw.label || raw.name || id).trim(),
+      description: String(raw.description || "").trim(),
+      capabilities: normalizedCapabilities(raw.capabilities),
     });
   }
 
@@ -371,53 +374,25 @@ function renderModelDetailPane(v) {
     return String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
   }
 
-  function legacyUserAdapterName(adapter) {
-    var byId = LEGACY_USER_ADAPTERS[adapterKey(adapter && adapter.id)];
-    if (byId) return byId;
-    var byLabel = adapterKey(adapter && adapter.name);
-    if (byLabel === "anthropic") return "Anthropic";
-    if (byLabel === "openai" || byLabel === "openai_compatible") return "OpenAI";
-    if (byLabel === "openai_responses") return "OpenAI Responses";
-    if (byLabel === "gemini") return "Gemini";
-    return "";
-  }
-
-  function adapterSelectableMetadata(adapter) {
-    if (!adapter || typeof adapter !== "object") return null;
-    var keys = ["user_selectable", "selectable"];
-    for (var index = 0; index < keys.length; index += 1) {
-      if (!Object.prototype.hasOwnProperty.call(adapter, keys[index])) continue;
-      var raw = adapter[keys[index]];
-      if (raw === true || raw === 1 || String(raw).toLowerCase() === "true" || String(raw) === "1") return true;
-      if (raw === false || raw === 0 || String(raw).toLowerCase() === "false" || String(raw) === "0") return false;
-    }
-    return null;
-  }
-
   function isUserSelectableAdapter(adapter) {
-    var declared = adapterSelectableMetadata(adapter);
-    return declared == null ? !!legacyUserAdapterName(adapter) : declared;
+    return !!adapter && adapter.user_selectable !== false;
   }
 
   function adapterOptionName(adapter) {
-    if (adapterKey(adapter && adapter.id) === "openai_compatible" && adapterSelectableMetadata(adapter) === false) {
-      return "OpenAI Compatible（旧配置）";
-    }
-    return legacyUserAdapterName(adapter) || String(adapter && (adapter.name || adapter.id) || "");
+    return String(adapter && (adapter.name || adapter.id) || "");
   }
 
   function normalizeConnection(raw, index) {
     raw = raw || {};
-    var id = String(raw.id || raw.connection_id || raw.provider_id || ("connection-" + index)).trim();
-    var adapter = String(raw.adapter || raw.adapter_id || raw.provider || raw.type || "openai_compatible").trim();
+    var id = String(raw.id || ("connection-" + index)).trim();
+    var adapter = String(raw.adapter || "openai").trim();
     return Object.assign({}, raw, {
       id: id,
-      name: String(raw.name || raw.label || raw.display_name || adapter || id).trim(),
+      name: String(raw.name || adapter || id).trim(),
       adapter: adapter,
-      adapter_id: adapter,
-      base_url: String(raw.base_url || raw.endpoint || raw.api_base || "").trim(),
+      base_url: String(raw.base_url || "").trim(),
       secret: String(raw.secret || raw.api_key || ""),
-      secret_configured: raw.secret_configured === true || raw.api_key_configured === true || raw.has_secret === true,
+      secret_configured: raw.secret_configured === true,
       enabled: raw.enabled !== false,
       use_proxy: raw.use_proxy === true,
     });
@@ -425,21 +400,18 @@ function renderModelDetailPane(v) {
 
   function normalizeProfile(raw, index, fallbackConnectionId) {
     raw = raw || {};
-    var remoteModel = String(raw.model || raw.model_id || raw.remote_id || raw.slug || raw.name || raw.id || "").trim();
-    var connectionId = String(raw.connection_id || raw.connection || raw.provider_id || fallbackConnectionId || "").trim();
-    var id = String(raw.id || raw.profile_id || safeId("profile", connectionId + "-" + remoteModel) || ("profile-" + index)).trim();
-    var ctx = raw.context_limit != null ? raw.context_limit : raw.ctx;
+    var remoteModel = String(raw.model || "").trim();
+    var connectionId = String(raw.connection_id || fallbackConnectionId || "").trim();
+    var id = String(raw.id || safeId("profile", connectionId + "-" + remoteModel) || ("profile-" + index)).trim();
+    var contextLimit = raw.context_limit;
     return Object.assign({}, raw, {
       id: id,
       connection_id: connectionId,
-      connection: connectionId,
       model: remoteModel,
-      model_id: remoteModel,
-      name: String(raw.name || raw.display_name || remoteModel || id).trim(),
-      context_limit: ctx == null || ctx === "" ? "" : ctx,
-      ctx: ctx == null || ctx === "" ? "" : ctx,
+      name: String(raw.name || remoteModel || id).trim(),
+      context_limit: contextLimit == null || contextLimit === "" ? "" : contextLimit,
       price: String(raw.price || "").trim(),
-      capabilities: normalizedCapabilities(raw.capabilities || raw.supports || raw.modalities),
+      capabilities: normalizedCapabilities(raw.capabilities),
       enabled: raw.enabled !== false,
     });
   }
@@ -448,12 +420,8 @@ function renderModelDetailPane(v) {
     raw = raw || {};
     function route(name) {
       var value = raw[name];
-      if (value == null && name === "primary") value = raw.default;
-      if (value == null && name === "secondary") value = raw.minor;
-      if (!Array.isArray(value)) value = value ? [value] : [];
-      return value.map(function (item) {
-        return String(item && typeof item === "object" ? (item.profile_id || item.id || "") : item || "").trim();
-      }).filter(Boolean);
+      if (!Array.isArray(value)) value = [];
+      return value.map(function (item) { return String(item || "").trim(); }).filter(Boolean);
     }
     return {
       primary: route("primary"),
@@ -464,49 +432,61 @@ function renderModelDetailPane(v) {
   }
 
   function normalizeConfig(raw) {
-    raw = raw && raw.config && !raw.connections && !raw.profiles ? raw.config : (raw || {});
-    var adapters = listFrom(raw.adapters || raw.adapter_definitions).map(normalizeAdapter);
-    var connections = listFrom(raw.connections || raw.model_connections || raw.providers).map(normalizeConnection);
-    var profiles = listFrom(raw.profiles || raw.model_profiles || raw.models).map(function (item, index) {
+    raw = raw || {};
+    var adapters = listFrom(raw.adapters).map(normalizeAdapter);
+    var connections = listFrom(raw.connections).map(normalizeConnection);
+    var profiles = listFrom(raw.profiles).map(function (item, index) {
       return normalizeProfile(item, index, "");
     });
     return Object.assign({}, raw, {
       adapters: adapters,
       connections: connections,
       profiles: profiles,
-      routes: normalizeRoutes(raw.routes || raw.model_routes || raw.usage),
+      routes: normalizeRoutes(raw.routes),
     });
   }
 
   function configPayload(config) {
-    return Object.assign({}, config, {
-      adapters: config.adapters || [],
+    var payload = {
       connections: (config.connections || []).map(function (connection) {
-        var next = Object.assign({}, connection, { adapter: connection.adapter, adapter_id: connection.adapter });
-        var secret = String(next.secret || "").trim();
+        var next = {
+          id: connection.id,
+          name: connection.name,
+          adapter: connection.adapter,
+          enabled: connection.enabled !== false,
+          use_proxy: connection.use_proxy === true,
+          base_url: connection.base_url,
+          options: connection.options && typeof connection.options === "object" ? connection.options : {},
+        };
+        var secret = String(connection.secret || "").trim();
         if (secret) {
           next.api_key = secret;
-          delete next.clear_api_key;
-          delete next.clear_secret;
-        } else {
-          delete next.secret;
-          delete next.api_key;
+        } else if (connection.clear_api_key === true) {
+          next.clear_api_key = true;
         }
         return next;
       }),
       profiles: (config.profiles || []).map(function (profile) {
-        return Object.assign({}, profile, {
+        return {
+          id: profile.id,
           connection_id: profile.connection_id,
           model: profile.model,
-          model_id: profile.model,
+          name: profile.name,
+          enabled: profile.enabled !== false,
           context_limit: profile.context_limit,
-          ctx: profile.context_limit,
+          dimensions: Number(profile.dimensions) || 0,
+          reasoning_effort: String(profile.reasoning_effort || "").trim(),
+          description: String(profile.description || "").trim(),
           price: String(profile.price || "").trim(),
+          max_concurrency: Number(profile.max_concurrency) || 0,
           capabilities: normalizedCapabilities(profile.capabilities),
-        });
+          options: profile.options && typeof profile.options === "object" ? profile.options : {},
+        };
       }),
       routes: normalizeRoutes(config.routes),
-    });
+    };
+    if (Number.isInteger(config.revision) && config.revision >= 0) payload.revision = config.revision;
+    return payload;
   }
 
   function connectionDraftPayload(connection) {
@@ -685,7 +665,7 @@ function renderModelDetailPane(v) {
   }
 
   function formatContext(profile) {
-    var raw = profile && (profile.context_limit != null ? profile.context_limit : profile.ctx);
+    var raw = profile && profile.context_limit;
     if (raw == null || raw === "") return "—";
     var value = Number(raw);
     if (!isFinite(value)) return String(raw);
@@ -695,17 +675,17 @@ function renderModelDetailPane(v) {
   }
 
   function connectionAdapter(connection) {
-    return String(connection && (connection.adapter || connection.adapter_id || connection.provider) || "").toLowerCase();
+    return String(connection && connection.adapter || "").toLowerCase();
   }
 
   function isCodexConnection(connection) {
     var adapter = connectionAdapter(connection);
-    return adapter === "codex_oauth" || adapter === "openai_oauth" || adapter.indexOf("codex") >= 0;
+    return adapter === "codex_oauth";
   }
 
   function isLocalConnection(connection) {
     var adapter = connectionAdapter(connection);
-    return adapter === "local_onnx" || adapter === "onnx" || adapter.indexOf("local") >= 0;
+    return adapter === "local_onnx";
   }
 
   function connectionProviderIcon(connection) {
@@ -739,6 +719,23 @@ function renderModelDetailPane(v) {
     return icon ? providerGlyph(icon, 19) : settingsGlyph("server", 17);
   }
 
+  function modelPluginForConnection(config, connection) {
+    var plugins = listFrom(config && config.model_plugins);
+    if (!plugins.length || !connection) return null;
+    var preset = adapterKey(connection.options && connection.options.provider_preset);
+    if (preset) {
+      var exact = plugins.find(function (plugin) { return adapterKey(plugin && plugin.id) === preset; });
+      if (exact) return exact;
+    }
+    var adapter = adapterKey(connection.adapter);
+    var fallback = adapter === "openai_responses"
+      ? "openai"
+      : adapter === "openai" || adapter === "openai_compatible"
+        ? "openai_compatible"
+        : adapter;
+    return plugins.find(function (plugin) { return adapterKey(plugin && plugin.id) === fallback; }) || null;
+  }
+
   function connectionDisplayName(connection) {
     var name = String(connection && connection.name || "").trim();
     if (isLocalConnection(connection) && (!name || /^local onnx$/i.test(name))) return "本地模型";
@@ -769,7 +766,6 @@ function renderModelDetailPane(v) {
         current[byIdentity[identity]] = Object.assign({}, normalized, old, {
           capabilities: old.capabilities && old.capabilities.length ? old.capabilities : normalized.capabilities,
           context_limit: old.context_limit || normalized.context_limit,
-          ctx: old.context_limit || normalized.context_limit,
         });
       }
     });
@@ -926,13 +922,126 @@ function renderModelDetailPane(v) {
     );
   }
 
+  function ModelIdCombobox(props) {
+    var value = String(props.value || "");
+    var options = listFrom(props.options);
+    var rootRef = useRef(null);
+    var inputRef = useRef(null);
+    var [open, setOpen] = useState(false);
+    var [filter, setFilter] = useState("");
+    var [activeIndex, setActiveIndex] = useState(0);
+    var needle = String(filter || "").trim().toLowerCase();
+    var filtered = options.filter(function (item) {
+      if (!needle) return true;
+      return [item.model, item.id, item.name, item.displayName, item.display_name]
+        .filter(Boolean).join(" ").toLowerCase().indexOf(needle) >= 0;
+    }).slice(0, 100);
+    var listId = "wb-mcfg-model-options-" + String(props.profileId || "model").replace(/[^a-zA-Z0-9_-]/g, "-");
+    function choose(item) {
+      var modelId = String(item && (item.model || item.id || item.name) || "").trim();
+      if (!modelId) return;
+      if (typeof props.onSelect === "function") props.onSelect(item);
+      else props.onChange(modelId);
+      setFilter("");
+      setOpen(false);
+      window.requestAnimationFrame(function () {
+        if (inputRef.current) inputRef.current.focus();
+      });
+    }
+    function closeFromBlur(event) {
+      var next = event.relatedTarget;
+      if (next && rootRef.current && rootRef.current.contains(next)) return;
+      setOpen(false);
+      setFilter("");
+    }
+    function onKeyDown(event) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setOpen(true);
+        setActiveIndex(function (current) { return filtered.length ? (open ? Math.min(current + 1, filtered.length - 1) : 0) : 0; });
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setOpen(true);
+        setActiveIndex(function (current) { return filtered.length ? (open ? Math.max(current - 1, 0) : filtered.length - 1) : 0; });
+      } else if (event.key === "Enter" && open && filtered[activeIndex]) {
+        event.preventDefault();
+        choose(filtered[activeIndex]);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        setFilter("");
+      }
+    }
+    return h("div", { className: "wb-mcfg-model-combobox", ref: rootRef, onBlur: closeFromBlur },
+      h("div", { className: "wb-mcfg-model-combobox-control" },
+        h("input", {
+          ref: inputRef,
+          className: "wb-input",
+          value: value,
+          role: "combobox",
+          "aria-label": "模型 ID",
+          "aria-autocomplete": "list",
+          "aria-expanded": open,
+          "aria-controls": open ? listId : undefined,
+          "aria-activedescendant": open && filtered[activeIndex] ? listId + "-" + activeIndex : undefined,
+          "aria-busy": props.loading === true,
+          autoComplete: "off",
+          spellCheck: false,
+          onFocus: function () { setFilter(""); setActiveIndex(0); setOpen(true); },
+          onChange: function (event) {
+            var next = event.target.value;
+            props.onChange(next);
+            setFilter(next);
+            setActiveIndex(0);
+            setOpen(true);
+          },
+          onKeyDown: onKeyDown,
+          placeholder: props.loading ? "正在获取模型…" : "输入或选择模型 ID",
+        }),
+        h("button", {
+          type: "button",
+          className: "wb-mcfg-model-combobox-toggle",
+          "aria-label": open ? "收起模型选项" : "展开模型选项",
+          "aria-expanded": open,
+          onClick: function () { setFilter(""); setActiveIndex(0); setOpen(!open); },
+        }, props.loading ? h("span", { className: "wb-spinner small" }) : settingsGlyph("arrow-down", 15))
+      ),
+      open ? h("div", { id: listId, className: "wb-mcfg-model-combobox-list", role: "listbox", "aria-label": "可用模型" },
+        props.loading ? h("div", { className: "wb-mcfg-model-combobox-state", role: "status" }, "正在从服务商获取模型…") : null,
+        !props.loading && props.error ? h("div", { className: "wb-mcfg-model-combobox-state is-error", role: "alert" }, props.error) : null,
+        !props.loading && !props.error && !filtered.length ? h("div", { className: "wb-mcfg-model-combobox-state" }, value ? "没有匹配项，可继续使用手动输入的模型 ID。" : "没有获取到模型，可直接输入模型 ID。") : null,
+        !props.loading && filtered.map(function (item, index) {
+          var modelId = String(item.model || item.id || item.name || "");
+          var modelName = String(item.name || item.displayName || item.display_name || modelId);
+          return h("button", {
+            type: "button",
+            id: listId + "-" + index,
+            key: modelId,
+            role: "option",
+            className: "wb-mcfg-model-combobox-option" + (index === activeIndex ? " is-active" : "") + (modelId === value ? " is-selected" : ""),
+            "aria-selected": modelId === value,
+            onMouseDown: function (event) { event.preventDefault(); },
+            onMouseEnter: function () { setActiveIndex(index); },
+            onClick: function () { choose(item); },
+          },
+            h("strong", null, modelName),
+            modelName !== modelId ? h("code", null, modelId) : null
+          );
+        })
+      ) : null
+    );
+  }
+
   function ProfileEditor(props) {
     var profile = props.profile;
     var pricing = profilePriceFields(profile.price);
     var displayName = profile.name || profile.model || "未命名模型";
     var capabilities = normalizedCapabilities(profile.capabilities);
     var capabilityOptions = ["chat", "vision", "embedding"];
-    var [expanded, setExpanded] = useState(false);
+    var [expanded, setExpanded] = useState(
+      !String(profile.model || "").trim()
+      || (profile.name === "新模型" && profile.model === "新模型")
+    );
     var detailsId = "wb-mcfg-profile-details-" + String(profile.id || "model").replace(/[^a-zA-Z0-9_-]/g, "-");
     function toggleCapability(capability) {
       var next = capabilities.indexOf(capability) >= 0
@@ -973,9 +1082,17 @@ function renderModelDetailPane(v) {
               }, capabilityLabel(capability, props));
             }))
           ),
-          h("label", { className: "wb-mcfg-profile-editor-field is-wide" },
+          h("div", { className: "wb-mcfg-profile-editor-field is-wide" },
             h("span", null, "模型 ID"),
-            h("input", { className: "wb-input", value: profile.model || "", "aria-label": "模型 ID", onChange: function (event) { props.onChange("model", event.target.value); }, placeholder: "例如 gpt-5" })
+            h(ModelIdCombobox, {
+              profileId: profile.id,
+              value: profile.model || "",
+              options: props.modelOptions || [],
+              loading: props.modelsLoading,
+              error: props.modelsError,
+              onChange: function (value) { props.onChange("model", value); },
+              onSelect: props.onModelSelect,
+            })
           ),
           h("label", { className: "wb-mcfg-profile-editor-field" },
             h("span", null, "上下文（Token）"),
@@ -1033,6 +1150,8 @@ function renderModelDetailPane(v) {
     var [localError, setLocalError] = useState("");
     var [localBusy, setLocalBusy] = useState("");
     var [proxyMasterEnabled, setProxyMasterEnabled] = useState(false);
+    var [modelDiscovery, setModelDiscovery] = useState({});
+    var discoveryRequestVersions = useRef({});
 
     var selected = config && (config.connections || []).find(function (item) { return item.id === selectedId; });
     useEffect(function () {
@@ -1230,7 +1349,6 @@ function renderModelDetailPane(v) {
               ? "OpenAI Codex OAuth" : connection.adapter === "local_onnx" ? "Local ONNX" : "";
             var managedName = value === "codex_oauth"
               ? "OpenAI Codex OAuth" : value === "local_onnx" ? "Local ONNX" : "";
-            next.adapter_id = value;
             if (managedName && (next.name === "新服务商" || next.name === previousManagedName)) next.name = managedName;
             if (!String(next.base_url || "").trim()
                 || String(next.base_url || "").replace(/\/$/, "") === String(previousAdapter.default_base_url || "").replace(/\/$/, "")) {
@@ -1392,11 +1510,75 @@ function renderModelDetailPane(v) {
           if (profile.id !== profileId) return profile;
           var next = Object.assign({}, profile);
           next[key] = value;
-          if (key === "model") next.model_id = value;
-          if (key === "context_limit") next.ctx = value;
           return next;
         }),
       }));
+    }
+
+    function applyDiscoveredModel(profileId, item) {
+      var modelId = String(item && (item.model || item.id || item.name) || "").trim();
+      if (!modelId) return;
+      updateConfig(Object.assign({}, config, {
+        profiles: config.profiles.map(function (profile) {
+          if (profile.id !== profileId) return profile;
+          var next = Object.assign({}, profile, {
+            model: modelId,
+          });
+          var discoveredName = String(item.name || item.displayName || item.display_name || modelId).trim();
+          if (!String(profile.name || "").trim() || profile.name === "新模型" || profile.name === profile.model) next.name = discoveredName;
+          var capabilities = normalizedCapabilities(item.capabilities || item.supports || item.modalities);
+          if (capabilities.length) next.capabilities = capabilities;
+          var contextLimit = item.context_limit != null ? item.context_limit : item.ctx_limit;
+          if ((profile.context_limit == null || profile.context_limit === "") && contextLimit != null) {
+            next.context_limit = contextLimit;
+          }
+          if (!profile.dimensions && item.dimensions) next.dimensions = item.dimensions;
+          return next;
+        }),
+      }));
+    }
+
+    function discoverConnection(options) {
+      options = options || {};
+      var connection = selected;
+      if (!connection || isLocalConnection(connection)) return Promise.resolve([]);
+      var adapter = (config.adapters || []).find(function (item) { return item.id === connection.adapter; }) || {};
+      var requiresKey = String(adapter.auth_type || "api_key") === "api_key";
+      var hasKey = connection.secret_configured === true || !!String(connection.secret || "").trim();
+      if (requiresKey && !hasKey && !options.force) return Promise.resolve([]);
+      var connectionId = connection.id;
+      var requestVersion = Number(discoveryRequestVersions.current[connectionId] || 0) + 1;
+      discoveryRequestVersions.current[connectionId] = requestVersion;
+      setModelDiscovery(function (previous) {
+        var next = Object.assign({}, previous);
+        next[connectionId] = Object.assign({}, previous[connectionId] || {}, { loading: true, error: "" });
+        return next;
+      });
+      return requestJson("/api/settings/model-config/connections/" + encodeURIComponent(connectionId) + "/discover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ connection: connectionDraftPayload(connection) }),
+      }).then(function (payload) {
+        var models = listFrom(payload.models);
+        if (requestVersion !== discoveryRequestVersions.current[connectionId]) return models;
+        setModelDiscovery(function (previous) {
+          var next = Object.assign({}, previous);
+          next[connectionId] = { loading: false, error: "", loaded: true, models: models };
+          return next;
+        });
+        if (options.notify) showSettingsToast("已获取 " + models.length + " 个可用模型。", "success");
+        return models;
+      }).catch(function (error) {
+        if (requestVersion !== discoveryRequestVersions.current[connectionId]) return [];
+        var message = localizedModelConfigurationError(error, props);
+        setModelDiscovery(function (previous) {
+          var next = Object.assign({}, previous);
+          next[connectionId] = Object.assign({}, previous[connectionId] || {}, { loading: false, loaded: true, error: message, models: [] });
+          return next;
+        });
+        if (options.notify) showSettingsToast(message, "error");
+        return [];
+      });
     }
 
     function removeProfile(profileId) {
@@ -1578,6 +1760,24 @@ function renderModelDetailPane(v) {
       refreshOauth();
     }, [selectedId, selected && selected.adapter]);
 
+    useEffect(function () {
+      if (!selected || isCodexConnection(selected) || isLocalConnection(selected)) return;
+      var adapter = (config.adapters || []).find(function (item) { return item.id === selected.adapter; }) || {};
+      if (adapter.supports_discovery === false) return;
+      if (!String(selected.base_url || "").trim()) return;
+      var requiresKey = String(adapter.auth_type || "api_key") === "api_key";
+      if (requiresKey && !selected.secret_configured && !String(selected.secret || "").trim()) return;
+      var timer = setTimeout(function () { discoverConnection(); }, 550);
+      return function () { clearTimeout(timer); };
+    }, [
+      selectedId,
+      selected && selected.adapter,
+      selected && selected.base_url,
+      selected && selected.secret,
+      selected && selected.secret_configured,
+      selected && selected.use_proxy,
+    ]);
+
     useEffect(function () { refreshLocalModels(); }, []);
 
     useEffect(function () {
@@ -1599,10 +1799,12 @@ function renderModelDetailPane(v) {
 
     var filtered = config.connections.filter(matchesConnectionQuery);
     var profiles = selected ? config.profiles.filter(function (profile) { return profile.connection_id === selected.id; }) : [];
+    var discovery = selected ? (modelDiscovery[selected.id] || { loading: false, loaded: false, error: "", models: [] }) : null;
     var adapters = config.adapters || [];
     var selectableAdapters = selectableConnectionAdapters();
     var currentAdapter = selected && (adapters.find(function (adapter) { return adapter.id === selected.adapter; })
       || normalizeAdapter({ id: selected.adapter, name: selected.adapter }, adapters.length));
+    var selectedModelPlugin = modelPluginForConnection(config, selected);
     var editorAdapters = selectableAdapters.slice();
     if (currentAdapter && !editorAdapters.some(function (adapter) { return adapter.id === currentAdapter.id; })) {
       editorAdapters.unshift(currentAdapter);
@@ -1610,7 +1812,9 @@ function renderModelDetailPane(v) {
     var selectedDescription = selected
       ? (isLocalConnection(selected)
         ? label(props, "settings.localModelsHint", "可选的本机增强能力，数据无需离开设备；下载需手动触发并支持断点续传。")
-        : String(currentAdapter && currentAdapter.description || "").trim())
+        : selectedModelPlugin
+          ? "由可编辑模型插件 " + String(selectedModelPlugin.plugin_name || selectedModelPlugin.name || "").trim() + " 提供模型发现与调用。"
+          : String(currentAdapter && currentAdapter.description || "").trim())
       : "";
     var menuConnection = connectionMenu && config.connections.find(function (connection) { return connection.id === connectionMenu.connectionId; });
     var connectionMenuNode = menuConnection ? h("div", {
@@ -1656,6 +1860,8 @@ function renderModelDetailPane(v) {
       localBusy: localBusy, manageLocalModel: manageLocalModel, profiles: profiles,
       proxyMasterEnabled: proxyMasterEnabled,
       addProfile: addProfile, ProfileEditor: ProfileEditor, updateProfile: updateProfile,
+      applyDiscoveredModel: applyDiscoveredModel, discovery: discovery,
+      discoverConnection: discoverConnection,
       removeProfile: removeProfile, testProfile: testProfile, busy: busy,
     };
 

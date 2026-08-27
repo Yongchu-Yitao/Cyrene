@@ -34,7 +34,7 @@ class SearchSettingsApplicationService:
         await self._publish_settings_changed(
             "search",
             result["revision"],
-            ["search", "enabled_tools"],
+            ["search", "enabled_plugins"],
         )
         return result
 

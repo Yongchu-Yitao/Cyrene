@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from cyrene.model_runtime import client as model_client
+from agent.plugin.model_catalog import resolve_session_model_candidate
 from cyrene.workbench import session_naming
 from cyrene.workbench.chat_events import publish_chat_changed
 
@@ -31,7 +31,7 @@ class ChatSessionNamingApplicationService:
         project_id: str,
         message: str,
     ) -> None:
-        candidate = model_client.resolve_session_model_candidate(chat_id)
+        candidate = resolve_session_model_candidate(chat_id)
         candidate_id = str((candidate or {}).get("id") or "")
         candidate_model = str((candidate or {}).get("model") or "")
         logger.info(

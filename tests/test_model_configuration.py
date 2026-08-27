@@ -20,16 +20,9 @@ def isolated_model_store(tmp_path, monkeypatch):
     monkeypatch.setattr(config_store, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(config_store, "_ENCRYPTED_PATH", tmp_path / "data" / "config.enc")
     monkeypatch.setattr(config_store, "_KEY_PATH", tmp_path / "data" / ".config_key")
-    monkeypatch.setattr(config_store, "_LEGACY_ENV_PATH", tmp_path / ".env")
-    monkeypatch.setattr(
-        config_store,
-        "_LEGACY_SETTINGS_PATH",
-        tmp_path / "data" / "web_settings.json",
-    )
     monkeypatch.setattr(config_store, "_cache", None)
-    monkeypatch.setattr(config_store, "_migrated", False)
     monkeypatch.setattr(config_store, "_fernet", None)
-    monkeypatch.setattr(config_store, "_SETTINGS_MIGRATIONS_DONE", False)
+    monkeypatch.setattr(config_store, "_initialized", False)
     return config_store
 
 
@@ -119,7 +112,9 @@ def test_model_connection_proxy_opt_in_survives_normalization_and_runtime_projec
     assert candidate["use_proxy"] is True
 
 
-def test_save_redacts_secrets_and_mirrors_independent_routes(isolated_model_store):
+def test_save_redacts_secrets_and_persists_only_the_canonical_graph(
+    isolated_model_store,
+):
     from cyrene.runtime.model_configuration import (
         public_model_configuration,
         save_model_configuration,
@@ -149,52 +144,18 @@ def test_save_redacts_secrets_and_mirrors_independent_routes(isolated_model_stor
     assert adapters["openai_responses"]["wire_protocol"] == "openai_responses"
     assert adapters["gemini"]["wire_protocol"] == "gemini_generate_content"
 
-    primary = isolated_model_store.get_models()
-    assert primary[0]["profile_id"] == "qwen-next"
-    assert primary[0]["context_limit"] == 1_000_000
-    from cyrene.runtime.model_configuration import RETIRED_MODEL_SETTING_KEYS
-
-    assert RETIRED_MODEL_SETTING_KEYS.isdisjoint(
-        isolated_model_store.export_snapshot()["settings"]
-    )
-    assert isolated_model_store.get_vision_models()[0]["profile_id"] == "qwen-next"
-    assert isolated_model_store.get_secondary_model()["profile_id"] == "qwen-next"
-    assert isolated_model_store.get_setting("embedding")["model"] == "qwen3-embedding-0.6b"
-    assert isolated_model_store.get_env("OPENAI_MODEL") == "Qwen3-Next-80B-A3B"
-    assert isolated_model_store.get_env("EMBEDDING_MODEL") == "qwen3-embedding-0.6b"
+    settings = isolated_model_store.export_snapshot()["settings"]
+    assert settings["model_configuration"]["routes"] == _configuration()["routes"]
+    assert {
+        "models",
+        "custom_models",
+        "model_source",
+        "vision_models",
+        "secondary_model",
+        "embedding",
+    }.isdisjoint(settings)
 
 
-def test_primary_route_wins_over_retired_models_setting(isolated_model_store):
-    from cyrene.runtime.model_configuration import get_model_configuration
-
-    configured = _configuration()
-    configured["version"] = 6
-    configured["profiles"].append({
-        "id": "qwen-backup",
-        "connection_id": "fastllm",
-        "model": "Qwen-Backup",
-        "capabilities": ["chat"],
-        "context_limit": 128_000,
-    })
-    configured["routes"]["primary"] = ["qwen-next", "qwen-backup"]
-    isolated_model_store.update_settings_atomic({
-        "model_configuration": configured,
-        # Deliberately opposite to the UI graph: an upgraded runtime must
-        # ignore and remove this retired duplicate ordering.
-        "models": [
-            {"id": "qwen-backup", "model": "Qwen-Backup"},
-            {"id": "qwen-next", "model": "Qwen3-Next-80B-A3B"},
-        ],
-    })
-
-    upgraded = get_model_configuration()
-
-    assert upgraded["routes"]["primary"] == ["qwen-next", "qwen-backup"]
-    assert [item["profile_id"] for item in isolated_model_store.get_models()] == [
-        "qwen-next",
-        "qwen-backup",
-    ]
-    assert "models" not in isolated_model_store.export_snapshot()["settings"]
 
 
 def test_blank_secret_is_retained_and_clear_is_explicit(isolated_model_store):
@@ -215,104 +176,108 @@ def test_blank_secret_is_retained_and_clear_is_explicit(isolated_model_store):
     blank["connections"][0]["clear_api_key"] = True
     save_model_configuration(blank)
     assert get_model_configuration()["connections"][0]["api_key"] == ""
-    assert isolated_model_store.get_env("OPENAI_API_KEY") == ""
-
-
-@pytest.mark.asyncio
-async def test_profile_test_targets_only_the_selected_chat_model(monkeypatch):
-    from cyrene.model_runtime import client
-    from route.settings.model_configuration import _test_model
-
-    captured = {}
-
-    async def fake_call_llm(messages, **kwargs):
-        captured["messages"] = messages
-        captured.update(kwargs)
-        return {"role": "assistant", "content": "OK"}
-
-    monkeypatch.setattr(client, "call_llm", fake_call_llm)
-    result = await _test_model(
-        {
-            "id": "provider",
-            "adapter": "openai",
-            "base_url": "https://example.test/v1",
-            "api_key": "sk-test",
-        },
-        {
-            "id": "profile-b",
-            "name": "Model B",
-            "model": "model-b",
-            "capabilities": ["chat", "vision"],
-        },
-    )
-
-    assert result == {"connected": True, "adapter": "openai", "model": "model-b"}
-    assert captured["candidates"] == [{
-        "id": "profile-b",
-        "profile_id": "profile-b",
-        "connection_id": "provider",
-        "model": "model-b",
-        "name": "Model B",
-        "provider": "openai",
-        "adapter": "openai",
-        "base_url": "https://example.test/v1",
-        "api_key": "sk-test",
-        "capabilities": ["chat", "vision"],
-        "reasoning_effort": "",
-        "use_proxy": False,
-        "endpoints": ["https://example.test/v1/chat/completions"],
-    }]
-    assert captured["publish_events"] is False
-    assert captured["record_usage"] is False
 
 
 @pytest.mark.asyncio
 async def test_embedding_profile_test_checks_the_exact_discovered_model(monkeypatch):
-    import route.settings.model_configuration as model_routes
+    from agent.plugin import Plugin, PluginRegistry
+    import agent.plugin.model_catalog as model_catalog
+    from route.settings.model_configuration import _test_model
 
-    async def fake_discover(_connection):
-        return [{"id": "embed-a", "model": "embed-a"}, {"id": "embed-b", "model": "embed-b"}]
+    captured = {}
 
-    monkeypatch.setattr(model_routes, "_discover", fake_discover)
-    result = await model_routes._test_model(
-        {"id": "provider", "adapter": "openai"},
-        {"id": "embedding", "model": "embed-b", "capabilities": ["embedding"]},
+    async def provider(arguments, _context):
+        captured.update(arguments)
+        return {"vectors": [[1.0, 0.0]], "dimensions": 2}
+
+    plugin = Plugin(
+        name="FakeEmbeddingProvider",
+        description="Test embedding Provider Plugin.",
+        input_schema={"type": "object", "additionalProperties": True},
+        handler=provider,
+        kind="model",
     )
-
-    assert result == {"connected": True, "adapter": "openai", "model": "embed-b"}
-
-
-def test_legacy_models_migrate_to_profiles_and_routes(isolated_model_store):
-    from cyrene.runtime.model_configuration import get_model_configuration
-
-    isolated_model_store.update_settings_and_env_atomic(
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(plugin, source="test")
+    monkeypatch.setattr(
+        model_catalog,
+        "resolve_model_plugin",
+        lambda _provider_id, _adapter_id: (registry, plugin),
+    )
+    result = await _test_model(
         {
-            "models": [
-                {
-                    "id": "legacy-main",
-                    "name": "Legacy main",
-                    "model": "legacy/model",
-                    "base_url": "https://example.test/v1",
-                    "api_key": "sk-legacy",
-                    "ctx": "128K",
-                }
-            ],
-            "vision_models": [],
-            "custom_models": [],
-            "model_source": "custom",
+            "id": "provider",
+            "adapter": "openai_compatible",
+            "base_url": "https://example.test/v1",
+            "options": {"provider_preset": "fake"},
         },
         {
-            "OPENAI_MODEL": "legacy/model",
-            "OPENAI_BASE_URL": "https://example.test/v1",
-            "OPENAI_API_KEY": "sk-legacy",
+            "id": "embedding",
+            "connection_id": "provider",
+            "model": "embed-b",
+            "capabilities": ["embedding"],
         },
     )
 
-    migrated = get_model_configuration(persist_migration=False)
+    assert result == {"connected": True, "adapter": "openai_compatible", "model": "embed-b"}
+    assert captured["operation"] == "embed"
+    assert captured["model"] == "embed-b"
 
-    assert migrated["routes"]["primary"] == ["legacy-main"]
-    assert migrated["profiles"][0]["context_limit"] == 128_000
-    assert migrated["profiles"][0]["connection_id"] == migrated["connections"][0]["id"]
+
+@pytest.mark.asyncio
+async def test_model_discovery_dispatches_through_provider_plugin(monkeypatch):
+    from agent.plugin import Plugin, PluginContext, PluginRegistry
+    import agent.plugin.model_catalog as model_catalog
+    from route.settings.model_configuration import _discover
+
+    captured = {}
+
+    async def discover(arguments, context: PluginContext):
+        captured["arguments"] = arguments
+        captured["connection"] = dict(context.services["model_connection"])
+        return {
+            "provider": "minimax",
+            "models": [{"id": "MiniMax-M2.7", "model": "MiniMax-M2.7"}],
+        }
+
+    plugin = Plugin(
+        name="FakeMiniMax",
+        description="Test editable provider plugin.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "operation": {"type": "string", "const": "list_models"},
+            },
+            "required": ["operation"],
+            "additionalProperties": False,
+        },
+        handler=discover,
+        kind="model",
+    )
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(plugin, source="test")
+    monkeypatch.setattr(
+        model_catalog,
+        "resolve_model_plugin",
+        lambda provider_id, adapter_id: (registry, plugin),
+    )
+    connection = {
+        "id": "minimax",
+        "adapter": "openai",
+        "base_url": "https://api.minimaxi.com/v1",
+        "api_key": "sk-private",
+        "options": {"provider_preset": "minimax"},
+    }
+
+    models = await _discover(connection)
+
+    assert models == [{"id": "MiniMax-M2.7", "model": "MiniMax-M2.7"}]
+    assert captured == {
+        "arguments": {"operation": "list_models"},
+        "connection": connection,
+    }
+
+
 
 
 def test_default_provider_connections_include_managed_local_provider(
@@ -328,6 +293,26 @@ def test_default_provider_connections_include_managed_local_provider(
     providers = {item["id"]: item for item in configured["connections"]}
 
     assert configured["version"] == CONFIG_VERSION
+    assert providers["openai"] == {
+        "id": "openai",
+        "name": "OpenAI",
+        "adapter": "openai",
+        "enabled": True,
+        "use_proxy": False,
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "",
+        "options": {"provider_preset": "openai"},
+    }
+    assert providers["anthropic"] == {
+        "id": "anthropic",
+        "name": "Anthropic",
+        "adapter": "anthropic",
+        "enabled": True,
+        "use_proxy": False,
+        "base_url": "https://api.anthropic.com/v1",
+        "api_key": "",
+        "options": {"provider_preset": "anthropic"},
+    }
     assert providers["minimax"] == {
         "id": "minimax",
         "name": "MiniMax",
@@ -367,6 +352,16 @@ def test_default_provider_connections_include_managed_local_provider(
         "base_url": "",
         "api_key": "",
         "options": {"provider_preset": "local_onnx"},
+    }
+    assert providers["ollama"] == {
+        "id": "ollama",
+        "name": "Ollama",
+        "adapter": "ollama",
+        "enabled": True,
+        "use_proxy": False,
+        "base_url": "http://127.0.0.1:11434",
+        "api_key": "",
+        "options": {"provider_preset": "ollama"},
     }
     assert providers["kimi"] == {
         "id": "kimi",
@@ -442,80 +437,12 @@ def test_default_provider_connections_include_managed_local_provider(
 
     assert reloaded["version"] == CONFIG_VERSION
     assert [item["id"] for item in reloaded["connections"]] == [
-        "deepseek",
-        "codex_oauth",
-        "local_onnx",
-        "kimi",
-        "glm",
-        "opencode_go",
-        "gemini",
-        "openrouter",
-        "amd_gpu_cloud",
+        item["id"]
+        for item in configured["connections"]
+        if item["id"] != "minimax"
     ]
 
 
-def test_version_six_configuration_gains_managed_local_provider(
-    isolated_model_store,
-):
-    from cyrene.runtime.model_configuration import CONFIG_VERSION, get_model_configuration
-
-    existing = {
-        "version": 6,
-        "connections": [{
-            "id": "remote",
-            "name": "Remote",
-            "adapter": "openai",
-            "enabled": True,
-            "base_url": "https://example.test/v1",
-            "api_key": "sk-remote",
-            "options": {},
-        }],
-        "profiles": [{
-            "id": "remote-model",
-            "connection_id": "remote",
-            "model": "remote-model",
-            "name": "Remote model",
-            "enabled": True,
-            "capabilities": ["chat"],
-            "context_limit": 128_000,
-            "ctx": "128K",
-            "dimensions": 0,
-            "reasoning_effort": "",
-            "description": "",
-            "price": "",
-            "max_concurrency": 0,
-            "options": {},
-        }],
-        "routes": {
-            "primary": ["remote-model"],
-            "secondary": [],
-            "vision": [],
-            "embedding": [],
-        },
-    }
-    isolated_model_store.update_settings_atomic({"model_configuration": existing})
-
-    upgraded = get_model_configuration(persist_migration=False)
-
-    assert upgraded["version"] == CONFIG_VERSION
-    assert sum(
-        connection["adapter"] == "local_onnx"
-        for connection in upgraded["connections"]
-    ) == 1
-    assert [
-        connection["id"] for connection in upgraded["connections"]
-    ] == [
-        "remote",
-        "local_onnx",
-        "kimi",
-        "glm",
-        "opencode_go",
-        "gemini",
-        "openrouter",
-        "amd_gpu_cloud",
-    ]
-    assert upgraded["profiles"][0]["id"] == "remote-model"
-    assert upgraded["routes"] == existing["routes"]
 
 
 def test_managed_connections_can_be_deleted_and_readded(isolated_model_store):
@@ -566,195 +493,16 @@ def test_managed_connections_can_be_deleted_and_readded(isolated_model_store):
     ] == ["restored-codex", "restored-local"]
 
 
-def test_version_five_configuration_gains_managed_codex_connection(
-    isolated_model_store,
-):
-    from cyrene.runtime.model_configuration import (
-        CONFIG_VERSION,
-        get_model_configuration,
-        normalize_model_configuration,
-    )
-
-    existing = _configuration()
-    existing["version"] = 5
-    isolated_model_store.update_settings_atomic({"model_configuration": existing})
-
-    upgraded = get_model_configuration(persist_migration=False)
-    normalized_existing = normalize_model_configuration(existing)
-    codex_connections = [
-        item
-        for item in upgraded["connections"]
-        if item["adapter"] == "codex_oauth"
-    ]
-
-    assert upgraded["version"] == CONFIG_VERSION
-    assert codex_connections == [{
-        "id": "codex_oauth",
-        "name": "OpenAI Codex OAuth",
-        "adapter": "codex_oauth",
-        "enabled": True,
-        "use_proxy": False,
-        "base_url": "codex://oauth",
-        "api_key": "",
-        "options": {"provider_preset": "codex_oauth"},
-    }]
-    assert upgraded["profiles"] == normalized_existing["profiles"]
-    assert upgraded["routes"] == normalized_existing["routes"]
 
 
-def test_provider_upgrade_does_not_duplicate_existing_codex_connection(
-    isolated_model_store,
-):
-    from cyrene.runtime.model_configuration import get_model_configuration
-
-    existing = _configuration()
-    existing["version"] = 5
-    existing["connections"].append({
-        "id": "legacy-codex",
-        "name": "Codex",
-        "adapter": "codex_oauth",
-        "enabled": True,
-        "base_url": "codex://oauth",
-        "api_key": "",
-        "options": {},
-    })
-    isolated_model_store.update_settings_atomic({"model_configuration": existing})
-
-    upgraded = get_model_configuration(persist_migration=False)
-
-    assert [
-        item["id"]
-        for item in upgraded["connections"]
-        if item["adapter"] == "codex_oauth"
-    ] == ["legacy-codex"]
 
 
-@pytest.mark.parametrize(
-    "legacy_base_url",
-    ["https://api.minimax.io/v1", "https://api.minimax.com/v1"],
-)
-def test_provider_upgrade_replaces_legacy_minimax_default_address(
-    isolated_model_store,
-    legacy_base_url,
-):
-    from cyrene.runtime.model_configuration import get_model_configuration
-
-    isolated_model_store.update_settings_atomic({
-        "model_configuration": {
-            "version": 3,
-            "connections": [{
-                "id": "minimax",
-                "name": "MiniMax",
-                "adapter": "openai",
-                "enabled": True,
-                "base_url": legacy_base_url,
-                "api_key": "sk-minimax",
-                "options": {"provider_preset": "minimax"},
-            }],
-            "profiles": [],
-            "routes": {name: [] for name in ("primary", "secondary", "vision", "embedding")},
-        },
-    })
-
-    upgraded = get_model_configuration(persist_migration=False)
-
-    assert upgraded["connections"][0]["base_url"] == "https://api.minimaxi.com/v1"
-    assert upgraded["connections"][0]["api_key"] == "sk-minimax"
 
 
-def test_provider_upgrade_adds_v1_to_legacy_deepseek_default_address(
-    isolated_model_store,
-):
-    from cyrene.runtime.model_configuration import get_model_configuration
-
-    isolated_model_store.update_settings_atomic({
-        "model_configuration": {
-            "version": 4,
-            "connections": [{
-                "id": "deepseek",
-                "name": "DeepSeek",
-                "adapter": "openai",
-                "enabled": True,
-                "base_url": "https://api.deepseek.com",
-                "api_key": "sk-deepseek",
-                "options": {"provider_preset": "deepseek"},
-            }],
-            "profiles": [],
-            "routes": {name: [] for name in ("primary", "secondary", "vision", "embedding")},
-        },
-    })
-
-    upgraded = get_model_configuration(persist_migration=False)
-
-    assert upgraded["connections"][0]["base_url"] == "https://api.deepseek.com/v1"
-    assert upgraded["connections"][0]["api_key"] == "sk-deepseek"
 
 
-def test_provider_upgrade_recognizes_existing_custom_connections(
-    isolated_model_store,
-):
-    from cyrene.runtime.model_configuration import get_model_configuration
-
-    existing = _configuration()
-    existing["version"] = 1
-    existing["connections"].append({
-        "id": "minimax-cn",
-        "name": "My MiniMax",
-        "adapter": "openai",
-        "enabled": True,
-        "base_url": "https://api.minimaxi.com/v1",
-        "api_key": "sk-minimax",
-        "options": {},
-    })
-    isolated_model_store.update_settings_atomic({"model_configuration": existing})
-
-    upgraded = get_model_configuration(persist_migration=False)
-    minimax = [
-        item
-        for item in upgraded["connections"]
-        if "minimax" in item["name"].lower()
-    ]
-
-    assert len(minimax) == 1
-    assert minimax[0]["id"] == "minimax-cn"
-    assert minimax[0]["api_key"] == "sk-minimax"
-    assert sum(item["id"] == "deepseek" for item in upgraded["connections"]) == 1
-    assert upgraded["routes"] == existing["routes"]
 
 
-def test_provider_upgrade_rebrands_legacy_deepseek_connection_in_place(
-    isolated_model_store,
-):
-    from cyrene.runtime.model_configuration import get_model_configuration
-
-    existing = _configuration()
-    existing["version"] = 2
-    existing["connections"][0].update({
-        "name": "OpenAI Compatible",
-        "adapter": "openai_compatible",
-        "base_url": "https://api.deepseek.com",
-        "api_key": "sk-deepseek",
-    })
-    existing["profiles"][0].update({
-        "model": "deepseek-v4-flash",
-        "name": "deepseek-v4-flash",
-        "capabilities": ["chat"],
-    })
-    isolated_model_store.update_settings_atomic({"model_configuration": existing})
-
-    upgraded = get_model_configuration(persist_migration=False)
-    deepseek = next(
-        item for item in upgraded["connections"] if item["id"] == "fastllm"
-    )
-
-    assert deepseek["name"] == "DeepSeek"
-    assert deepseek["adapter"] == "openai"
-    assert deepseek["base_url"] == "https://api.deepseek.com/v1"
-    assert deepseek["api_key"] == "sk-deepseek"
-    assert deepseek["options"]["provider_preset"] == "deepseek"
-    assert sum(item["name"] == "DeepSeek" for item in upgraded["connections"]) == 1
-    assert upgraded["profiles"][0]["connection_id"] == "fastllm"
-    assert upgraded["routes"] == existing["routes"]
 
 
 def test_profile_route_validation_rejects_dangling_references():
@@ -764,88 +512,6 @@ def test_profile_route_validation_rejects_dangling_references():
     raw["routes"]["primary"] = ["missing-profile"]
     with pytest.raises(ValueError, match="unknown profile"):
         normalize_model_configuration(raw)
-
-
-def test_runtime_candidates_keep_wire_protocols_distinct(monkeypatch):
-    from cyrene.model_runtime import client
-
-    configured = [
-        {
-            "id": "chat",
-            "profile_id": "chat",
-            "adapter": "openai",
-            "provider": "openai",
-            "model": "gpt-test",
-            "base_url": "https://api.example.test/v1",
-            "api_key": "sk-test",
-        },
-        {
-            "id": "responses",
-            "profile_id": "responses",
-            "adapter": "openai_responses",
-            "provider": "openai_responses",
-            "model": "gpt-test",
-            "base_url": "https://api.example.test/v1",
-            "api_key": "sk-test",
-        },
-    ]
-    monkeypatch.setattr(client, "candidates_for_route", lambda _route: configured)
-
-    candidates = client.resolve_llm_candidates()
-
-    assert candidates[0]["endpoints"] == ["https://api.example.test/v1/chat/completions"]
-    assert candidates[1]["endpoints"] == ["https://api.example.test/v1/responses"]
-    assert client._candidate_key(candidates[0], "chat-1") != client._candidate_key(
-        candidates[1], "chat-1"
-    )
-    selected = client.resolve_exact_model_candidate({
-        "candidateId": "responses",
-        "adapter": "openai_responses",
-        "provider": "openai_responses",
-        "model": "gpt-test",
-        "baseUrl": "https://api.example.test",
-    })
-    assert selected is not None
-    assert selected["adapter"] == "openai_responses"
-
-
-def test_opencode_go_profiles_route_to_model_specific_wire_protocols(monkeypatch):
-    from cyrene.model_runtime import client
-
-    models = ["kimi-k3", "minimax-m3", "gpt-5.6-luna"]
-    configured = [
-        {
-            "id": model,
-            "profile_id": model,
-            "connection_id": "opencode_go",
-            "adapter": "openai",
-            "provider": "openai",
-            "model": model,
-            "base_url": "https://opencode.ai/zen/go/v1",
-            "api_key": "go-key",
-            "options": {"provider_preset": "opencode_go"},
-        }
-        for model in models
-    ]
-    monkeypatch.setattr(client, "candidates_for_route", lambda _route: configured)
-
-    candidates = client.resolve_llm_candidates()
-
-    assert [candidate["provider"] for candidate in candidates] == [
-        "opencode_go",
-        "opencode_go",
-        "opencode_go",
-    ]
-    assert [candidate["adapter"] for candidate in candidates] == [
-        "openai",
-        "anthropic",
-        "openai_responses",
-    ]
-    assert [candidate["endpoints"][0] for candidate in candidates] == [
-        "https://opencode.ai/zen/go/v1/chat/completions",
-        "https://opencode.ai/zen/go/v1/messages",
-        "https://opencode.ai/zen/go/v1/responses",
-    ]
 
 
 def test_selectable_models_include_non_default_chat_profiles_only():
@@ -877,45 +543,9 @@ def test_selectable_models_include_non_default_chat_profiles_only():
     assert candidates[1]["model"] == "vision/manual"
 
 
-def test_legacy_model_settings_payload_uses_selectable_profile_graph(monkeypatch):
-    from cyrene.runtime import model_configuration, settings_store
-    from cyrene.runtime.model_probe_service import ModelProbeService
-    from route.settings.model_service import ModelSettingsApplicationService
-
-    monkeypatch.setattr(settings_store, "get_models", lambda: [{
-        "id": "legacy-primary",
-        "model": "legacy-model",
-        "provider": "openai_compatible",
-    }])
-    monkeypatch.setattr(settings_store, "get_custom_models", lambda: [])
-    monkeypatch.setattr(settings_store, "get_codex_model", lambda: None)
-    monkeypatch.setattr(settings_store, "get_model_source", lambda: "custom")
-    monkeypatch.setattr(settings_store, "get_vision_models", lambda: [])
-    monkeypatch.setattr(settings_store, "get_secondary_model", lambda: {})
-    monkeypatch.setattr(
-        model_configuration,
-        "selectable_model_candidates",
-        lambda: [{
-            "id": "profile-chat",
-            "profile_id": "profile-chat",
-            "connection_id": "provider-main",
-            "name": "Profile Chat",
-            "model": "profile-model",
-            "provider": "openai_compatible",
-            "adapter": "openai_compatible",
-            "capabilities": ["chat"],
-        }],
-    )
-
-    payload = ModelSettingsApplicationService(ModelProbeService()).get_settings()
-
-    assert [item["id"] for item in payload["selectable_models"]] == [
-        "profile-chat"
-    ]
-    assert [item["id"] for item in payload["models"]] == ["legacy-primary"]
 
 
-def test_deleting_connection_persists_graph_and_clears_legacy_mirrors(
+def test_deleting_connection_persists_the_canonical_graph(
     isolated_model_store,
 ):
     from cyrene.runtime.model_configuration import (
@@ -945,11 +575,9 @@ def test_deleting_connection_persists_graph_and_clears_legacy_mirrors(
     assert all(
         "qwen-next" not in profile_ids for profile_ids in reloaded["routes"].values()
     )
-    assert isolated_model_store.get_models() == []
-    assert all(
-        item.get("profile_id") != "qwen-next"
-        for item in isolated_model_store.get_custom_models()
-    )
+    stored = isolated_model_store.get_setting("model_configuration")
+    assert all(item["id"] != "fastllm" for item in stored["connections"])
+    assert all(item["id"] != "qwen-next" for item in stored["profiles"])
 
 
 def test_frontend_registers_split_pages_and_live_context_contract():
@@ -987,8 +615,15 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert 'body: JSON.stringify({ connection: connectionDraftPayload(selected), profile: profile })' in settings
     assert 'onTest: function () { v.testProfile(profile); }' in settings
     assert 'onClick: testConnection' not in settings
-    assert 'onClick: discoverConnection' not in settings
-    assert '"获取模型列表"' not in settings
+    assert 'function discoverConnection(options)' in settings
+    assert '"/discover"' in settings
+    assert 'function ModelIdCombobox(props)' in settings
+    assert 'modelPluginForConnection(config, selected)' in settings
+    assert "function configPayload(config)" in settings
+    assert 'body: JSON.stringify(configPayload(draft))' in settings
+    assert 'role: "combobox"' in settings
+    assert 'aria-autocomplete": "list"' in settings
+    assert '"刷新模型"' in settings
     assert 'label(props, "settings.inputPrice", "输入价格")' in settings
     assert 'label(props, "settings.outputPrice", "输出价格")' in settings
     assert 'label(props, "settings.cachePrice", "缓存价格")' in settings

@@ -6,7 +6,6 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from cyrene.workbench import runtime as runtime_module
 from cyrene.workbench.task_execution_service import TaskExecutionApplicationService
 from cyrene.workbench.task_services import (
     ArtifactApplicationService,
@@ -33,14 +32,12 @@ def register_task_session_routes(
     planning_service: PlanningApplicationService | None = None,
     execution_service: TaskExecutionApplicationService | None = None,
     route_dependencies: TaskRouteDependencies | None = None,
-    runtime_service: Any = runtime_module,
     context: TaskSessionRouteContext | None = None,
 ) -> None:
     """Build the task-session service graph and register its route slices."""
-    del bot
     context = context or build_task_session_context(
         db_path,
-        runtime_service,
+        bot=bot,
         task_service=task_service,
         artifact_service=artifact_service,
         planning_service=planning_service,

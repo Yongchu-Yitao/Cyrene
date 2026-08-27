@@ -4,32 +4,33 @@ from .bridge import (
     AgentSessionCancelledError,
     AgentSessionRunError,
     WorkbenchChatResult,
+    WorkbenchPendingQuestion,
     WorkbenchPublisher,
     WorkbenchSessionBridge,
+    project_tool_activity_messages,
     workbench_events,
 )
+from .conversation_runtime import ConversationConfig, ConversationRuntime
 from .chat_runtime import (
+    MODEL_ROUTER_PLUGIN,
     ThreadsafeWorkbenchPublisher,
-    WORKBENCH_CHAT_KERNEL_ENV,
-    WORKBENCH_CHAT_MODEL_PLUGIN,
-    create_workbench_chat_model_plugin,
     run_workbench_chat,
-    workbench_chat_kernel_enabled,
-    workbench_chat_model,
+    workbench_agent_data_directory,
 )
 
 __all__ = [
     "AgentSessionCancelledError",
     "AgentSessionRunError",
     "WorkbenchChatResult",
+    "WorkbenchPendingQuestion",
     "WorkbenchPublisher",
     "WorkbenchSessionBridge",
+    "ConversationConfig",
+    "ConversationRuntime",
+    "project_tool_activity_messages",
+    "MODEL_ROUTER_PLUGIN",
     "ThreadsafeWorkbenchPublisher",
-    "WORKBENCH_CHAT_KERNEL_ENV",
-    "WORKBENCH_CHAT_MODEL_PLUGIN",
-    "create_workbench_chat_model_plugin",
     "run_workbench_chat",
-    "workbench_chat_kernel_enabled",
-    "workbench_chat_model",
+    "workbench_agent_data_directory",
     "workbench_events",
 ]

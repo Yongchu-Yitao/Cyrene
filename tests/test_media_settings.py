@@ -14,11 +14,9 @@ def isolated_config_store(tmp_path, monkeypatch):
     monkeypatch.setattr(config_store, "DATA_DIR", tmp_path)
     monkeypatch.setattr(config_store, "_ENCRYPTED_PATH", tmp_path / "config.enc")
     monkeypatch.setattr(config_store, "_KEY_PATH", tmp_path / ".config_key")
-    monkeypatch.setattr(config_store, "_LEGACY_ENV_PATH", tmp_path / ".env")
-    monkeypatch.setattr(config_store, "_LEGACY_SETTINGS_PATH", tmp_path / "web_settings.json")
     monkeypatch.setattr(config_store, "_cache", None)
-    monkeypatch.setattr(config_store, "_migrated", False)
     monkeypatch.setattr(config_store, "_fernet", None)
+    monkeypatch.setattr(config_store, "_initialized", False)
     return config_store
 
 

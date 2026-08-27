@@ -63,7 +63,7 @@ npm install
 npm run build
 cd ../..
 
-uv run python -m cyrene
+uv run cyrene
 ```
 
 打开 `http://localhost:4242`。首次启动会引导完成 Model 与 Personality 配置。
@@ -76,15 +76,15 @@ npm install
 npm run dev
 ```
 
-后台服务命令：
+Workbench 后端和终端客户端命令：
 
 ```bash
 uv run cyrene
+uv run cyrene chat
 uv run cyrene status
-uv run cyrene stop
 ```
 
-裸命令 `cyrene` 会在需要时启动后台服务并直接进入交互界面。
+裸命令 `cyrene` 会使用新 Agent Runtime 启动 Workbench 后端。
 `cyrene chat` 提供流式回复、工具/计划进度、权限确认、附件、历史对话切换、
 运行中断与断线恢复；一次性调用可使用
 `cyrene chat --json "你的任务"`。
@@ -99,7 +99,6 @@ uv run cyrene stop
 - [使用指南](docs/usage.zh-CN.md)
 - [实时控制 PowerPoint](docs/office-live-control.zh-CN.md)
 - [配置说明](docs/configuration.zh-CN.md)
-- [自定义工具](docs/custom-tools.zh-CN.md)
 - [架构说明](docs/architecture.zh-CN.md)
 - [开发指南](docs/development.zh-CN.md)
 - [当前限制](docs/limitations.zh-CN.md)

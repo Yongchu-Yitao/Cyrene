@@ -1,15 +1,30 @@
 """Editable Cyrene media Plugin pack."""
 
-from ._runtime import create_plugin_pack
+from agent.plugin import Plugin, PluginPack
 
-plugin_pack = create_plugin_pack(
-    package_name=__name__,
-    pack_id="cyrene_media",
+from . import start_media_generation
+
+_FUNCTION = start_media_generation.TOOL_DEF["function"]
+plugin_pack = PluginPack(
+    id="cyrene_media",
     description="Start asynchronous media generation.",
-    native_module_names=("start_media_generation",),
-    registration_providers=(),
+    plugins=(
+        Plugin(
+            name=str(_FUNCTION["name"]),
+            description=str(_FUNCTION.get("description") or ""),
+            input_schema=dict(
+                _FUNCTION.get("parameters")
+                or {"type": "object", "properties": {}}
+            ),
+            handler=start_media_generation.handler,
+            allow_parallel=True,
+            timeout_seconds=180.0,
+            metadata={
+                **start_media_generation.TOOL_METADATA,
+                "main_only": True,
+            },
+        ),
+    ),
 )
-if len(plugin_pack.plugins) != 1:
-    raise RuntimeError("media pack must contain exactly 1 Plugin")
 
 __all__ = ["plugin_pack"]

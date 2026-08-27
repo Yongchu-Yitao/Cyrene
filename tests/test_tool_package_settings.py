@@ -4,54 +4,54 @@ from fastapi.testclient import TestClient
 from route.registry import register_routes
 
 
-def _client(monkeypatch):
+def _client(monkeypatch, tmp_path):
     from cyrene.runtime import settings_service, settings_store
 
     state = {
-        "packages": {"browser_tools": False},
-        "tools": {"browser_navigate": False},
-        "saved_packages": [],
-        "saved_tools": [],
+        "packs": {"cyrene_browser": False},
+        "plugins": {"browser_navigate": False},
+        "saved_packs": [],
+        "saved_plugins": [],
     }
 
     monkeypatch.setattr(
         settings_store,
-        "get_enabled_tool_packs",
-        lambda: dict(state["packages"]),
+        "get_enabled_plugin_packs",
+        lambda: dict(state["packs"]),
     )
     monkeypatch.setattr(
         settings_store,
-        "is_tool_pack_enabled",
-        lambda name: state["packages"].get(name, True),
+        "is_plugin_pack_enabled",
+        lambda name: state["packs"].get(name, True),
     )
     monkeypatch.setattr(
         settings_store,
-        "save_enabled_tool_packs",
+        "save_enabled_plugin_packs",
         lambda value: (
-            state["saved_packages"].append(dict(value)),
-            state.__setitem__("packages", dict(value)),
+            state["saved_packs"].append(dict(value)),
+            state.__setitem__("packs", dict(value)),
         ),
     )
     monkeypatch.setattr(
         settings_store,
-        "get_enabled_tools",
-        lambda: dict(state["tools"]),
+        "get_enabled_plugins",
+        lambda: dict(state["plugins"]),
     )
     monkeypatch.setattr(
         settings_store,
-        "save_enabled_tools",
-        lambda value: state["saved_tools"].append(dict(value)),
+        "save_enabled_plugins",
+        lambda value: state["saved_plugins"].append(dict(value)),
     )
 
     def fake_update(_namespace, changes, **_kwargs):
-        if "enabled_tool_packs" in changes:
-            value = dict(changes["enabled_tool_packs"])
-            state["saved_packages"].append(value)
-            state["packages"] = value
-        if "enabled_tools" in changes:
-            value = dict(changes["enabled_tools"])
-            state["saved_tools"].append(value)
-            state["tools"] = value
+        if "enabled_plugin_packs" in changes:
+            value = {**state["packs"], **dict(changes["enabled_plugin_packs"])}
+            state["saved_packs"].append(value)
+            state["packs"] = value
+        if "enabled_plugins" in changes:
+            value = {**state["plugins"], **dict(changes["enabled_plugins"])}
+            state["saved_plugins"].append(value)
+            state["plugins"] = value
         return {
             "revision": 1,
             "apply_mode": "next_run",
@@ -62,106 +62,75 @@ def _client(monkeypatch):
     monkeypatch.setattr(settings_service, "update", fake_update)
 
     app = FastAPI()
-    register_routes(app, bot=None, db_path="test.db")
+    register_routes(app, bot=None, db_path=str(tmp_path / "cyrene.db"))
     return TestClient(app), state
 
 
-def test_settings_api_exposes_stable_package_groups(monkeypatch):
-    client, _state = _client(monkeypatch)
+def test_settings_api_exposes_registry_packs_and_standalone_plugins(monkeypatch, tmp_path):
+    client, _state = _client(monkeypatch, tmp_path)
 
-    response = client.get("/api/settings/tools")
+    response = client.get("/api/settings/plugins")
 
     assert response.status_code == 200
     payload = response.json()
-    assert [item["id"] for item in payload["packages"]] == [
-        "code_tools",
-        "media_tools",
-        "browser_tools",
-        "desktop_tools",
-        "memory_tools",
-        "knowledge_tools",
-        "task_tools",
-        "entity_tools",
-        "map_tools",
-        "subagent_tools",
-        "delivery_tools",
-        "environment_tools",
-        "skill_tools",
-        "remote_tools",
-        "cyrene_tools",
-        "office_tools",
-        "plugin_tools",
-        "integration_tools",
-        "custom_tools",
-    ]
-    groups = payload["tool_groups"]
-    assert len(groups) == 19
-    assert all(item["kind"] == "package" for item in groups)
+    package_ids = {item["id"] for item in payload["packs"]}
+    assert {"core", "cyrene_browser", "cyrene_memory"} <= package_ids
     browser = next(
-        item for item in payload["packages"]
-        if item["id"] == "browser_tools"
+        item for item in payload["packs"]
+        if item["id"] == "cyrene_browser"
     )
-    assert browser["enabled"] is False
+    assert browser["configured_enabled"] is False
     assert browser["enabled_count"] == 0
-    custom = next(
-        item for item in payload["packages"]
-        if item["id"] == "custom_tools"
-    )
-    # Existing settings files predate this package key. Missing means enabled,
-    # preserving the global default during migration.
-    assert custom["enabled"] is True
-    assert custom["source"] == "custom"
-    plugin = next(
-        item for item in payload["packages"]
-        if item["id"] == "plugin_tools"
-    )
-    assert plugin["enabled"] is True
-    assert plugin["tool_count"] == 12
-    assert plugin["source"] == "native"
+    core = next(item for item in payload["packs"] if item["id"] == "core")
+    assert core["locked"] is True
+    assert core["source"] == "core"
 
-    tools = {item["name"]: item for item in payload["tools"]}
-    assert tools["AnalyzeAttachment"]["package_id"] == "direct_tools"
-    assert tools["AnalyzeAttachment"]["effective_enabled"] is True
-    assert tools["browser_navigate"]["configured_enabled"] is False
-    assert tools["browser_navigate"]["effective_enabled"] is False
-    assert tools["SearchKnowledge"]["package_id"] == "knowledge_tools"
-    assert tools["ListEnvironment"]["package_id"] == "environment_tools"
-    assert tools["SearchEnvironment"]["package_id"] == "environment_tools"
+    plugins = {item["name"]: item for item in payload["plugins"]}
+    assert plugins["toolbox"]["pack_id"] == "core"
+    assert plugins["toolbox"]["locked"] is True
+    assert plugins["browser_navigate"]["pack_id"] == "cyrene_browser"
+    assert plugins["browser_navigate"]["effective_enabled"] is False
+    standalone = {item["name"] for item in payload["standalone_plugins"]}
+    assert {"Edit", "Glob", "Grep"} <= standalone
 
 
-def test_settings_api_updates_package_atomically(monkeypatch):
-    client, state = _client(monkeypatch)
+def test_settings_api_updates_package_atomically(monkeypatch, tmp_path):
+    client, state = _client(monkeypatch, tmp_path)
 
     response = client.put(
-        "/api/settings/tools",
-        json={"packages": {"browser_tools": True}},
+        "/api/settings/plugins",
+        json={"packs": {"cyrene_browser": True}},
     )
 
     assert response.status_code == 200
-    assert response.json()["updated_packages"] == ["browser_tools"]
-    assert state["packages"]["browser_tools"] is True
-    assert state["saved_packages"] == [{"browser_tools": True}]
-    assert state["saved_tools"] == []
+    browser = next(
+        item for item in response.json()["packs"]
+        if item["id"] == "cyrene_browser"
+    )
+    assert browser["configured_enabled"] is True
+    assert state["packs"]["cyrene_browser"] is True
+    assert state["saved_packs"] == [{"cyrene_browser": True}]
+    assert state["saved_plugins"] == []
 
 
 def test_settings_api_rejects_invalid_package_without_partial_save(
-    monkeypatch,
+    monkeypatch, tmp_path,
 ):
-    client, state = _client(monkeypatch)
+    client, state = _client(monkeypatch, tmp_path)
 
     unknown = client.put(
-        "/api/settings/tools",
+        "/api/settings/plugins",
         json={
-            "tools": {"Read": False},
-            "packages": {"not_a_package": True},
+            "plugins": {"Read": False},
+            "packs": {"not_a_package": True},
         },
     )
     non_boolean = client.put(
-        "/api/settings/tools",
-        json={"packages": {"browser_tools": "false"}},
+        "/api/settings/plugins",
+        json={"packs": {"cyrene_browser": "false"}},
     )
 
     assert unknown.status_code == 400
     assert non_boolean.status_code == 400
-    assert state["saved_packages"] == []
-    assert state["saved_tools"] == []
+    assert state["saved_packs"] == []
+    assert state["saved_plugins"] == []

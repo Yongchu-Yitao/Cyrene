@@ -1,38 +1,46 @@
-"""Tool implementation for track_entity."""
+"""Create durable entities through the host-owned entity service."""
 
 from __future__ import annotations
 
-from .definitions import get_native_tool_def
+from typing import Any
 
-TOOL_NAME = 'track_entity'
-TOOL_DEF = get_native_tool_def(TOOL_NAME)
+from agent.plugin import PluginContext
+
+from ._plugin import create_tool_plugin
+from ._service import current_project_id, entity_service
+
+TOOL_NAME = "entity.track"
 
 
-async def _tool_track_entity(args, bot, chat_id, db_path, notify_state):
-    from .store import create_entity
-    from cyrene.agent.context import get_current_session_id
-    from cyrene.workbench.context import resolve_project_data_key_for_session
-
-    # Scope the entity to the active Workbench project so its deadline shows on
-    # that project's calendar (日程). Outside a Workbench session → "default".
-    project_id = resolve_project_data_key_for_session(get_current_session_id())
-    entity = await create_entity(
-        db_path,
-        type=args.get("type", "task"),
-        title=args["title"],
-        content=args.get("content", ""),
-        priority=args.get("priority", "medium"),
-        due_date=args.get("due_date"),
-        people=args.get("people", []),
-        tags=args.get("tags", []),
-        source=args.get("source", "extracted"),
-        confidence=args.get("confidence", 1.0),
-        source_round_id=args.get("source_round_id"),
-        project_id=project_id,
+async def track_entity(
+    arguments: dict[str, Any],
+    context: PluginContext,
+) -> dict[str, Any]:
+    entity = await entity_service(context).create(
+        type=arguments["type"],
+        title=arguments["title"],
+        content=arguments.get("content", ""),
+        priority=arguments.get("priority", "medium"),
+        due_date=arguments.get("due_date"),
+        people=arguments.get("people", []),
+        tags=arguments.get("tags", []),
+        source=arguments.get("source", "extracted"),
+        confidence=arguments.get("confidence", 1.0),
+        source_round_id=(
+            arguments.get("source_round_id")
+            or context.data.get("run_id")
+            or None
+        ),
+        project_id=current_project_id(context),
     )
-    return f"已记录事务：{entity['title']}（ID: {entity['id']}）"
+    return {
+        "ok": True,
+        "entity": entity,
+        "message": f"已记录事务：{entity['title']}（ID: {entity['id']}）",
+    }
 
 
-handler = _tool_track_entity
+plugin = create_tool_plugin(TOOL_NAME, track_entity)
+handler = track_entity
 
-__all__ = ["TOOL_NAME", "TOOL_DEF", "handler", "_tool_track_entity"]
+__all__ = ["TOOL_NAME", "handler", "plugin", "track_entity"]

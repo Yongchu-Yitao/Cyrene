@@ -25,6 +25,10 @@ from agent.plugin.core_impl import PermissionReviewPlugin
 CANONICAL_PLUGIN_DIRECTORY = Path(__file__).parents[1] / "plugin" / "plugin_impl"
 
 
+def _model_plugin_pack() -> Path:
+    return CANONICAL_PLUGIN_DIRECTORY / "cyrene_model"
+
+
 def run(coroutine):
     return asyncio.run(coroutine)
 
@@ -92,6 +96,16 @@ def test_bad_user_pack_isolated_as_load_failure(tmp_path):
     assert len(failures) == 1
     assert failures[0].path == package
     assert "must export PluginPack" in failures[0].error
+    assert registry.list_packs() == ()
+
+
+def test_registry_ignores_bytecode_only_retired_pack_directory(tmp_path):
+    retired = tmp_path / "plugin_impl" / "retired_pack" / "__pycache__"
+    retired.mkdir(parents=True)
+    (retired / "__init__.cpython-312.pyc").write_bytes(b"stale bytecode")
+    registry = PluginRegistry(include_core=False)
+
+    assert registry.load_directory(retired.parents[1]) == ()
     assert registry.list_packs() == ()
 
 
@@ -174,21 +188,8 @@ plugin = Plugin(
         write_plugin(1)
         listing = await runtime.call("toolbox", {"operation": "list"})
         assert listing.success is True
-        assert listing.value["packs"] == [
-            {
-                "id": "existing",
-                "description": "An existing tool pack",
-                "tools": [
-                    {"name": "PackedTool", "description": "A packed tool"}
-                ],
-            }
-        ]
-        assert listing.value["standalone_tools"] == [
-            {
-                "name": "StandaloneTool",
-                "description": "Standalone tool version 1",
-            }
-        ]
+        assert listing.value["packs"] == ["existing"]
+        assert listing.value["standalone_tools"] == ["StandaloneTool"]
         registered = registry.registered("StandaloneTool")
         assert registered.pack_id is None
         assert registered.source == str(standalone)
@@ -202,6 +203,7 @@ plugin = Plugin(
             },
         )
         assert first.success is True
+        assert first.value["pack"] is None
         assert first.value["result"] == "standalone-1:one"
 
         write_plugin(2)
@@ -229,12 +231,7 @@ plugin = Plugin(
         write_plugin(3, "RenamedTool")
         renamed = await runtime.call("toolbox", {"operation": "list"})
         assert renamed.success is True
-        assert renamed.value["standalone_tools"] == [
-            {
-                "name": "RenamedTool",
-                "description": "Standalone tool version 3",
-            }
-        ]
+        assert renamed.value["standalone_tools"] == ["RenamedTool"]
         assert "StandaloneTool" not in {
             item.plugin.name for item in registry.list_plugins()
         }
@@ -252,7 +249,7 @@ plugin = Plugin(
         standalone.write_text("plugin = None\n", encoding="utf-8")
         failed_update = await runtime.call("toolbox", {"operation": "list"})
         assert failed_update.success is True
-        assert failed_update.value["standalone_tools"][0]["name"] == "RenamedTool"
+        assert failed_update.value["standalone_tools"][0] == "RenamedTool"
         assert failed_update.value["refresh_errors"][0]["path"] == str(standalone)
 
         stale_description = await runtime.call(
@@ -276,7 +273,7 @@ plugin = Plugin(
         removed = await runtime.call("toolbox", {"operation": "list"})
         assert removed.success is True
         assert removed.value["standalone_tools"] == []
-        assert [pack["id"] for pack in removed.value["packs"]] == ["existing"]
+        assert removed.value["packs"] == ["existing"]
         unavailable = await runtime.call(
             "toolbox",
             {
@@ -468,15 +465,7 @@ plugin_pack = PluginPack(
         listing = await runtime.call("toolbox", {"operation": "list"})
         assert listing.success is True
         assert listing.value["standalone_tools"] == []
-        assert listing.value["packs"] == [
-            {
-                "id": "live",
-                "description": "Live reloadable tools version 1",
-                "tools": [
-                    {"name": "LiveTool", "description": "Live tool version 1"}
-                ],
-            }
-        ]
+        assert listing.value["packs"] == ["live"]
 
         first = await runtime.call(
             "toolbox",
@@ -492,7 +481,7 @@ plugin_pack = PluginPack(
         write_pack(2)
         description = await runtime.call(
             "toolbox",
-            {"operation": "describe", "name": "LiveTool"},
+            {"operation": "describe", "name": "live"},
         )
         assert description.success is True
         current = description.value["plugins"][0]
@@ -926,20 +915,7 @@ def test_filesystem_plugins_follow_toolbox_list_describe_invoke_chain(tmp_path):
         )
         assert listing.success is True
         assert listing.value["packs"] == []
-        assert listing.value["standalone_tools"] == [
-            {
-                "name": "Edit",
-                "description": "Replace an exact string in a text file.",
-            },
-            {
-                "name": "Glob",
-                "description": "Find files in the workspace using a glob pattern.",
-            },
-            {
-                "name": "Grep",
-                "description": "Search file contents by regex pattern inside the workspace.",
-            },
-        ]
+        assert listing.value["standalone_tools"] == ["Edit", "Glob", "Grep"]
 
         described = await runtime.call(
             "toolbox",
@@ -1013,6 +989,22 @@ def test_minimax_model_pack_uses_openai_tool_call_shape(tmp_path, monkeypatch):
         requests = []
 
         async def respond(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                requests.append({
+                    "method": "GET",
+                    "url": str(request.url),
+                    "authorization": request.headers.get("Authorization", ""),
+                })
+                return httpx.Response(
+                    200,
+                    json={
+                        "object": "list",
+                        "data": [
+                            {"id": "MiniMax-M2.7", "owned_by": "minimax"},
+                            {"id": "MiniMax-M2.7-highspeed", "owned_by": "minimax"},
+                        ],
+                    },
+                )
             requests.append(json.loads(request.content))
             return httpx.Response(
                 200,
@@ -1049,18 +1041,37 @@ def test_minimax_model_pack_uses_openai_tool_call_shape(tmp_path, monkeypatch):
                 },
             )
 
-        monkeypatch.setenv("MINIMAX_API_KEY", "test-key")
-        monkeypatch.setenv("MINIMAX_BASE_URL", "https://minimax.test/v1")
         registry = PluginRegistry(include_core=False)
         plugin_directory = tmp_path / "model_plugins"
         plugin_directory.mkdir()
-        model_pack = Path(__file__).parents[3] / "plugin_impl" / "model"
+        model_pack = _model_plugin_pack()
         shutil.copytree(model_pack, plugin_directory / model_pack.name)
         for name in ("edit.py", "glob.py", "grep.py"):
             shutil.copy2(CANONICAL_PLUGIN_DIRECTORY / name, plugin_directory / name)
         failures = registry.load_directory(plugin_directory)
         assert failures == ()
         assert registry.resolve("MiniMax").kind == "model"
+        assert {
+            item.plugin.name
+            for item in registry.list_plugins()
+            if item.plugin.kind == "model"
+        } == {
+            "AMDGPUCloud",
+            "Anthropic",
+            "CodexOAuth",
+            "DeepSeek",
+            "GLM",
+            "Gemini",
+            "Kimi",
+            "LocalONNX",
+            "MiniMax",
+            "Ollama",
+            "OpenAI",
+            "OpenAICompatible",
+            "OpenCodeGo",
+            "OpenRouter",
+        }
+        assert registry.resolve("MiniMax").metadata["provider"]["id"] == "minimax"
         assert {
             definition["function"]["name"]
             for definition in registry.tool_definitions()
@@ -1094,6 +1105,10 @@ def test_minimax_model_pack_uses_openai_tool_call_shape(tmp_path, monkeypatch):
                 data={
                     "http_transport": httpx.MockTransport(respond),
                     "model_call_kind": "agent",
+                    "model_connection": {
+                        "base_url": "https://minimax.test/v1",
+                        "api_key": "test-key",
+                    },
                 },
             ),
         )
@@ -1124,6 +1139,41 @@ def test_minimax_model_pack_uses_openai_tool_call_shape(tmp_path, monkeypatch):
         assert len(observations) == 1
         assert observations[0]["call_kind"] == "agent"
         assert observations[0]["usage"]["cached_prompt_tokens"] == 14
+
+        discovered = await PluginRuntime(registry).call(
+            "MiniMax",
+            {"operation": "list_models"},
+            PluginContext(data={
+                "http_transport": httpx.MockTransport(respond),
+                "model_connection": {
+                    "base_url": "https://minimax.test/v1",
+                    "api_key": "test-key",
+                },
+            }),
+        )
+        assert discovered.success is True
+        assert [item["id"] for item in discovered.value["models"]] == [
+            "MiniMax-M2.7",
+            "MiniMax-M2.7-highspeed",
+        ]
+        assert requests[-1]["url"] == "https://minimax.test/v1/models"
+
+        monkeypatch.setenv("OPENAI_API_KEY", "must-not-leak")
+        generic_discovered = await PluginRuntime(registry).call(
+            "OpenAICompatible",
+            {"operation": "list_models"},
+            PluginContext(data={
+                "http_transport": httpx.MockTransport(respond),
+                "model_connection": {
+                    "adapter": "openai_compatible",
+                    "base_url": "https://custom-provider.test/v1",
+                    "api_key": "",
+                },
+            }),
+        )
+        assert generic_discovered.success is True
+        assert requests[-1]["url"] == "https://custom-provider.test/v1/models"
+        assert requests[-1]["authorization"] == ""
         store.close()
 
     run(scenario())

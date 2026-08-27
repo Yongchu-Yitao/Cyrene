@@ -8,6 +8,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 _runtime_started = False
 
+_CLIENT_COMMANDS = frozenset(
+    {
+        "chat",
+        "mcp",
+        "memory",
+        "session",
+        "start",
+        "status",
+        "stop",
+    }
+)
+
 
 def _print_help() -> None:
     print(
@@ -17,7 +29,7 @@ Cyrene runtime entry point.
 
 modes:
   (default)         Start the Workbench web UI
-  --workbench       Start the Workbench web UI (compatibility alias)
+  --workbench       Start the Workbench web UI
   --gui              Start the native GUI wrapper
   --telegram         Start the Telegram bot
 
@@ -35,22 +47,15 @@ The installed `cyrene` command provides daemon/client subcommands; run
 async def _prepare_runtime() -> None:
     """初始化运行时所需的目录和文件"""
     from cyrene.config import (
-        DATA_DIR,
         DB_PATH,
         INBOX_DIR,
-        SOUL_PATH,
     )
     from cyrene.runtime.bootstrap import initialize_runtime, start_external_services
 
     await initialize_runtime(learning=True)
     logger.info("Database initialized at %s", DB_PATH)
-    logger.info("SOUL.md ready at %s", SOUL_PATH)
     logger.info("Inbox ready at %s", INBOX_DIR)
-    logger.info("Short-term memory initialized at %s", DATA_DIR / "short_term.json")
-    # Telegram owns a different long-lived asyncio loop. Start the custom-tool
-    # watcher from that loop's post-init hook; legacy search and MCP
-    # retain their existing startup path here.
-    await start_external_services(custom_tools=False)
+    await start_external_services()
 
     # 人格设置检测（Telegram 模式跳过交互，提示用户先运行 CLI）
     from cyrene.runtime.setup import init_setup_flag, is_setup_done
@@ -72,6 +77,11 @@ def _run_bot() -> None:
 def main() -> None:
     import sys
     global _runtime_started
+    if sys.argv[1:2] and sys.argv[1] in _CLIENT_COMMANDS:
+        from cyrene.cli import main as client_main
+
+        client_main()
+        return
     if "--help" in sys.argv or "-h" in sys.argv:
         _print_help()
         return

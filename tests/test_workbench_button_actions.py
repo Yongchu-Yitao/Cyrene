@@ -1,7 +1,7 @@
 """Service-level tests for the :::button block_actions protocol helpers."""
 
-from cyrene.workbench.chat import (
-    _iter_button_blocks,
+from cyrene.workbench.chat_application import (
+    _button_blocks as _iter_button_blocks,
     disable_button_block,
     has_button_block,
 )

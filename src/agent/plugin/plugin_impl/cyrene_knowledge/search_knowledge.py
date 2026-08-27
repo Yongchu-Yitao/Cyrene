@@ -1,53 +1,49 @@
-"""Tool implementation for SearchKnowledge."""
+"""Native Plugin for hybrid project-knowledge search."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import (
-    logger,
+from agent.plugin import Plugin, PluginContext
+
+from ._service import knowledge_service
+from .definitions import get_native_tool_def, get_plugin_spec
+
+TOOL_NAME = "SearchKnowledge"
+TOOL_DEF = get_native_tool_def(TOOL_NAME)
+TOOL_METADATA = {
+    "read_only": True,
+    "resource_keys": ("knowledge:project",),
+}
+
+
+async def handler(arguments: dict[str, Any], context: PluginContext) -> str:
+    query = str(arguments.get("query") or "").strip()
+    results = await knowledge_service(context).search_knowledge(
+        context,
+        query,
+        limit=int(arguments.get("k") or 6),
+    )
+    if not results:
+        return "No matching documents found in the knowledge base."
+    lines = [f"Found {len(results)} matching passage(s) from the knowledge base:"]
+    for index, result in enumerate(results, start=1):
+        similarity = result.get("cosine_similarity")
+        similarity_text = f"; cosine_similarity={float(similarity):.6f}" if similarity is not None else ""
+        content = str(result.get("content") or "").strip()[:500]
+        lines.append(f"[{index}] {result.get('document_name') or 'Unknown'}{similarity_text}\n{content}")
+    return "\n\n".join(lines)
+
+
+_spec = get_plugin_spec(TOOL_NAME)
+plugin = Plugin(
+    name=TOOL_NAME,
+    description=_spec["description"],
+    input_schema=_spec["input_schema"],
+    handler=handler,
+    allow_parallel=True,
+    timeout_seconds=180,
+    metadata=TOOL_METADATA,
 )
 
-TOOL_NAME = 'SearchKnowledge'
-TOOL_DEF = get_native_tool_def(TOOL_NAME)
-
-
-async def _tool_search_knowledge(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    """Search the user's knowledge base for relevant passages."""
-    query = str(args.get("query", "") or "").strip()
-    if not query:
-        return "Error: query is required."
-
-    k = max(1, int(args.get("k", 6) or 6))
-
-    try:
-        from cyrene.knowledge import retrieve
-        from cyrene.workbench.context import ensure_knowledge_db_for_session
-        from cyrene.agent.context import get_current_session_id
-
-        db_path = await ensure_knowledge_db_for_session(get_current_session_id())
-        results = await retrieve.search_knowledge(db_path, query, k=k)
-        if not results:
-            return "No matching documents found in the knowledge base."
-
-        output_lines = [f"Found {len(results)} matching passage(s) from your knowledge base:\n"]
-        for i, result in enumerate(results, start=1):
-            doc_name = result.get("document_name", "Unknown")
-            content = result.get("content", "")[:400]
-            cosine_similarity = result.get("cosine_similarity")
-            similarity_text = (
-                f" (cosine_similarity: {float(cosine_similarity):.6f})"
-                if cosine_similarity is not None
-                else ""
-            )
-            output_lines.append(f"[{i}. {doc_name}]{similarity_text}\n{content}\n")
-        return "\n".join(output_lines)
-    except Exception as e:
-        logger.debug(f"Knowledge base search failed: {e}")
-        return f"Error searching knowledge base: {str(e)}"
-
-
-handler = _tool_search_knowledge
-
-__all__ = ["TOOL_NAME", "TOOL_DEF", "handler", "_tool_search_knowledge"]
+__all__ = ["TOOL_DEF", "TOOL_METADATA", "TOOL_NAME", "handler", "plugin"]

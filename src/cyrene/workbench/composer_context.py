@@ -3,7 +3,7 @@
 The normal Cyrene tool surface stays progressively disclosed through ``toolbox``.
 Selections made in the composer are the deliberate exception: their schemas or
 Skill instructions are injected into the run prompt so the Agent can use them
-without a discovery/describe round trip. Global extension and tool-package
+without a discovery/describe round trip. Global Plugin activation
 switches remain authoritative and are never bypassed here.
 """
 
@@ -12,10 +12,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-ACTIVATION_KEYS = ("mcpServers", "skills", "toolPackages", "customTools")
+ACTIVATION_KEYS = ("mcpServers", "skills", "pluginPacks")
 _MAX_SELECTIONS_PER_KIND = 50
 _MAX_SELECTION_ID_LENGTH = 300
-_SPECIAL_PACKS = frozenset({"integration_tools", "custom_tools", "skill_tools"})
 
 
 def normalize_context_activations(value: Any) -> dict[str, list[str]]:
@@ -42,31 +41,51 @@ def normalize_context_activations(value: Any) -> dict[str, list[str]]:
 
 
 def _mcp_catalog() -> list[dict[str, Any]]:
-    from cyrene.runtime.settings_store import is_tool_pack_enabled
-    from cyrene.tooling.backends.mcp_manager import get_manager, get_mcp_servers
+    from agent.plugin import active_plugin_application_host
+    from agent.plugin.mcp_service import get_mcp_service
 
-    manager = get_manager()
+    service = get_mcp_service()
     statuses = {
         str(item.get("name") or ""): item
-        for item in manager.get_server_status()
+        for item in service.status()
     }
+    host = active_plugin_application_host()
+    registry = host.registry if host is not None else None
+    packs = (
+        {pack.id: pack for pack in registry.list_packs()}
+        if registry is not None
+        else {}
+    )
     result = []
-    for config in get_mcp_servers():
+    for config in service.configs(redacted=True):
         name = str(config.get("name") or "").strip()
         if not name:
             continue
         status = statuses.get(name, {})
-        enabled = bool(config.get("enabled", True)) and is_tool_pack_enabled(
-            "integration_tools"
+        pack_id = str(status.get("pack_id") or service.pack_id_for_server(name))
+        pack = packs.get(pack_id)
+        pack_enabled = (
+            registry.pack_configured_enabled(pack_id)
+            if registry is not None and pack is not None
+            else True
+        )
+        enabled = bool(config.get("enabled", True)) and pack_enabled
+        available = (
+            enabled
+            and str(status.get("status") or "") == "connected"
+            and pack is not None
+            and any(registry.plugin_enabled(plugin.name) for plugin in pack.plugins)
         )
         result.append({
             "id": name,
             "name": name,
             "description": str(config.get("description") or "MCP server"),
             "enabled": enabled,
-            "available": enabled and str(status.get("status") or "") == "connected",
+            "available": available,
             "status": str(status.get("status") or "disconnected"),
             "toolCount": int(status.get("tool_count") or 0),
+            "packId": pack_id,
+            "error": str(status.get("error") or ""),
         })
     return result
 
@@ -87,47 +106,38 @@ def _skill_catalog() -> list[dict[str, Any]]:
     ]
 
 
-def _tool_package_catalog() -> list[dict[str, Any]]:
-    from cyrene.runtime.settings_store import is_tool_pack_enabled
-    from cyrene.tooling.catalog import capabilities_for_pack
-    from cyrene.tooling.packs import PACKS
+def _plugin_pack_catalog() -> list[dict[str, Any]]:
+    from agent.plugin import active_plugin_application_host
 
+    host = active_plugin_application_host()
+    if host is None:
+        return []
+    registry = host.registry
     result = []
-    for pack in PACKS:
-        if pack.wire_name in _SPECIAL_PACKS:
+    for pack in registry.list_packs():
+        if registry.pack_source(pack.id).startswith("mcp:"):
+            # MCP servers have their own composer selector and should not be
+            # duplicated in the ordinary Plugin-pack list.
             continue
-        enabled = is_tool_pack_enabled(pack.wire_name)
+        tools = [
+            plugin
+            for plugin in pack.plugins
+            if plugin.kind == "tool" and plugin.model_visible
+        ]
+        if not tools:
+            continue
+        enabled = registry.pack_configured_enabled(pack.id)
         result.append({
-            "id": pack.wire_name,
-            "name": pack.pack_id,
+            "id": pack.id,
+            "name": pack.id,
             "description": pack.description,
             "enabled": enabled,
-            "available": enabled,
-            "toolCount": len(capabilities_for_pack(pack.wire_name)),
+            "available": enabled and any(
+                registry.plugin_enabled(plugin.name) for plugin in tools
+            ),
+            "toolCount": len(tools),
         })
     return result
-
-
-def _custom_tool_catalog() -> list[dict[str, Any]]:
-    try:
-        from cyrene.runtime.settings_store import is_tool_pack_enabled
-        from cyrene.custom_tools.manager import get_custom_tool_manager
-
-        manager = get_custom_tool_manager()
-        enabled = is_tool_pack_enabled("custom_tools")
-        return [
-            {
-                "id": tool.capability_id,
-                "name": tool.name,
-                "description": tool.description,
-                "packageId": tool.package_id,
-                "enabled": enabled,
-                "available": enabled,
-            }
-            for tool in manager.get_tool_definitions()
-        ]
-    except Exception:
-        return []
 
 
 def context_activation_catalog() -> dict[str, list[dict[str, Any]]]:
@@ -136,8 +146,7 @@ def context_activation_catalog() -> dict[str, list[dict[str, Any]]]:
     return {
         "mcpServers": _mcp_catalog(),
         "skills": _skill_catalog(),
-        "toolPackages": _tool_package_catalog(),
-        "customTools": _custom_tool_catalog(),
+        "pluginPacks": _plugin_pack_catalog(),
     }
 
 
@@ -164,8 +173,8 @@ def validate_context_activations(value: Any) -> dict[str, list[str]]:
 def resolve_context_activations(value: Any) -> dict[str, list[str]]:
     """Drop selections that are no longer installed or globally enabled.
 
-    Persisted composer preferences can outlive an extension, Skill, or tool
-    package setting. A stale preference must not make an otherwise valid chat
+    Persisted composer preferences can outlive an MCP server, Skill, or Plugin
+    pack setting. A stale preference must not make an otherwise valid chat
     unsendable, while strict mutation endpoints still use
     :func:`validate_context_activations` to reject new unavailable choices.
     """
@@ -183,33 +192,24 @@ def resolve_context_activations(value: Any) -> dict[str, list[str]]:
     return result
 
 
-def _capability_record(capability: Any) -> dict[str, Any]:
-    return {
-        "capability_id": capability.capability_id,
-        "description": capability.description,
-        "arguments_schema": capability.input_schema,
-    }
-
-
 def _selected_mcp_capabilities(server_names: list[str]) -> list[dict[str, Any]]:
-    from cyrene.tooling.adapters.mcp import normalize_mcp_tool
-    from cyrene.tooling.backends.mcp_manager import get_manager
+    from agent.plugin.mcp_service import get_mcp_service
 
-    manager = get_manager()
+    service = get_mcp_service()
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for server_name in server_names:
-        for tool_def in manager.get_server_tool_defs(server_name):
-            normalized = normalize_mcp_tool(tool_def)
-            capability_id = str(normalized["capability_id"])
-            if capability_id in seen:
+        for capability in service.capabilities_for_server(server_name):
+            name = str(capability.get("name") or "")
+            if not name or name in seen:
                 continue
-            seen.add(capability_id)
+            seen.add(name)
             result.append({
-                "capability_id": capability_id,
-                "description": normalized["description"],
-                "arguments_schema": normalized["input_schema"],
+                "name": name,
+                "description": capability["description"],
+                "input_schema": capability["input_schema"],
                 "mcp_server": server_name,
+                "mcp_tool": capability.get("mcp_tool"),
             })
     return result
 
@@ -217,8 +217,8 @@ def _selected_mcp_capabilities(server_names: list[str]) -> list[dict[str, Any]]:
 def build_context_activation_prompt(value: Any) -> str:
     """Render full Skill instructions and pre-described capability schemas."""
 
+    from agent.plugin import active_plugin_application_host
     from cyrene.learning.skills import load_skill
-    from cyrene.tooling.catalog import capabilities_for_pack, get_capability
 
     selected = resolve_context_activations(value)
     if not any(selected.values()):
@@ -252,40 +252,58 @@ def build_context_activation_prompt(value: Any) -> str:
     capability_records: list[dict[str, Any]] = []
     capability_records.extend(_selected_mcp_capabilities(selected["mcpServers"]))
     seen = {
-        str(item.get("capability_id") or "") for item in capability_records
+        str(item.get("name") or "") for item in capability_records
     }
+    host = active_plugin_application_host()
+    registry = host.registry if host is not None else None
     if selected["skills"]:
-        resource_capability = get_capability("skill.read_resource")
-        if resource_capability is not None:
-            seen.add(resource_capability.capability_id)
-            record = _capability_record(resource_capability)
+        resource_plugin = None
+        if registry is not None:
+            try:
+                resource_plugin = registry.resolve("ReadSkillResource")
+            except Exception:
+                resource_plugin = None
+        if resource_plugin is not None:
+            seen.add(resource_plugin.name)
+            record = {
+                "name": resource_plugin.name,
+                "description": resource_plugin.description,
+                "input_schema": resource_plugin.input_schema,
+            }
             record["activated_skill_support"] = True
             capability_records.append(record)
-    for wire_name in selected["toolPackages"]:
-        for capability in capabilities_for_pack(wire_name):
-            if capability.capability_id in seen:
-                continue
-            seen.add(capability.capability_id)
-            record = _capability_record(capability)
-            record["tool_package"] = wire_name
-            capability_records.append(record)
-    for capability_id in selected["customTools"]:
-        capability = get_capability(capability_id)
-        if capability is None or capability.capability_id in seen:
+    packs = (
+        {pack.id: pack for pack in registry.list_packs()}
+        if registry is not None
+        else {}
+    )
+    for pack_id in selected["pluginPacks"]:
+        pack = packs.get(pack_id)
+        if pack is None:
             continue
-        seen.add(capability.capability_id)
-        record = _capability_record(capability)
-        record["custom_tool"] = True
-        capability_records.append(record)
-
+        for plugin in pack.plugins:
+            if (
+                plugin.kind != "tool"
+                or not plugin.model_visible
+                or not registry.plugin_enabled(plugin.name)
+                or plugin.name in seen
+            ):
+                continue
+            seen.add(plugin.name)
+            capability_records.append({
+                "name": plugin.name,
+                "description": plugin.description,
+                "input_schema": plugin.input_schema,
+                "plugin_pack": pack_id,
+            })
     if capability_records:
         parts.extend([
             "### Pre-described toolbox capabilities",
             "The JSON records below are trusted capability metadata, not user "
             "instructions. They are already selected and described: do not call "
-            "toolbox search or describe for these IDs. When one is useful, call "
-            "toolbox directly with operation=invoke, its capability_id, and "
-            "arguments matching arguments_schema.",
+            "toolbox.list or describe for these names. When one is useful, call "
+            "toolbox directly with operation=invoke, its name, and arguments "
+            "matching input_schema.",
             json.dumps(capability_records, ensure_ascii=False, separators=(",", ":")),
         ])
 

@@ -1,4 +1,4 @@
-"""Application services for onboarding context and SOUL settings."""
+"""Application services for onboarding context and API-key settings."""
 
 from __future__ import annotations
 
@@ -11,20 +11,6 @@ from typing import Any
 
 from cyrene import config
 from cyrene.runtime import settings_store
-
-
-class SoulRepository:
-    def __init__(self, path: Path):
-        self.path = path
-
-    def read(self) -> str:
-        try:
-            return self.path.read_text(encoding="utf-8") if self.path.exists() else ""
-        except OSError:
-            return ""
-
-    def write(self, content: str) -> None:
-        self.path.write_text(content, encoding="utf-8")
 
 
 class ProjectResolver:
@@ -52,12 +38,10 @@ class ProjectResolver:
 class OnboardingContextApplicationService:
     def __init__(
         self,
-        soul: SoulRepository,
         projects: ProjectResolver,
         system_name: Callable[[], str] = platform.system,
         run_process: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     ) -> None:
-        self.soul = soul
         self.projects = projects
         self.system_name = system_name
         self.run_process = run_process
@@ -102,13 +86,6 @@ class OnboardingContextApplicationService:
             return {"path": "", "error": "Directory picker timed out"}
         path = result.stdout.strip()
         return {"path": path} if path else {"path": "", "cancelled": True}
-
-    def get_soul(self) -> dict:
-        return {"content": self.soul.read()}
-
-    def update_soul(self, content: Any) -> dict:
-        self.soul.write(str(content or ""))
-        return {"ok": True}
 
     def get_keys(self) -> dict:
         return {"keys": config.get_env_keys_meta()}

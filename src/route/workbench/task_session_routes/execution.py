@@ -51,10 +51,7 @@ def register_execution_routes(router: APIRouter, context: TaskSessionRouteContex
 
     @router.post("/api/task-sessions/{session_id}/answer")
     async def api_workbench_answer(session_id: str, body_model: api_models.AnswerBody):
-        """Answer a paused run's permission / clarification question and resume
-        the SAME round inside the project scope. The continued reply (or a follow-up
-        question) replaces the question card. Mirrors the legacy chat answer flow,
-        but session-scoped to this Workbench task."""
+        """Continue the Task's durable Agent ContextTree with a user answer."""
         return await coordinated("answer", context.execution.answer, session_id, body_model, bypass=True)
 
     return {"dispatch_task": api_workbench_dispatch, "create_run": api_workbench_create_run, "answer_task": api_workbench_answer}

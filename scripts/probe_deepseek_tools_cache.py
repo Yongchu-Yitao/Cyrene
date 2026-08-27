@@ -22,7 +22,7 @@
 
 安全：--dry-run 不联网、不花钱，先确认配置解析对、前缀够长再真跑。
 真正测量会联网并消耗少量 token（一遍约 2~3 万输入 token，几分钱量级），请自行运行。
-配置来源：优先复用项目的 `_resolve_llm_candidates()`（即 app 里配的模型/Key/BaseURL），
+配置来源：优先复用新 Plugin 模型目录解析出的候选（即 app 里配的模型/Key/BaseURL），
 否则回退到环境变量 OPENAI_MODEL / OPENAI_BASE_URL / OPENAI_API_KEY。
 """
 from __future__ import annotations
@@ -49,13 +49,18 @@ def resolve_endpoint() -> tuple[str, str, str]:
     import os
 
     try:
-        from cyrene.call_llm import _resolve_llm_candidates  # type: ignore
+        from agent.plugin.model_catalog import configured_model_candidates
+        from cyrene.model_runtime.protocol_adapters import protocol_endpoints
 
-        cands = _resolve_llm_candidates()
+        cands = configured_model_candidates(route="primary")
         if cands:
             c = cands[0]
-            endpoints = c.get("endpoints") or []
-            endpoint = endpoints[0] if endpoints else c["base_url"].rstrip("/") + "/chat/completions"
+            endpoints = protocol_endpoints(
+                str(c.get("adapter") or c.get("provider") or "openai"),
+                str(c.get("base_url") or ""),
+                str(c.get("model") or ""),
+            )
+            endpoint = endpoints[0] if endpoints else str(c["base_url"]).rstrip("/") + "/chat/completions"
             return c["model"], c["api_key"], endpoint
     except Exception as exc:  # pragma: no cover - 仅在 cyrene 不可导入时
         print(f"[warn] 复用项目配置失败，回退环境变量：{exc}", file=sys.stderr)

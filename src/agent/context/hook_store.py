@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 from datetime import datetime
 
+from ..observability import log_operation
 from ..hook.hook import Hook, HookEvent
 from ..hook.storage import QueuedHookEvent, decode_event_payload, encode_event_payload
 from .schema import transaction
+
+logger = logging.getLogger(__name__)
 
 
 class TreeHookStore:
@@ -43,15 +47,34 @@ class TreeHookStore:
                 ORDER BY created_at, hook_id
                 """
             ).fetchall()
-        return tuple(self._hook_from_row(row) for row in rows)
+        hooks = tuple(self._hook_from_row(row) for row in rows)
+        log_operation(
+            logger,
+            "hook.store",
+            "list_bindings",
+            phase="completed",
+            count=len(hooks),
+            hooks=[
+                {"hook_id": hook.id, "event": hook.event, "plugin_id": hook.plugin_id}
+                for hook in hooks
+            ],
+        )
+        return hooks
 
     def recover(self) -> None:
         """Release deliveries left claimed by a previous process."""
 
         with self._lock, transaction(self._connection):
-            self._connection.execute(
+            cursor = self._connection.execute(
                 "UPDATE hook_queue SET status = 'pending' WHERE status = 'running'"
             )
+        log_operation(
+            logger,
+            "hook.store",
+            "recover_queue",
+            phase="completed",
+            released=max(cursor.rowcount, 0),
+        )
 
     def save_hook(self, hook: Hook) -> None:
         config_json = json.dumps(
@@ -80,6 +103,20 @@ class TreeHookStore:
                     hook.created_at.isoformat() if hook.created_at else datetime.now().astimezone().isoformat(),
                 ),
             )
+        log_operation(
+            logger,
+            "hook.store",
+            "save_binding",
+            phase="completed",
+            hook_id=hook.id,
+            event=hook.event,
+            plugin_id=hook.plugin_id,
+            root_only=hook.root_only,
+            matcher=hook.matcher,
+            failure_policy=hook.failure_policy,
+            config=dict(hook.config),
+            enabled=hook.enabled,
+        )
 
     def delete_hook(self, hook_id: str) -> bool:
         with self._lock, transaction(self._connection):
@@ -87,7 +124,16 @@ class TreeHookStore:
                 "DELETE FROM hook_bindings WHERE hook_id = ?",
                 (str(hook_id),),
             )
-        return cursor.rowcount > 0
+        removed = cursor.rowcount > 0
+        log_operation(
+            logger,
+            "hook.store",
+            "delete_binding",
+            phase="completed",
+            hook_id=hook_id,
+            removed=removed,
+        )
+        return removed
 
     def enqueue(self, event: HookEvent) -> int:
         """Queue one delivery per currently matching binding.
@@ -119,7 +165,20 @@ class TreeHookStore:
                 int(event.is_root),
             ),
         )
-        return max(cursor.rowcount, 0)
+        count = max(cursor.rowcount, 0)
+        log_operation(
+            logger,
+            "hook.store",
+            "enqueue_event",
+            phase="completed",
+            tree_id=event.tree_id,
+            event=event.name,
+            node_id=event.node_id,
+            is_root=event.is_root,
+            payload=event.payload,
+            deliveries=count,
+        )
+        return count
 
     def enqueue_committed(self, event: HookEvent) -> int:
         with self._lock, transaction(self._connection):
@@ -161,7 +220,22 @@ class TreeHookStore:
             node_id=str(row["node_id"]) if row["node_id"] is not None else None,
             is_root=bool(row["is_root"]),
         )
-        return QueuedHookEvent(sequence, hook, event, int(row["attempts"]) + 1)
+        delivery = QueuedHookEvent(sequence, hook, event, int(row["attempts"]) + 1)
+        log_operation(
+            logger,
+            "hook.store",
+            "claim_delivery",
+            phase="completed",
+            sequence=sequence,
+            tree_id=event.tree_id,
+            event=event.name,
+            node_id=event.node_id,
+            hook_id=hook.id,
+            plugin_id=hook.plugin_id,
+            attempt=delivery.attempts,
+            payload=event.payload,
+        )
+        return delivery
 
     def _set_status(self, sequence: int, status: str, error: str = "") -> None:
         with self._lock, transaction(self._connection):
@@ -169,6 +243,15 @@ class TreeHookStore:
                 "UPDATE hook_queue SET status = ?, last_error = ? WHERE sequence = ?",
                 (status, str(error), int(sequence)),
             )
+        log_operation(
+            logger,
+            "hook.store",
+            "set_delivery_status",
+            phase="completed",
+            sequence=sequence,
+            status=status,
+            error=error,
+        )
 
     def complete(self, sequence: int) -> None:
         with self._lock, transaction(self._connection):
@@ -176,6 +259,14 @@ class TreeHookStore:
                 "DELETE FROM hook_queue WHERE sequence = ?",
                 (int(sequence),),
             )
+        log_operation(
+            logger,
+            "hook.store",
+            "complete_delivery",
+            phase="completed",
+            sequence=sequence,
+            removed=True,
+        )
 
     def fail(self, sequence: int, error: str) -> None:
         self._set_status(sequence, "failed", error)
@@ -199,7 +290,16 @@ class TreeHookStore:
                 """,
                 (str(plugin_id),),
             )
-        return max(cursor.rowcount, 0)
+        count = max(cursor.rowcount, 0)
+        log_operation(
+            logger,
+            "hook.store",
+            "requeue_blocked",
+            phase="completed",
+            plugin_id=plugin_id,
+            count=count,
+        )
+        return count
 
     def retry_failed(self) -> int:
         with self._lock, transaction(self._connection):
@@ -210,7 +310,15 @@ class TreeHookStore:
                 WHERE status = 'failed'
                 """
             )
-        return max(cursor.rowcount, 0)
+        count = max(cursor.rowcount, 0)
+        log_operation(
+            logger,
+            "hook.store",
+            "retry_failed",
+            phase="completed",
+            count=count,
+        )
+        return count
 
     def has_work(self) -> bool:
         with self._lock:

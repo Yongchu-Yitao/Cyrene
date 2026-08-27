@@ -1,8 +1,10 @@
-"""Entity (事务) management system.
+"""Editable persistence for Cyrene's durable entity Plugin.
 
 Supports tracking and managing various entity types:
 - task, project, decision, knowledge, relationship, event, resource, idea, problem, habit
 """
+
+from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
@@ -17,6 +19,82 @@ from cyrene.runtime.sqlite_json import (
     serialize_list as _serialize_list,
 )
 
+_UPDATABLE_FIELDS = frozenset(
+    {
+        "status",
+        "priority",
+        "content",
+        "title",
+        "effort",
+        "due_date",
+        "parent_id",
+        "tags",
+        "linked_ids",
+        "people",
+        "metadata",
+    }
+)
+
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS entities (
+    id                  TEXT PRIMARY KEY,
+    type                TEXT NOT NULL,
+    title               TEXT NOT NULL,
+    content             TEXT DEFAULT '',
+    status              TEXT DEFAULT 'active',
+    tags                TEXT DEFAULT '[]',
+    priority            TEXT DEFAULT 'medium',
+    effort              TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    last_referenced_at  TEXT NOT NULL,
+    due_date            TEXT,
+    parent_id           TEXT REFERENCES entities(id),
+    linked_ids          TEXT DEFAULT '[]',
+    people              TEXT DEFAULT '[]',
+    source              TEXT DEFAULT 'extracted',
+    source_round_id     TEXT,
+    confidence          REAL DEFAULT 1.0,
+    metadata            TEXT DEFAULT '{}',
+    project_id          TEXT DEFAULT 'default'
+);
+CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
+CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status);
+CREATE INDEX IF NOT EXISTS idx_entities_due ON entities(due_date);
+CREATE INDEX IF NOT EXISTS idx_entities_project_id ON entities(project_id);
+
+CREATE TABLE IF NOT EXISTS entity_candidates (
+    id              TEXT PRIMARY KEY,
+    type            TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    content         TEXT DEFAULT '',
+    confidence      REAL NOT NULL,
+    source_round_id TEXT,
+    project_id      TEXT DEFAULT 'default',
+    raw_text        TEXT,
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_entity_candidates_project_id
+ON entity_candidates(project_id);
+
+CREATE TABLE IF NOT EXISTS entity_type_confidence (
+    type         TEXT PRIMARY KEY,
+    adjustment   REAL DEFAULT 0.0,
+    sample_count INTEGER DEFAULT 0,
+    updated_at   TEXT NOT NULL
+);
+"""
+
+
+async def _initialize_store(db_path: str) -> None:
+    """Create every table and index owned by this Plugin pack."""
+
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA journal_mode = WAL")
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.executescript(_SCHEMA_SQL)
+        await db.commit()
+
 
 def _now() -> str:
     """Return current time in ISO 8601 format."""
@@ -26,33 +104,6 @@ def _now() -> str:
 def _new_id() -> str:
     """Generate a new UUID string."""
     return str(uuid.uuid4())
-
-
-async def _schedule_entity_reminder(
-    db_path: str,
-    entity_id: str,
-    title: str,
-    due_date: str,
-) -> str:
-    """Create a reminder task for the entity and return the task_id."""
-    from cyrene.config import OWNER_ID
-
-    task_id = _new_id()
-    now = _now()
-    prompt = f"提醒用户：{title} 到期了"
-    chat_id = OWNER_ID if OWNER_ID is not None else 0
-
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute(
-            """
-            INSERT INTO scheduled_tasks (id, chat_id, prompt, schedule_type, schedule_value, next_run, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (task_id, chat_id, prompt, "once", due_date, due_date, now),
-        )
-        await db.commit()
-
-    return task_id
 
 
 def _row_to_entity(row: aiosqlite.Row) -> dict:
@@ -77,7 +128,7 @@ def _row_to_entity(row: aiosqlite.Row) -> dict:
         "source_round_id": row["source_round_id"],
         "confidence": row["confidence"],
         "metadata": _deserialize_dict(row["metadata"]),
-        "project_id": row["project_id"] if "project_id" in row.keys() else "default",
+        "project_id": row["project_id"],
     }
 
 
@@ -107,18 +158,14 @@ async def create_entity(
     on that project's calendar (日程). Defaults to ``"default"`` for globally /
     auto-extracted entities.
 
-    If source=="explicit" and due_date is set, automatically creates a reminder task.
+    Reminder coordination belongs to :class:`EntityService`; this repository
+    function only persists entity state.
     """
     entity_id = _new_id()
     now = _now()
 
     if metadata is None:
         metadata = {}
-
-    # If explicit source with due_date, create reminder task
-    if source == "explicit" and due_date:
-        reminder_task_id = await _schedule_entity_reminder(db_path, entity_id, title, due_date)
-        metadata["reminder_task_id"] = reminder_task_id
 
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
@@ -166,6 +213,9 @@ async def update_entity(db_path: str, entity_id: str, **fields) -> dict | None:
     """Update specified fields of an entity and return the updated entity."""
     if not fields:
         return await get_entity(db_path, entity_id)
+    unsupported = sorted(set(fields) - _UPDATABLE_FIELDS)
+    if unsupported:
+        raise ValueError("unsupported entity field(s): " + ", ".join(unsupported))
 
     # Build the update query dynamically
     now = _now()
@@ -210,32 +260,21 @@ async def delete_entity(db_path: str, entity_id: str, permanent: bool = False) -
 
     If permanent=False (default), sets status to 'archived' (soft delete).
     If permanent=True, deletes the entity permanently.
-    Also cancels any associated reminder task if metadata has reminder_task_id.
+    Reminder coordination belongs to :class:`EntityService`.
     """
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
 
-        # Get the entity to check for reminder_task_id
-        cursor = await db.execute("SELECT metadata FROM entities WHERE id = ?", (entity_id,))
+        cursor = await db.execute("SELECT 1 FROM entities WHERE id = ?", (entity_id,))
         row = await cursor.fetchone()
 
         if row is None:
             return False
 
-        metadata = _deserialize_dict(row["metadata"])
-        reminder_task_id = metadata.get("reminder_task_id")
-
         if permanent:
             await db.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
         else:
             await db.execute("UPDATE entities SET status = ? WHERE id = ?", ("archived", entity_id))
-
-        # Cancel reminder task if it exists
-        if reminder_task_id:
-            await db.execute(
-                "UPDATE scheduled_tasks SET status = ? WHERE id = ?",
-                ("cancelled", reminder_task_id),
-            )
 
         await db.commit()
         return True
@@ -246,6 +285,7 @@ async def find_entities_by_title(
     title: str,
     *,
     type: str | None = None,
+    project_id: str | None = None,
     limit: int = 20,
 ) -> list[dict]:
     """Find entities whose title matches exactly.
@@ -263,6 +303,9 @@ async def find_entities_by_title(
     if type:
         query += " AND type = ?"
         params.append(type)
+    if project_id is not None:
+        query += " AND COALESCE(project_id, 'default') = ?"
+        params.append(project_id)
     query += " ORDER BY updated_at DESC LIMIT ?"
     params.append(limit)
 
@@ -277,24 +320,24 @@ async def find_entities_by_id_prefix(
     db_path: str,
     id_prefix: str,
     *,
+    project_id: str | None = None,
     limit: int = 20,
 ) -> list[dict]:
-    """Find entities whose IDs start with ``id_prefix``.
-
-    ``track_entity`` historically exposed only the first eight UUID characters,
-    so accepting a unique prefix keeps those older references usable while still
-    refusing ambiguous matches.
-    """
+    """Find entities whose IDs start with ``id_prefix`` for concise resolution."""
     normalized_prefix = str(id_prefix or "").strip()
     if not normalized_prefix:
         return []
 
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM entities WHERE substr(id, 1, ?) = ? ORDER BY updated_at DESC LIMIT ?",
-            (len(normalized_prefix), normalized_prefix, limit),
-        )
+        query = "SELECT * FROM entities WHERE substr(id, 1, ?) = ?"
+        params: list[Any] = [len(normalized_prefix), normalized_prefix]
+        if project_id is not None:
+            query += " AND COALESCE(project_id, 'default') = ?"
+            params.append(project_id)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        cursor = await db.execute(query, params)
         rows = await cursor.fetchall()
         return [_row_to_entity(row) for row in rows]
 
@@ -363,6 +406,7 @@ async def query_entities(
     type: str | None = None,
     status: str | None = None,
     due_before: str | None = None,
+    project_id: str | None = None,
     limit: int = 50,
 ) -> list[dict]:
     """Search entities by keyword and apply filters.
@@ -372,6 +416,7 @@ async def query_entities(
         type: Filter by entity type (optional)
         status: Filter by status (None = exclude only archived/abandoned)
         due_before: Filter to entities with due_date before this time (ISO 8601)
+        project_id: Scope to a Workbench project (optional; None = all projects)
         limit: Maximum number of results
     """
     query = "SELECT * FROM entities WHERE 1=1"
@@ -395,6 +440,10 @@ async def query_entities(
     if due_before:
         query += " AND due_date IS NOT NULL AND due_date < ?"
         params.append(due_before)
+
+    if project_id is not None:
+        query += " AND COALESCE(project_id, 'default') = ?"
+        params.append(project_id)
 
     query += " ORDER BY updated_at DESC LIMIT ?"
     params.append(limit)
@@ -447,14 +496,23 @@ async def add_candidate(
     return candidate_id
 
 
-async def list_candidates(db_path: str, limit: int = 50) -> list[dict]:
+async def list_candidates(
+    db_path: str,
+    limit: int = 50,
+    *,
+    project_id: str | None = None,
+) -> list[dict]:
     """List all candidate entities."""
+    query = "SELECT * FROM entity_candidates"
+    params: list[Any] = []
+    if project_id is not None:
+        query += " WHERE COALESCE(project_id, 'default') = ?"
+        params.append(project_id)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM entity_candidates ORDER BY created_at DESC LIMIT ?",
-            (limit,),
-        )
+        cursor = await db.execute(query, params)
         rows = await cursor.fetchall()
         return [
             {
@@ -464,11 +522,7 @@ async def list_candidates(db_path: str, limit: int = 50) -> list[dict]:
                 "content": row["content"],
                 "confidence": row["confidence"],
                 "source_round_id": row["source_round_id"],
-                "project_id": (
-                    row["project_id"]
-                    if "project_id" in row.keys()
-                    else "default"
-                ),
+                "project_id": row["project_id"],
                 "raw_text": row["raw_text"],
                 "created_at": row["created_at"],
             }
@@ -498,11 +552,7 @@ async def promote_candidate(db_path: str, candidate_id: str) -> dict | None:
             confidence=row["confidence"],
             source="extracted",
             source_round_id=row["source_round_id"],
-            project_id=(
-                row["project_id"]
-                if "project_id" in row.keys()
-                else "default"
-            ),
+            project_id=row["project_id"],
         )
 
         # Delete the candidate
@@ -622,3 +672,127 @@ async def adjust_type_confidence(db_path: str, type: str, delta: float) -> None:
             (type, delta, 1, _now(), delta, _now()),
         )
         await db.commit()
+
+
+class EntityRepository:
+    """Bound repository used by services and non-Agent application surfaces."""
+
+    def __init__(self, db_path: str) -> None:
+        normalized = str(db_path or "").strip()
+        if not normalized:
+            raise ValueError("entity repository requires a database path")
+        self.db_path = normalized
+        self._ready = False
+
+    async def ensure_ready(self) -> None:
+        if self._ready:
+            return
+        await _initialize_store(self.db_path)
+        self._ready = True
+
+    async def create(self, **values: Any) -> dict:
+        await self.ensure_ready()
+        return await create_entity(self.db_path, **values)
+
+    async def update(self, entity_id: str, **fields: Any) -> dict | None:
+        await self.ensure_ready()
+        return await update_entity(self.db_path, entity_id, **fields)
+
+    async def delete(self, entity_id: str, *, permanent: bool = False) -> bool:
+        await self.ensure_ready()
+        return await delete_entity(self.db_path, entity_id, permanent=permanent)
+
+    async def get(self, entity_id: str) -> dict | None:
+        await self.ensure_ready()
+        return await get_entity(self.db_path, entity_id)
+
+    async def find_by_title(
+        self,
+        title: str,
+        *,
+        type: str | None = None,
+        project_id: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        await self.ensure_ready()
+        return await find_entities_by_title(
+            self.db_path,
+            title,
+            type=type,
+            project_id=project_id,
+            limit=limit,
+        )
+
+    async def find_by_id_prefix(
+        self,
+        prefix: str,
+        *,
+        project_id: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        await self.ensure_ready()
+        return await find_entities_by_id_prefix(
+            self.db_path,
+            prefix,
+            project_id=project_id,
+            limit=limit,
+        )
+
+    async def list(self, **filters: Any) -> list[dict]:
+        await self.ensure_ready()
+        return await list_entities(self.db_path, **filters)
+
+    async def query(self, q: str = "", **filters: Any) -> list[dict]:
+        await self.ensure_ready()
+        return await query_entities(self.db_path, q, **filters)
+
+    async def add_candidate(self, **values: Any) -> str:
+        await self.ensure_ready()
+        return await add_candidate(self.db_path, **values)
+
+    async def list_candidates(
+        self,
+        *,
+        limit: int = 50,
+        project_id: str | None = None,
+    ) -> list[dict]:
+        await self.ensure_ready()
+        return await list_candidates(
+            self.db_path,
+            limit=limit,
+            project_id=project_id,
+        )
+
+    async def promote_candidate(self, candidate_id: str) -> dict | None:
+        await self.ensure_ready()
+        return await promote_candidate(self.db_path, candidate_id)
+
+    async def reject_candidate(self, candidate_id: str) -> bool:
+        await self.ensure_ready()
+        return await reject_candidate(self.db_path, candidate_id)
+
+    async def process_candidates(self) -> list[dict]:
+        await self.ensure_ready()
+        return await process_candidates(self.db_path)
+
+    async def has_similar(
+        self,
+        type: str,
+        title: str,
+        *,
+        project_id: str = "default",
+    ) -> bool:
+        await self.ensure_ready()
+        return await has_similar_entity(
+            self.db_path,
+            type,
+            title,
+            project_id=project_id,
+        )
+
+    async def adjust_type_confidence(self, type: str, delta: float) -> None:
+        await self.ensure_ready()
+        await adjust_type_confidence(self.db_path, type, delta)
+
+
+__all__ = ["EntityRepository"]

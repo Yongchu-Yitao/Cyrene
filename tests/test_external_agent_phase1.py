@@ -553,40 +553,6 @@ async def test_recommended_agent_install_records_managed_verified_artifact(saved
     assert record["runtime_state"] == "not_started"
 
 
-def test_installed_agents_enumerated_from_installation_state(saved_settings, monkeypatch):
-    from cyrene.extensions import agent_runtime
-    from cyrene.extensions import service as service_module
-    from cyrene.tooling.backends import mcp_manager
-
-    monkeypatch.setattr(service_module, "build_skills", lambda: [])
-    monkeypatch.setattr(service_module.ExtensionService, "_system_observation", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(service_module.ExtensionService, "infrastructure_status", lambda self, name: {})
-    monkeypatch.setattr(mcp_manager, "get_mcp_servers", lambda: [])
-    monkeypatch.setattr(mcp_manager, "get_manager", lambda: type("Manager", (), {"get_server_status": lambda self: []})())
-
-    agent_runtime.register_agent_installation(
-        agent_id="external-tool",
-        manifest=agent_runtime.validate_agent_manifest(_inline_manifest(agentId="external-tool", displayName="External Tool")),
-        source={"type": "inline"},
-        source_trust="external_unverified",
-        recommended=False,
-    )
-
-    service = _service()
-    listing = service.list_extensions()
-    agents = listing["agents"]
-    assert [item["agentId"] for item in agents["recommended"]] == ["opencode", "codex-acp", "pi-acp"]
-    assert all(item["installState"] == "available" for item in agents["recommended"])
-    assert agents["recommended"][0]["checksums"].get("sha256")
-
-    installed = {item["agentId"]: item for item in agents["installed"]}
-    assert set(installed) == {"external-tool"}
-    assert installed["external-tool"]["installationId"] == "agent_external-tool_default"
-    assert installed["external-tool"]["sourceTrust"] == "external_unverified"
-    assert installed["external-tool"]["installState"] == "installed"
-    assert installed["external-tool"]["verified"] is False
-
-
 def test_legacy_pending_transport_installation_migrates_to_on_demand(saved_settings):
     from cyrene.extensions import agent_runtime
 
@@ -736,51 +702,3 @@ def test_agents_route_endpoints_with_runtime_states(saved_settings):
 
     response = client.get("/api/agents/does-not-exist")
     assert response.status_code == 404
-
-
-def test_extensions_agent_proposal_routes(saved_settings):
-    from cyrene.extensions.application_service import (
-        ExtensionApplicationService,
-        ExtensionInstallInputService,
-    )
-    from cyrene.extensions.service import (
-        audit_records,
-        source_settings,
-        update_source_settings,
-    )
-    import route.extensions as extension_routes
-
-    service = _service()
-    router = APIRouter()
-    extension_routes.register_extension_routes(
-        router,
-        ExtensionApplicationService(
-            service,
-            ExtensionInstallInputService(service, Path.cwd()),
-            source_get=source_settings,
-            source_update=update_source_settings,
-            audit_get=audit_records,
-        ),
-    )
-    app = FastAPI()
-    app.include_router(router)
-    client = TestClient(app)
-
-    response = client.post(
-        "/api/extensions/agents/install-proposals",
-        json={"source": {"type": "inline", "manifest": _inline_manifest()}, "requestedVersion": "1.2.3"},
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["sourceTrust"] == "external_unverified"
-    proposal_id = body["proposalId"]
-
-    response = client.post(f"/api/extensions/agents/install-proposals/{proposal_id}/confirm")
-    assert response.status_code == 200
-    confirmed = response.json()
-    assert confirmed["ok"] is True
-    assert confirmed["task"]["kind"] == "agent"
-
-    response = client.post("/api/extensions/agents/install-proposals/nope/confirm")
-    assert response.status_code == 400

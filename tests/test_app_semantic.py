@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from cyrene.tooling.backends import app_semantic
+from agent.plugin.plugin_impl.cyrene_desktop import _app_semantic_backend as app_semantic
 
 
 @pytest.fixture(autouse=True)
@@ -151,7 +151,7 @@ async def test_public_semantic_nodes_expose_expandability(monkeypatch):
 
 
 def test_app_ui_snapshot_schema_exposes_find():
-    from cyrene.tool_impl.desktop.app_ui_snapshot import TOOL_DEF
+    from agent.plugin.plugin_impl.cyrene_desktop.app_ui_snapshot import TOOL_DEF
 
     properties = TOOL_DEF["function"]["parameters"]["properties"]
     assert properties["operation"]["enum"] == [
@@ -230,15 +230,9 @@ async def test_semantic_connect_filters_unreachable_manifest_capabilities(monkey
 
 
 def test_all_seven_external_semantic_tools_are_registered():
-    from cyrene.tool_impl import NATIVE_TOOL_MODULES
-    from cyrene.tooling.packs import CAPABILITY_BINDINGS
+    from agent.plugin.plugin_impl.cyrene_desktop import plugin_pack
 
-    modules = {name.rsplit(".", 1)[-1] for name in NATIVE_TOOL_MODULES}
-    assert {
-        "app_ui_snapshot", "app_ui_inspect", "app_ui_click", "app_ui_double_click",
-        "app_ui_type", "app_ui_scroll", "app_ui_drag",
-    } <= modules
-    concrete = {tool for _, tool in CAPABILITY_BINDINGS["desktop_tools"]}
+    concrete = {plugin.name for plugin in plugin_pack.plugins}
     assert {
         "AppUISnapshot", "AppUIInspect", "AppUIClick", "AppUIDoubleClick",
         "AppUIType", "AppUIScroll", "AppUIDrag",

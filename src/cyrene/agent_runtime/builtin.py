@@ -1,9 +1,7 @@
-"""Built-in Cyrene Agent descriptor and legacy compatibility normalization.
+"""Built-in Cyrene Agent descriptor and external-driver binding normalization.
 
-Phase 1 keeps the built-in agent on the existing ``cyrene.agent`` runtime; this
-module provides the normalized descriptor/binding/capabilities that the rest of
-the system can rely on, and the fallback normalization that keeps every legacy
-chat (and every chat created without agent fields) on the built-in Agent.
+The built-in entry describes the native Plugin/ContextTree Agent.  External
+ACP Agents use drivers; the native Agent deliberately has no subprocess driver.
 """
 
 from __future__ import annotations
@@ -202,13 +200,7 @@ def chat_agent_fields(chat: dict[str, Any]) -> dict[str, Any]:
 
 
 class BuiltinAgentDriver:
-    """Descriptor/probe-only placeholder for the built-in Cyrene Agent.
-
-    Phase 1 intentionally keeps the built-in agent on the legacy
-    ``cyrene.agent`` run path; this driver exists so the Driver Registry is
-    uniform for inspection while ``connect()`` is a clean, stable placeholder
-    that no caller is expected to invoke.
-    """
+    """Descriptor/probe-only entry for the in-process Plugin Agent."""
 
     async def inspect(self, installation: dict[str, Any] | None = None) -> AgentDescriptor:
         return builtin_descriptor()
@@ -216,8 +208,10 @@ class BuiltinAgentDriver:
     async def connect(self, request: Any) -> Any:
         raise AgentRuntimeError(
             kind="capability_missing",
-            message="built-in Cyrene agent runs through the legacy cyrene.agent runtime; "
-                    "no external driver connection applies",
+            message=(
+                "the built-in Cyrene Agent runs in-process through the Plugin "
+                "runtime; no external driver connection applies"
+            ),
         )
 
 

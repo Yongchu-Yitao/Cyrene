@@ -7,11 +7,18 @@ import hashlib
 import ipaddress
 import json
 import math
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlparse
 
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import json_result, resolve_tool_path
+from agent.plugin import PluginContext
+from agent.plugin.native_runtime import (
+    json_result,
+    resolve_tool_path,
+    run_context_data,
+    run_context_value,
+)
 
 TOOL_NAME = "StartMediaGeneration"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -78,18 +85,23 @@ def _string_list(
     return result
 
 
-def _chat_attachment_ids(chat_id: str) -> set[str]:
-    """Return attachment ids explicitly present in the current conversation."""
-    from cyrene.workbench.chat import get_workbench_chat
+def _chat_attachment_ids(context: PluginContext) -> set[str]:
+    """Return attachment ids explicitly exposed to this Plugin invocation."""
 
-    chat = get_workbench_chat(str(chat_id or "")) or {}
-    return {
-        str(item.get("id") or "").strip()
-        for message in chat.get("messages") or []
-        if isinstance(message, dict)
-        for item in message.get("attachments") or []
-        if isinstance(item, dict) and str(item.get("id") or "").strip()
-    }
+    values: set[str] = set()
+    for raw_mapping in (
+        context.data.get("attachment_paths"),
+        run_context_data(context).get("attachment_paths"),
+        context.services.get("attachment_paths"),
+    ):
+        if not isinstance(raw_mapping, Mapping):
+            continue
+        values.update(
+            str(identifier).strip()
+            for identifier in raw_mapping
+            if str(identifier or "").strip()
+        )
+    return values
 
 
 def _resolve_references(
@@ -292,21 +304,34 @@ def _normalize_request(
 
 async def _tool_start_media_generation(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
     from cyrene.media.manager import get_media_job_manager
     from cyrene.media.settings import get_media_settings
-    from cyrene.tooling.backends.terminals import agent_creation_scope
 
     try:
-        context, project_id, chat_id = agent_creation_scope()
+        agent_id = str(run_context_value(context, "agent_id", "main") or "main")
+        caller = str(run_context_value(context, "caller", "main_agent") or "main_agent")
+        if agent_id != "main" or caller not in {
+            "main",
+            "main_agent",
+            "execution_agent",
+        }:
+            raise PermissionError(
+                "Only the main conversation Agent can create media jobs."
+            )
+        chat_id = str(run_context_value(context, "session_id", "") or "").strip()
+        if not chat_id:
+            raise ValueError("Media generation requires an active conversation.")
+        project_id = str(context.data.get("project_id") or "").strip()
+        if not project_id:
+            raise ValueError(
+                "Media generation requires a conversation attached to a project."
+            )
         raw_requests = args.get("requests")
         if not isinstance(raw_requests, list) or not 1 <= len(raw_requests) <= 8:
             raise ValueError("requests must contain between 1 and 8 media jobs")
-        visible_attachment_ids = _chat_attachment_ids(chat_id)
+        visible_attachment_ids = _chat_attachment_ids(context)
         requests = [
             _normalize_request(
                 raw,
@@ -322,7 +347,11 @@ async def _tool_start_media_generation(
         )
         if idempotency_key and len(idempotency_key) < 8:
             raise ValueError("idempotency_key must contain at least 8 characters")
-        owner_call_id = str(context.round_id or context.client_request_id or "")
+        owner_call_id = str(
+            run_context_value(context, "round_id", "")
+            or run_context_value(context, "client_request_id", "")
+            or ""
+        )
         if not idempotency_key and owner_call_id:
             canonical = json.dumps(
                 requests,

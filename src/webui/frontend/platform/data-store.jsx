@@ -8,6 +8,7 @@ const DATA = {
   user: { name: "loading…", handle: "loading", initials: "…", avatar: "", avatar_emoji: "", avatar_color: "", bio: "" },
   assistantName: "Cyrene",
   appVersion: APP_VERSION,
+  pluginModules: [],
   dashboard: {
     today: { learned: [], learned_count: 0, memory_count: 0, archive_days: 0 },
     soul: { path: "", updated_at: "", recent_items: [], section_count: 0 },
@@ -20,41 +21,7 @@ const DATA = {
     activity_heatmap: { days: [], rows: [] },
   },
 
-  sessions: [
-    {
-      id: "run_loading",
-      title: "loading…",
-      status: "queued",
-      started: "—",
-      dur: "—",
-      preview: "Fetching session data from backend…",
-      model: "—",
-      ctx_limit: 0,
-      summary: { tokens: "—", spend: "—", toolCalls: 0, total_tokens: 0 },
-      chat: {
-        contextChips: [{ icon: "⌛", label: "loading" }],
-        messages: [],
-      },
-      liveRounds: [],
-      shells: [],
-      subagents: [],
-      flow: {
-        nodes: [
-          {
-            id: "n_main", kind: "main", x: 200, y: 80,
-            title: "main agent", subtitle: "loading", status: "queued",
-            model: "—",
-            detail: {
-              systemPrompt: "Loading…",
-              reasoning: "Fetching live state from /api/ui-data.",
-              tokensIn: 0, tokensOut: 0, model: "—", temp: 0.2,
-            },
-          },
-        ],
-        edges: [],
-      },
-    },
-  ],
+  sessions: [],
 
   status: {
     metrics: [
@@ -172,8 +139,9 @@ async function bootstrapData() {
     if (fresh.user) DATA.user = fresh.user;
     if (fresh.assistantName) DATA.assistantName = fresh.assistantName;
     if (fresh.appVersion) DATA.appVersion = fresh.appVersion;
+    if (Array.isArray(fresh.pluginModules)) DATA.pluginModules = fresh.pluginModules.slice();
     if (fresh.dashboard) DATA.dashboard = fresh.dashboard;
-    if (Array.isArray(fresh.sessions) && fresh.sessions.length) DATA.sessions = fresh.sessions;
+    if (Array.isArray(fresh.sessions)) DATA.sessions = fresh.sessions;
     if (fresh.status) DATA.status = fresh.status;
     if (fresh.settings) DATA.settings = { ...DATA.settings, ...fresh.settings };
     if (fresh.onboarding) DATA.onboarding = fresh.onboarding;
@@ -192,39 +160,21 @@ let __refreshTimer = null;
 function sessionsFingerprint(sessions) {
   if (!Array.isArray(sessions)) return "";
   return sessions.map(function (s) {
-    var flow = s.flow || {};
-    var nodes = Array.isArray(flow.nodes) ? flow.nodes.length : 0;
-    var edges = Array.isArray(flow.edges) ? flow.edges.length : 0;
-    var messages = s.chat && Array.isArray(s.chat.messages) ? s.chat.messages : [];
-    var lastMessage = messages.length ? messages[messages.length - 1] : null;
-    var lastMessageId = String(lastMessage && (lastMessage.messageId || lastMessage.id) || "");
-    var lastMessageBody = String(lastMessage && lastMessage.body || "").slice(0, 120);
     var pendingQuestion = s.pendingQuestion || {};
-    var liveRounds = Array.isArray(s.liveRounds) ? s.liveRounds : [];
-    var liveRoundFingerprint = liveRounds.map(function (round) {
-      return [
-        round.id || "",
-        round.status || "",
-        round.pendingGuidance || 0,
-        round.runningSubagents || 0,
-        round.updatedAt || "",
-      ].join(":");
-    }).join(",");
+    var subagents = Array.isArray(s.subagents) ? s.subagents : [];
     return [
       s.id || "",
       s.title || "",
       s.status || "",
-      nodes,
-      edges,
+      s.runStatus || "",
       s.preview || "",
-      s.currentRoundId || "",
-      s.currentRoundTitle || "",
-      messages.length,
-      lastMessageId,
-      lastMessageBody,
+      s.updatedAt || "",
+      s.messageCount || 0,
+      (s.summary && s.summary.total_tokens) || 0,
       pendingQuestion.id || "",
-      pendingQuestion.text || "",
-      liveRoundFingerprint,
+      (s.usedPluginPacks || []).join(","),
+      (s.usedStandalonePlugins || []).join(","),
+      subagents.map(function (agent) { return [agent.id, agent.status, agent.updatedAt].join(":"); }).join(","),
     ].join("|");
   }).join(",");
 }
@@ -235,22 +185,16 @@ async function refreshSessions() {
   const controller = new AbortController();
   __sessionsRequestController = controller;
   try {
-    const r = await fetch("/api/sessions", { signal: controller.signal });
+    const r = await fetch("/api/workbench/sessions", { signal: controller.signal });
     if (!r.ok) return;
-    const { sessions, model_stats } = await r.json();
+    const { sessions } = await r.json();
     if (seq !== __sessionsRequestSeq) return;
     var changed = false;
-    if (Array.isArray(sessions) && sessions.length) {
+    if (Array.isArray(sessions)) {
       var prev = sessionsFingerprint(DATA.sessions);
       var next = sessionsFingerprint(sessions);
       DATA.sessions = sessions;
       if (prev !== next) changed = true;
-    }
-    if (Array.isArray(model_stats)) {
-      var prevStats = JSON.stringify(DATA.dashboard.model_stats);
-      var nextStats = JSON.stringify(model_stats);
-      DATA.dashboard.model_stats = model_stats;
-      if (prevStats !== nextStats) changed = true;
     }
     if (changed) bumpData();
   } catch (e) { /* swallow */ } finally {

@@ -5,31 +5,22 @@ from __future__ import annotations
 import asyncio
 import difflib
 import json
-import logging
 import os
 import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
-from cyrene.workbench import generation_gateway
 from cyrene.config import WORKSPACE_DIR, cyrene_dir
 from cyrene.runtime.attachments import EXPORTS_DIR as _EXPORTS_DIR
-from cyrene.workbench import project_runtime, task_initialization_runtime
+from cyrene.workbench import project_runtime
 from cyrene.workbench.workspace_changes import is_cyrene_managed_workspace_path
-
-logger = logging.getLogger(__name__)
-_WORKBENCH_LEGACY_DATA_KEY = "default"
 
 def _workbench_workspace_root(project: dict[str, Any] | None) -> Path | None:
     project_id = str((project or {}).get('id') or '').strip()
     workspace_source = str((project or {}).get('workspacePathSource') or '').strip().lower()
     if workspace_source == 'generated' and project_id:
         return (cyrene_dir(WORKSPACE_DIR) / 'projects' / project_id).resolve()
-    if project_runtime._workbench_project_data_key(project or {}) == _WORKBENCH_LEGACY_DATA_KEY and (not workspace_source):
-        raw_legacy = str((project or {}).get('workspacePath') or '').replace('\\', '/').rstrip('/')
-        if raw_legacy.lower().endswith('/workspace'):
-            return WORKSPACE_DIR.resolve()
     workspace_path = str((project or {}).get('workspacePath') or '').strip()
     if not workspace_path:
         return None
@@ -37,10 +28,6 @@ def _workbench_workspace_root(project: dict[str, Any] | None) -> Path | None:
         candidate = Path(workspace_path).expanduser().resolve()
     except OSError:
         return None
-    if project_id and (not workspace_source):
-        legacy_root = (WORKSPACE_DIR / 'projects').resolve()
-        if candidate.is_relative_to(legacy_root):
-            return (cyrene_dir(WORKSPACE_DIR) / 'projects' / project_id).resolve()
     return candidate
 
 def _workbench_display_path(path_value: Any, workspace_root: Path | None=None) -> str:
@@ -371,39 +358,8 @@ def _workbench_artifact_download_target(project: dict[str, Any], session: dict[s
             pass
     target = _workbench_resolve_workspace_file(_workbench_workspace_root(project), artifact.get('path') or artifact.get('name'))
     if not target.exists() or not target.is_file():
-        fallback = _workbench_find_exported_copy(artifact.get('path') or artifact.get('name'))
-        if fallback is None:
-            raise FileNotFoundError('artifact file not found')
-        return (artifact, fallback)
+        raise FileNotFoundError('artifact file not found')
     return (artifact, target)
-
-def _workbench_find_exported_copy(path_value: Any) -> Path | None:
-    """Find the durable webui_exports copy of a missing legacy artifact.
-
-    Old artifacts recorded workspace-relative paths (e.g. deliverables/...)
-    whose sources are neither backed up nor migrated. The copy pinned by
-    send_file survives in webui_exports as ``<stem>_<hash><suffix>``; match it
-    by basename prefix so those downloads keep working after a cross-machine
-    restore.
-    """
-    raw = str(path_value or '').strip().replace('\\', '/')
-    name = raw.rsplit('/', 1)[-1]
-    if not name:
-        return None
-    stem, dot, suffix = name.rpartition('.')
-    if not dot:
-        stem, suffix = (name, '')
-    prefix = f'{stem}_'
-    try:
-        exports_root = _EXPORTS_DIR.resolve()
-        if not exports_root.is_dir():
-            return None
-        for candidate in exports_root.iterdir():
-            if candidate.name.startswith(prefix) and candidate.name.endswith(suffix):
-                return candidate
-    except OSError:
-        return None
-    return None
 
 def _workbench_unified_diff(left_text: str, right_text: str, left_label: str, right_label: str) -> str:
     return ''.join(difflib.unified_diff(left_text.splitlines(keepends=True), right_text.splitlines(keepends=True), fromfile=left_label, tofile=right_label))
@@ -577,87 +533,6 @@ def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: lis
     session['artifacts'] = artifacts
     return added
 
-def _workbench_backfill_file_artifacts(session: dict[str, Any], now: str, workspace_root: Path | None=None) -> int:
-    """Derive file_change artifacts from a session's already-recorded runs and
-    plan steps, for tasks that ran before file promotion existed."""
-    changes: list[dict[str, Any]] = []
-    for run in session.get('runs') or []:
-        if isinstance(run, dict):
-            changes.extend((c for c in run.get('fileChanges') or [] if isinstance(c, dict)))
-    for step in session.get('plan') or []:
-        if isinstance(step, dict):
-            changes.extend((c for c in step.get('relatedFiles') or [] if isinstance(c, dict)))
-    merged = _workbench_merge_file_changes(changes)
-    if workspace_root is not None:
-        existing: list[dict[str, Any]] = []
-        for change in merged:
-            if not _workbench_is_artifact_change(change):
-                existing.append(change)
-                continue
-            try:
-                target = _workbench_resolve_workspace_file(workspace_root, change.get('path') or change.get('name'))
-            except (OSError, ValueError):
-                continue
-            if target.is_file():
-                existing.append(change)
-        merged = existing
-    return _workbench_promote_file_artifacts(session, merged, now)
-
-async def _workbench_backfill_referenced_file_artifacts(project: dict[str, Any], session: dict[str, Any], now: str) -> int:
-    """Use a model once to recover deliverables from legacy free-text replies."""
-    if int(session.get('legacyArtifactModelMigrationVersion') or 0) >= 1:
-        return 0
-    root = _workbench_workspace_root(project)
-    snapshot = _workbench_workspace_file_snapshot(root)
-    if not snapshot:
-        session['legacyArtifactModelMigrationVersion'] = 1
-        return 0
-    candidates: list[dict[str, str]] = []
-    for run in session.get('runs') or []:
-        if not isinstance(run, dict):
-            continue
-        response = str(run.get('agentResponse') or '')
-        if not response:
-            continue
-        for path in snapshot:
-            name = path.rsplit('/', 1)[-1]
-            index = response.find(path)
-            if index < 0:
-                index = response.find(name)
-            if index < 0:
-                continue
-            candidate = {'path': path, 'context': response[max(0, index - 240):index + len(name) + 240]}
-            if candidate not in candidates:
-                candidates.append(candidate)
-            if len(candidates) >= 100:
-                break
-        if len(candidates) >= 100:
-            break
-    if not candidates:
-        session['legacyArtifactModelMigrationVersion'] = 1
-        return 0
-    prompt = '请判断旧任务回复中提到的文件，哪些是 Agent 明确交付给用户的最终输出产物。必须理解否定、输入/源文件、临时文件、示例和历史文件等语义；只有明确作为本任务产出或交付物的文件才选中。不要根据‘生成’‘保存’等单个词机械判断。只返回 JSON：{"deliverablePaths":["候选中的完整相对路径"]}。不得返回候选之外的路径。\n\n候选：' + task_initialization_runtime._workbench_stable_json(candidates)
-    try:
-        response = await asyncio.wait_for(generation_gateway.call_llm([{'role': 'user', 'content': prompt}], tools=None, max_tokens=1200, secondary=True, thinking='disabled'), timeout=30)
-    except Exception:
-        logger.exception('Workbench legacy artifact classification failed')
-        return 0
-    content = str(response.get('content') or '') if isinstance(response, dict) else ''
-    parsed = task_initialization_runtime._workbench_parse_json_object(content)
-    raw_paths = parsed.get('deliverablePaths') if isinstance(parsed, dict) else None
-    if not isinstance(raw_paths, list):
-        return 0
-    allowed = {item['path'] for item in candidates}
-    changes: list[dict[str, Any]] = []
-    for value in raw_paths:
-        path = str(value or '').strip()
-        if path not in allowed:
-            continue
-        change = _workbench_file_change(path, 'produced', root, 'workspace_output')
-        if change:
-            changes.append(change)
-    session['legacyArtifactModelMigrationVersion'] = 1
-    return _workbench_promote_file_artifacts(session, _workbench_merge_file_changes(changes), now)
 _WORKBENCH_FINAL_KNOWLEDGE_STATUSES = {'review', 'completed', 'done'}
 
 def _workbench_final_artifact_file_changes(session: dict[str, Any]) -> list[dict[str, Any]]:
@@ -686,89 +561,4 @@ def _workbench_final_artifact_file_changes(session: dict[str, Any]) -> list[dict
         changes.append(change)
     return changes
 
-def _workbench_prune_invalid_file_records(project: dict[str, Any], session: dict[str, Any]) -> bool:
-    """Remove historical file records that cannot belong to this workspace.
-
-    Older builds ran ``git status`` from a nested workspace without a pathspec.
-    Git then reported changes from the parent repository, which were persisted
-    as step files and artifacts. Absolute paths outside the workspace and
-    inferred Git modifications that do not exist under the workspace are the
-    reliable signatures of that bug.
-    """
-    workspace_root = _workbench_workspace_root(project)
-    if workspace_root is None:
-        return False
-    try:
-        root = workspace_root.resolve()
-    except OSError:
-        return False
-    changed = False
-    rejected_paths: set[str] = set()
-
-    def valid(item: Any) -> bool:
-        if not isinstance(item, dict):
-            return False
-        raw = str(item.get('path') or item.get('name') or '').strip()
-        if not raw:
-            return False
-        path = Path(raw).expanduser()
-        try:
-            target = path.resolve() if path.is_absolute() else (root / path).resolve()
-            target.relative_to(root)
-        except (OSError, ValueError):
-            rejected_paths.add(raw)
-            return False
-        source = str(item.get('source') or '').strip().lower()
-        status = str(item.get('status') or item.get('changeType') or '').strip().lower()
-        if source == 'git' and status != 'deleted' and (not target.exists()):
-            rejected_paths.add(raw)
-            return False
-        return True
-
-    def prune(container: dict[str, Any], key: str) -> None:
-        nonlocal changed
-        items = container.get(key)
-        if not isinstance(items, list):
-            return
-        kept = [item for item in items if valid(item)]
-        if len(kept) != len(items):
-            container[key] = kept
-            changed = True
-    for step in session.get('plan') or []:
-        if isinstance(step, dict):
-            prune(step, 'relatedFiles')
-    for run in session.get('runs') or []:
-        if not isinstance(run, dict):
-            continue
-        prune(run, 'fileChanges')
-        for event in run.get('events') or []:
-            if isinstance(event, dict):
-                prune(event, 'fileChanges')
-    for event in session.get('events') or []:
-        if isinstance(event, dict):
-            prune(event, 'fileChanges')
-    all_changes: list[dict[str, Any]] = []
-    for run in session.get('runs') or []:
-        if isinstance(run, dict):
-            all_changes.extend((item for item in run.get('fileChanges') or [] if isinstance(item, dict)))
-    for step in session.get('plan') or []:
-        if isinstance(step, dict):
-            all_changes.extend((item for item in step.get('relatedFiles') or [] if isinstance(item, dict)))
-    known_paths = {str(item.get('path') or item.get('name') or '').strip() for item in all_changes if str(item.get('path') or item.get('name') or '').strip()}
-    artifact_paths = {str(item.get('path') or item.get('name') or '').strip() for item in all_changes if _workbench_is_artifact_change(item)}
-    artifacts = session.get('artifacts')
-    if isinstance(artifacts, list):
-        kept_artifacts = []
-        for artifact in artifacts:
-            if not isinstance(artifact, dict) or artifact.get('type') != 'file_change':
-                kept_artifacts.append(artifact)
-                continue
-            path = str(artifact.get('path') or artifact.get('name') or '').strip()
-            if path in rejected_paths or (path in known_paths and path not in artifact_paths):
-                changed = True
-                continue
-            kept_artifacts.append(artifact)
-        session['artifacts'] = kept_artifacts
-    return changed
-
-__all__ = ['_WORKBENCH_DIFF_SNAPSHOT_MAX_BYTES', '_WORKBENCH_FINAL_KNOWLEDGE_STATUSES', '_WORKBENCH_SNAPSHOT_IGNORED_DIRS', '_WORKBENCH_TEXT_SNAPSHOT_MAX_BYTES', '_WORKBENCH_TEXT_SNAPSHOT_MAX_FILES', '_WORKBENCH_TEXT_SNAPSHOT_MAX_TOTAL_BYTES', '_workbench_apply_step_file_changes', '_workbench_artifact_download_target', '_workbench_backfill_file_artifacts', '_workbench_backfill_referenced_file_artifacts', '_workbench_collect_run_file_changes', '_workbench_current_file_snapshot_diff', '_workbench_display_path', '_workbench_file_change', '_workbench_file_changes_from_tool_event', '_workbench_final_artifact_file_changes', '_workbench_find_exported_copy', '_workbench_git_context', '_workbench_git_diff_for_path', '_workbench_git_status_change_type', '_workbench_git_status_delta', '_workbench_git_status_snapshot', '_workbench_is_artifact_change', '_workbench_merge_file_changes', '_workbench_promote_file_artifacts', '_workbench_prune_invalid_file_records', '_workbench_prune_non_file_artifacts', '_workbench_recorded_diff_for_path', '_workbench_resolve_workspace_file', '_workbench_unified_diff', '_workbench_workspace_file_snapshot', '_workbench_workspace_root', '_workbench_workspace_snapshot_delta', '_workbench_workspace_text_snapshot']
+__all__ = ['_WORKBENCH_DIFF_SNAPSHOT_MAX_BYTES', '_WORKBENCH_FINAL_KNOWLEDGE_STATUSES', '_WORKBENCH_SNAPSHOT_IGNORED_DIRS', '_WORKBENCH_TEXT_SNAPSHOT_MAX_BYTES', '_WORKBENCH_TEXT_SNAPSHOT_MAX_FILES', '_WORKBENCH_TEXT_SNAPSHOT_MAX_TOTAL_BYTES', '_workbench_apply_step_file_changes', '_workbench_artifact_download_target', '_workbench_collect_run_file_changes', '_workbench_current_file_snapshot_diff', '_workbench_display_path', '_workbench_file_change', '_workbench_file_changes_from_tool_event', '_workbench_final_artifact_file_changes', '_workbench_git_context', '_workbench_git_diff_for_path', '_workbench_git_status_change_type', '_workbench_git_status_delta', '_workbench_git_status_snapshot', '_workbench_is_artifact_change', '_workbench_merge_file_changes', '_workbench_promote_file_artifacts', '_workbench_prune_non_file_artifacts', '_workbench_recorded_diff_for_path', '_workbench_resolve_workspace_file', '_workbench_unified_diff', '_workbench_workspace_file_snapshot', '_workbench_workspace_root', '_workbench_workspace_snapshot_delta', '_workbench_workspace_text_snapshot']

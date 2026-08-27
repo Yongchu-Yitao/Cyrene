@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+from ._native import create_tool, service as memory_service
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import json_result
+from agent.plugin.native_runtime import json_result
 
 TOOL_NAME = "ReadChatGroupSessions"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -13,21 +15,18 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 async def _tool_read_chat_group_sessions(
     args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    db_path: str,
-    _notify_state: dict[str, bool] | None,
+    context: PluginContext,
 ) -> str:
-    from cyrene.agent.context import current_agent_id, get_current_session_id
-    from cyrene.workbench import chat, chat_groups, context as workbench_context
+    from cyrene.workbench import chat_groups
 
-    if current_agent_id() != "main":
+    memory = memory_service(context)
+    if not memory.is_main:
         return json_result({
             "status": "error",
             "type": "permission_denied",
             "message": "Chat-group session reads are available only to the main agent.",
         })
-    current_session_id = get_current_session_id()
+    current_session_id = memory.session_id
     requested = args.get("session_ids")
     if requested is not None and not isinstance(requested, list):
         return json_result({
@@ -35,9 +34,7 @@ async def _tool_read_chat_group_sessions(
             "type": "invalid_arguments",
             "message": "session_ids must be an array of strings.",
         })
-    chat.configure_store(db_path)
-    chat_groups.configure_store(db_path)
-    workbench_context.configure_store(db_path)
+    chat_groups.configure_store(memory.db_path)
     try:
         payload = chat_groups.read_group_session_snapshots(
             current_session_id,
@@ -55,10 +52,12 @@ async def _tool_read_chat_group_sessions(
 
 
 handler = _tool_read_chat_group_sessions
+plugin = create_tool(TOOL_DEF, handler, allow_parallel=True)
 
 __all__ = [
     "TOOL_NAME",
     "TOOL_DEF",
     "handler",
+    "plugin",
     "_tool_read_chat_group_sessions",
 ]

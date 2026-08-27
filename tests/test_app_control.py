@@ -7,32 +7,40 @@ from pathlib import Path
 import pytest
 
 
-def _bind_local_delegation(user_request: str, *, session_id: str = "origin"):
-    from cyrene.agent import state
-    from cyrene.agent.context import bind_run_context
+def _plugin_context(
+    *,
+    session_id: str = "origin",
+    round_id: str = "round-1",
+    client_request_id: str = "request-1",
+    conversation_source: str = "desktop_local",
+    ui_instance_id: str = "surface-main",
+):
+    from agent.plugin import PluginContext
 
-    binding = bind_run_context(
-        agent_id="main",
-        caller="main_agent",
-        client_request_id="request-1",
-        round_id="round-1",
-        session_id=session_id,
-        conversation_source="desktop_local",
-        user_request_text=user_request,
+    return PluginContext(
+        data={
+            "run_context": {
+                "agent_id": "main",
+                "caller": "main_agent",
+                "client_request_id": client_request_id,
+                "round_id": round_id,
+                "session_id": session_id,
+                "conversation_source": conversation_source,
+                "ui_instance_id": ui_instance_id,
+            }
+        },
     )
-    receipt_token = state._explicit_delegation_receipts.set(set())
-    batch_token = state._explicit_delegation_batches.set({})
-    return binding, (receipt_token, batch_token)
 
 
-def _reset_local_delegation(state, tokens):
-    receipt_token, batch_token = tokens
-    state._explicit_delegation_batches.reset(batch_token)
-    state._explicit_delegation_receipts.reset(receipt_token)
+def _bind_plugin_context(context, *, name: str = "test_plugin"):
+    from agent.plugin import PluginCall
+    from agent.plugin.execution import bind_plugin_execution
 
-
-async def _approved_delegation():
-    return True, "用户明确要求执行该精确操作。"
+    return bind_plugin_execution(
+        object(),
+        PluginCall(name=name, arguments={}),
+        context,
+    )
 
 
 def test_operation_and_ui_action_manifests_are_classified():
@@ -64,32 +72,21 @@ def test_agent_model_secret_input_is_redacted_from_self_control_audit_payloads()
 
 
 def test_background_business_controls_are_internal_only():
-    from cyrene.tooling.catalog import capabilities_for_pack, get_active_tool_defs_for_actor
-    from cyrene.tooling.packs import INTERNAL_ONLY_CONCRETE_TOOL_NAMES
+    from agent.plugin.plugin_impl.cyrene_application import plugin_pack
 
-    exposed = [
-        item.capability_id
-        for item in capabilities_for_pack("cyrene_tools", include_disabled=True)
-    ]
-    assert exposed == [
-        "cyrene.app.status",
-        "cyrene.app.window",
-        "cyrene.ui.snapshot",
-        "cyrene.ui.inspect",
-        "cyrene.ui.click",
-        "cyrene.ui.double_click",
-        "cyrene.ui.type",
-        "cyrene.ui.scroll",
-        "cyrene.ui.drag",
-        "cyrene.settings.describe",
-        "cyrene.settings.read",
-        "cyrene.settings.update",
-    ]
-    active_names = {
-        item["function"]["name"]
-        for item in get_active_tool_defs_for_actor("main")
+    plugins = {plugin.name: plugin for plugin in plugin_pack.plugins}
+    assert {
+        "CyreneSessionMessage",
+        "CyreneProjectControl",
+        "CyreneChatControl",
+        "CyreneDataControl",
+        "CyreneUpdateControl",
+        "CyreneLifecycleControl",
+    } == {
+        name
+        for name, plugin in plugins.items()
+        if plugin.metadata.get("model_visible") is False
     }
-    assert active_names.isdisjoint(INTERNAL_ONLY_CONCRETE_TOOL_NAMES)
 
 
 def test_current_tree_exposes_project_switch_chat_search_and_shared_pip_maximize_handler():
@@ -155,7 +152,7 @@ def test_current_tree_exposes_project_switch_chat_search_and_shared_pip_maximize
 
 
 def test_window_control_schema_requires_argument_bound_idempotency_key():
-    from cyrene.tool_impl.application.window import TOOL_DEF
+    from agent.plugin.plugin_impl.cyrene_application.window import TOOL_DEF
 
     function = TOOL_DEF["function"]
     assert function["parameters"]["required"] == ["action", "idempotency_key"]
@@ -164,14 +161,14 @@ def test_window_control_schema_requires_argument_bound_idempotency_key():
 
 @pytest.mark.asyncio
 async def test_settings_describe_reports_its_own_operation_id(monkeypatch):
-    from cyrene.tool_impl.application import settings_describe
+    from agent.plugin.plugin_impl.cyrene_application import settings_describe
 
     monkeypatch.setattr(
         settings_describe,
         "describe",
         lambda _namespace: {"revision": 4, "settings": [], "controls": []},
     )
-    result = json.loads(await settings_describe.handler({}, None, 0, "", None))
+    result = json.loads(await settings_describe.handler({}, _plugin_context()))
 
     assert result["status"] == "success"
     assert result["operation_id"] == "cyrene.settings.describe"
@@ -192,13 +189,13 @@ def test_tool_output_global_cap_is_configurable_and_unlimited_at_zero(monkeypatc
 async def test_desktop_conversation_source_requires_host_verified_owned_surface(monkeypatch):
     from cyrene.runtime import host_bridge
 
-    async def electron_surface(_method, _args):
+    async def electron_surface(_method, _args, **_kwargs):
         return {"ok": True, "hostKind": "electron", "surfaceAvailable": True}
 
     monkeypatch.setattr(host_bridge, "call_host", electron_surface)
     assert await host_bridge.resolve_conversation_source("surface-1") == "desktop_local"
 
-    async def unverified_surface(_method, _args):
+    async def unverified_surface(_method, _args, **_kwargs):
         return {"ok": True, "hostKind": "electron", "surfaceAvailable": False}
 
     monkeypatch.setattr(host_bridge, "call_host", unverified_surface)
@@ -212,11 +209,9 @@ def test_settings_patch_is_atomic_revisioned_and_self_pack_is_protected(monkeypa
     monkeypatch.setattr(config_store, "DATA_DIR", tmp_path)
     monkeypatch.setattr(config_store, "_ENCRYPTED_PATH", tmp_path / "config.enc")
     monkeypatch.setattr(config_store, "_KEY_PATH", tmp_path / ".config_key")
-    monkeypatch.setattr(config_store, "_LEGACY_ENV_PATH", tmp_path / ".env")
-    monkeypatch.setattr(config_store, "_LEGACY_SETTINGS_PATH", tmp_path / "web_settings.json")
     monkeypatch.setattr(config_store, "_cache", None)
-    monkeypatch.setattr(config_store, "_migrated", False)
     monkeypatch.setattr(config_store, "_fernet", None)
+    monkeypatch.setattr(config_store, "_initialized", False)
 
     first = settings_service.update(
         "runtime",
@@ -244,7 +239,7 @@ def test_settings_patch_is_atomic_revisioned_and_self_pack_is_protected(monkeypa
         )
     with pytest.raises(settings_service.SettingsForbiddenError):
         settings_service.validate_changes(
-            "runtime", {"enabled_tool_packs": {"cyrene_tools": False}},
+            "runtime", {"enabled_plugin_packs": {"cyrene_application": False}},
             actor="agent", approved_risks=frozenset({"R2"}),
         )
 
@@ -271,11 +266,9 @@ def test_agent_visible_settings_registry_covers_models_and_shortcuts_are_version
     monkeypatch.setattr(config_store, "DATA_DIR", tmp_path)
     monkeypatch.setattr(config_store, "_ENCRYPTED_PATH", tmp_path / "config.enc")
     monkeypatch.setattr(config_store, "_KEY_PATH", tmp_path / ".config_key")
-    monkeypatch.setattr(config_store, "_LEGACY_ENV_PATH", tmp_path / ".env")
-    monkeypatch.setattr(config_store, "_LEGACY_SETTINGS_PATH", tmp_path / "web_settings.json")
     monkeypatch.setattr(config_store, "_cache", None)
-    monkeypatch.setattr(config_store, "_migrated", False)
     monkeypatch.setattr(config_store, "_fernet", None)
+    monkeypatch.setattr(config_store, "_initialized", False)
 
     schema = settings_service.describe()
     assert schema["excluded_tabs"] == []
@@ -361,15 +354,15 @@ def test_agent_visible_settings_registry_covers_models_and_shortcuts_are_version
 
 
 def test_lifecycle_records_revalidation_and_reconciles_only_host_accepted_actions(monkeypatch, tmp_path):
-    from cyrene.agent.context import bind_run_context
     from cyrene.runtime import host_actions
 
     monkeypatch.setattr(host_actions, "_STATE_PATH", tmp_path / "actions.json")
-    binding = bind_run_context(
-        session_id="session-1", round_id="round-1",
+    context = _plugin_context(
+        session_id="session-1",
+        round_id="round-1",
         client_request_id="request-1",
     )
-    try:
+    with _bind_plugin_context(context):
         first = host_actions.schedule_action(
             "restart_app",
             idempotency_key="restart-1",
@@ -383,8 +376,6 @@ def test_lifecycle_records_revalidation_and_reconciles_only_host_accepted_action
             parameter_hash="b" * 64,
             expected_app_version="0.7.9",
         )
-    finally:
-        binding.reset()
 
     assert first["origin_run_id"] == "request-1"
     assert first["approval_fingerprint"] == "delegation_receipt"
@@ -401,8 +392,7 @@ def test_lifecycle_records_revalidation_and_reconciles_only_host_accepted_action
 async def test_update_install_uses_host_prepare_launch_commit_order(monkeypatch, tmp_path):
     from unittest.mock import MagicMock
 
-    from cyrene.runtime import host_actions, updater
-    from cyrene.workbench import runtime as workbench_runtime
+    from cyrene.runtime import host_actions, update_install, updater
 
     monkeypatch.setattr(host_actions, "_STATE_PATH", tmp_path / "actions.json")
     monkeypatch.setattr(updater, "get_download_progress", lambda: {
@@ -413,7 +403,7 @@ async def test_update_install_uses_host_prepare_launch_commit_order(monkeypatch,
         "total": 12,
     })
     launched = MagicMock(return_value=(True, "", "", 200))
-    monkeypatch.setattr(workbench_runtime, "_launch_update_restart", launched)
+    monkeypatch.setattr(update_install, "launch_update_restart", launched)
     calls = []
 
     async def fake_host(method, args=None):
@@ -436,237 +426,20 @@ async def test_update_install_uses_host_prepare_launch_commit_order(monkeypatch,
     assert [item[1].get("phase") for item in calls[1:]] == ["prepare", "commit"]
 
 
-@pytest.mark.asyncio
-async def test_explicit_local_delegation_is_exact_and_single_use(monkeypatch):
-    from cyrene.agent import auto_review
-    from cyrene.agent import state
-    from cyrene.tooling.policy import approvals
-    from cyrene.workbench.app_control import authorize
-
-    quote = "现在重启 Cyrene"
-    binding, token = _bind_local_delegation(quote)
-    requested = []
-
-    async def fallback(**_kwargs):
-        requested.append(True)
-        return "approval-required"
-
-    async def approve_delegation(**_kwargs):
-        return True, "用户明确要求执行该精确操作。"
-
-    monkeypatch.setattr(auto_review, "review_user_delegation", approve_delegation)
-    monkeypatch.setattr(approvals, "request_host_lifecycle_confirmation", fallback)
-    # app_control imported the policy function directly.
-    monkeypatch.setattr("cyrene.workbench.app_control.request_host_lifecycle_confirmation", fallback)
-    try:
-        first = await authorize(
-            "cyrene.app.lifecycle",
-            {"action": "restart_app"},
-            reason="User requested restart.",
-            delegation_quote=quote,
-        )
-        second = await authorize(
-            "cyrene.app.lifecycle",
-            {"action": "restart_backend"},
-            reason="User requested another restart.",
-            delegation_quote=quote,
-        )
-    finally:
-        _reset_local_delegation(state, token)
-        binding.reset()
-
-    assert first is None
-    assert second == "approval-required"
-    assert requested == [True]
 
 
-@pytest.mark.asyncio
-async def test_local_round_without_client_request_id_reviews_full_user_request(monkeypatch):
-    from cyrene.agent import auto_review, state
-    from cyrene.agent.context import bind_run_context
-    from cyrene.workbench.app_control import authorize
-
-    user_request = "帮我新建一个对话，然后在新的对话里面搜索看一下野生小熊猫的攻略。"
-    reviews = []
-    fallbacks = []
-
-    async def approve_delegation(**kwargs):
-        reviews.append(kwargs)
-        return True, "用户明确要求提交新对话中的消息。"
-
-    async def fallback(**_kwargs):
-        fallbacks.append(True)
-        return "approval-required"
-
-    monkeypatch.setattr(auto_review, "review_user_delegation", approve_delegation)
-    monkeypatch.setattr(
-        "cyrene.workbench.app_control.request_self_configuration_confirmation",
-        fallback,
-    )
-    binding = bind_run_context(
-        agent_id="main",
-        caller="main_agent",
-        client_request_id="",
-        round_id="round-local-no-request-id",
-        session_id="origin",
-        conversation_source="desktop_local",
-        user_request_text=user_request,
-    )
-    receipt_token = state._explicit_delegation_receipts.set(set())
-    batch_token = state._explicit_delegation_batches.set({})
-    try:
-        result = await authorize(
-            "cyrene.ui.click.r2",
-            {
-                "snapshot_id": "tree-current",
-                "revision": 7,
-                "node_id": "chat_composer_submit",
-                "action_id": "submit",
-            },
-            reason="Submit the message requested by the user.",
-        )
-    finally:
-        state._explicit_delegation_batches.reset(batch_token)
-        state._explicit_delegation_receipts.reset(receipt_token)
-        binding.reset()
-
-    assert result is None
-    assert fallbacks == []
-    assert len(reviews) == 1
-    assert reviews[0]["delegation_quote"] == user_request
 
 
-@pytest.mark.asyncio
-async def test_explicit_local_delegation_batch_is_reviewed_once_and_consumed_in_order(monkeypatch):
-    from cyrene.agent import auto_review, state
-    from cyrene.workbench.app_control import authorize
-
-    quote = "先重启后端，然后退出 Cyrene"
-    binding, token = _bind_local_delegation(quote)
-    reviews = []
-    fallbacks = []
-    operations = [
-        {
-            "operation_id": "cyrene.app.lifecycle",
-            "arguments": {"action": "restart_backend"},
-        },
-        {
-            "operation_id": "cyrene.app.lifecycle",
-            "arguments": {"action": "quit"},
-        },
-    ]
-
-    async def approve_batch(**kwargs):
-        reviews.append(kwargs)
-        return True, "用户明确要求按顺序执行这两项操作。"
-
-    async def fallback(**_kwargs):
-        fallbacks.append(True)
-        return "approval-required"
-
-    monkeypatch.setattr(auto_review, "review_user_delegation", approve_batch)
-    monkeypatch.setattr(
-        "cyrene.workbench.app_control.request_host_lifecycle_confirmation",
-        fallback,
-    )
-    try:
-        first = await authorize(
-            "cyrene.app.lifecycle",
-            {"action": "restart_backend"},
-            reason="Perform the first requested action.",
-            delegation_quote=quote,
-            delegation_operations=operations,
-        )
-        second = await authorize(
-            "cyrene.app.lifecycle",
-            {"action": "quit"},
-            reason="Perform the second requested action.",
-            delegation_quote=quote,
-            delegation_operations=operations,
-        )
-        exhausted = await authorize(
-            "cyrene.app.lifecycle",
-            {"action": "restart_backend"},
-            reason="Attempt to reuse the consumed batch.",
-            delegation_quote=quote,
-            delegation_operations=operations,
-        )
-    finally:
-        _reset_local_delegation(state, token)
-        binding.reset()
-
-    assert first is None
-    assert second is None
-    assert exhausted == "approval-required"
-    assert len(reviews) == 1
-    reviewed_operations = json.loads(reviews[0]["operations_json"])
-    assert reviewed_operations == operations
-    assert fallbacks == [True]
 
 
-@pytest.mark.asyncio
-async def test_policy_statement_and_forwarded_text_are_not_delegation(monkeypatch):
-    from cyrene.agent import auto_review
-    from cyrene.agent import state
-    from cyrene.agent.context import bind_run_context
-    from cyrene.workbench.app_control import authorize
-
-    policy = "如果用户要求，也可以由 agent 来确认并重启"
-
-    async def fallback(**_kwargs):
-        return "approval-required"
-
-    reviews = []
-
-    async def review_delegation(**kwargs):
-        reviews.append(kwargs)
-        return False, "这是产品规则讨论，不是当前行动指令。"
-
-    monkeypatch.setattr(auto_review, "review_user_delegation", review_delegation)
-    monkeypatch.setattr("cyrene.workbench.app_control.request_host_lifecycle_confirmation", fallback)
-    binding, token = _bind_local_delegation(policy)
-    try:
-        policy_result = await authorize(
-            "cyrene.app.lifecycle", {"action": "restart_app"},
-            reason="Policy discussion.", delegation_quote=policy,
-        )
-    finally:
-        _reset_local_delegation(state, token)
-        binding.reset()
-
-    forwarded = bind_run_context(
-        agent_id="main", caller="main_agent", client_request_id="request-2",
-        round_id="round-2", session_id="target",
-        conversation_source="agent_session",
-        user_request_text="请你代我确认并重启 Cyrene",
-    )
-    forwarded_token = state._explicit_delegation_receipts.set(set())
-    forwarded_batch_token = state._explicit_delegation_batches.set({})
-    try:
-        forwarded_result = await authorize(
-            "cyrene.app.lifecycle", {"action": "restart_app"},
-            reason="Forwarded agent text.", delegation_quote="请你代我确认并重启 Cyrene",
-        )
-    finally:
-        state._explicit_delegation_batches.reset(forwarded_batch_token)
-        state._explicit_delegation_receipts.reset(forwarded_token)
-        forwarded.reset()
-
-    assert policy_result == "approval-required"
-    assert "local desktop approval" in forwarded_result
-    assert len(reviews) == 1
-    assert reviews[0]["delegation_quote"] == policy
 
 
 @pytest.mark.asyncio
 async def test_session_message_target_is_bound_to_current_tree(monkeypatch, tmp_path):
-    from cyrene.agent import auto_review
-    from cyrene.agent import state
-    from cyrene.tool_impl.application import session_message
+    from agent.plugin.plugin_impl.cyrene_application import session_message
     from cyrene.workbench import app_control
 
-    quote = "请你代我向另一个任务发送这段文字"
-    binding, token = _bind_local_delegation(quote)
+    context = _plugin_context()
     monkeypatch.setattr(app_control, "_AUDIT_PATH", tmp_path / "audit.jsonl")
     monkeypatch.setattr(app_control, "_IDEMPOTENCY_PATH", tmp_path / "idempotency.json")
     calls = []
@@ -709,12 +482,7 @@ async def test_session_message_target_is_bound_to_current_tree(monkeypatch, tmp_
 
     monkeypatch.setattr(session_message, "call_host", fake_host)
     monkeypatch.setattr(session_message.app_services, "dispatch_session_message", fake_dispatch)
-    monkeypatch.setattr(
-        auto_review,
-        "review_user_delegation",
-        lambda **_kwargs: _approved_delegation(),
-    )
-    try:
+    with _bind_plugin_context(context, name="CyreneSessionMessage"):
         result = json.loads(await session_message.handler({
             "snapshot_id": "tree-current",
             "revision": 7,
@@ -722,11 +490,7 @@ async def test_session_message_target_is_bound_to_current_tree(monkeypatch, tmp_
             "message": "hello",
             "reason": "Send the requested instruction.",
             "idempotency_key": "send-1",
-            "delegation_quote": quote,
-        }, None, 0, "", None))
-    finally:
-        _reset_local_delegation(state, token)
-        binding.reset()
+        }, context))
 
     assert result["status"] == "success"
     assert result["effects"][0] == {
@@ -742,10 +506,9 @@ async def test_session_message_target_is_bound_to_current_tree(monkeypatch, tmp_
 
 @pytest.mark.asyncio
 async def test_session_message_cannot_submit_calling_session(monkeypatch):
-    from cyrene.agent import state
-    from cyrene.tool_impl.application import session_message
+    from agent.plugin.plugin_impl.cyrene_application import session_message
 
-    binding, token = _bind_local_delegation("请你代我发送", session_id="same")
+    context = _plugin_context(session_id="same")
 
     async def fake_host(_method, _args):
         return {
@@ -770,25 +533,20 @@ async def test_session_message_cannot_submit_calling_session(monkeypatch):
         }
 
     monkeypatch.setattr(session_message, "call_host", fake_host)
-    try:
-        result = json.loads(await session_message.handler({
-            "snapshot_id": "tree-current", "revision": 3,
-            "node_id": "chat_composer_input", "message": "hello",
-            "reason": "Prepare own draft.", "idempotency_key": "self-1",
-        }, None, 0, "", None))
-    finally:
-        _reset_local_delegation(state, token)
-        binding.reset()
+    result = json.loads(await session_message.handler({
+        "snapshot_id": "tree-current", "revision": 3,
+        "node_id": "chat_composer_input", "message": "hello",
+        "reason": "Prepare own draft.", "idempotency_key": "self-1",
+    }, context))
 
     assert result["error_code"] == "self_session_submit_forbidden"
 
 
 @pytest.mark.asyncio
-async def test_cyrene_gateway_reaches_current_surface_broker_end_to_end(
+async def test_application_plugins_reach_current_surface_broker_end_to_end(
     monkeypatch, tmp_path,
 ):
-    from cyrene.agent.context import bind_run_context
-    from cyrene.tooling import execute_wire_tool
+    from agent.plugin.plugin_impl.cyrene_application import ui_click, ui_snapshot
     from cyrene.workbench import app_control, ui_surface
 
     monkeypatch.delenv("CYRENE_ELECTRON_RPC_PORT", raising=False)
@@ -831,9 +589,7 @@ async def test_cyrene_gateway_reaches_current_surface_broker_end_to_end(
 
     socket = FakeSurfaceSocket()
     socket.connection = await ui_surface.register("surface-e2e", socket)
-    binding = bind_run_context(
-        agent_id="main",
-        caller="main_agent",
+    context = _plugin_context(
         session_id="origin",
         round_id="round-e2e",
         client_request_id="request-e2e",
@@ -841,44 +597,15 @@ async def test_cyrene_gateway_reaches_current_surface_broker_end_to_end(
         ui_instance_id="surface-e2e",
     )
     try:
-        discovered = json.loads(await execute_wire_tool(
-            "cyrene_tools",
-            {"operation": "discover", "query": "current interface tree"},
-            None, 0, "", None,
-        ))
-        assert any(
-            item["id"] == "cyrene.ui.snapshot"
-            for item in discovered["capabilities"]
-        )
-        described = json.loads(await execute_wire_tool(
-            "cyrene_tools",
-            {"operation": "describe", "capability_ids": [
-                "cyrene.ui.snapshot", "cyrene.ui.inspect", "cyrene.ui.click",
-            ]},
-            None, 0, "", None,
-        ))
-        assert [item["id"] for item in described["capabilities"]] == [
-            "cyrene.ui.snapshot", "cyrene.ui.inspect", "cyrene.ui.click",
-        ]
+        with _bind_plugin_context(context, name="CyreneUIClick"):
+            read_result = json.loads(await ui_snapshot.handler(
+                {"max_depth": 12},
+                context,
+            ))
+            assert read_result["snapshot"]["snapshot_id"] == "tree-e2e"
 
-        read_outer = json.loads(await execute_wire_tool(
-            "cyrene_tools",
-            {
-                "operation": "invoke",
-                "capability_id": "cyrene.ui.snapshot",
-                "arguments": {"max_depth": 12},
-            },
-            None, 0, "", None,
-        ))
-        read_result = read_outer["result"]
-        assert read_result["snapshot"]["snapshot_id"] == "tree-e2e"
-
-        act_outer = json.loads(await execute_wire_tool(
-            "cyrene_tools",
-            {
-                "operation": "invoke",
-                "capability_id": "cyrene.ui.click",
-                "arguments": {
+            act_result = json.loads(await ui_click.handler(
+                {
                     "snapshot_id": "tree-e2e",
                     "revision": 4,
                     "node_id": "navigation_chat",
@@ -886,14 +613,11 @@ async def test_cyrene_gateway_reaches_current_surface_broker_end_to_end(
                     "reason": "Open the user-visible Chat surface.",
                     "idempotency_key": "gateway-e2e-open-chat",
                 },
-            },
-            None, 0, "", None,
-        ))
-        act_result = act_outer["result"]
-        assert act_result["status"] == "success"
-        assert act_result["revision"] == 5
+                context,
+            ))
+            assert act_result["status"] == "success"
+            assert act_result["revision"] == 5
     finally:
-        binding.reset()
         await ui_surface.unregister("surface-e2e", socket.connection)
 
 
@@ -901,8 +625,7 @@ async def test_cyrene_gateway_reaches_current_surface_broker_end_to_end(
 async def test_ui_inspect_uses_target_node_lease_across_unrelated_revision_changes(
     monkeypatch,
 ):
-    from cyrene.agent.context import bind_run_context
-    from cyrene.tool_impl.application import _ui_snapshot, ui_inspect
+    from agent.plugin.plugin_impl.cyrene_application import _ui_snapshot, ui_inspect
 
     calls = []
 
@@ -929,21 +652,18 @@ async def test_ui_inspect_uses_target_node_lease_across_unrelated_revision_chang
         }
 
     monkeypatch.setattr(_ui_snapshot, "call_host", fake_host)
-    binding = bind_run_context(
-        agent_id="main", caller="main_agent", session_id="origin",
-        round_id="round-inspect", client_request_id="request-inspect",
-        conversation_source="desktop_local", ui_instance_id="surface-inspect",
+    context = _plugin_context(
+        round_id="round-inspect",
+        client_request_id="request-inspect",
+        ui_instance_id="surface-inspect",
     )
-    try:
-        result = json.loads(await ui_inspect.handler({
-            "snapshot_id": "tree-inspect",
-            "revision": 4,
-            "node_id": "chat_composer_input",
-            "include": ["interactive", "text"],
-            "max_depth": 3,
-        }, None, 0, "", None))
-    finally:
-        binding.reset()
+    result = json.loads(await ui_inspect.handler({
+        "snapshot_id": "tree-inspect",
+        "revision": 4,
+        "node_id": "chat_composer_input",
+        "include": ["interactive", "text"],
+        "max_depth": 3,
+    }, context))
 
     assert result["status"] == "success"
     assert result["revision"] == 9
@@ -964,11 +684,10 @@ async def test_non_pointer_ui_actions_still_move_cursor_to_their_target(
 ):
     from importlib import import_module
 
-    from cyrene.agent.context import bind_run_context
-    from cyrene.tool_impl.application import _ui_action
+    from agent.plugin.plugin_impl.cyrene_application import _ui_action
     from cyrene.workbench import app_control
 
-    module = import_module(f"cyrene.tool_impl.application.{module_name}")
+    module = import_module(f"agent.plugin.plugin_impl.cyrene_application.{module_name}")
     monkeypatch.setattr(app_control, "_AUDIT_PATH", tmp_path / "audit.jsonl")
     monkeypatch.setattr(app_control, "_IDEMPOTENCY_PATH", tmp_path / "idempotency.json")
     calls = []
@@ -993,12 +712,11 @@ async def test_non_pointer_ui_actions_still_move_cursor_to_their_target(
         return {"ok": True, "revision": 4}
 
     monkeypatch.setattr(_ui_action, "call_host", fake_host)
-    binding = bind_run_context(
-        agent_id="main", caller="main_agent", session_id="origin",
-        round_id=f"round-{module_name}", client_request_id=f"request-{module_name}",
-        conversation_source="desktop_local", ui_instance_id="surface-main",
+    context = _plugin_context(
+        round_id=f"round-{module_name}",
+        client_request_id=f"request-{module_name}",
     )
-    try:
+    with _bind_plugin_context(context, name=module.TOOL_NAME):
         result = json.loads(await module.handler({
             "snapshot_id": f"tree-{module_name}",
             "revision": 3,
@@ -1007,9 +725,7 @@ async def test_non_pointer_ui_actions_still_move_cursor_to_their_target(
             "input": {},
             "reason": "Perform the requested visible action.",
             "idempotency_key": f"cursor-{module_name}",
-        }, None, 0, "", None))
-    finally:
-        binding.reset()
+        }, context))
 
     assert result["status"] == "success"
     assert operation_family in result["operation_id"]
@@ -1022,8 +738,7 @@ async def test_non_pointer_ui_actions_still_move_cursor_to_their_target(
 
 @pytest.mark.asyncio
 async def test_ui_snapshot_exposes_visible_and_calling_session_mismatch(monkeypatch):
-    from cyrene.agent.context import bind_run_context
-    from cyrene.tool_impl.application import _ui_snapshot, ui_snapshot
+    from agent.plugin.plugin_impl.cyrene_application import _ui_snapshot, ui_snapshot
 
     async def fake_host(method, _args):
         assert method == "ui.snapshot.current"
@@ -1041,15 +756,12 @@ async def test_ui_snapshot_exposes_visible_and_calling_session_mismatch(monkeypa
         }
 
     monkeypatch.setattr(_ui_snapshot, "call_host", fake_host)
-    binding = bind_run_context(
-        agent_id="main", caller="main_agent", session_id="calling-chat",
-        round_id="round-mismatch", client_request_id="request-mismatch",
-        conversation_source="desktop_local", ui_instance_id="surface-main",
+    context = _plugin_context(
+        session_id="calling-chat",
+        round_id="round-mismatch",
+        client_request_id="request-mismatch",
     )
-    try:
-        result = json.loads(await ui_snapshot.handler({}, None, 0, "", None))
-    finally:
-        binding.reset()
+    result = json.loads(await ui_snapshot.handler({}, context))
 
     assert result["snapshot"]["surface"] == {
         "kind": "main",
@@ -1065,8 +777,7 @@ async def test_ui_snapshot_exposes_visible_and_calling_session_mismatch(monkeypa
 async def test_ui_action_exact_retry_replays_before_reading_new_tree(
     monkeypatch, tmp_path,
 ):
-    from cyrene.agent.context import bind_run_context
-    from cyrene.tool_impl.application import _ui_action, ui_click
+    from agent.plugin.plugin_impl.cyrene_application import _ui_action, ui_click
     from cyrene.workbench import app_control
 
     monkeypatch.setattr(app_control, "_AUDIT_PATH", tmp_path / "audit.jsonl")
@@ -1087,26 +798,25 @@ async def test_ui_action_exact_retry_replays_before_reading_new_tree(
         return {"ok": True, "revision": 3}
 
     monkeypatch.setattr(_ui_action, "call_host", fake_host)
-    binding = bind_run_context(
-        agent_id="main", caller="main_agent", session_id="origin",
-        round_id="round-retry", client_request_id="request-retry",
-        conversation_source="webui", ui_instance_id="surface-retry",
+    context = _plugin_context(
+        round_id="round-retry",
+        client_request_id="request-retry",
+        conversation_source="webui",
+        ui_instance_id="surface-retry",
     )
     args = {
         "snapshot_id": "tree-retry", "revision": 2,
         "node_id": "open_search", "action_id": "open",
         "reason": "Open search.", "idempotency_key": "retry-open-search",
     }
-    try:
-        first = json.loads(await ui_click.handler(args, None, 0, "", None))
+    with _bind_plugin_context(context, name="CyreneUIClick"):
+        first = json.loads(await ui_click.handler(args, context))
 
         async def should_not_call_host(_method, _args):
             raise AssertionError("an exact idempotent retry must not touch the changed surface")
 
         monkeypatch.setattr(_ui_action, "call_host", should_not_call_host)
-        second = json.loads(await ui_click.handler(args, None, 0, "", None))
-    finally:
-        binding.reset()
+        second = json.loads(await ui_click.handler(args, context))
 
     assert first["status"] == "success"
     assert second == first
@@ -1120,8 +830,7 @@ async def test_ui_action_exact_retry_replays_before_reading_new_tree(
 async def test_ui_action_accepts_unchanged_node_lease_across_global_revision(
     monkeypatch, tmp_path,
 ):
-    from cyrene.agent.context import bind_run_context
-    from cyrene.tool_impl.application import _ui_action, ui_click
+    from agent.plugin.plugin_impl.cyrene_application import _ui_action, ui_click
     from cyrene.workbench import app_control
 
     monkeypatch.setattr(app_control, "_AUDIT_PATH", tmp_path / "audit.jsonl")
@@ -1151,12 +860,12 @@ async def test_ui_action_accepts_unchanged_node_lease_across_global_revision(
         return {"ok": True, "revision": 13}
 
     monkeypatch.setattr(_ui_action, "call_host", fake_host)
-    binding = bind_run_context(
-        agent_id="main", caller="main_agent", session_id="origin",
-        round_id="round-compatible", client_request_id="request-compatible",
-        conversation_source="desktop_local", ui_instance_id="surface-compatible",
+    context = _plugin_context(
+        round_id="round-compatible",
+        client_request_id="request-compatible",
+        ui_instance_id="surface-compatible",
     )
-    try:
+    with _bind_plugin_context(context, name="CyreneUIClick"):
         result = json.loads(await ui_click.handler({
             "snapshot_id": "tree-compatible",
             "revision": 7,
@@ -1164,9 +873,7 @@ async def test_ui_action_accepts_unchanged_node_lease_across_global_revision(
             "action_id": "invoke",
             "reason": "Create the requested visible chat.",
             "idempotency_key": "compatible-new-chat",
-        }, None, 0, "", None))
-    finally:
-        binding.reset()
+        }, context))
 
     assert result["status"] == "success"
     assert result["revision"] == 13
@@ -1180,8 +887,7 @@ async def test_ui_action_accepts_unchanged_node_lease_across_global_revision(
 async def test_ui_double_click_requires_declared_double_press_and_maximizes_browser(
     monkeypatch, tmp_path,
 ):
-    from cyrene.agent.context import bind_run_context
-    from cyrene.tool_impl.application import _ui_action, ui_double_click
+    from agent.plugin.plugin_impl.cyrene_application import _ui_action, ui_double_click
     from cyrene.workbench import app_control
 
     monkeypatch.setattr(app_control, "_AUDIT_PATH", tmp_path / "audit.jsonl")
@@ -1211,10 +917,10 @@ async def test_ui_double_click_requires_declared_double_press_and_maximizes_brow
         return {"ok": True, "revision": 5, "result": {"mode": "maximized"}}
 
     monkeypatch.setattr(_ui_action, "call_host", fake_host)
-    binding = bind_run_context(
-        agent_id="main", caller="main_agent", session_id="origin",
-        round_id="round-double-click", client_request_id="request-double-click",
-        conversation_source="desktop_local", ui_instance_id="surface-double-click",
+    context = _plugin_context(
+        round_id="round-double-click",
+        client_request_id="request-double-click",
+        ui_instance_id="surface-double-click",
     )
     base_args = {
         "snapshot_id": "tree-browser",
@@ -1223,18 +929,16 @@ async def test_ui_double_click_requires_declared_double_press_and_maximizes_brow
         "action_id": "maximize",
         "reason": "Double-click the Browser titlebar to maximize it.",
     }
-    try:
+    with _bind_plugin_context(context, name="CyreneUIDoubleClick"):
         success = json.loads(await ui_double_click.handler({
             **base_args,
             "idempotency_key": "double-click-browser-maximize",
-        }, None, 0, "", None))
+        }, context))
         declared_aliases[:] = ["press", "keyboard"]
         rejected = json.loads(await ui_double_click.handler({
             **base_args,
             "idempotency_key": "double-click-ordinary-button",
-        }, None, 0, "", None))
-    finally:
-        binding.reset()
+        }, context))
 
     assert success["status"] == "success"
     assert success["operation_id"] == "cyrene.ui.double_click"
@@ -1246,7 +950,7 @@ async def test_ui_double_click_requires_declared_double_press_and_maximizes_brow
 
 @pytest.mark.asyncio
 async def test_desktop_settings_describe_uses_electron_cas_revision(monkeypatch):
-    from cyrene.tool_impl.application import settings_describe
+    from agent.plugin.plugin_impl.cyrene_application import settings_describe
 
     async def fake_host(method, args):
         assert (method, args) == ("desktop.settings.get", {})
@@ -1257,7 +961,7 @@ async def test_desktop_settings_describe_uses_electron_cas_revision(monkeypatch)
 
     monkeypatch.setattr(settings_describe, "call_host", fake_host)
     result = json.loads(await settings_describe.handler(
-        {"namespace": "desktop"}, None, 0, "", None,
+        {"namespace": "desktop"}, _plugin_context(),
     ))
     assert result["revision"] == 17
     assert result["schema"]["revision"] == 17
@@ -1267,7 +971,6 @@ async def test_desktop_settings_describe_uses_electron_cas_revision(monkeypatch)
 async def test_lifecycle_finalization_is_scoped_to_origin_request(
     monkeypatch, tmp_path,
 ):
-    from cyrene.agent.context import bind_run_context
     from cyrene.runtime import host_actions
 
     monkeypatch.setattr(host_actions, "_STATE_PATH", tmp_path / "actions.json")
@@ -1285,19 +988,18 @@ async def test_lifecycle_finalization_is_scoped_to_origin_request(
         ("request-a", "lifecycle-a", "a" * 64),
         ("request-b", "lifecycle-b", "b" * 64),
     ):
-        binding = bind_run_context(
-            session_id="same-session", round_id=f"round-{run_id}",
+        context = _plugin_context(
+            session_id="same-session",
+            round_id=f"round-{run_id}",
             client_request_id=run_id,
         )
-        try:
+        with _bind_plugin_context(context):
             host_actions.schedule_action(
                 "restart_backend",
                 idempotency_key=key,
                 parameter_hash=digest,
                 expected_app_version="0.7.9",
             )
-        finally:
-            binding.reset()
 
     await host_actions.finalize_origin(
         "same-session", "", origin_run_id="request-a",

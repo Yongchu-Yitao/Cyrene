@@ -152,8 +152,8 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
     _spec("subagent_discussion_max_wall_seconds", "integer", 600, tab="agents", minimum=30, maximum=86400),
     _spec("subagent_discussion_max_tool_calls", "integer", 50, tab="agents", minimum=1, maximum=1000),
     _spec("subagent_discussion_no_new_info_rounds", "integer", 2, tab="agents", minimum=1, maximum=20),
-    _spec("enabled_tools", "boolean_map", {}, tab="capabilities"),
-    _spec("enabled_tool_packs", "boolean_map", {}, tab="capabilities", apply_mode="next_run"),
+    _spec("enabled_plugins", "boolean_map", {}, tab="capabilities"),
+    _spec("enabled_plugin_packs", "boolean_map", {}, tab="capabilities", apply_mode="next_run"),
     _spec("theme", "string", "system", namespace="appearance", tab="appearance", agent=True, risk="R1", enum=("system", "light", "dark")),
     _spec("accent", "string", "", namespace="appearance", tab="appearance", agent=True, risk="R1"),
     _spec("text_scale", "number", 1.0, namespace="appearance", tab="appearance", agent=True, risk="R1", minimum=0.8, maximum=1.4),
@@ -194,15 +194,15 @@ SETTING_CONTROL_SPECS: tuple[SettingControlSpec, ...] = (
     SettingControlSpec("channels.telegram_token", "channels", "user_ceremony", "cyrene.secret.input", "R3", secret=True),
     SettingControlSpec("channels.wechat_login", "channels", "user_ceremony", "cyrene.ui.inspect", "R3"),
     SettingControlSpec("channels.wechat_runtime", "channels", "current_ui", "cyrene.ui.inspect", "R2"),
-    SettingControlSpec("remote.service", "remote", "existing_capability", "remote_tools", "R2"),
-    SettingControlSpec("remote.pairing", "remote", "user_ceremony", "remote_tools", "R3", secret=True),
-    SettingControlSpec("remote.peer_grants", "remote", "existing_capability", "remote_tools", "R3"),
+    SettingControlSpec("remote.service", "remote", "existing_capability", "cyrene_remote", "R2"),
+    SettingControlSpec("remote.pairing", "remote", "user_ceremony", "cyrene_remote", "R3", secret=True),
+    SettingControlSpec("remote.peer_grants", "remote", "existing_capability", "cyrene_remote", "R3"),
     SettingControlSpec("agents.soul", "agents", "current_ui", "cyrene.ui.inspect", "R2"),
     SettingControlSpec("capabilities.voice_settings", "capabilities", "current_ui", "cyrene.ui.inspect", "R2"),
     SettingControlSpec("capabilities.voice_profile", "capabilities", "user_ceremony", "cyrene.file_picker", "R3"),
-    SettingControlSpec("capabilities.tool_packages", "capabilities", "direct", "cyrene.settings.update", "R2", "next_run"),
-    SettingControlSpec("capabilities.mcp_servers", "capabilities", "existing_capability", "skill_tools", "R2", "immediate"),
-    SettingControlSpec("skills.installed", "skills", "existing_capability", "skill_tools", "R2"),
+    SettingControlSpec("capabilities.plugin_packs", "capabilities", "direct", "cyrene.settings.update", "R2", "next_run"),
+    SettingControlSpec("capabilities.mcp_servers", "capabilities", "existing_capability", "cyrene_skills", "R2", "immediate"),
+    SettingControlSpec("skills.installed", "skills", "existing_capability", "cyrene_skills", "R2"),
     SettingControlSpec("skills.install_picker", "skills", "user_ceremony", "cyrene.file_picker", "R2"),
     SettingControlSpec("shortcuts.workbench_bindings", "shortcuts", "direct", "cyrene.settings.update", "R2"),
     SettingControlSpec("shortcuts.quick_chat", "shortcuts", "direct", "cyrene.settings.update", "R2"),
@@ -448,12 +448,60 @@ def validate_changes(
         _validate_shortcut_bindings(candidate)
 
     if actor == "agent":
-        pack_changes = normalized.get("enabled_tool_packs")
-        if isinstance(pack_changes, dict) and "cyrene_tools" in pack_changes:
-            raise SettingsForbiddenError("cyrene_tools cannot change its own availability")
-        tool_changes = normalized.get("enabled_tools")
-        if isinstance(tool_changes, dict) and any(str(key).startswith("Cyrene") for key in tool_changes):
-            raise SettingsForbiddenError("Cyrene tools cannot change their own availability")
+        pack_changes = normalized.get("enabled_plugin_packs")
+        plugin_changes = normalized.get("enabled_plugins")
+        if isinstance(pack_changes, dict) or isinstance(plugin_changes, dict):
+            from agent.plugin import active_plugin_application_host
+            from agent.plugin.execution import current_plugin_execution
+
+            host = active_plugin_application_host()
+            if host is None:
+                raise SettingsForbiddenError("Plugin activation is unavailable")
+            registered_packs = {pack.id for pack in host.registry.list_packs()}
+            registered_plugins = {
+                item.plugin.name for item in host.registry.list_plugins()
+            }
+            execution = current_plugin_execution()
+            executing_plugin = (
+                str(execution.call.name)
+                if execution is not None
+                else ""
+            )
+            executing_pack = ""
+            if executing_plugin:
+                try:
+                    registered = execution.runtime.registry.registered(
+                        executing_plugin
+                    )
+                    executing_pack = str(registered.pack_id or "")
+                except Exception:
+                    executing_pack = ""
+            if (plugin_changes or {}).get(executing_plugin) is False:
+                raise SettingsForbiddenError(
+                    "an executing Plugin cannot disable itself"
+                )
+            if executing_pack and (pack_changes or {}).get(executing_pack) is False:
+                raise SettingsForbiddenError(
+                    "an executing Plugin cannot disable its own pack"
+                )
+            for pack_id in (pack_changes or {}):
+                if pack_id not in registered_packs:
+                    raise SettingsValidationError(
+                        f"unknown Plugin pack: {pack_id}"
+                    )
+                if host.registry.pack_locked(pack_id):
+                    raise SettingsForbiddenError(
+                        f"locked Plugin pack cannot change availability: {pack_id}"
+                    )
+            for plugin_id in (plugin_changes or {}):
+                if plugin_id not in registered_plugins:
+                    raise SettingsValidationError(
+                        f"unknown Plugin: {plugin_id}"
+                    )
+                if host.registry.plugin_locked(plugin_id):
+                    raise SettingsForbiddenError(
+                        f"locked Plugin cannot change availability: {plugin_id}"
+                    )
     return normalized, specs
 
 

@@ -4,29 +4,33 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+from agent.plugin.native_runtime import json_result, run_context_value
+
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import json_result
+from .services import terminal_service
 
 TOOL_NAME = "DeleteShell"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
-async def _tool_delete_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    from cyrene.agent.context import get_current_session_id
-    from cyrene.terminal.client import get_terminal_daemon_client
-    from cyrene.tooling.backends.terminals import resolve_terminal
-
-    terminal = await resolve_terminal(
+async def _tool_delete_shell(
+    args: dict[str, Any],
+    context: PluginContext,
+) -> str:
+    terminals = terminal_service(context)
+    terminal = await terminals.resolve(
+        context,
         terminal_id=str(args.get("shell_id") or ""),
         name=str(args.get("name") or ""),
-        access="write",
     )
     if (
         str(terminal.get("createdBy") or "") != "agent"
-        or str(terminal.get("ownerChatId") or "") != str(get_current_session_id() or "")
+        or str(terminal.get("ownerChatId") or "")
+        != str(run_context_value(context, "session_id") or "")
     ):
         raise PermissionError("The Agent can delete only terminals it created in this conversation.")
-    result = await get_terminal_daemon_client().remove(str(terminal.get("id") or ""))
+    result = await terminals.remove(str(terminal.get("id") or ""))
     return json_result({
         "shell_id": terminal.get("id", ""),
         "terminal_id": terminal.get("id", ""),

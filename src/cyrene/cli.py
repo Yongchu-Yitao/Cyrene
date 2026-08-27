@@ -273,7 +273,6 @@ def cmd_start(args: argparse.Namespace, *, quiet: bool = False) -> str:
     print("Available commands:")
     print("  cyrene chat")
     print('  cyrene chat "your question"')
-    print('  cyrene do "your question" --session run_live')
     print("  cyrene status")
     print("  cyrene --help")
     print()
@@ -295,32 +294,6 @@ def cmd_stop(args: argparse.Namespace) -> None:
     print("Cyrene stopped.")
 
 
-# ---------------------------------------------------------------------------
-# do
-# ---------------------------------------------------------------------------
-
-
-def cmd_do(args: argparse.Namespace) -> None:
-    """Send a message to the agent and print the response."""
-    session_id = args.session
-    text = args.text
-
-    payload = {"message": text, "session_id": session_id}
-    resp = _api_json("/api/chat", method="POST", json=payload)
-
-    if args.json:
-        print(json.dumps(resp, ensure_ascii=False, indent=2))
-    else:
-        response = resp.get("response", "")
-        if response:
-            print(f"Cyrene: {response}")
-        print("---")
-        labels = _api_json("/api/sessions")
-        current = next((s for s in labels.get("sessions", []) if s.get("id") == "run_live"), {})
-        summary = current.get("summary", {})
-        print(f"Session: {session_id} | Tokens: {summary.get('tokens', '—')} | Duration: {summary.get('spend', '—')}")
-
-
 def cmd_chat(args: argparse.Namespace) -> None:
     """Run the interactive streaming daemon client."""
     from cyrene.cli_chat import run_chat
@@ -335,7 +308,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
 
 def cmd_session_list(args: argparse.Namespace) -> None:
     """List all sessions."""
-    data = _api_json("/api/sessions")
+    data = _api_json("/api/workbench/sessions")
     sessions = data.get("sessions", [])
 
     if args.json:
@@ -358,7 +331,7 @@ def cmd_session_status(args: argparse.Namespace) -> None:
     """Show detailed session status."""
     session_id = args.session
 
-    data = _api_json("/api/sessions")
+    data = _api_json("/api/workbench/sessions")
     sessions = data.get("sessions", [])
     session = next((s for s in sessions if s.get("id") == session_id), None)
 
@@ -371,28 +344,16 @@ def cmd_session_status(args: argparse.Namespace) -> None:
         print(json.dumps(session, ensure_ascii=False, indent=2))
         return
 
-    chat = session.get("chat", {})
-    msgs = chat.get("messages", [])
     summary = session.get("summary", {})
 
     print(f"Session: {session_id}")
     print(f"  title: {session.get('title', '?')}")
     print(f"  status: {session.get('status', '?')}")
-    print(f"  messages: {len(msgs)}")
+    print(f"  messages: {session.get('messageCount', 0)}")
     print(f"  tokens: {summary.get('tokens', '—')}")
     print(f"  started: {session.get('started', '—')}")
     print(f"  duration: {session.get('dur', '—')}")
     print()
-
-    rounds = session.get("liveRounds", [])
-    if rounds:
-        print("Rounds:")
-        for r in rounds:
-            rid = r.get("id", "?")
-            status = r.get("status", "?")
-            elapsed = r.get("elapsed", "—")
-            prompt = (r.get("prompt") or "")[:40]
-            print(f"  {rid:<24} {status:<10} {elapsed:<10} \"{prompt}\"")
 
     subagents = session.get("subagents", [])
     if subagents:
@@ -400,154 +361,15 @@ def cmd_session_status(args: argparse.Namespace) -> None:
         for sa in subagents:
             name = sa.get("name", "?")
             status = sa.get("status", "?")
-            elapsed = sa.get("elapsed", "—")
             task = (sa.get("task") or "")[:40]
-            print(f"  {name:<16} {status:<10} {elapsed:<10} \"{task}\"")
+            print(f"  {name:<16} {status:<10} \"{task}\"")
 
 
 def cmd_session_delete(args: argparse.Namespace) -> None:
     """Delete a session."""
     session_id = args.session
-    _api(f"/api/sessions/{session_id}", method="DELETE")
+    _api(f"/api/workbench/sessions/{session_id}", method="DELETE")
     print(f"Session {session_id} deleted.")
-
-
-# ---------------------------------------------------------------------------
-# flow
-# ---------------------------------------------------------------------------
-
-
-def cmd_flow(args: argparse.Namespace) -> None:
-    """Show agent run timeline. Rebuilds from persisted session messages."""
-    session_id = args.session
-    round_id = args.round
-    event_id = args.id
-
-    # Event detail (from in-memory full event store)
-    if event_id:
-        if not round_id:
-            print("Error: --round is required when using --id")
-            sys.exit(1)
-        event = _api_json(f"/api/events/{event_id}")
-        if args.json or True:
-            print(json.dumps(event, ensure_ascii=False, indent=2))
-        else:
-            etype = event.get("type", "?")
-            caller = event.get("caller", "?")
-            duration = event.get("duration_ms", 0)
-            print(f"Event: {event_id}")
-            print(f"  type: {etype}")
-            print(f"  caller: {caller}")
-            print(f"  duration: {duration}ms")
-            if etype == "llm_call":
-                msgs = event.get("messages", [])
-                resp = event.get("response", {})
-                print(f"  messages: {len(msgs)}")
-                print(f"  response tokens: {resp.get('usage', {}).get('completion_tokens', '?')}")
-                if args.verbose:
-                    print("\nFull messages:")
-                    print(json.dumps(msgs, ensure_ascii=False, indent=2))
-                    print("\nFull response:")
-                    print(json.dumps(resp, ensure_ascii=False, indent=2))
-            elif etype == "tool_call":
-                print(f"  tool: {event.get('tool', '?')}")
-                print(f"  args: {json.dumps(event.get('args', {}), ensure_ascii=False)}")
-                if args.verbose:
-                    print("\nFull result:")
-                    print(event.get("result", "")[:2000])
-        return
-
-    # Fetch raw session messages (includes round_id, tool_calls)
-    history = _api_json("/api/chat/state")
-    raw_messages = history.get("messages", [])
-
-    # Build round map from persisted messages
-    round_messages: dict[str, list] = {}
-    for msg in raw_messages:
-        rid = str(msg.get("round_id", "")).strip()
-        if not rid:
-            continue
-        round_messages.setdefault(rid, []).append(msg)
-
-    if not round_messages:
-        print(f"No rounds found for session '{session_id}'.")
-        return
-
-    # List all rounds
-    if not round_id:
-        sorted_rounds = sorted(round_messages.keys(), reverse=True)
-        if args.json:
-            print(json.dumps(sorted_rounds, ensure_ascii=False, indent=2))
-            return
-        print("Rounds (most recent first):")
-        for rid in sorted_rounds:
-            msgs = round_messages[rid]
-            # Find the user prompt
-            prompt = ""
-            for m in msgs:
-                if m.get("role") == "user" and m.get("content", "").strip():
-                    prompt = m["content"].strip()[:40]
-                    break
-            n_msgs = len(msgs)
-            n_tools = sum(len(m.get("tool_calls") or []) for m in msgs if m.get("tool_calls"))
-            print(f"  {rid:<24} {n_msgs:<4} msgs  {n_tools} tools  \"{prompt}\"")
-        return
-
-    # Show single round timeline
-    msgs = round_messages.get(round_id, [])
-    if not msgs:
-        print(f"Round '{round_id}' not found in session '{session_id}'.")
-        sys.exit(1)
-
-    if args.json:
-        print(json.dumps(msgs, ensure_ascii=False, indent=2))
-        return
-
-    prompt = ""
-    for m in msgs:
-        if m.get("role") == "user" and m.get("content", "").strip():
-            prompt = m["content"].strip()
-            break
-    print(f"Round: {round_id}")
-    print(f"  prompt: \"{prompt}\"")
-    print(f"  messages: {len(msgs)}")
-    print()
-
-    seq = 0
-    for m in msgs:
-        role = m.get("role", "?")
-        content = m.get("content", "").strip()
-        tool_calls = m.get("tool_calls") or []
-
-        if role == "user":
-            continue  # prompt already shown above
-
-        if role == "assistant":
-            seq += 1
-            if tool_calls:
-                for tc in tool_calls:
-                    fn = tc.get("function", {})
-                    name = fn.get("name", "?")
-                    raw_args = fn.get("arguments", "")
-                    try:
-                        args_display = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                    except Exception:
-                        args_display = raw_args
-                    args_str = json.dumps(args_display, ensure_ascii=False) if isinstance(args_display, dict) else str(args_display)
-                    if len(args_str) > 80:
-                        args_str = args_str[:80] + "…"
-                    print(f"  [{seq:03d}] Tool call: {name}({args_str})")
-            if content:
-                content_preview = content[:200].replace("\n", " ")
-                print(f"  [{seq:03d}] Response: \"{content_preview}\"")
-
-        if role == "tool":
-            tool_name = m.get("tool_call_id", "?")
-            tool_content = m.get("content", "").strip()[:100]
-            print(f"  [   ] Tool result ({tool_name}): {tool_content}…")
-
-    n_tools = sum(len(m.get("tool_calls") or []) for m in msgs if m.get("tool_calls"))
-    print(f"\nTools called: {n_tools}")
 
 
 # ---------------------------------------------------------------------------
@@ -774,16 +596,10 @@ def build_parser() -> argparse.ArgumentParser:
     # stop
     sub.add_parser("stop", help="Stop the Cyrene daemon")
 
-    # do
-    do_parser = sub.add_parser("do", help="Send a message to the agent")
-    do_parser.add_argument("text", help="Message text")
-    do_parser.add_argument("--session", "-s", required=True, help="Session ID (required)")
-
     # chat
     chat_parser = sub.add_parser("chat", help="Interactive streaming conversation")
     chat_parser.add_argument("text", nargs="?", help="Send one message and exit")
     chat_parser.add_argument("--chat", dest="chat_id", help="Resume a Workbench conversation")
-    chat_parser.add_argument("--legacy", action="store_true", help="Use the legacy run_live session")
     chat_parser.add_argument("--list", dest="list_chats", action="store_true", help="List conversations and exit")
     chat_parser.add_argument("--resume", action="store_true", help="Reconnect to the selected chat's latest run")
     chat_parser.add_argument("--cursor", type=int, default=0, help="Resume after this event sequence")
@@ -810,13 +626,6 @@ def build_parser() -> argparse.ArgumentParser:
     session_delete = session_sub.add_parser("delete", help="Delete a session")
     session_delete.add_argument("--session", "-s", required=True)
     session_delete.add_argument("--json", action="store_true")
-
-    # flow
-    flow_parser = sub.add_parser("flow", help="Agent run timeline")
-    flow_parser.add_argument("--session", "-s", required=True, help="Session ID (required)")
-    flow_parser.add_argument("--round", "-r", help="Round ID")
-    flow_parser.add_argument("--id", help="Event ID for deep debug")
-    flow_parser.add_argument("--json", action="store_true")
 
     # memory
     memory_parser = sub.add_parser("memory", help="Memory system")
@@ -878,8 +687,6 @@ def main() -> None:
         cmd_start(args)
     elif cmd == "stop":
         cmd_stop(args)
-    elif cmd == "do":
-        cmd_do(args)
     elif cmd == "chat":
         cmd_chat(args)
     elif cmd == "session":
@@ -890,8 +697,6 @@ def main() -> None:
             cmd_session_status(args)
         elif sub == "delete":
             cmd_session_delete(args)
-    elif cmd == "flow":
-        cmd_flow(args)
     elif cmd == "memory":
         sub = args.subcommand
         if sub == "soul":

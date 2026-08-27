@@ -1,31 +1,36 @@
-"""Tool implementation for list_entities."""
+"""List durable entities in the current project scope."""
 
 from __future__ import annotations
 
-from .definitions import get_native_tool_def
+from typing import Any
 
-TOOL_NAME = 'list_entities'
-TOOL_DEF = get_native_tool_def(TOOL_NAME)
+from agent.plugin import PluginContext
+
+from ._plugin import create_tool_plugin
+from ._service import current_project_id, entity_service
+
+TOOL_NAME = "entity.list"
 
 
-async def _tool_list_entities(args, bot, chat_id, db_path, notify_state):
-    from .store import list_entities
-    entities = await list_entities(
-        db_path,
-        type=args.get("type"),
-        status=args.get("status", "active"),
-        limit=args.get("limit", 50),
+async def list_entities(
+    arguments: dict[str, Any],
+    context: PluginContext,
+) -> dict[str, Any]:
+    entities = await entity_service(context).list(
+        type=arguments.get("type"),
+        status=arguments.get("status"),
+        project_id=current_project_id(context),
+        limit=arguments.get("limit", 50),
     )
-    if not entities:
-        return "没有找到符合条件的事务。"
-    lines = [
-        f"- [{e['type']}] {e['title']}（ID: {e['id']}，{e['status']}）"
-        f"{' 截止：'+e['due_date'] if e.get('due_date') else ''}"
-        for e in entities
-    ]
-    return f"找到 {len(entities)} 条事务：\n" + "\n".join(lines)
+    return {
+        "ok": True,
+        "count": len(entities),
+        "entities": entities,
+        "message": f"找到 {len(entities)} 条事务。",
+    }
 
 
-handler = _tool_list_entities
+plugin = create_tool_plugin(TOOL_NAME, list_entities, allow_parallel=True)
+handler = list_entities
 
-__all__ = ["TOOL_NAME", "TOOL_DEF", "handler", "_tool_list_entities"]
+__all__ = ["TOOL_NAME", "handler", "list_entities", "plugin"]

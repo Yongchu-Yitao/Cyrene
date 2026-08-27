@@ -164,7 +164,7 @@ function wbcAnswerQuestionForChat(context, chatId, questionId, optionText, resum
 
 function wbcHandleRetryMessage(context, messageId) {
   var chat = context.activeChat;
-  if (!chat || chat.legacy || context.runtimeEngine.isRunning(chat.id) || context.retryPendingChatIdRef.current) return;
+  if (!chat || context.runtimeEngine.isRunning(chat.id) || context.retryPendingChatIdRef.current) return;
   var chatId = String(chat.id || "");
   var targetMessageId = typeof messageId === "string" ? messageId : "";
   var selection = wbcRetryTurnSelection(chat, targetMessageId);
@@ -193,7 +193,7 @@ function wbcHandleRetryMessage(context, messageId) {
 
 function wbcHandleEditMessage(context, messageId, newContent) {
   var chat = context.activeChat;
-  if (!chat || chat.legacy || context.runtimeEngine.isRunning(chat.id) || !messageId || !newContent) return;
+  if (!chat || context.runtimeEngine.isRunning(chat.id) || !messageId || !newContent) return;
   context.setError("");
   var replayMode = wbcNormalizePermissionMode(chat.permissionMode, "auto");
   context.model.forkChat(chat.id, messageId, newContent).then(function (newChat) {
@@ -235,7 +235,7 @@ function wbcHandleRename(context, title) {
 }
 
 function wbcOpenQuickRename(context) {
-  if (!context.activeChat || context.activeChat.legacy) return;
+  if (!context.activeChat) return;
   context.closePageContextMenu();
   context.setQuickRenameChat(context.activeChat);
 }

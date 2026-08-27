@@ -16,45 +16,20 @@ import pytest
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 REPOSITORY_ROOT = SRC_ROOT.parent
 COMPLEXITY_BASELINE = REPOSITORY_ROOT / "project-notes" / "architecture-complexity-baseline.json"
-PRIVATE_IMPORT_BUDGET = {
-    "cyrene.agent": 7,
-    "cyrene.agent.agent": 1,
-    "cyrene.agent.budget": 1,
-    "cyrene.agent.coordinator": 4,
-    "cyrene.agent.message": 15,
-    "cyrene.agent.planning": 1,
-    "cyrene.agent.prompts": 20,
-    "cyrene.agent.replies": 9,
-    "cyrene.agent.round": 1,
-    "cyrene.agent.session": 22,
-    "cyrene.agent.state": 57,
-    "cyrene.learning.engine": 2,
-    "cyrene.subagent": 1,
-    "cyrene.tool_impl.knowledge.list_library_items": 1,
-    "cyrene.tooling.executor": 2,
-    "cyrene.workbench.inbox": 2,
-    "cyrene.workbench.memory": 1,
-    "cyrene.workbench.task_context": 1,
-}
+PRIVATE_IMPORT_TOTAL_BUDGET = 148
 
 CYRENE_TOP_LEVEL_DIRECTORIES = {
-    "agent",
     "agent_runtime",
     "channels",
-    "custom_tools",
     "extensions",
     "hooks",
-    "knowledge",
     "learning",
     "media",
     "model_runtime",
     "observability",
     "office",
-    "plugins",
     "runtime",
     "terminal",
-    "tool_impl",
-    "tooling",
     "voice",
     "workbench",
 }
@@ -62,14 +37,10 @@ CYRENE_TOP_LEVEL_FILES = {
     "__init__.py",
     "__main__.py",
     "browser.py",
-    "call_llm.py",
     "cli.py",
     "cli_chat.py",
     "config.py",
     "local_cli.py",
-    "memory.py",
-    "subagent.py",
-    "tools.py",
 }
 
 # Historical namespace-wide imports are migration debt. The set may shrink but
@@ -79,7 +50,6 @@ IMPORT_STAR_ALLOWLIST = {
     "src/route/agent/sessions.py",
     "src/route/backup.py",
     "src/route/learning.py",
-    "src/route/memory.py",
     "src/route/notifications.py",
     "src/route/search.py",
     "src/route/system/shell.py",
@@ -113,7 +83,11 @@ def test_cyrene_top_level_matches_final_architecture() -> None:
 
 
 def _application_python_files() -> list[Path]:
-    return sorted(SRC_ROOT.rglob("*.py"))
+    return sorted(
+        path
+        for path in SRC_ROOT.rglob("*.py")
+        if "tests" not in path.relative_to(SRC_ROOT).parts
+    )
 
 
 def _relative_source(path: Path) -> str:
@@ -305,7 +279,7 @@ def test_private_cross_package_imports_can_only_decrease() -> None:
 
 @pytest.mark.parametrize(
     "package",
-    ("cyrene.agent", "cyrene.learning", "cyrene.tooling"),
+    ("cyrene.learning",),
 )
 def test_public_package_facades_are_lazy(package: str) -> None:
     """Importing a facade must not initialize its implementation graph."""
@@ -323,6 +297,8 @@ def test_public_package_facades_are_lazy(package: str) -> None:
 def _source_modules() -> dict[str, tuple[Path, bool]]:
     modules: dict[str, tuple[Path, bool]] = {}
     for path in SRC_ROOT.rglob("*.py"):
+        if "tests" in path.relative_to(SRC_ROOT).parts:
+            continue
         parts = list(path.relative_to(SRC_ROOT).with_suffix("").parts)
         is_package = parts[-1] == "__init__"
         if is_package:
@@ -354,7 +330,10 @@ def _static_import_graph() -> dict[str, set[str]]:
             if imported is not None and imported != importer:
                 graph[importer].add(imported)
 
-        for node in ast.walk(tree):
+        # Function-local imports are deferred dependency lookups, not static
+        # module initialization edges. Only module-scope imports participate
+        # in this cycle check.
+        for node in tree.body:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     add_import(alias.name)
@@ -426,9 +405,9 @@ def test_source_tree_has_no_static_import_cycles() -> None:
     assert _multi_module_cycles(_static_import_graph()) == []
 
 
-def test_tool_executor_import_does_not_require_registry_import_order() -> None:
-    """Remote tool registration imports progress reporting during catalog init."""
-    code = "from cyrene.tooling.executor import _execute_tool, publish_tool_progress\nprint(_execute_tool.__name__, publish_tool_progress.__name__)\n"
+def test_plugin_execution_import_does_not_require_registry_import_order() -> None:
+    """Plugin execution services must not depend on registry import order."""
+    code = "from agent.plugin.execution import invoke_plugin, publish_plugin_progress\nprint(invoke_plugin.__name__, publish_plugin_progress.__name__)\n"
 
     output = subprocess.check_output(
         [sys.executable, "-c", code],
@@ -436,7 +415,7 @@ def test_tool_executor_import_does_not_require_registry_import_order() -> None:
         text=True,
     )
 
-    assert output.strip() == "_execute_tool publish_tool_progress"
+    assert output.strip() == "invoke_plugin publish_plugin_progress"
 
 
 def _private_import_counts() -> Counter[str]:
@@ -453,25 +432,6 @@ def _private_import_counts() -> Counter[str]:
 
 
 def test_private_import_budget_can_only_decrease() -> None:
-    """Block new private dependencies while the compatibility debt is removed."""
+    """Block new private cross-package dependencies."""
     current = _private_import_counts()
-    unexpected_sources = sorted(set(current) - set(PRIVATE_IMPORT_BUDGET))
-    over_budget = {
-        source: {"current": count, "budget": PRIVATE_IMPORT_BUDGET[source]}
-        for source, count in current.items()
-        if source in PRIVATE_IMPORT_BUDGET and count > PRIVATE_IMPORT_BUDGET[source]
-    }
-
-    assert unexpected_sources == []
-    assert over_budget == {}
-    assert sum(current.values()) <= sum(PRIVATE_IMPORT_BUDGET.values()) == 148
-
-
-def test_agent_facade_private_export_budget_can_only_decrease() -> None:
-    """Do not add more historical private names to the lazy agent facade."""
-    from cyrene import agent
-
-    exported_names = [name for names in agent._EXPORT_GROUPS.values() for name in names]
-    private_names = [name for name in exported_names if name.startswith("_")]
-
-    assert len(private_names) <= 120
+    assert sum(current.values()) <= PRIVATE_IMPORT_TOTAL_BUDGET

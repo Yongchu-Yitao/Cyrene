@@ -131,12 +131,12 @@ _TOOL_ACTION_MAP: dict[str, tuple[str, str, str, int]] = {
     "query_round": ("state_management", "observe_context", "query_round", 0),
     "recall_memory": ("state_management", "observe_context", "recall_memory", 1),
     "ask_user": ("user_interaction", "ask_clarification", "ask_user", 1),
-    "schedule_task": ("schedule_management", "manage_schedule", "schedule_task", 0),
-    "list_tasks": ("schedule_management", "manage_schedule", "list_tasks", 0),
-    "edit_task": ("schedule_management", "manage_schedule", "edit_task", 0),
-    "pause_task": ("schedule_management", "manage_schedule", "pause_task", 0),
-    "resume_task": ("schedule_management", "manage_schedule", "resume_task", 0),
-    "cancel_task": ("schedule_management", "manage_schedule", "cancel_task", 0),
+    "schedule.create": ("schedule_management", "manage_schedule", "schedule.create", 0),
+    "schedule.list": ("schedule_management", "manage_schedule", "schedule.list", 0),
+    "schedule.edit": ("schedule_management", "manage_schedule", "schedule.edit", 0),
+    "schedule.pause": ("schedule_management", "manage_schedule", "schedule.pause", 0),
+    "schedule.resume": ("schedule_management", "manage_schedule", "schedule.resume", 0),
+    "schedule.cancel": ("schedule_management", "manage_schedule", "schedule.cancel", 0),
     "StartShell": ("system_operation", "run_command", "start_shell", 0),
     "SendShell": ("system_operation", "run_command", "send_shell", 0),
     "DeleteShell": ("system_operation", "manage_state", "delete_shell", 0),
@@ -406,6 +406,32 @@ class CaptureService:
             row = await cursor.fetchone()
         return str(row['turn_id'] or '') if row is not None else ''
 
+    async def open_turn(self, session_id: str, round_id: str) -> dict[str, str] | None:
+        """Recover the durable, not-yet-finalized turn for one Plugin run."""
+        sid = str(session_id or '').strip()
+        rid = str(round_id or '').strip()
+        if not sid or not rid:
+            return None
+        async with self.ports.connect() as conn:
+            cursor = await conn.execute(
+                '''
+                SELECT turn_id, session_id, round_id
+                FROM behavior_turns
+                WHERE session_id = ? AND round_id = ? AND processed_status = -1
+                ORDER BY created_at DESC
+                LIMIT 1
+                ''',
+                (sid, rid),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            'turn_id': str(row['turn_id'] or ''),
+            'session_id': str(row['session_id'] or ''),
+            'round_id': str(row['round_id'] or ''),
+        }
+
     async def _upsert_behavior_session(self, conn: aiosqlite.Connection, *, session_id: str, scope: dict[str, str], now: str, session_title: str, user_message: str) -> None:
         cursor = await conn.execute('SELECT session_id FROM behavior_sessions WHERE session_id = ?', (session_id,))
         if await cursor.fetchone() is None:
@@ -422,12 +448,38 @@ class CaptureService:
         metadata['correction_feedback'] = True
         await conn.execute('\n        UPDATE behavior_turns\n        SET user_feedback = ?, metadata_json = ?, updated_at = ?\n        WHERE turn_id = ?\n        ', ('correction', self.ports.json_dumps(metadata), now, latest_turn['turn_id']))
 
-    async def begin_turn(self, *, session_id: str, round_id: str, user_message: str, history: list[dict[str, Any]], session_title: str='', system_initiated: bool=False) -> dict[str, Any]:
+    async def begin_turn(
+        self,
+        *,
+        session_id: str,
+        round_id: str,
+        user_message: str,
+        history: list[dict[str, Any]],
+        session_title: str = '',
+        system_initiated: bool = False,
+        defer_processing: bool = False,
+    ) -> dict[str, Any]:
         if not self.ports.init_done:
             await self.ports.ensure_tables()
         now = self.ports.now_iso()
         normalized_session_id = str(session_id or '').strip() or self.ports.new_id('session')
         normalized_round_id = str(round_id or '').strip() or self.ports.new_id('round')
+        if defer_processing:
+            existing = await self.open_turn(
+                normalized_session_id,
+                normalized_round_id,
+            )
+            if existing is not None:
+                existing_turn_id = existing['turn_id']
+                return {
+                    'turn_id': existing_turn_id,
+                    'session_id': existing['session_id'],
+                    'round_id': existing['round_id'],
+                    'scope': await self._project_scope_for_turn(existing_turn_id),
+                    'session_token': self.ports.current_session_id.set(existing['session_id']),
+                    'turn_token': self.ports.current_turn_id.set(existing_turn_id),
+                    'round_token': self.ports.current_round_id.set(existing['round_id']),
+                }
         scope = self.ports.project_scope_for_session(normalized_session_id)
         turn_id = self.ports.new_id('turn')
         feedback = self.ports.turn_feedback_from_message(user_message)
@@ -435,9 +487,22 @@ class CaptureService:
         metadata = {'round_id': normalized_round_id, 'session_title': str(session_title or '').strip(), 'correction_feedback': False, 'round_title': '', 'system_initiated': bool(system_initiated)}
         async with self.ports.connect() as conn:
             await self._upsert_behavior_session(conn, session_id=normalized_session_id, scope=scope, now=now, session_title=session_title, user_message=user_message)
+            if defer_processing:
+                # One Agent session runs one turn at a time.  An older open
+                # marker therefore represents an interrupted process that did
+                # not get a Stop Hook before this new run began.
+                await conn.execute(
+                    '''
+                    UPDATE behavior_turns
+                    SET updated_at = ?, outcome_status = 'cancelled',
+                        processed_status = 1
+                    WHERE session_id = ? AND processed_status = -1
+                    ''',
+                    (now, normalized_session_id),
+                )
             if feedback:
                 await self._mark_previous_turn_corrected(conn, normalized_session_id, now)
-            await conn.execute("\n            INSERT INTO behavior_turns\n            (turn_id, session_id, project_id, project_key, session_kind, round_id, created_at, updated_at, user_message, context_summary,\n             agent_response, outcome_status, user_feedback, processed_status, metadata_json)\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 'success', '', 0, ?)\n            ", (turn_id, normalized_session_id, scope['project_id'], scope['project_key'], scope['session_kind'], normalized_round_id, now, now, str(user_message or ''), context_summary, self.ports.json_dumps({**metadata, **scope})))
+            await conn.execute("\n            INSERT INTO behavior_turns\n            (turn_id, session_id, project_id, project_key, session_kind, round_id, created_at, updated_at, user_message, context_summary,\n             agent_response, outcome_status, user_feedback, processed_status, metadata_json)\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 'success', '', ?, ?)\n            ", (turn_id, normalized_session_id, scope['project_id'], scope['project_key'], scope['session_kind'], normalized_round_id, now, now, str(user_message or ''), context_summary, -1 if defer_processing else 0, self.ports.json_dumps({**metadata, **scope})))
             await conn.commit()
         session_token = self.ports.current_session_id.set(normalized_session_id)
         turn_token = self.ports.current_turn_id.set(turn_id)
@@ -485,9 +550,30 @@ class CaptureService:
     def _map_tool_to_action(self, tool_name: str) -> tuple[str, str, str, int]:
         return map_tool_to_action(tool_name)
 
-    async def record_action(self, tool_name: str, args: dict[str, Any], caller: str, round_id: str, duration_ms: float, *, result: Any='', success: bool=True, error: str='') -> None:
-        session_id = self.ports.current_session_id.get()
-        turn_id = self.ports.current_turn_id.get()
+    async def record_action(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        caller: str,
+        round_id: str,
+        duration_ms: float,
+        *,
+        result: Any = '',
+        success: bool = True,
+        error: str = '',
+        session_id: str = '',
+        turn_id: str = '',
+    ) -> None:
+        """Persist one completed Plugin action.
+
+        Agent lifecycle Hooks run on a dedicated worker and therefore cannot
+        rely on context variables set by a previous Hook task.  Explicit
+        ``session_id``/``turn_id`` values are the canonical Plugin boundary;
+        the context-variable fallback remains useful for direct, same-task
+        capture such as browser takeover events.
+        """
+        session_id = str(session_id or self.ports.current_session_id.get()).strip()
+        turn_id = str(turn_id or self.ports.current_turn_id.get()).strip()
         if not session_id or not turn_id:
             return
         now = self.ports.now_iso()
@@ -573,11 +659,9 @@ class CaptureService:
             return 'partial_success'
 
     async def complete_turn(self, *, turn_id: str, assistant_response: str, session_title: str='', round_title: str='') -> None:
-        try:
-            from cyrene.tooling.executor import flush_behavior_action_tasks
-            await flush_behavior_action_tasks()
-        except Exception:
-            logger.debug('failed to flush behavior action telemetry', exc_info=True)
+        # Plugin PostToolUse Hooks persist each action before returning, so
+        # SessionEnd is already the ordering barrier.  There is deliberately
+        # no detached legacy executor queue to flush here.
         now = self.ports.now_iso()
         outcome = await self._classify_turn_outcome(turn_id)
         async with self.ports.connect() as conn:
@@ -591,8 +675,37 @@ class CaptureService:
                 metadata['session_title'] = session_title
             if round_title:
                 metadata['round_title'] = round_title
-            await conn.execute('\n            UPDATE behavior_turns\n            SET updated_at = ?, outcome_status = ?, agent_response = ?, metadata_json = ?\n            WHERE turn_id = ?\n            ', (now, outcome, str(assistant_response or ''), self.ports.json_dumps(metadata), turn_id))
+            await conn.execute('\n            UPDATE behavior_turns\n            SET updated_at = ?, outcome_status = ?, agent_response = ?,\n                processed_status = 0, metadata_json = ?\n            WHERE turn_id = ?\n            ', (now, outcome, str(assistant_response or ''), self.ports.json_dumps(metadata), turn_id))
             if session_title:
                 await conn.execute('\n                UPDATE behavior_sessions\n                SET updated_at = ?, session_summary = ?\n                WHERE session_id = ?\n                ', (now, self.ports.truncate_text(session_title, 240), row['session_id']))
             await conn.commit()
         await self._rebuild_tool_chain_for_turn(turn_id)
+
+    async def abort_turn(self, *, turn_id: str, reason: str = '') -> None:
+        """Close an interrupted Plugin turn without making it learnable."""
+        tid = str(turn_id or '').strip()
+        if not tid:
+            return
+        now = self.ports.now_iso()
+        async with self.ports.connect() as conn:
+            cursor = await conn.execute(
+                'SELECT metadata_json FROM behavior_turns WHERE turn_id = ?',
+                (tid,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return
+            metadata = self.ports.json_loads(row['metadata_json'], {})
+            metadata['interrupted'] = True
+            metadata['interruption_reason'] = self.ports.truncate_text(reason, 240)
+            await conn.execute(
+                '''
+                UPDATE behavior_turns
+                SET updated_at = ?, outcome_status = 'cancelled',
+                    processed_status = 1, metadata_json = ?
+                WHERE turn_id = ?
+                ''',
+                (now, self.ports.json_dumps(metadata), tid),
+            )
+            await conn.commit()
+        await self._rebuild_tool_chain_for_turn(tid)

@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 from typing import Any, Awaitable, Callable
 
+from agent.plugin import PluginContext
 from cyrene.office.slide_layout import SEMANTIC_LAYOUTS
 from ._shared import (
     CONTEXT_PROPERTIES,
@@ -224,31 +225,43 @@ def _edit_properties(op: str) -> dict[str, Any]:
     return properties
 
 
-async def _read_handler(method: str, args: dict[str, Any], *_rest: Any) -> str:
+async def _read_handler(
+    method: str,
+    args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     return await execute_powerpoint_request(args, method, method, timeout=60)
 
 
-async def _edit_handler(op: str, args: dict[str, Any], *_rest: Any) -> str:
+async def _edit_handler(
+    op: str,
+    args: dict[str, Any],
+    context: PluginContext,
+) -> str:
     request = normalize_powerpoint_arguments(args)
     operation = {key: value for key, value in request.items() if key not in {*CONTEXT_PROPERTIES, *SLIDE_PROPERTIES, *MUTATION_PROPERTIES}}
     operation["op"] = op
     request["operations"] = [operation]
-    return await apply_batch_handler(request)
+    return await apply_batch_handler(request, context)
 
 
-async def _method_handler(method: str, args: dict[str, Any], *_rest: Any) -> str:
+async def _method_handler(
+    method: str,
+    args: dict[str, Any],
+    context: PluginContext,
+) -> str:
     if method == "ppt.create_slides":
         return await _create_slides_handler(args)
     if method == "ppt.render_slide":
-        return await render_slide_handler(args)
+        return await render_slide_handler(args, context)
     if method == "ppt.edit_chart":
-        return await edit_chart_handler(args)
+        return await edit_chart_handler(args, context)
     if method == "ppt.apply_ooxml_patch":
-        return await apply_ooxml_patch_handler(args)
+        return await apply_ooxml_patch_handler(args, context)
     if method == "ppt.replace_slide_ooxml":
-        return await replace_slide_ooxml_handler(args)
+        return await replace_slide_ooxml_handler(args, context)
     if method in {"ppt.import_slides"}:
-        return await insert_slides_handler(args)
+        return await insert_slides_handler(args, context)
     request = deepcopy(args)
     if method in {"ppt.create_slide", "ppt.apply_slide_spec", "ppt.relayout_slide", "ppt.create_from_template", "ppt.replace_slide"}:
         if str(request.get("mode") or "") == "file" or request.get("filePath"):
@@ -428,8 +441,11 @@ async def _create_slides_handler(args: dict[str, Any]) -> str:
 
 
 def _bind(function: Callable[..., Awaitable[str]], value: str) -> Callable[..., Awaitable[str]]:
-    async def handler(args: dict[str, Any], *rest: Any) -> str:
-        return await function(value, args, *rest)
+    async def handler(
+        args: dict[str, Any],
+        context: PluginContext,
+    ) -> str:
+        return await function(value, args, context)
     return handler
 
 

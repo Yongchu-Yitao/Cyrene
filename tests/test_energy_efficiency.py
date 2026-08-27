@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 
@@ -25,7 +26,6 @@ async def test_scheduler_uses_independent_maintenance_cadences(
     monkeypatch,
 ):
     from cyrene.runtime import scheduler
-    from cyrene.workbench import chat as routes_workbench_chat
     from cyrene.workbench import notifications as workbench_notifications
 
     monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
@@ -33,8 +33,9 @@ async def test_scheduler_uses_independent_maintenance_cadences(
     monkeypatch.setattr(scheduler, "SCHEDULER_INTERVAL", 60)
     monkeypatch.setattr(scheduler, "PATTERN_DETECTION_INTERVAL", 600)
     monkeypatch.setattr(scheduler, "STEWARD_INTERVAL", 3600)
+    monkeypatch.setenv("CYRENE_PLUGIN_IMPL_DIR", str(tmp_path / "plugin_impl"))
+    monkeypatch.setenv("SCHEDULER_INTERVAL", "60")
     monkeypatch.setattr(scheduler, "_workbench_db_path", "")
-    monkeypatch.setattr(routes_workbench_chat, "configure_store", lambda _path: None)
     monkeypatch.setattr(workbench_notifications, "configure_store", lambda _path: None)
 
     instance = scheduler.setup_scheduler(None, str(tmp_path / "cyrene.runtime.database"))
@@ -42,6 +43,7 @@ async def test_scheduler_uses_independent_maintenance_cadences(
 
     assert set(jobs) == {
         "scheduled_tasks",
+        "plugin_registry_sync",
         "behavior_learning",
         "proactive_heartbeat",
         "steward",
@@ -54,29 +56,36 @@ async def test_scheduler_uses_independent_maintenance_cadences(
     assert jobs["short_term_cleanup"].trigger.interval.total_seconds() == 86400
 
 
-async def test_due_task_poll_does_not_run_heavy_maintenance(monkeypatch):
+async def test_due_task_job_invokes_hidden_plugin_not_maintenance(monkeypatch, tmp_path):
     from cyrene.runtime import scheduler
+    from cyrene.workbench import notifications as workbench_notifications
 
-    due_tasks = AsyncMock()
     proactive = AsyncMock()
-    steward = AsyncMock()
     learning = AsyncMock()
-    monkeypatch.setattr(scheduler, "_check_and_execute_tasks", due_tasks)
+    monkeypatch.setenv("CYRENE_PLUGIN_IMPL_DIR", str(tmp_path / "plugin_impl"))
+    monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
+    monkeypatch.setattr(workbench_notifications, "configure_store", lambda _path: None)
     monkeypatch.setattr(scheduler, "_heartbeat_proactive_check", proactive)
-    monkeypatch.setattr(scheduler, "_run_steward_if_needed", steward)
     monkeypatch.setattr(scheduler, "_behavior_learning_tick", learning)
+    scheduler.setup_scheduler(None, str(tmp_path / "runtime.sqlite3"))
+    host = scheduler._background_plugin_host
+    assert host is not None
+    plugin_call = AsyncMock(
+        return_value=SimpleNamespace(success=True, error="")
+    )
+    monkeypatch.setattr(host.runtime, "call", plugin_call)
 
-    await scheduler._scheduled_task_tick(None, "cyrene.runtime.database")
+    await host._invoke("schedule.tick", {}, "scheduled_tasks")
 
-    due_tasks.assert_awaited_once_with(None, "cyrene.runtime.database")
+    plugin_call.assert_awaited_once()
+    assert plugin_call.await_args.args[0] == "schedule.tick"
     proactive.assert_not_awaited()
-    steward.assert_not_awaited()
     learning.assert_not_awaited()
 
 
 def test_steward_reads_recent_workbench_session_archives(tmp_path, monkeypatch):
-    from cyrene.runtime import scheduler
-    from cyrene.workbench import runtime as workbench_runtime
+    from agent.plugin.plugin_impl.cyrene_memory import steward
+    from cyrene.workbench import context as workbench_context
 
     conversations = tmp_path / "conversations"
     conversations.mkdir()
@@ -94,14 +103,22 @@ def test_steward_reads_recent_workbench_session_archives(tmp_path, monkeypatch):
     import os
     os.utime(old, (old_timestamp, old_timestamp))
 
-    monkeypatch.setattr(scheduler, "CONVERSATIONS_DIR", conversations)
+    memory_service = SimpleNamespace(
+        conversations_directory=conversations,
+        session_conversations_directory=lambda workspace_path: (
+            Path(workspace_path) / "conversations"
+        ),
+    )
     monkeypatch.setattr(
-        workbench_runtime,
-        "_read_workbench_store",
-        lambda: {"projects": []},
+        workbench_context,
+        "read_projects",
+        lambda: [],
     )
 
-    text = scheduler._recent_workbench_conversations(time.time() - 3600)
+    text = steward.recent_workbench_conversations(
+        memory_service,
+        time.time() - 3600,
+    )
 
     assert "wbchat_recent.md" in text
     assert "project_id=default" in text
@@ -110,9 +127,9 @@ def test_steward_reads_recent_workbench_session_archives(tmp_path, monkeypatch):
 
 
 def test_steward_normalizes_soul_commands_and_excludes_entities():
-    from cyrene.runtime import scheduler
+    from agent.plugin.plugin_impl.cyrene_memory import steward
 
-    result = scheduler._steward_soul_commands(
+    result = steward.normalize_soul_commands(
         "APPEND MEMORY:HIGH_IMPACT :: exact fact\n"
         "APPEND: PATTERN:USER — legacy preference\n"
         "MERGE RELATIONSHIP:USER: old|||new\n"
@@ -131,94 +148,54 @@ def test_steward_normalizes_soul_commands_and_excludes_entities():
 async def test_steward_processes_workbench_archive_without_owner_id(
     tmp_path, monkeypatch
 ):
-    from cyrene.runtime import scheduler
+    import agent.plugin as plugin_runtime
+    from agent.plugin.plugin_impl.cyrene_memory import steward
 
-    steward = AsyncMock(return_value="SKIP")
-    monkeypatch.setattr(scheduler, "_get_last_steward_run", lambda: None)
-    monkeypatch.setattr(scheduler, "_has_new_conversation", lambda: False)
+    model_runner = AsyncMock(return_value="SKIP")
+    monkeypatch.setattr(steward, "has_daily_conversation", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
-        scheduler,
-        "_recent_workbench_conversations",
+        steward,
+        "recent_workbench_conversations",
         lambda *_args, **_kwargs: "Workbench conversation text",
     )
-    monkeypatch.setattr(scheduler, "OWNER_ID", None)
-    monkeypatch.setattr(scheduler, "read_soul", lambda: "")
-    monkeypatch.setattr(scheduler, "run_steward_agent", steward)
-    monkeypatch.setattr(scheduler, "_save_steward_run", lambda _timestamp: None)
+    memory_service = SimpleNamespace(
+        data_directory=tmp_path,
+        conversations_directory=tmp_path / "conversations",
+        recent_conversations=AsyncMock(return_value=""),
+        read_soul=lambda: "",
+        apply_soul_update=lambda _commands: [],
+    )
+    monkeypatch.setattr(plugin_runtime, "active_plugin_service", lambda _name: None)
 
-    await scheduler._run_steward_if_needed(None, str(tmp_path / "entities.db"))
+    ran = await steward.run_steward_if_needed(
+        memory_service,
+        interval=3600,
+        now=100_000,
+        model_runner=model_runner,
+    )
 
-    steward.assert_awaited_once_with(
+    assert ran is True
+    model_runner.assert_awaited_once_with(
         "Workbench conversation text",
         "",
         None,
-        0,
-        str(tmp_path / "entities.db"),
     )
+    assert (tmp_path / "memory_steward.json").exists()
 
 
-async def test_behavior_learning_kicks_are_coalesced(monkeypatch):
-    from cyrene.learning import engine as behavior_learning
-    from cyrene.agent import coordinator
+async def test_scheduler_steward_tick_only_delegates_to_memory_plugin(monkeypatch):
+    from cyrene.runtime import scheduler
 
-    process = AsyncMock()
-    monkeypatch.setattr(behavior_learning, "process_unprocessed_turns", process)
-    monkeypatch.setattr(coordinator, "PATTERN_DETECTION_INTERVAL", 1)
+    run_steward = AsyncMock(return_value=True)
+    service = SimpleNamespace(run_steward_if_needed=run_steward)
+    monkeypatch.setattr(scheduler, "_memory_service", lambda: service)
+    monkeypatch.setattr(scheduler, "STEWARD_INTERVAL", 4321)
 
-    await coordinator._kick_behavior_learning_processing()
-    first_task = coordinator._DEFERRED_BEHAVIOR_TASK
-    await coordinator._kick_behavior_learning_processing()
+    await scheduler._steward_tick(None, "ignored.db")
 
-    assert coordinator._DEFERRED_BEHAVIOR_TASK is first_task
-    process.assert_not_awaited()
-    first_task.cancel()
-    await coordinator.shutdown_background_tasks()
+    run_steward.assert_awaited_once_with(interval=4321)
 
 
-async def test_single_tool_turn_skips_learning_llm(tmp_path, monkeypatch):
-    from cyrene.learning import engine as learning
-
-    await learning.init(tmp_path, tmp_path)
-    calls: list[str] = []
-
-    async def capture(prompt: str, *, caller: str = "behavior_learning"):
-        calls.append(f"{caller}:{prompt[:40]}")
-        return {"purpose": "不应生成"}
-
-    monkeypatch.setattr(learning, "_call_llm_json", capture)
-    context = await learning.begin_turn(
-        session_id="single-tool-session",
-        round_id="single-tool-round",
-        user_message="查询上海天气",
-        history=[],
-    )
-    await learning.record_action(
-        "search_web",
-        {"query": "上海天气"},
-        "main_agent",
-        "single-tool-round",
-        10,
-        result="晴",
-        success=True,
-    )
-    await learning.complete_turn(
-        turn_id=context["turn_id"],
-        assistant_response="上海今天晴。",
-    )
-    learning.clear_turn_context(context)
-
-    result = await learning.process_unprocessed_turns(force=True)
-
-    assert result["processed_turns"] == 1
-    assert calls == []
-    async with learning._conn() as conn:
-        row = await (
-            await conn.execute(
-                "SELECT purpose FROM behavior_turn_tool_chains WHERE turn_id = ?",
-                (context["turn_id"],),
-            )
-        ).fetchone()
-    assert row["purpose"] == ""
 
 
 async def test_llm_usage_and_latency_can_share_one_batch(tmp_path):

@@ -3,13 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
+from agent.plugin import PluginApplicationHost, PluginRegistry
+from agent.plugin.plugin_impl.cyrene_map import plugin_pack as map_plugin_pack
 from cyrene.runtime.backup import BackupDownloadError, BackupRepository
 from route.backup import register_backup_routes
-from route.maps.map import register_map_routes
-from route.memory import register_memory_routes
+from agent.plugin.plugin_impl.cyrene_memory.routes_overview import register_memory_routes
 from route.search import register_search_routes
 from route.system.shell import register_shell_routes
 
@@ -18,11 +19,15 @@ class FakePresentationQueries:
     def __init__(self) -> None:
         self.search_args = None
 
+    @property
+    def search_types(self):
+        return frozenset({"project"})
+
     async def search_workbench(self, query, types, per_type_limit):
         self.search_args = (query, types, per_type_limit)
         return {"project": [{"id": "project_1"}]}
 
-    async def memory(self):
+    async def overview(self):
         return {"memories": [{"id": "memory_1"}]}
 
     async def ui_data(self, timezone_name=""):
@@ -65,27 +70,33 @@ def test_presentation_routes_delegate_to_explicit_query_service(tmp_path: Path):
     assert root.headers["cache-control"] == "no-store, no-cache, must-revalidate"
 
 
-class FakeSessionStates:
-    def __init__(self) -> None:
-        self.session_id = None
-
-    def read_map(self, session_id: str):
-        self.session_id = session_id
-        return {"map_pins": [{"id": "pin_1"}], "map_routes": [{"id": "route_1"}]}
-
-
-def test_map_route_delegates_session_lookup_to_repository():
-    states = FakeSessionStates()
+def test_map_route_is_owned_by_the_map_plugin(tmp_path: Path):
     app = FastAPI()
-    register_map_routes(app, states)
+    registry = PluginRegistry(include_core=False)
+    registry.register_pack(map_plugin_pack, source="test")
+    host = PluginApplicationHost(
+        app=app,
+        registry=registry,
+        bot=None,
+        db_path=str(tmp_path / "cyrene.sqlite3"),
+        data_directory=tmp_path / "data",
+        plugin_directory=tmp_path / "plugin_impl",
+    )
+    router = APIRouter()
+    host.attach(router)
+    app.include_router(router)
+    host.service("maps").add_pin(
+        "chat_1",
+        lat=39.9,
+        lng=116.4,
+        name="Beijing",
+    )
 
     response = TestClient(app).get("/api/map/pins", params={"session_id": " chat_1 "})
 
-    assert response.json() == {
-        "pins": [{"id": "pin_1"}],
-        "routes": [{"id": "route_1"}],
-    }
-    assert states.session_id == "chat_1"
+    assert response.status_code == 200
+    assert response.json()["pins"][0]["name"] == "Beijing"
+    assert response.json()["routes"] == []
 
 
 def test_backup_repository_owns_download_boundary(tmp_path: Path):

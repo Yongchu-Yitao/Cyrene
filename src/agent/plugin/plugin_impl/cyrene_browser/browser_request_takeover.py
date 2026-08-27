@@ -4,25 +4,26 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.plugin import PluginContext
+from agent.plugin.execution import require_plugin_execution
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import (
+from agent.plugin.native_runtime import (
     json_result,
+    publish_runtime_event,
+    run_context_value,
 )
 
 TOOL_NAME = 'browser_request_takeover'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
-async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+async def _tool_browser_request_takeover(args: dict[str, Any], context: PluginContext) -> str:
     from cyrene import browser as _browser
-    from cyrene.observability import debug
     from cyrene.browser import get_session
-    from cyrene.agent.context import get_current_agent_id, get_current_client_request_id, get_current_round_id, get_current_session_id
-    from cyrene.agent.session import clear_pending_question, upsert_pending_question, get_session_labels
 
-    if get_current_agent_id() != "main":
+    if str(run_context_value(context, "agent_id", "main")) != "main":
         return "Only the main agent can request a browser takeover."
-    round_id = str(get_current_round_id() or "").strip()
+    round_id = str(run_context_value(context, "round_id") or "").strip()
     if not round_id:
         return "Cannot request a browser takeover outside an active chat round."
 
@@ -44,42 +45,28 @@ async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_
     # Ask in the app FIRST (the standard question popup), then open the real
     # browser window. The browser side panel also receives the question id so it
     # can offer the same "finished login" confirmation in place.
-    labels = get_session_labels(round_id)
-    question = await upsert_pending_question({
-        "text": reason,
-        "round_id": round_id,
-        "round_title": labels.get("round_title", ""),
-        "client_request_id": str(get_current_client_request_id() or "").strip(),
-        "options": ["我已完成登录"],
-        "allow_custom": False,
-        "meta": {"kind": "browser_takeover", "url": current_url},
-    })
-    await debug.publish_event({
+    question_id = f"question_{require_plugin_execution().call.id[:24]}"
+    await publish_runtime_event(context, {
         "type": "browser_takeover_request",
-        "session_id": str(get_current_session_id() or ""),
+        "session_id": str(run_context_value(context, "session_id") or ""),
         "round_id": round_id,
         "url": current_url,
         "reason": reason,
-        "question_id": question.get("id", ""),
+        "question_id": question_id,
     })
     if not _browser.electron_browser_available():
         try:
             await session.switch_to_headed(current_url)
         except Exception as exc:
-            # Couldn't open the window — undo the pending question and clear the panel.
-            try:
-                await clear_pending_question(str(question.get("id", "")))
-            except Exception:
-                pass
-            await debug.publish_event({
+            await publish_runtime_event(context, {
                 "type": "browser_takeover_cancelled",
-                "session_id": str(get_current_session_id() or ""),
+                "session_id": str(run_context_value(context, "session_id") or ""),
                 "round_id": round_id,
             })
             return f"Failed to open the browser window for takeover: {exc}"
     return json_result({
         "status": "awaiting_user",
-        "question_id": question.get("id", ""),
+        "question_id": question_id,
         "takeover": True,
         "embedded": _browser.electron_browser_available(),
     })

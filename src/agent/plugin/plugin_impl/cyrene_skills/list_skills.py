@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
+from agent.plugin import PluginContext
 from .definitions import get_native_tool_def
-from cyrene.tooling.runtime_api import (
-    build_skills,
-    json,
-)
+from cyrene.learning.skills import build_skills
 
 TOOL_NAME = 'ListSkills'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
-async def _tool_list_skills(_args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+async def _tool_list_skills(
+    _args: dict[str, Any],
+    _context: PluginContext,
+) -> str:
     skills = [
         {
             "id": s.get("id"),

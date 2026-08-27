@@ -78,7 +78,7 @@ def install_resources_dir(
     contents = bundle_contents_dir(executable)
     if contents is not None:
         for candidate in (contents / "Resources", contents / "Frameworks"):
-            if (candidate / "pyproject.toml").exists() or (candidate / ".env.example").exists():
+            if (candidate / "pyproject.toml").exists() or (candidate / "agent" / "plugin" / "plugin_impl").is_dir():
                 return candidate
     return source_root()
 

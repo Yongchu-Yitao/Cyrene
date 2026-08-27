@@ -28,17 +28,28 @@ _COLUMN_MIGRATIONS = (
     AddColumnMigration("scheduled_tasks", "schedule_timezone", "TEXT DEFAULT 'UTC'"),
     AddColumnMigration("scheduled_tasks", "origin_session_id", "TEXT DEFAULT ''"),
     AddColumnMigration("scheduled_tasks", "action_type", "TEXT DEFAULT 'agent_task'"),
-    AddColumnMigration("entities", "project_id", "TEXT DEFAULT 'default'"),
-    AddColumnMigration("entity_candidates", "project_id", "TEXT DEFAULT 'default'"),
+    AddColumnMigration("scheduled_tasks", "updated_at", "TEXT NOT NULL DEFAULT ''"),
+    AddColumnMigration("scheduled_tasks", "definition_revision", "INTEGER NOT NULL DEFAULT 1"),
+    AddColumnMigration("scheduled_tasks", "schedule_revision", "INTEGER NOT NULL DEFAULT 1"),
+    AddColumnMigration("scheduled_tasks", "lease_token", "TEXT"),
+    AddColumnMigration("scheduled_tasks", "lease_until", "TEXT"),
+    AddColumnMigration("scheduled_tasks", "current_run_id", "TEXT"),
+    AddColumnMigration("scheduled_tasks", "scheduled_for", "TEXT"),
+    AddColumnMigration("scheduled_tasks", "last_error", "TEXT"),
+    AddColumnMigration("task_run_logs", "run_id", "TEXT NOT NULL DEFAULT ''"),
+    AddColumnMigration("task_run_logs", "scheduled_for", "TEXT"),
+    AddColumnMigration("task_run_logs", "started_at", "TEXT"),
+    AddColumnMigration("task_run_logs", "completed_at", "TEXT"),
     AddColumnMigration("kb_documents", "content_hash", "TEXT DEFAULT ''"),
 )
 
 _POST_MIGRATION_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_project_id "
     "ON scheduled_tasks(project_id)",
-    "CREATE INDEX IF NOT EXISTS idx_entities_project_id ON entities(project_id)",
-    "CREATE INDEX IF NOT EXISTS idx_entity_candidates_project_id "
-    "ON entity_candidates(project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due_lease "
+    "ON scheduled_tasks(status, next_run, lease_until)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_task_run_logs_run_id "
+    "ON task_run_logs(task_id, run_id) WHERE run_id <> ''",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_documents_content_hash "
     "ON kb_documents(content_hash) WHERE content_hash <> ''",
 )

@@ -3,6 +3,7 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
@@ -118,6 +119,60 @@ async def test_backup_round_trip_is_exact_and_restores_sqlite_and_config(backup_
     assert sorted(path.name for path in conversations.iterdir()) == ["old.md"]
     assert (data / "config.enc").read_bytes() == b"encrypted-on-destination"
     assert env["activated"] == [env["snapshot"]]
+
+
+async def test_backup_collects_plugin_owned_files_and_replace_roots(
+    backup_sandbox,
+    monkeypatch,
+):
+    import agent.plugin as plugin_runtime
+
+    env = backup_sandbox
+    backup = env["backup"]
+    conversations = env["workspace"] / ".cyrene" / "conversations"
+    soul = env["workspace"] / ".cyrene" / "SOUL.md"
+    conversations.mkdir(parents=True)
+    (conversations / "2026-08-26.md").write_text("conversation", encoding="utf-8")
+    soul.write_text("persona", encoding="utf-8")
+    monkeypatch.setattr(
+        backup,
+        "_MANAGED_DIRECTORIES",
+        [
+            item
+            for item in backup._MANAGED_DIRECTORIES
+            if item[1] != "workspace/conversations"
+        ],
+    )
+    monkeypatch.setattr(
+        backup,
+        "_RESTORABLE_REPLACE_ROOTS",
+        {
+            arcname
+            for _path, arcname in backup._MANAGED_DIRECTORIES
+        },
+    )
+    service = SimpleNamespace(
+        backup_sources=lambda: {
+            "files": ((soul, "workspace/SOUL.md"),),
+            "directories": ((conversations, "workspace/conversations"),),
+        }
+    )
+    host = SimpleNamespace(services={"memory": service})
+    monkeypatch.setattr(
+        plugin_runtime,
+        "active_plugin_application_host",
+        lambda: host,
+    )
+
+    result = await backup.export_backup(include_db=False)
+
+    assert result["ok"] is True
+    with ZipFile(result["path"]) as archive:
+        names = set(archive.namelist())
+        manifest = json.loads(archive.read("manifest.json"))
+    assert "workspace/SOUL.md" in names
+    assert "workspace/conversations/2026-08-26.md" in names
+    assert "workspace/conversations" in manifest["replace_roots"]
 
 
 async def test_backup_restores_exports_and_workspace_collections_into_cyrene(

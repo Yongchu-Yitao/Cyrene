@@ -1,19 +1,217 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 
 import pytest
 
 from agent import AgentSession
+from agent.hook import SESSION_END, SESSION_START
 from agent.plugin import Plugin, PluginPack, PluginRegistry
 from agent.workbench import (
     WorkbenchSessionBridge,
+)
+from agent.workbench.bridge import (
+    _normalized_usage,
+    _turn_metrics,
+    project_tool_activity_messages,
 )
 
 
 def run(coroutine):
     return asyncio.run(coroutine)
+
+
+def test_usage_normalization_preserves_openai_compatible_cache_details():
+    usage = _normalized_usage(
+        {
+            "prompt_tokens": 100,
+            "completion_tokens": 10,
+            "prompt_tokens_details": {"cached_tokens": 80},
+        }
+    )
+
+    assert usage["prompt_cache_hit_tokens"] == 80
+    assert usage["prompt_cache_miss_tokens"] == 20
+
+
+def test_turn_metrics_aggregate_model_usage_and_generation_time():
+    snapshot = {
+        "nodes": [
+            {
+                "id": "user",
+                "parent_id": "root",
+                "value": {"role": "user", "run_id": "run-1"},
+            },
+            {
+                "id": "observation-1",
+                "parent_id": "user",
+                "value": {
+                    "role": "model_observation",
+                    "call_kind": "agent",
+                    "latency_ms": 500,
+                    "usage": {"total_tokens": 999},
+                },
+            },
+            {
+                "id": "assistant-1",
+                "parent_id": "user",
+                "value": {
+                    "role": "assistant",
+                    "run_id": "run-1",
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 20,
+                        "total_tokens": 120,
+                    },
+                    "model_observation_id": "observation-1",
+                    "model_latency_ms": 500,
+                },
+            },
+            {
+                "id": "observation-2",
+                "parent_id": "assistant-1",
+                "value": {
+                    "role": "model_observation",
+                    "call_kind": "permission",
+                    "latency_ms": 250,
+                },
+            },
+            {
+                "id": "tool-results",
+                "parent_id": "assistant-1",
+                "value": {"role": "tool_results", "run_id": "run-1"},
+            },
+            {
+                "id": "assistant-final",
+                "parent_id": "tool-results",
+                "value": {
+                    "role": "assistant",
+                    "run_id": "run-1",
+                    "model": "provider/model",
+                    "model_identity": {"provider": "provider"},
+                    "usage": {
+                        "input_tokens": 40,
+                        "output_tokens": 10,
+                    },
+                    "model_observation_id": "",
+                    "model_latency_ms": 250,
+                    "auxiliary_usage": [
+                        {
+                            "usage": {
+                                "prompt_tokens": 15,
+                                "completion_tokens": 5,
+                                "total_tokens": 20,
+                            },
+                            "model_observation_id": "observation-2",
+                            "model_latency_ms": 250,
+                        }
+                    ],
+                },
+            },
+        ]
+    }
+
+    usage, model, identity, duration_ms, rate = _turn_metrics(
+        snapshot,
+        "run-1",
+        "assistant-final",
+    )
+
+    assert usage == {
+        "prompt_tokens": 155,
+        "completion_tokens": 35,
+        "total_tokens": 190,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 0,
+    }
+    assert model == "provider/model"
+    assert identity == {"provider": "provider"}
+    assert duration_ms == 1000
+    assert rate == 35
+
+
+def test_context_tree_tool_calls_project_to_durable_activity_cards():
+    snapshot = {
+        "nodes": [
+            {
+                "id": "assistant-discover",
+                "parent_id": "user",
+                "created_at": "2030-01-01T00:00:01+00:00",
+                "value": {
+                    "role": "assistant",
+                    "run_id": "run-1",
+                    "model": "provider/model",
+                    "tool_calls": [
+                        {
+                            "id": "call-list",
+                            "name": "toolbox",
+                            "arguments": {"operation": "list"},
+                        },
+                        {
+                            "id": "call-save",
+                            "name": "toolbox",
+                            "arguments": {
+                                "operation": "invoke",
+                                "name": "save_project_memory",
+                                "arguments": {"content": "likes hamsters"},
+                            },
+                        },
+                    ],
+                },
+            },
+            {
+                "id": "tool-results",
+                "parent_id": "assistant-discover",
+                "created_at": "2030-01-01T00:00:02+00:00",
+                "value": {
+                    "role": "tool_results",
+                    "run_id": "run-1",
+                    "results": [
+                        {
+                            "call_id": "call-list",
+                            "name": "toolbox",
+                            "success": True,
+                            "value": {"packs": ["cyrene_memory"]},
+                        },
+                        {
+                            "call_id": "call-save",
+                            "name": "toolbox",
+                            "success": True,
+                            "value": {
+                                "operation": "invoke",
+                                "result": "Saved to project memory",
+                            },
+                        },
+                    ],
+                },
+            },
+            {
+                "id": "assistant-final",
+                "parent_id": "tool-results",
+                "created_at": "2030-01-01T00:00:03+00:00",
+                "value": {
+                    "role": "assistant",
+                    "run_id": "run-1",
+                    "content": "done",
+                    "session_end_complete": True,
+                },
+            },
+        ]
+    }
+
+    activities = project_tool_activity_messages(snapshot, "run-1")
+
+    assert len(activities) == 1
+    assert activities[0]["id"] == "activity_assistant-discover"
+    assert activities[0]["activityCard"] is True
+    assert [entry["text"] for entry in activities[0]["trace"]] == [
+        "toolbox.list",
+        "save_project_memory",
+    ]
+    assert activities[0]["trace"][1]["preview"] == "Saved to project memory"
+    assert activities[0]["trace"][1]["status"] == "completed"
 
 
 def model_registry(handler) -> PluginRegistry:
@@ -217,6 +415,245 @@ def test_bridge_recovers_unfinished_chat_after_process_restart(tmp_path):
     assert second.snapshot()["run_id"] == "recover-run"
     reply_done = next(event for event in published if event["type"] == "reply_done")
     assert reply_done["response"] == "recovered reply"
+    bridge.close()
+
+
+def test_bridge_persists_pending_question_and_answers_same_run_after_restart(tmp_path):
+    observed_tool_answers = []
+
+    async def model(arguments, _context):
+        tools = {
+            item.get("function", {}).get("name")
+            for item in arguments.get("tools") or []
+            if isinstance(item, dict)
+        }
+        if tools == {"decide"}:
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "permission",
+                        "name": "decide",
+                        "arguments": {"approve": True, "rationale": "allowed"},
+                    }
+                ],
+            }
+        last = arguments["messages"][-1]
+        if last["role"] == "user":
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "ask-call",
+                        "name": "toolbox",
+                        "arguments": {
+                            "operation": "invoke",
+                            "name": "ask_user",
+                            "arguments": {
+                                "text": "Choose a format",
+                                "options": ["short", "long"],
+                            },
+                        },
+                    }
+                ],
+            }
+        observed_tool_answers.append(
+            json.loads(last["content"])["value"]["result"]
+        )
+        return {"content": "using long", "tool_calls": []}
+
+    async def ask_user(_arguments, _context):
+        return json.dumps(
+            {
+                "status": "awaiting_user",
+                "question_id": "question-format",
+            }
+        )
+
+    registry = model_registry(model)
+    registry.register_plugin(
+        Plugin(
+            "ask_user",
+            "pause for a user answer",
+            {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "options": {"type": "array"},
+                },
+                "required": ["text"],
+            },
+            ask_user,
+        ),
+        source="test",
+    )
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    first = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        tree_id="pending-chat",
+        registry=registry,
+    )
+    first_bridge = WorkbenchSessionBridge(first)
+    published = []
+
+    pending = run(
+        first_bridge.submit_result(
+            "ask before continuing",
+            run_id="pending-run",
+            publish=lambda event: published.append(event),
+        )
+    )
+    assert pending.status == "awaiting_user"
+    assert pending.run_id == "pending-run"
+    assert pending.pending_question is not None
+    assert pending.pending_question.as_dict() == {
+        "id": "question-format",
+        "text": "Choose a format",
+        "options": ["short", "long"],
+        "allowCustom": True,
+        "kind": "clarification",
+        "roundId": "pending-run",
+        "clientRequestId": "",
+        "askedAt": pending.pending_question.asked_at,
+    }
+    assert "awaiting_user" in [event["type"] for event in published]
+    first_bridge.close()
+
+    reopened = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        tree_id="pending-chat",
+        registry=registry,
+    )
+    reopened_bridge = WorkbenchSessionBridge(reopened)
+    assert reopened.snapshot()["status"] == "awaiting_user"
+
+    completed = run(
+        reopened_bridge.answer_result("question-format", "long")
+    )
+    assert completed.status == "completed"
+    assert completed.run_id == "pending-run"
+    assert completed.text == "using long"
+    assert observed_tool_answers == [
+        {
+            "status": "answered",
+            "question_id": "question-format",
+            "answer": "long",
+        }
+    ]
+    reopened_bridge.close()
+
+
+def test_bridge_projection_failure_does_not_revoke_agent_reply(tmp_path):
+    async def model(_arguments, _context):
+        return {"content": "durable reply", "tool_calls": []}
+
+    registry = model_registry(model)
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        tree_id="projection-failure-chat",
+        registry=registry,
+    )
+    bridge = WorkbenchSessionBridge(session)
+
+    async def scenario():
+        async def broken_publish(_event):
+            raise RuntimeError("projection database is locked")
+
+        return await bridge.submit(
+            "complete despite projection failure",
+            run_id="projection-failure-run",
+            publish=broken_publish,
+        )
+
+    assert run(scenario()) == "durable reply"
+    assert session.final_output("projection-failure-run")["content"] == "durable reply"
+    bridge.close()
+
+
+def test_plugin_pack_session_context_and_terminal_lifecycle_are_durable(tmp_path):
+    model_messages = []
+    model_services = []
+    lifecycle_events = []
+
+    async def model(arguments, context):
+        model_messages.append(arguments["messages"])
+        model_services.append(dict(context.services))
+        return {"content": "memory-aware reply", "tool_calls": []}
+
+    async def session_start(event):
+        lifecycle_events.append(("start", dict(event.payload)))
+        return {"context": "Durable memory context"}
+
+    async def session_end(event):
+        lifecycle_events.append(("end", dict(event.payload)))
+
+    def setup(context):
+        context.provide("test.memory", {"ready": True})
+        context.hooks.register(
+            SESSION_START,
+            session_start,
+            plugin_id="test.memory.start",
+            hook_id="test-memory-start",
+            root_only=True,
+        )
+        context.hooks.register(
+            SESSION_END,
+            session_end,
+            plugin_id="test.memory.end",
+            hook_id="test-memory-end",
+            root_only=True,
+        )
+
+    registry = model_registry(model)
+    registry.register_pack(
+        PluginPack(
+            "memory-test",
+            "session lifecycle fixture",
+            (),
+            setup=setup,
+        ),
+        source="test",
+    )
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        tree_id="memory-lifecycle-chat",
+        registry=registry,
+    )
+    bridge = WorkbenchSessionBridge(session)
+
+    assert run(
+        bridge.submit("remember this", run_id="memory-lifecycle-run")
+    ) == "memory-aware reply"
+
+    assert model_services[0]["test.memory"] == {"ready": True}
+    assert "subagents" in model_services[0]
+    assert "Durable memory context" in model_messages[0][0]["content"]
+    context_nodes = [
+        node
+        for node in session.store.get_subtree(session.tree.id, session.tree.root_id)
+        if isinstance(node.value, dict) and node.value.get("role") == "context"
+    ]
+    assert len(context_nodes) == 1
+    assert context_nodes[0].value["context_kind"] == "plugin_session"
+    assert context_nodes[0].value["content"] == "Durable memory context"
+    terminal = session.final_output("memory-lifecycle-run")
+    assert terminal is not None
+    assert terminal["session_end_complete"] is True
+    assert [name for name, _payload in lifecycle_events] == ["start", "end"]
+    assert lifecycle_events[-1][1]["assistant_text"] == "memory-aware reply"
     bridge.close()
 
 

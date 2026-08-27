@@ -277,7 +277,7 @@ async def test_new_terminal_inherits_active_shell_cwd(
         lambda project_id: {"id": project_id, "workspacePath": str(tmp_path)},
     )
     monkeypatch.setattr(
-        "cyrene.tooling.backends.shell_runtime.interactive_argv",
+        "cyrene.terminal.shell_runtime.interactive_argv",
         lambda: ("sh", ["/bin/sh"]),
     )
     manager = TerminalManager(state_dir=tmp_path / "state")

@@ -16,7 +16,7 @@ import numpy as np
 import soundfile as sf
 
 from cyrene.config import CACHE_DIR
-from cyrene.knowledge import local_models
+from agent.plugin import active_plugin_service
 from cyrene.runtime import config_store
 import cyrene.voice.minimax as minimax_tts
 
@@ -81,6 +81,20 @@ _RECOGNIZER: Any = None
 _PUNCTUATION: Any = None
 _KOKORO_TTS: Any = None
 _ZIPVOICE_TTS: Any = None
+_LOCAL_MODEL_RESETTERS_REGISTERED = False
+
+
+def _knowledge_service() -> Any:
+    global _LOCAL_MODEL_RESETTERS_REGISTERED
+    service = active_plugin_service("knowledge")
+    if service is None:
+        raise RuntimeError("knowledge Plugin is not available")
+    if not _LOCAL_MODEL_RESETTERS_REGISTERED and "reset_asr" in globals():
+        service.register_local_model_resetter(ASR_MODEL_ID, reset_asr)
+        service.register_local_model_resetter(PRESET_TTS_MODEL_ID, reset_kokoro_tts)
+        service.register_local_model_resetter(CUSTOM_TTS_MODEL_ID, reset_zipvoice_tts)
+        _LOCAL_MODEL_RESETTERS_REGISTERED = True
+    return service
 
 
 def _voice_presets() -> list[dict[str, Any]]:
@@ -151,14 +165,14 @@ def _settings() -> dict[str, Any]:
         settings["voice_preset"] = DEFAULT_PRESET_ID
     elif (
         settings["voice_preset"] == ZIPVOICE_DEFAULT_PRESET_ID
-        and not local_models.is_ready(CUSTOM_TTS_MODEL_ID)
-        and local_models.is_ready(PRESET_TTS_MODEL_ID)
+        and not _knowledge_service().is_local_model_ready(CUSTOM_TTS_MODEL_ID)
+        and _knowledge_service().is_local_model_ready(PRESET_TTS_MODEL_ID)
     ):
         settings["voice_preset"] = DEFAULT_PRESET_ID
     elif (
         settings["voice_preset"] != ZIPVOICE_DEFAULT_PRESET_ID
-        and not local_models.is_ready(PRESET_TTS_MODEL_ID)
-        and local_models.is_ready(CUSTOM_TTS_MODEL_ID)
+        and not _knowledge_service().is_local_model_ready(PRESET_TTS_MODEL_ID)
+        and _knowledge_service().is_local_model_ready(CUSTOM_TTS_MODEL_ID)
     ):
         settings["voice_preset"] = ZIPVOICE_DEFAULT_PRESET_ID
     return settings
@@ -202,7 +216,7 @@ def _profile_ready(settings: dict[str, Any] | None = None) -> bool:
 
 
 def _preset_ready() -> bool:
-    return local_models.is_ready(PRESET_TTS_MODEL_ID)
+    return _knowledge_service().is_local_model_ready(PRESET_TTS_MODEL_ID)
 
 
 def _active_reference(settings: dict[str, Any]) -> tuple[Path, str]:
@@ -215,9 +229,9 @@ def status() -> dict[str, Any]:
     with _VOICE_PROFILE_LOCK:
         settings = _settings()
         profile_ready = _profile_ready(settings)
-    asr_ready = local_models.is_ready(ASR_MODEL_ID)
-    preset_model_ready = local_models.is_ready(PRESET_TTS_MODEL_ID)
-    custom_model_ready = local_models.is_ready(CUSTOM_TTS_MODEL_ID)
+    asr_ready = _knowledge_service().is_local_model_ready(ASR_MODEL_ID)
+    preset_model_ready = _knowledge_service().is_local_model_ready(PRESET_TTS_MODEL_ID)
+    custom_model_ready = _knowledge_service().is_local_model_ready(CUSTOM_TTS_MODEL_ID)
     minimax_configured = minimax_tts.is_configured()
     selected_model, tts_provider = _resolved_tts_model(
         settings,
@@ -331,13 +345,13 @@ def update_settings(
             ):
                 raise RuntimeError("Configure MiniMax in Model Services before using MiniMax TTS")
             if normalized_tts_model == PRESET_TTS_MODEL_ID:
-                if not local_models.is_ready(PRESET_TTS_MODEL_ID):
+                if not _knowledge_service().is_local_model_ready(PRESET_TTS_MODEL_ID):
                     raise RuntimeError("Kokoro model is not downloaded")
                 current["voice_mode"] = VOICE_MODE_PRESET
                 if current["voice_preset"] == ZIPVOICE_DEFAULT_PRESET_ID:
                     current["voice_preset"] = DEFAULT_PRESET_ID
             elif normalized_tts_model == CUSTOM_TTS_MODEL_ID:
-                if not local_models.is_ready(CUSTOM_TTS_MODEL_ID):
+                if not _knowledge_service().is_local_model_ready(CUSTOM_TTS_MODEL_ID):
                     raise RuntimeError("ZipVoice model is not downloaded")
                 if current["voice_mode"] != VOICE_MODE_CUSTOM:
                     current["voice_preset"] = ZIPVOICE_DEFAULT_PRESET_ID
@@ -346,7 +360,7 @@ def update_settings(
             normalized_mode = str(voice_mode).strip().lower()
             if normalized_mode not in {VOICE_MODE_PRESET, VOICE_MODE_CUSTOM}:
                 raise ValueError("voice_mode must be preset or custom")
-            if normalized_mode == VOICE_MODE_CUSTOM and not local_models.is_ready(CUSTOM_TTS_MODEL_ID):
+            if normalized_mode == VOICE_MODE_CUSTOM and not _knowledge_service().is_local_model_ready(CUSTOM_TTS_MODEL_ID):
                 raise RuntimeError("ZipVoice model is not downloaded")
             current["voice_mode"] = normalized_mode
             if normalized_mode == VOICE_MODE_CUSTOM:
@@ -362,7 +376,7 @@ def update_settings(
                 if normalized_preset == ZIPVOICE_DEFAULT_PRESET_ID
                 else PRESET_TTS_MODEL_ID
             )
-            if not local_models.is_ready(required_model):
+            if not _knowledge_service().is_local_model_ready(required_model):
                 raise RuntimeError("selected voice model is not downloaded")
             current["voice_preset"] = normalized_preset
             current["tts_model"] = (
@@ -423,12 +437,12 @@ def _resample(samples: np.ndarray, source_rate: int, target_rate: int) -> np.nda
 
 def _load_asr() -> tuple[Any, Any, Any]:
     global _RECOGNIZER, _PUNCTUATION
-    if not local_models.is_ready(ASR_MODEL_ID):
+    if not _knowledge_service().is_local_model_ready(ASR_MODEL_ID):
         raise RuntimeError("FireRedASR2 model is not downloaded")
     import sherpa_onnx
 
-    root = local_models.model_dir(ASR_MODEL_ID)
-    provider = local_models.sherpa_provider(ASR_MODEL_ID)
+    root = _knowledge_service().local_model_dir(ASR_MODEL_ID)
+    provider = _knowledge_service().local_model_provider(ASR_MODEL_ID)
     if _RECOGNIZER is None:
         _RECOGNIZER = sherpa_onnx.OfflineRecognizer.from_fire_red_asr(
             encoder=str(root / "encoder.int8.onnx"),
@@ -519,7 +533,7 @@ def transcribe(payload: bytes) -> dict[str, Any]:
         segments = _speech_segments(
             sherpa_onnx,
             samples_16k,
-            local_models.model_dir(ASR_MODEL_ID),
+            _knowledge_service().local_model_dir(ASR_MODEL_ID),
         )
         parts: list[str] = []
         silence_placeholder_seen = False
@@ -546,7 +560,7 @@ def transcribe(payload: bytes) -> dict[str, Any]:
 
 
 def save_voice_profile(payload: bytes, reference_text: str) -> dict[str, Any]:
-    if not local_models.is_ready(CUSTOM_TTS_MODEL_ID):
+    if not _knowledge_service().is_local_model_ready(CUSTOM_TTS_MODEL_ID):
         raise RuntimeError("ZipVoice model is not downloaded")
     text = str(reference_text or "").strip()
     if not text:
@@ -615,14 +629,14 @@ def delete_voice_profile() -> dict[str, Any]:
 
 def _load_zipvoice_tts() -> Any:
     global _ZIPVOICE_TTS
-    if not local_models.is_ready(CUSTOM_TTS_MODEL_ID):
+    if not _knowledge_service().is_local_model_ready(CUSTOM_TTS_MODEL_ID):
         raise RuntimeError("ZipVoice model is not downloaded")
     if _ZIPVOICE_TTS is not None:
         return _ZIPVOICE_TTS
     import sherpa_onnx
 
-    root = local_models.model_dir(CUSTOM_TTS_MODEL_ID)
-    provider = local_models.sherpa_provider(CUSTOM_TTS_MODEL_ID)
+    root = _knowledge_service().local_model_dir(CUSTOM_TTS_MODEL_ID)
+    provider = _knowledge_service().local_model_provider(CUSTOM_TTS_MODEL_ID)
     config = sherpa_onnx.OfflineTtsConfig(
         model=sherpa_onnx.OfflineTtsModelConfig(
             zipvoice=sherpa_onnx.OfflineTtsZipvoiceModelConfig(
@@ -646,13 +660,13 @@ def _load_zipvoice_tts() -> Any:
 
 def _load_kokoro_tts() -> Any:
     global _KOKORO_TTS
-    if not local_models.is_ready(PRESET_TTS_MODEL_ID):
+    if not _knowledge_service().is_local_model_ready(PRESET_TTS_MODEL_ID):
         raise RuntimeError("Kokoro model is not downloaded")
     if _KOKORO_TTS is not None:
         return _KOKORO_TTS
     import sherpa_onnx
 
-    root = local_models.model_dir(PRESET_TTS_MODEL_ID)
+    root = _knowledge_service().local_model_dir(PRESET_TTS_MODEL_ID)
     config = sherpa_onnx.OfflineTtsConfig(
         model=sherpa_onnx.OfflineTtsModelConfig(
             kokoro=sherpa_onnx.OfflineTtsKokoroModelConfig(
@@ -664,7 +678,7 @@ def _load_kokoro_tts() -> Any:
             ),
             debug=False,
             num_threads=max(1, min(4, (os.cpu_count() or 2) // 2)),
-            provider=local_models.sherpa_provider(PRESET_TTS_MODEL_ID),
+            provider=_knowledge_service().local_model_provider(PRESET_TTS_MODEL_ID),
         )
     )
     if not config.validate():
@@ -790,7 +804,7 @@ def synthesize(text: str, *, num_steps: int | None = None) -> bytes:
             # Automatic mode prefers MiniMax but keeps the existing local voice
             # as a transparent availability fallback.
             fallback_model = _local_tts_model(settings)
-            fallback_ready = _runtime_available() and local_models.is_ready(fallback_model)
+            fallback_ready = _runtime_available() and _knowledge_service().is_local_model_ready(fallback_model)
             if (
                 fallback_model == CUSTOM_TTS_MODEL_ID
                 and settings["voice_mode"] == VOICE_MODE_CUSTOM
@@ -810,7 +824,7 @@ def synthesize(text: str, *, num_steps: int | None = None) -> bytes:
             if custom_selected:
                 reference_path, reference_text = _active_reference(settings)
             else:
-                reference_path = local_models.model_dir(CUSTOM_TTS_MODEL_ID) / "preset-default.wav"
+                reference_path = _knowledge_service().local_model_dir(CUSTOM_TTS_MODEL_ID) / "preset-default.wav"
                 reference_text = DEFAULT_PRESET_TEXT
             reference_audio, reference_sample_rate = sf.read(
                 reference_path,
@@ -876,8 +890,3 @@ def reset_zipvoice_tts() -> None:
 def reset_tts() -> None:
     reset_kokoro_tts()
     reset_zipvoice_tts()
-
-
-local_models.register_resetter(ASR_MODEL_ID, reset_asr)
-local_models.register_resetter(PRESET_TTS_MODEL_ID, reset_kokoro_tts)
-local_models.register_resetter(CUSTOM_TTS_MODEL_ID, reset_zipvoice_tts)

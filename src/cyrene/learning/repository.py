@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
-import logging
 from pathlib import Path
 
 import aiosqlite
-
-
-logger = logging.getLogger(__name__)
 
 
 class LearningConnection:
@@ -37,7 +33,7 @@ class LearningConnection:
 
 
 class LearningRepository:
-    """Owns the behavior-learning SQLite schema and migration boundary."""
+    """Owns the behavior-learning SQLite schema."""
 
     def __init__(self, db_file: Path, busy_timeout: float):
         self._db_file = db_file
@@ -51,99 +47,8 @@ class LearningRepository:
             cursor = await conn.execute("PRAGMA journal_mode = WAL")
             await cursor.fetchone()
             await cursor.close()
-            await conn.executescript(DROP_LEGACY_LEARNING_SCHEMA)
             await conn.executescript(LEARNING_SCHEMA)
             await conn.commit()
-            await self._add_permission_snapshot(conn)
-            await self._add_compatibility_columns(conn)
-            await self._remove_fingerprint_columns(conn)
-            await conn.execute(
-                "UPDATE learned_skills SET status = 'active' WHERE status = 'shadow'"
-            )
-            await conn.commit()
-            await conn.executescript(LEARNING_PROJECT_INDEXES)
-            await conn.commit()
-
-    @staticmethod
-    async def _add_permission_snapshot(conn: aiosqlite.Connection) -> None:
-        try:
-            await conn.execute(
-                "ALTER TABLE learned_skill_runs ADD COLUMN permission_snapshot "
-                "TEXT NOT NULL DEFAULT 'workspace_only'"
-            )
-            await conn.commit()
-        except Exception:
-            pass
-
-    @staticmethod
-    async def _add_compatibility_columns(conn: aiosqlite.Connection) -> None:
-        migrations = {
-            "behavior_sessions": [
-                ("project_id", "TEXT NOT NULL DEFAULT ''"),
-                ("project_key", "TEXT NOT NULL DEFAULT ''"),
-                ("session_kind", "TEXT NOT NULL DEFAULT ''"),
-            ],
-            "behavior_turns": [
-                ("project_id", "TEXT NOT NULL DEFAULT ''"),
-                ("project_key", "TEXT NOT NULL DEFAULT ''"),
-                ("session_kind", "TEXT NOT NULL DEFAULT ''"),
-                ("agent_response", "TEXT NOT NULL DEFAULT ''"),
-            ],
-            "learned_skills": [
-                ("project_id", "TEXT NOT NULL DEFAULT ''"),
-                ("project_key", "TEXT NOT NULL DEFAULT ''"),
-                ("script_json", "TEXT NOT NULL DEFAULT '{}'"),
-            ],
-            "behavior_turn_tool_chains": [
-                ("project_id", "TEXT NOT NULL DEFAULT ''"),
-                ("project_key", "TEXT NOT NULL DEFAULT ''"),
-                ("purpose", "TEXT NOT NULL DEFAULT ''"),
-            ],
-            "behavior_browser_user_events": [
-                ("project_id", "TEXT NOT NULL DEFAULT ''"),
-                ("project_key", "TEXT NOT NULL DEFAULT ''"),
-            ],
-            "behavior_skill_candidates": [("purpose", "TEXT NOT NULL DEFAULT ''")],
-            "behavior_skill_candidate_turns": [
-                ("assignment_reason", "TEXT NOT NULL DEFAULT ''")
-            ],
-        }
-        for table, columns in migrations.items():
-            for column, declaration in columns:
-                try:
-                    await conn.execute(
-                        f"ALTER TABLE {table} ADD COLUMN {column} {declaration}"
-                    )
-                    await conn.commit()
-                except Exception:
-                    pass
-
-    @staticmethod
-    async def _remove_fingerprint_columns(conn: aiosqlite.Connection) -> None:
-        for table, column in (
-            ("learned_skills", "pattern_id"),
-            ("behavior_turns", "linked_skill_id"),
-        ):
-            try:
-                await conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
-                await conn.commit()
-            except Exception:
-                pass
-        await conn.execute("DROP INDEX IF EXISTS idx_behavior_skill_candidates_bucket")
-        await conn.commit()
-        try:
-            cursor = await conn.execute("PRAGMA table_info(behavior_skill_candidates)")
-            columns = {str(row["name"]) for row in await cursor.fetchall()}
-            if "bucket_key" in columns:
-                await conn.execute(
-                    "ALTER TABLE behavior_skill_candidates DROP COLUMN bucket_key"
-                )
-                await conn.commit()
-        except Exception:
-            logger.warning(
-                "failed to remove legacy behavior_skill_candidates.bucket_key",
-                exc_info=True,
-            )
 
 LEARNING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS behavior_sessions (
@@ -348,9 +253,6 @@ CREATE TABLE IF NOT EXISTS behavior_skill_candidate_turns (
     FOREIGN KEY (candidate_id) REFERENCES behavior_skill_candidates(candidate_id),
     FOREIGN KEY (turn_id) REFERENCES behavior_turns(turn_id)
 );
-"""
-
-LEARNING_PROJECT_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_behavior_sessions_project ON behavior_sessions(project_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_behavior_turns_project ON behavior_turns(project_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_learned_skills_project ON learned_skills(project_id, updated_at);
@@ -360,15 +262,4 @@ CREATE INDEX IF NOT EXISTS idx_behavior_browser_user_events_project
     ON behavior_browser_user_events(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_behavior_skill_candidate_turns_candidate
     ON behavior_skill_candidate_turns(candidate_id, occurrence_index);
-"""
-
-DROP_LEGACY_LEARNING_SCHEMA = """
-DROP TABLE IF EXISTS behavior_replay_tests;
-DROP TABLE IF EXISTS behavior_learning_agent_reviews;
-DROP TABLE IF EXISTS behavior_pattern_turns;
-DROP TABLE IF EXISTS behavior_patterns;
-DROP TABLE IF EXISTS behavior_fingerprints;
-DROP TABLE IF EXISTS behavior_vocabulary_aliases;
-DROP TABLE IF EXISTS behavior_unknown_labels;
-DROP TABLE IF EXISTS behavior_vocabulary_labels;
 """

@@ -17,9 +17,11 @@ Cyrene 的 Office 工具包可以控制 PowerPoint 当前打开的演示文稿�
 
 手动 Web 模式默认不占用固定端口。需要使用 Office Gateway 时以 `CYRENE_OFFICE_FORCE_START=1` 启动 Cyrene。端口可通过 `CYRENE_OFFICE_PORT` 修改；修改后要重新生成并重新加载清单。
 
-## 渐进式 PPT Agent Kit
+## PPT Plugin Pack
 
-安装后，模型默认只看到五个核心工具：`ppt.get_context`、`ppt.inspect`、`ppt.apply_batch`、`ppt.render`、`ppt.tool_search`。其中 `ppt.tool_search` 支持搜索、描述、调用三个阶段，只把当前任务需要的参数 schema 加载进上下文。
+安装后，PowerPoint 能力作为 `cyrene_office` Plugin Pack 注册。Agent 统一通过
+`toolbox.list → toolbox.describe → toolbox.invoke` 发现并调用所需 Plugin；Office
+内部不再维护第二套搜索、描述和调用协议。
 
 | 层级 | 按需能力 |
 | --- | --- |

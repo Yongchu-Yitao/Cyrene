@@ -6,9 +6,6 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from cyrene.workbench.chat import (
-    remove_project_chats,
-)
 from route.workbench.chat_routes.chats import register_chat_routes
 from route.workbench.chat_routes.context import ChatRouteContext
 from route.workbench.chat_routes.conversation_context import register_context_routes
@@ -40,5 +37,4 @@ def register_workbench_chat_routes(
 
 __all__ = [
     "register_workbench_chat_routes",
-    "remove_project_chats",
 ]

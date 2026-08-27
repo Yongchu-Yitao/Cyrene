@@ -545,19 +545,19 @@ function wbIsPermissionQuestionKind(kind) {
 
   // Stop the active agent run for a session (best-effort, per-session interrupt).
   function interruptSession(sessionId) {
-    return fetch("/api/chat/interrupt?session_id=" + encodeURIComponent(sessionId), { method: "POST" })
+    return fetch("/api/workbench/chats/" + encodeURIComponent(sessionId) + "/interrupt", { method: "POST" })
       .then(function (r) { return r.json().catch(function () { return {}; }); })
       .catch(function () { return {}; });
   }
 
-  // Upload files via the shared /api/chat/upload endpoint. Returns attachment
+  // Upload files through the Workbench attachment endpoint. Returns attachment
   // objects ({ id, name, path, content_type, size, kind, url, ... }).
   function uploadAttachments(files) {
     var list = Array.prototype.slice.call(files || []);
     if (!list.length) return Promise.resolve([]);
     var form = new FormData();
     list.forEach(function (f) { form.append("files", f); });
-    return fetch("/api/chat/upload", { method: "POST", body: form }).then(function (r) {
+    return fetch("/api/workbench/uploads", { method: "POST", body: form }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (payload) {
         if (!r.ok) throw new Error(payload.error || ("HTTP " + r.status));
         return Array.isArray(payload.files) ? payload.files : [];
