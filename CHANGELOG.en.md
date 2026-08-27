@@ -266,9 +266,9 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
-## [0.8.0-beta3] - 2026-08-25
+## [0.8.0-beta4] - 2026-08-26
 
-`0.8.0-beta3` brings together every feature and interface change since `0.8.0-beta1`, led by independent image, video, and music generation, reference media and rich media messages, per-chat context capabilities and slash commands, unified proxy controls, and managed remote terminals. It also improves model services, continuous Agent execution, PowerPoint, search, terminal performance, Settings, and desktop startup. This section contains user-visible capabilities and experience changes only.
+`0.8.0-beta4` brings together every feature and interface change since `0.8.0-beta1`, led by independent image, video, and music generation, reference media and rich media messages, per-chat context capabilities and slash commands, unified proxy controls, and managed remote terminals. It also improves model services, continuous Agent execution, PowerPoint, search, terminal performance, Settings, and desktop startup. This section contains user-visible capabilities and experience changes only.
 
 ### Image, video, and music generation
 
@@ -328,6 +328,7 @@ The Chinese edition remains the most detailed record for older releases.
 - Codex OAuth authentication and quota failures now show actionable notices and preserve the selected service instead of silently moving to another model family.
 - Internal tool markup, private reasoning, credentials, absolute paths, and sensitive provider details are removed before a final reply reaches the chat, while errors retain enough information to remain useful to users.
 - Large tool results and PowerPoint results are stored as recoverable references so long tasks can continue using their outputs without filling the conversation context with entire payloads.
+- Agent routing, execution finalization, and project-memory tasks now use stable structured tool protocols. Required tool selection also participates in cache decisions, reducing extra model calls at task completion, prompt-cache invalidation, and incomplete final replies.
 
 ### Terminals, managed SSH, and sustained output
 
@@ -341,6 +342,7 @@ The Chinese edition remains the most detailed record for older releases.
 - When a split terminal is already open beside the conversation, the Agent can identify its visible name, position, and connection state. References such as “the current terminal,” “the left terminal,” or “the right terminal” can resolve directly to the matching session, including an SSH terminal that is not bound to the current chat.
 - Installed and portable Electron builds now settle terminal processes more completely during quit, restart, terminal deletion, and session recovery, reducing orphaned processes, stale state, and incorrect recovery on the next launch.
 - Windows terminals now recover from temporary background read interruptions instead of treating a live CMD or PowerShell session as exited. Consecutive background terminal creation no longer stops because of invalid system-console state, large pastes and command bursts are delivered completely, slower Windows ARM devices receive enough recovery time during background restarts, and genuine creation failures report their actual cause.
+- The Windows development desktop app now starts reliably from the repository virtual environment and correct working directory. Terminal connection, reconnection, and restart no longer steal the current input focus automatically.
 
 ### PowerPoint creation improvements
 
@@ -364,7 +366,8 @@ The Chinese edition remains the most detailed record for older releases.
 - Removed the old Welcome/Get Started page and its automatic startup entry. Cyrene now opens directly into the unified Workbench, while required first-use model and personality setup remains in the supported onboarding flow.
 - Completing first-use setup now creates and opens the first conversation immediately, so users can begin typing instead of landing on an empty page without an active chat.
 - Settings further unifies cards, fields, dropdowns, status labels, autosave feedback, keyboard focus, and narrow-window layouts so model, proxy, and media configuration behave consistently.
-- Current version presentation across the README, application, web assets, and desktop packages is unified as `0.8.0-beta3`.
+- Running reasoning and tool traces now use a one-way shimmer to make the active step and overall running state easier to recognize, while respecting the system reduced-motion preference.
+- Current version presentation across the README, application, web assets, and desktop packages is unified as `0.8.0-beta4`.
 
 ## [0.8.0-beta1] - 2026-08-24
 

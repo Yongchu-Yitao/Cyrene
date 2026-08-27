@@ -140,7 +140,6 @@ _MEMORY_RESULT_TOOL_CHOICE = {
     "function": {"name": _MEMORY_RESULT_TOOL_NAME},
 }
 
-
 def _is_user_visible_entry(entry: dict) -> bool:
     """Whether an entry belongs on user-facing Workbench memory surfaces.
 
