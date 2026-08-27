@@ -29,8 +29,6 @@ from agent.plugin.plugin_impl.cyrene_remote.control import (
     RemoteGateway,
     RemoteIdentityStore,
     WebSocketRemoteRelay,
-    register_remote_gateway,
-    unregister_remote_gateway,
 )
 from agent.plugin.plugin_impl.cyrene_remote.commands import (
     RemoteCommandExecutor,
@@ -44,10 +42,7 @@ from agent.plugin.plugin_impl.cyrene_remote.pairing import (
     connect_by_address,
     normalize_pairing_address,
 )
-from agent.plugin.plugin_impl.cyrene_remote.list_devices import handler as list_remote_devices
 from agent.plugin.plugin_impl.cyrene_remote.harness import handler as remote_harness
-from agent.plugin.plugin_impl.cyrene_remote.run import handler as run_remote_cyrene
-from agent.plugin.plugin_impl.cyrene_remote.status import handler as remote_cyrene_status
 from agent.plugin.plugin_impl.cyrene_remote.application import register_remote_routes
 
 

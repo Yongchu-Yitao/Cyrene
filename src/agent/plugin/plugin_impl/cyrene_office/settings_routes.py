@@ -61,7 +61,7 @@ def register_office_integration_routes(router: APIRouter) -> None:
     async def get_office_integration_status():
         try:
             return await asyncio.to_thread(integration_status)
-        except (OSError, RuntimeError) as exc:
+        except (OSError, RuntimeError):
             logger.info("Unable to inspect Office integration", exc_info=True)
             return localized_error_response(
                 "PowerPoint integration status is unavailable.",
@@ -76,7 +76,7 @@ def register_office_integration_routes(router: APIRouter) -> None:
         was_running = runtime.running
         try:
             await runtime.start()
-        except (OSError, RuntimeError) as exc:
+        except (OSError, RuntimeError):
             logger.info("Unable to start Office gateway", exc_info=True)
             return localized_error_response(
                 "PowerPoint integration service is unavailable.",
@@ -109,7 +109,7 @@ def register_office_integration_routes(router: APIRouter) -> None:
         files = get_office_gateway_runtime().files
         try:
             files.ensure()
-        except OSError as exc:
+        except OSError:
             logger.info("Unable to prepare Office manifest", exc_info=True)
             return localized_error_response(
                 "PowerPoint integration manifest is unavailable.",

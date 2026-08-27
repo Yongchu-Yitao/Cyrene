@@ -323,7 +323,7 @@ class PluginSettingsApplicationService:
                 "settings_revision_conflict",
                 revision=exc.actual,
             )
-        except (settings_service.SettingsServiceError, PluginRegistryError) as exc:
+        except (settings_service.SettingsServiceError, PluginRegistryError):
             logger.info("Invalid Plugin activation update", exc_info=True)
             return _bad_request(
                 "Plugin settings are invalid.",

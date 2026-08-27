@@ -6,11 +6,11 @@ import json
 import re
 import sqlite3
 import threading
-from pathlib import Path
 from typing import Any
 
 from cyrene.workbench.store import ensure_schema
 
+_DEFAULT_DATA_KEY = "default"
 _WORKBENCH_DB_PATH = ""
 _SCOPE_CACHE_LOCK = threading.RLock()
 _SCOPE_CACHE_SIGNATURE: tuple[Any, ...] | None = None

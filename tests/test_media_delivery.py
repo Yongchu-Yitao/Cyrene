@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import pytest
 
-from agent.plugin.plugin_impl.cyrene_media.delivery import MediaDelivery
 
 
 @pytest.mark.asyncio

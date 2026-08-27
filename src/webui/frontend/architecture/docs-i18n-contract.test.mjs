@@ -37,7 +37,7 @@ const CRITICAL_TOPICS = {
   configuration: ["configuration-architecture", "environment-variables", "runtime-settings", "model-pricing"],
   "usage-workbench": ["launching", "pages", "intent-dispatch", "step-by-step-execution", "project-isolation", "related-docs"],
   "usage-cli": ["http-client", "interactive-cli", "chat-slash-commands", "workflow-example"],
-  architecture: ["two-phase-loop", "self-control", "project-structure", "security-model"],
+  architecture: ["plugin-runtime", "self-control", "project-structure", "security-model"],
   memory: ["three-layer-architecture", "memory-flow", "memory-retirement", "soul-personality", "workbench-memory"],
   subagents: ["overview", "lifecycle", "communication", "use-cases", "considerations"],
   browser: ["features", "setup", "workflow", "configuration", "tools"],

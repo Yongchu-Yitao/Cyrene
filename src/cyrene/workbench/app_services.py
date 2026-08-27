@@ -874,7 +874,7 @@ async def dispatch_session_message(
                 termination_reason=str(lease.termination_reason or "user_interrupted"),
             )
             raise
-        except Exception as exc:
+        except Exception:
             logger.exception(
                 "Delegated task instruction failed [session=%s run=%s]",
                 target_id,

@@ -1085,7 +1085,7 @@ class GoalLoopManager:
                 )
                 return False
             execution_error = exc.message
-        except Exception as exc:
+        except Exception:
             logger.exception("Goal-loop Agent step failed")
             execution_error = _l(
                 "Step execution failed.",
@@ -1985,7 +1985,7 @@ class GoalLoopManager:
             # ContextTree stays resumable; the durable Goal Loop status is owned
             # by pause/cancel/shutdown application paths.
             raise
-        except Exception as exc:
+        except Exception:
             logger.exception("Goal-loop worker failed [run=%s]", run_id)
             current = await _get_run_by_id(self.db_path, run_id)
             if current and str(current.get("status") or "") == "running":

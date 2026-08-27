@@ -1938,7 +1938,7 @@ class _BrowserSession:
                         })()
                     })"""
                 )
-            except Exception as exc:
+            except Exception:
                 logger.debug("Browser file input ref was not found", exc_info=True)
                 return {
                     "ok": False,
@@ -2028,7 +2028,7 @@ class _BrowserSession:
                         "code": "UPLOAD_TARGET_CHANGED",
                     }
                 await locator.set_input_files(file_paths)
-            except Exception as exc:
+            except Exception:
                 logger.debug("Failed to set browser file input", exc_info=True)
                 return {
                     "ok": False,
@@ -2601,7 +2601,7 @@ async def _httpx_navigate(
             "浏览器 HTTP 请求失败。",
         )
         result["code"] = "BROWSER_HTTP_ERROR"
-    except Exception as exc:
+    except Exception:
         logger.exception("browser_navigate failed for %s", url)
         result["error"] = _l(
             "The browser could not fetch the page.",
@@ -2719,7 +2719,7 @@ async def screenshot(
         validate_screenshot_file(path)
         title = await (await session.page()).title()
         return {"ok": True, "path": path, "title": title}
-    except Exception as exc:
+    except Exception:
         logger.exception("screenshot failed for %s", url)
         return _browser_failure(
             "BROWSER_SCREENSHOT_FAILED",

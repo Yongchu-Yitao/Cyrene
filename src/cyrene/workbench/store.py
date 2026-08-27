@@ -12,34 +12,20 @@ preserved.
 
 from __future__ import annotations
 
-import copy
-import json
 import logging
 import sqlite3
 import threading
-import time
 from collections.abc import Callable
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypeVar
 
 from cyrene.workbench.persistence.document_merge import (
     TrackedDict,
-    TrackedList,
-    baseline,
-    entity_id as _entity_id,
-    plain as _plain,
-    three_way_merge as _three_way_merge,
-    tracked as _tracked,
 )
 from cyrene.workbench.persistence.chat_repository import ChatPorts, ChatRepository
 from cyrene.workbench.persistence.project_repository import ProjectPorts, ProjectRepository
 from cyrene.workbench.persistence.document_repository import DocumentPorts, DocumentRepository
-from cyrene.workbench.persistence.schema import (
-    SCHEMA_READY as _SCHEMA_READY,
-    connect as _connect,
-    ensure_schema,
-)
+from cyrene.workbench.persistence.schema import ensure_schema
 
 logger = logging.getLogger(__name__)
 

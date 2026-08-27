@@ -53,17 +53,17 @@ async def _call(awaitable: Awaitable[Any]) -> Any:
             status_code=404,
             detail=localized("The workspace was not found.", "未找到工作区。"),
         ) from exc
-    except ValueError as exc:
+    except ValueError:
         return JSONResponse({
             "error": localized("The knowledge request is invalid.", "知识库请求无效。"),
             "code": "invalid_knowledge_request",
         }, status_code=400)
-    except LookupError as exc:
+    except LookupError:
         return JSONResponse({
             "error": localized("The knowledge item was not found.", "未找到知识库条目。"),
             "code": "knowledge_item_not_found",
         }, status_code=404)
-    except PermissionError as exc:
+    except PermissionError:
         return JSONResponse({
             "error": localized("Access to the knowledge item was denied.", "无权访问该知识库条目。"),
             "code": "knowledge_access_denied",

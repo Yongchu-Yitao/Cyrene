@@ -1,10 +1,6 @@
 import json
-import threading
-from urllib.parse import quote
 
 import pytest
-from fastapi import APIRouter, FastAPI
-from fastapi.testclient import TestClient
 
 
 def test_managed_attachment_path_rebases_after_portable_restore(

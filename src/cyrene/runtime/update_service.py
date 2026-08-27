@@ -87,7 +87,7 @@ class DownloadCoordinator:
             result = await self.download_file(info.download_url, self.progress.progress)
         except updater.UpdateDownloadInProgressError:
             return self._in_progress_response()
-        except Exception as exc:
+        except Exception:
             logger.warning("Update download failed", exc_info=True)
             self.progress.failure(
                 localized("Update download failed.", "下载更新失败。")

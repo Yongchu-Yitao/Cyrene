@@ -22,7 +22,6 @@ from agent.plugin.native_runtime import (
     run_context_data,
     run_context_value,
 )
-from cyrene.localization import localized
 
 TOOL_NAME = "StartMediaGeneration"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)

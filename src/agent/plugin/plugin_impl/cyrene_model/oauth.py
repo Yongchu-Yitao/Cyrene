@@ -94,7 +94,7 @@ def register_oauth_routes(router: APIRouter) -> None:
             # Login state + model choices are the interactive path. Quota has a
             # separate endpoint/panel and must not delay showing "connected".
             return await _codex_oauth_snapshot(include_limits=False)
-        except (RuntimeError, OSError, TimeoutError) as exc:
+        except (RuntimeError, OSError, TimeoutError):
             logger.info("Unable to load OpenAI OAuth status", exc_info=True)
             return {
                 "available": False, "connected": False, "models": [],
@@ -114,7 +114,7 @@ def register_oauth_routes(router: APIRouter) -> None:
         set_setting("codex_budget_enabled", True)
         try:
             return await get_codex_provider().start_login()
-        except (RuntimeError, OSError, TimeoutError) as exc:
+        except (RuntimeError, OSError, TimeoutError):
             logger.info("Unable to start OpenAI OAuth login", exc_info=True)
             return localized_error_response(
                 "OpenAI OAuth login could not be started.",
@@ -129,7 +129,7 @@ def register_oauth_routes(router: APIRouter) -> None:
 
         try:
             await get_codex_provider().logout()
-        except (RuntimeError, OSError, TimeoutError) as exc:
+        except (RuntimeError, OSError, TimeoutError):
             logger.info("Unable to log out of OpenAI OAuth", exc_info=True)
             return localized_error_response(
                 "OpenAI OAuth logout failed.",
@@ -172,7 +172,7 @@ def register_oauth_routes(router: APIRouter) -> None:
             return _public_codex_cli_status(
                 codex_cli.start_download(force=bool(body.get("force")))
             )
-        except Exception as exc:
+        except Exception:
             logger.info("Unable to start Codex CLI download", exc_info=True)
             return localized_error_response(
                 "Codex CLI download could not be started.",
@@ -198,7 +198,7 @@ def register_oauth_routes(router: APIRouter) -> None:
                 "limits": snapshot.get("limits") or {},
                 "quota_enabled": snapshot.get("quota_enabled", True),
             }
-        except (RuntimeError, OSError, TimeoutError) as exc:
+        except (RuntimeError, OSError, TimeoutError):
             logger.info("Unable to load OpenAI OAuth limits", exc_info=True)
             return {
                 "available": False, "connected": False, "limits": {},

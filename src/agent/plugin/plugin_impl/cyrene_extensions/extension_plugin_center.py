@@ -526,7 +526,7 @@ async def _test_extension_sources(
                     "status": response.status_code,
                     "url": url,
                 }
-            except httpx.HTTPError as exc:
+            except httpx.HTTPError:
                 logger.info(
                     "Plugin Center source health check failed [source=%s url=%s]",
                     name,

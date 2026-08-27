@@ -9,7 +9,6 @@ from __future__ import annotations
 from conftest import workbench_chat_source
 
 import hashlib
-import importlib
 from collections import Counter
 from importlib.metadata import version
 import json

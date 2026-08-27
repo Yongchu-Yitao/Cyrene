@@ -148,7 +148,7 @@ async def _publish_sse(title: str, body: str) -> dict[str, Any]:
             "ts": datetime.now(timezone.utc).isoformat(),
         })
         return {"ok": True}
-    except Exception as exc:
+    except Exception:
         logger.warning("In-app notification publish failed", exc_info=True)
         return {
             "ok": False,
@@ -180,7 +180,7 @@ async def _notify_desktop(title: str, body: str) -> dict[str, Any]:
                 "不支持的平台：{platform}",
                 platform=system,
             )}
-    except Exception as exc:
+    except Exception:
         logger.warning("Desktop notification failed", exc_info=True)
         return {
             "ok": False,

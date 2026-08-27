@@ -9610,7 +9610,6 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     root = Path(__file__).resolve().parent.parent
     source = workbench_settings_source()
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
-    save_block = source.split("function persistQueuedConfig()", 1)[1].split("function updateConfig", 1)[0]
 
     assert "async function readSettingsResponse(response)" in source
     assert "if (!response.ok)" in source

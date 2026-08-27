@@ -9,7 +9,6 @@ import pytest
 from agent.plugin import PluginContext
 
 from conftest import (
-    workbench_i18n_source,
     workbench_settings_source,
     workbench_style_source,
 )

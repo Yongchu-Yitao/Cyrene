@@ -9,7 +9,6 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from agent.plugin import active_plugin_service
 from cyrene.config import DB_PATH
 from cyrene.workbench import presentation_runtime
 from cyrene.workbench.session_presentation import (

@@ -1,6 +1,5 @@
 """Canonical project-id tests for Plugin-owned workspace memory."""
 
-import pytest
 
 from agent.plugin.plugin_impl.cyrene_memory import structured as memory
 

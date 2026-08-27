@@ -50,7 +50,7 @@ async def _tool_read_chat_group_sessions(
             message_offset=max(0, int(args.get("message_offset", 0) or 0)),
             message_limit=max(1, min(int(args.get("message_limit", 20) or 20), 200)),
         )
-    except PermissionError as exc:
+    except PermissionError:
         return json_result({
             "status": "error",
             "type": "permission_denied",

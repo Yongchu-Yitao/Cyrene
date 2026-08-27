@@ -1,19 +1,12 @@
 """Tests for the Workbench global search endpoint and helpers."""
 
-import asyncio
-import json
-import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import httpx
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from cyrene.runtime import database as db
 from cyrene.workbench.presentation_runtime import _search_matches, _search_snippet, _search_workbench_items
-from route.registry import register_routes
 
 
 def test_search_matches_substring():

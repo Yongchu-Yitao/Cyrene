@@ -9,7 +9,6 @@ from conftest import workbench_shell_source
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from route.registry import register_routes
 
 
 def _patch_paths(monkeypatch, tmp_path, soul_content, default_content):
@@ -198,7 +197,6 @@ async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path
 
 
 async def test_save_codex_oauth_setup_persists_model_and_effort(monkeypatch, tmp_path):
-    from cyrene.model_runtime import codex_provider
     from cyrene.runtime import onboarding
 
     default_soul = "# Cyrene's Soul\n\n## SELF:IDENTITY\n- default\n"

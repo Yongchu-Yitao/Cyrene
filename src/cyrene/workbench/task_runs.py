@@ -335,7 +335,7 @@ async def _resume_one_task_run(
                 ),
             )
         raise
-    except Exception as exc:
+    except Exception:
         logger.exception(
             "Failed to resume Workbench Task run [session=%s run=%s]",
             session_id,
@@ -388,7 +388,7 @@ async def recover_interrupted_task_runs(
                     continue
                 try:
                     resume_body = _resume_body(run)
-                except ValueError as exc:
+                except ValueError:
                     logger.warning(
                         "Interrupted Task run has no resumable request "
                         "[session=%s run=%s]",

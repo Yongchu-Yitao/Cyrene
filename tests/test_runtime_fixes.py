@@ -3,11 +3,8 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import AsyncMock
 
-import httpx
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -415,6 +412,7 @@ async def test_recall_memory_tool_bounds_large_results(tmp_path):
 
 
 async def test_recall_conversation_tool_returns_archived_matches(tmp_path, monkeypatch):
+    from agent.plugin.plugin_impl.cyrene_memory import archive as conversations
     from agent.plugin.plugin_impl.cyrene_memory import recall_conversation as tools
 
     conversations_dir = tmp_path / "conversations"
@@ -764,7 +762,6 @@ def test_last_user_time_mtime_fallback_requires_user_spoke_last(tmp_path, monkey
 
     from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
 
-    conv_dir = tmp_path / "conversations"  # deliberately not created
     state_file = tmp_path / "state.json"
     memory_service = SimpleNamespace(latest_archived_user_message_time=lambda: None)
     monkeypatch.setattr(scheduler, "_memory_service", lambda: memory_service)

@@ -85,7 +85,7 @@ def register_onboarding_routes(router: APIRouter) -> None:
             )
         except ValueError as exc:
             return _validation_error(exc, code="invalid_llm_setup")
-        except httpx.TimeoutException as exc:
+        except httpx.TimeoutException:
             logger.info("Onboarding model probe timed out", exc_info=True)
             return localized_error_response(
                 "upstream model timed out",
@@ -93,7 +93,7 @@ def register_onboarding_routes(router: APIRouter) -> None:
                 504,
                 "model_timeout",
             )
-        except httpx.HTTPError as exc:
+        except httpx.HTTPError:
             logger.info("Onboarding model probe failed", exc_info=True)
             return localized_error_response(
                 "upstream model request failed",
@@ -101,7 +101,7 @@ def register_onboarding_routes(router: APIRouter) -> None:
                 502,
                 "model_request_failed",
             )
-        except (RuntimeError, OSError) as exc:
+        except (RuntimeError, OSError):
             logger.info("Onboarding model setup is unavailable", exc_info=True)
             return localized_error_response(
                 "model setup is temporarily unavailable",
@@ -122,7 +122,7 @@ def register_onboarding_routes(router: APIRouter) -> None:
             )
         except ValueError as exc:
             return _validation_error(exc, code="invalid_codex_setup")
-        except (RuntimeError, OSError, TimeoutError) as exc:
+        except (RuntimeError, OSError, TimeoutError):
             logger.info("Codex onboarding model validation failed", exc_info=True)
             return localized_error_response(
                 "Codex model validation failed",

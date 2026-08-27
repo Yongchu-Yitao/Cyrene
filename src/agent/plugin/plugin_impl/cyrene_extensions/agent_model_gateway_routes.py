@@ -289,7 +289,7 @@ def register_agent_model_gateway_routes(router: APIRouter) -> None:
                 yield "data: [DONE]\n\n"
 
             return StreamingResponse(stream(), media_type="text/event-stream")
-        except ValueError as exc:
+        except ValueError:
             logger.info("Invalid external Agent chat-completions request", exc_info=True)
             return _gateway_error(
                 "Invalid model gateway request.",
@@ -371,7 +371,7 @@ def register_agent_model_gateway_routes(router: APIRouter) -> None:
                     yield event
 
             return StreamingResponse(stream(), media_type="text/event-stream")
-        except ValueError as exc:
+        except ValueError:
             logger.info("Invalid external Agent Responses request", exc_info=True)
             return _gateway_error(
                 "Invalid model gateway request.",

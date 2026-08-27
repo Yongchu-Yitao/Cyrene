@@ -15,7 +15,6 @@ from fastapi.responses import FileResponse
 from agent.plugin import (
     PluginApplicationHost,
     PluginPack,
-    PluginRegistry,
     PluginRegistryError,
     RegisteredPlugin,
 )

@@ -42,7 +42,7 @@ def _register_configuration_route(
                 extension_id,
                 configuration,
             )
-        except MCPServerNotFoundError as exc:
+        except MCPServerNotFoundError:
             return JSONResponse(
                 {
                     "ok": False,
@@ -51,7 +51,7 @@ def _register_configuration_route(
                 },
                 status_code=404,
             )
-        except ValueError as exc:
+        except ValueError:
             return JSONResponse(
                 {
                     "ok": False,

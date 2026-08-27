@@ -268,7 +268,7 @@ class BrowserLiveApplicationService:
             }
         try:
             return await self.runtime.navigate(url)
-        except Exception as exc:
+        except Exception:
             logger.warning("Browser navigation failed", exc_info=True)
             return {
                 "ok": False,
@@ -294,7 +294,7 @@ class BrowserLiveApplicationService:
             url = await session.current_url()
             await session.open_user_window(url)
             return {"ok": True, "url": url, "mode": "headed"}
-        except Exception as exc:
+        except Exception:
             logger.warning("Browser takeover failed", exc_info=True)
             return {
                 "ok": False,
@@ -319,7 +319,7 @@ class BrowserLiveApplicationService:
             session = await self.runtime.session()
             await session.close_user_window(await session.current_url())
             return {"ok": True, "mode": "headless"}
-        except Exception as exc:
+        except Exception:
             logger.warning("Browser release failed", exc_info=True)
             return {
                 "ok": False,

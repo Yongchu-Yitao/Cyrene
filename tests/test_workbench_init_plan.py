@@ -2,12 +2,10 @@ import sys
 import os
 import asyncio
 import subprocess
-import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from route.registry import register_routes
 
 
 def test_workbench_init_task_plan_normalizes_llm_payload():

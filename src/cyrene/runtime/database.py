@@ -32,6 +32,34 @@ from cyrene.runtime.persistence.analytics import (
 from cyrene.runtime.persistence.migrations import initialize_runtime_database
 from cyrene.runtime.persistence.schema import RUNTIME_SCHEMA
 
+__all__ = [
+    "activity_column",
+    "backfill_analytics",
+    "bump_activity_sync",
+    "count_stat_days",
+    "estimate_cost",
+    "extract_topic_terms",
+    "get_daily_stats_range",
+    "get_llm_cache_stats_by_phase",
+    "get_model_stats_range",
+    "get_runtime_trace",
+    "get_task_time_totals",
+    "get_token_usage_stats",
+    "get_tool_counts_range",
+    "get_topic_counts_range",
+    "init_db",
+    "record_archive_exchange",
+    "record_llm_latency",
+    "record_llm_telemetry_batch",
+    "record_memory_touch_sync",
+    "record_permission_decision",
+    "record_runtime_trace_span",
+    "record_runtime_trace_spans",
+    "record_token_usage",
+    "record_tool_call",
+    "record_usage_stats_batch",
+]
+
 # Historical diagnostic helper retained without importing a private repository
 # member across the package boundary.
 _estimate_cost = estimate_cost

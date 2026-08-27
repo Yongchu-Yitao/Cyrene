@@ -3178,7 +3178,7 @@ class RemoteControlRuntime:
                     self.store.update_listen_port,
                     self.lan_port,
                 )
-        except Exception as exc:
+        except Exception:
             logger.error("LAN control listener failed", exc_info=True)
             self.last_error = localized(
                 "The LAN control listener could not start.",
@@ -3195,7 +3195,7 @@ class RemoteControlRuntime:
             if hasattr(self.executor, "set_remote_event_sender"):
                 self.executor.set_remote_event_sender(gateway.send_event)
             await gateway.start()
-        except Exception as exc:
+        except Exception:
             logger.error("Remote gateway failed to start", exc_info=True)
             if hasattr(self.executor, "set_remote_event_sender"):
                 self.executor.set_remote_event_sender(None)

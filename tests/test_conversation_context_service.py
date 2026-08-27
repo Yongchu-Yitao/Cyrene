@@ -8,7 +8,6 @@ from cyrene.workbench.conversation_context_service import (
     ConversationInboxQueryService,
     _agent_path_usage,
     _agent_path_plugin_usage,
-    _system_prompt_blocks,
 )
 
 

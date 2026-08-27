@@ -1,10 +1,8 @@
 import sys
-import hashlib
 import json
-import re
 import sqlite3
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient

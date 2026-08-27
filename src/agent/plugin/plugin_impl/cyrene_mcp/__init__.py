@@ -72,7 +72,7 @@ def application_setup(context: PluginApplicationContext) -> None:
                 servers,
                 merge_redacted=True,
             )
-        except ValueError as exc:
+        except ValueError:
             return JSONResponse(
                 {
                     "ok": False,

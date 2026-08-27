@@ -43,7 +43,7 @@ def launch_update_restart(
                 "已下载的更新包不存在。",
             ), "update_package_missing", 409
         file_size = dest.stat().st_size
-    except OSError as exc:
+    except OSError:
         logger.warning("Unable to inspect downloaded update package", exc_info=True)
         return False, localized(
             "Unable to inspect the downloaded update package.",
@@ -86,7 +86,7 @@ def launch_update_restart(
 
     try:
         current_sha256 = updater._hash_file(dest).lower()
-    except OSError as exc:
+    except OSError:
         logger.warning("Unable to verify downloaded update package", exc_info=True)
         return False, localized(
             "Unable to verify the downloaded update package.",
@@ -135,7 +135,7 @@ def launch_update_restart(
             script_path.write_text(script, encoding="utf-8")
             script_path.chmod(0o755)
             popen_fn(["bash", str(script_path)], start_new_session=True)
-    except Exception as exc:
+    except Exception:
         logger.warning("Failed to spawn updater script", exc_info=True)
         return False, localized(
             "Failed to launch the updater.",

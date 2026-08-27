@@ -172,7 +172,7 @@ def _public_configuration_with_plugins(
 
             plugin_catalog = model_plugin_catalog()
         payload["model_plugins"] = plugin_catalog
-    except Exception as exc:
+    except Exception:
         logger.exception("Unable to build model Plugin catalog")
         plugin_catalog = []
         payload["model_plugins"] = []
@@ -517,7 +517,7 @@ def register_model_configuration_routes(
                 if profile is not None
                 else await _test_connection(connection, service=service)
             )
-        except (TimeoutError, httpx.TimeoutException) as exc:
+        except (TimeoutError, httpx.TimeoutException):
             logger.info("Model connection test timed out", exc_info=True)
             return _error(
                 "model connection timed out",
@@ -534,7 +534,7 @@ def register_model_configuration_routes(
                 502,
                 upstream_status=exc.response.status_code,
             )
-        except httpx.HTTPError as exc:
+        except httpx.HTTPError:
             logger.info("Model connection request failed", exc_info=True)
             return _error(
                 "model connection failed",
@@ -542,7 +542,7 @@ def register_model_configuration_routes(
                 "model_connection_failed",
                 502,
             )
-        except (RuntimeError, OSError) as exc:
+        except (RuntimeError, OSError):
             logger.info("Model connection is unavailable", exc_info=True)
             return _error(
                 "model connection is unavailable",
@@ -578,7 +578,7 @@ def register_model_configuration_routes(
         try:
             connection = _connection_draft(connection_id, body)
             models = await _discover(connection, service=service)
-        except (TimeoutError, httpx.TimeoutException) as exc:
+        except (TimeoutError, httpx.TimeoutException):
             logger.info("Model discovery timed out", exc_info=True)
             return _error(
                 "model discovery timed out",
@@ -595,7 +595,7 @@ def register_model_configuration_routes(
                 502,
                 upstream_status=exc.response.status_code,
             )
-        except httpx.HTTPError as exc:
+        except httpx.HTTPError:
             logger.info("Model discovery request failed", exc_info=True)
             return _error(
                 "model discovery failed",
@@ -603,7 +603,7 @@ def register_model_configuration_routes(
                 "model_discovery_failed",
                 502,
             )
-        except (RuntimeError, OSError) as exc:
+        except (RuntimeError, OSError):
             logger.info("Model discovery is unavailable", exc_info=True)
             return _error(
                 "model discovery is unavailable",

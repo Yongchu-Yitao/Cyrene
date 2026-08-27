@@ -92,7 +92,7 @@ def register_media_settings_routes(router: APIRouter) -> None:
                 expected_revision=exc.expected,
                 revision=exc.actual,
             )
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError):
             logger.info("Invalid media settings update", exc_info=True)
             return localized_error_response(
                 "Invalid media settings.",

@@ -11,7 +11,6 @@ from cyrene.model_runtime.codex_provider import (
     CODEX_AUTHENTICATION_EXPIRED,
     CODEX_CLI_REQUIRED,
     CODEX_MODEL_UNAVAILABLE,
-    CODEX_PROVIDER,
     CODEX_QUOTA_EXHAUSTED,
     CodexAppServer,
     CodexAvailabilityError,

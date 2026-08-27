@@ -1411,10 +1411,6 @@ def _provider_instructions(
     ]
     tool_contract = ""
     if tools and structured_actions:
-        tool_names = {
-            str((tool.get("function") or {}).get("name") or "").strip()
-            for tool in tools
-        }
         tool_contract = (
             "\nCyrene tools are application actions. Never claim that an action "
             "ran before Cyrene returns its tool result. Your response is constrained "
