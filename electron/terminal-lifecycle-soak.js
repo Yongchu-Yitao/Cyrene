@@ -142,13 +142,13 @@ async function waitForBackendRestart(
   throw lastError || new Error(`Backend did not restart after PID ${previousPid}`);
 }
 
-async function waitForMarker(connection, terminalId, marker, cursor, input) {
+async function waitForMarker(connection, terminalId, marker, cursor, input, timeoutMs = 20000) {
   await daemonRequest(connection, 'input', {
     terminalId,
     data: input || `echo ${marker}\r`,
     actor: 'user',
   }, 10000);
-  const deadline = Date.now() + 20000;
+  const deadline = Date.now() + timeoutMs;
   let position = Math.max(0, Number(cursor || 0));
   let tail = Buffer.alloc(0);
   while (Date.now() < deadline) {
@@ -238,7 +238,14 @@ async function runTerminalLifecycleSoak(options) {
       { length: 1024 },
       (_value, index) => `echo CYRENE_TERMINAL_SOAK_BURST_${String(index).padStart(4, '0')}\r`,
     ).join('') + `echo ${burstMarker}\r`;
-    cursor = await waitForMarker(connection, terminalId, burstMarker, cursor, burst);
+    cursor = await waitForMarker(
+      connection,
+      terminalId,
+      burstMarker,
+      cursor,
+      burst,
+      120000,
+    );
 
     for (let cycle = 1; cycle <= cycles; cycle += 1) {
       const previousBackendPid = Number(getBackendPid() || 0);

@@ -432,7 +432,6 @@ jobs:
           pip install aiosqlite anyio apscheduler croniter fastapi "httpx[http2]==0.28.1" "jinja2==3.1.6" python-dotenv python-telegram-bot requests sniffio watchfiles websockets python-multipart certifi==2025.7.14 h11 idna
           pip install winloop "pyte>=0.8.2" pywinpty==3.0.5
           pip install . --no-deps
-          pip install -r build/requirements-windows-release.txt
           pip install openai-codex==0.144.4 --no-deps
           pip install pyyaml "prompt-toolkit>=3.0.52" "rich>=15.0.0"
           pip install --upgrade typing_extensions pydantic pydantic_core
@@ -446,8 +445,11 @@ jobs:
           vcpkg install openssl:arm64-windows-static-md
           $env:OPENSSL_DIR = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed\arm64-windows-static-md"
           $env:OPENSSL_STATIC = "1"
+          python -m pip install --force-reinstall --no-deps --no-binary cffi cffi
+          python -c "import _cffi_backend; print('arm64-cffi-ok')"
           python -m pip install --force-reinstall --no-deps --no-binary cryptography cryptography
           python -c "import platform; from cryptography.fernet import Fernet; assert platform.machine().lower() in {'arm64','aarch64'}; Fernet(Fernet.generate_key()); print('arm64-cryptography-ok')"
+          python -m pip install -r build/requirements-windows-release.txt
 
       - name: Install MCP runtime
         shell: powershell

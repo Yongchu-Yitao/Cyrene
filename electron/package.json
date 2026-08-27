@@ -14,7 +14,7 @@
     "prestart": "node build-app-use-macos.js",
     "start": "electron .",
     "predev": "node build-app-use-macos.js",
-    "dev": "ELECTRON_DEV=1 electron .",
+    "dev": "node dev-launcher.js",
     "build:app-use-macos": "node build-app-use-macos.js",
     "build:mac": "electron-builder --mac",
     "build:win": "electron-builder --win",

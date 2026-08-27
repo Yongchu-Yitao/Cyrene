@@ -1,7 +1,26 @@
+import json
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_electron_dev_launcher_is_cross_platform_and_uses_uv_backend():
+    package = json.loads(
+        (ROOT / "electron" / "package.json").read_text(encoding="utf-8")
+    )
+    launcher = (ROOT / "electron" / "dev-launcher.js").read_text(
+        encoding="utf-8"
+    )
+    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+
+    assert package["scripts"]["dev"] == "node dev-launcher.js"
+    assert "ELECTRON_DEV: '1'" in launcher
+    assert "spawn(electronPath, ['.']" in launcher
+    assert "return 'uv';" in main
+    assert "'run'," in main
+    assert "'cyrene'," in main
+    assert "cwd: cwd" in main
 
 
 def test_windows_arm_keeps_electron_hardware_acceleration_enabled():
@@ -41,6 +60,11 @@ def test_windows_release_installs_required_native_runtime_packages():
     assert "onnxruntime_qnn" in arm_job
     assert "vcpkg install openssl:arm64-windows-static-md" in arm_job
     assert "--force-reinstall --no-deps --no-binary cryptography" in arm_job
+    assert "--force-reinstall --no-deps --no-binary cffi" in arm_job
+    assert "import _cffi_backend" in arm_job
+    assert arm_job.index("arm64-cryptography-ok") < arm_job.index(
+        "requirements-windows-release.txt"
+    )
     assert arm_job.index("Build native ARM64 cryptography runtime") < arm_job.index(
         "Install MCP runtime"
     )
@@ -140,6 +164,7 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert "path.join(userDataDir, 'workspace', 'terminal-lifecycle-workspace')" in lifecycle_soak
     assert "path.join(tempDir, 'terminal-lifecycle-workspace')" not in lifecycle_soak
     assert "CYRENE_TERMINAL_SOAK_BURST_COMPLETE" in lifecycle_soak
+    assert "120000" in lifecycle_soak
     assert "await daemonRequest(cleanupConnection, 'shutdown'" in lifecycle_soak
     assert '"terminal-lifecycle-soak.js"' in electron_package
     client = (ROOT / "src" / "cyrene" / "terminal" / "client.py").read_text(
