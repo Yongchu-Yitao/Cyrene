@@ -185,7 +185,7 @@ async def test_gateway_calls_exact_scoped_candidate_with_chat_affinity(monkeypat
     )
     assert result["content"] == "ok"
     assert captured["session_id"] == "chat_selected"
-    assert captured["candidates"][0]["id"] == "configured-primary"
+    assert captured["model_identity"]["candidateId"] == "configured-primary"
     assert captured["tools"][0]["function"]["name"] == "read"
     assert captured["max_tokens"] == 321
 

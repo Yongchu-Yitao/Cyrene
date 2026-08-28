@@ -431,7 +431,7 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert 'showTerminalRecoveryToast(message.terminal)' in source
     assert 'showTerminalExitToast(message.terminal, restartTerminal)' in source
     assert 'terminalT("terminal.exitedWithReason"' in source
-    assert 'actionLabel: recoverable ? "重新启动" : ""' in source
+    assert 'actionLabel: recoverable ? terminalT("terminal.restart", "Restart") : ""' in source
     assert 'else if (connection === "exited") {' not in source
     assert 'className="workbench-toast-action"' in feedback
     assert 'typeof opts.onAction === "function"' in feedback

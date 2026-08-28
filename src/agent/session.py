@@ -2100,47 +2100,55 @@ class AgentSession:
                 self._leaf_id = source.id
                 return
 
-            parent = source
-            for index, mount in enumerate(mounts):
-                node_id = self._stable_id(
-                    "context",
-                    f"{source.id}:{index}:{mount['kind']}",
+            self._mount_context_nodes(source, run_id, mounts)
+
+    def _mount_context_nodes(
+        self,
+        source: Any,
+        run_id: str,
+        mounts: list[dict[str, str]],
+    ) -> None:
+        parent = source
+        for index, mount in enumerate(mounts):
+            node_id = self._stable_id(
+                "context",
+                f"{source.id}:{index}:{mount['kind']}",
+            )
+            try:
+                child = self.store.get_node(self.tree.id, node_id)
+            except NodeNotFoundError:
+                child = self.store.mount(
+                    self.tree.id,
+                    parent.id,
+                    {
+                        "role": "context",
+                        "content": mount["content"],
+                        "context_kind": mount["kind"],
+                        "context_source": mount["source"],
+                        "source_node_id": source.id,
+                        "context_index": index,
+                        "metadata": {"source": mount["source"]},
+                        "run_id": run_id,
+                        "trigger_model": index == len(mounts) - 1,
+                    },
+                    node_id=node_id,
                 )
-                try:
-                    child = self.store.get_node(self.tree.id, node_id)
-                except NodeNotFoundError:
-                    child = self.store.mount(
+            else:
+                child_value = (
+                    dict(child.value)
+                    if isinstance(child.value, Mapping)
+                    else {}
+                )
+                should_trigger = index == len(mounts) - 1
+                if child_value.get("trigger_model") is not should_trigger:
+                    child_value["trigger_model"] = should_trigger
+                    child = self.store.update_node(
                         self.tree.id,
-                        parent.id,
-                        {
-                            "role": "context",
-                            "content": mount["content"],
-                            "context_kind": mount["kind"],
-                            "context_source": mount["source"],
-                            "source_node_id": source.id,
-                            "context_index": index,
-                            "metadata": {"source": mount["source"]},
-                            "run_id": run_id,
-                            "trigger_model": index == len(mounts) - 1,
-                        },
-                        node_id=node_id,
+                        child.id,
+                        child_value,
                     )
-                else:
-                    child_value = (
-                        dict(child.value)
-                        if isinstance(child.value, Mapping)
-                        else {}
-                    )
-                    should_trigger = index == len(mounts) - 1
-                    if child_value.get("trigger_model") is not should_trigger:
-                        child_value["trigger_model"] = should_trigger
-                        child = self.store.update_node(
-                            self.tree.id,
-                            child.id,
-                            child_value,
-                        )
-                parent = child
-            self._leaf_id = parent.id
+            parent = child
+        self._leaf_id = parent.id
 
     def _configured_compaction_limit(self) -> int:
         try:

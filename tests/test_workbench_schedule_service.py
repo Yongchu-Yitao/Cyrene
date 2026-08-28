@@ -103,7 +103,7 @@ def test_schedule_crud_runs_and_project_isolation_use_plugin_runtime(tmp_path):
     wrong_workspace = client.delete(
         f"/api/workbench/schedule/tasks/{task_id}?workspace=other"
     )
-    assert wrong_workspace.status_code == 404
+    assert wrong_workspace.status_code == 400
     deleted = client.delete(
         f"/api/workbench/schedule/tasks/{task_id}?workspace=project_1"
     )

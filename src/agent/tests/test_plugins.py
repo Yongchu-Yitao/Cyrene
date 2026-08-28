@@ -470,7 +470,7 @@ plugin = Plugin(
 
         old_search = await runtime.call("toolbox", {"operation": "search"})
         assert old_search.success is False
-        assert old_search.error.startswith("Invalid arguments:")
+        assert old_search.error.startswith("Invalid arguments")
 
     run(scenario())
 
@@ -506,11 +506,11 @@ def test_runtime_validates_the_resolved_plugins_current_schema():
         valid = await runtime.call("Live", {"value": "ok"})
 
         assert missing.success is False
-        assert missing.error.startswith("Invalid arguments:")
+        assert missing.error.startswith("Invalid arguments")
         assert wrong_type.success is False
-        assert wrong_type.error.startswith("Invalid arguments:")
+        assert wrong_type.error.startswith("Invalid arguments")
         assert unknown.success is False
-        assert unknown.error.startswith("Invalid arguments:")
+        assert unknown.error.startswith("Invalid arguments")
         assert valid.success is True
         assert valid.value == "ok"
 
@@ -589,7 +589,7 @@ def test_runtime_revalidates_arguments_modified_by_hooks():
         )
 
         assert result.success is False
-        assert result.error.startswith("Invalid arguments:")
+        assert result.error.startswith("Invalid arguments")
         assert executed is False
 
     run(scenario())

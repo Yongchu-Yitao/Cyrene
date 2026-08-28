@@ -163,7 +163,7 @@ def test_memory_pack_mounts_session_context_through_hook(monkeypatch, tmp_path):
     ]
     mounted = nodes[2]["value"]
     assert mounted["context_kind"] == "plugin_session"
-    assert mounted["context_source"] == "hook"
+    assert mounted["context_source"] == "SessionStart"
     assert mounted["metadata"] == {"source": "SessionStart"}
     assert "Project memory:\nUse the verified design." in captured[0][0]["content"]
     session.close()

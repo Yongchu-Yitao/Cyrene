@@ -185,7 +185,7 @@ async def test_analyze_attachment_does_not_write_next_to_source(tmp_path, monkey
     src.write_text("some workspace content", encoding="utf-8")
 
     result = await attachments.analyze_attachment(str(src))
-    assert result["kind"] == "file"
+    assert result["kind"] == "document"
 
     # No sidecar pollution next to the user's file...
     assert not (tmp_path / "notes.txt.analysis.json").exists()
@@ -397,7 +397,7 @@ async def test_unknown_channel_is_rejected(monkeypatch):
     _patch_channels(monkeypatch)
     result = await n.notify("t", "b", channel="carrier-pigeon")
     assert result["ok"] is False
-    assert "unknown channel" in result.get("error", "").lower()
+    assert "unknown notification channel" in result.get("error", "").lower()
 
 
 # ---------------------------------------------------------------------------

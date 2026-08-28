@@ -141,7 +141,8 @@ async def test_visual_describe_converts_window_capture_to_text(monkeypatch):
 
     async def fake_vision(content, content_prompt="", **kwargs):
         assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
-        assert content_prompt == "Explain the chart"
+        assert content_prompt.startswith("Explain the chart")
+        assert "Write the observation in English." in content_prompt
         assert kwargs["timeout"] == 60.0
         assert kwargs["record_latency"] is True
         return {"vision_text": "A rising line chart.", "vision_model": "vision-test"}

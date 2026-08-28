@@ -170,4 +170,6 @@ def test_content_pack_toolbox_search_and_result_read_chain(tmp_path, monkeypatch
             wrong_session,
         )
     )
-    assert rejected.value["result"] == "工具失败：结果引用或分页参数无效。"
+    assert rejected.value["result"] == (
+        "Tool failed: the result reference or paging arguments are invalid."
+    )

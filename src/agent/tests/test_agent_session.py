@@ -76,7 +76,7 @@ def test_context_change_hook_mounts_turn_context_before_model(tmp_path):
     ]
     mounted = snapshot["nodes"][2]["value"]
     assert mounted["context_kind"] == "plugin_session"
-    assert mounted["context_source"] == "hook"
+    assert mounted["context_source"] == "SessionStart"
     assert mounted["metadata"] == {"source": "SessionStart"}
     assert captured_messages[0][0]["role"] == "system"
     assert "Project memory:\nKeep the verified decision." in captured_messages[0][0]["content"]

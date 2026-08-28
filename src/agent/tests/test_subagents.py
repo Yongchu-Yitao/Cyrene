@@ -205,7 +205,7 @@ def test_subagent_pack_follows_toolbox_list_describe_invoke(tmp_path):
         )
 
         assert spawned.value["result"].startswith("Sub-agent 'worker' started.")
-        assert sent.value["result"] == "消息已发送给 worker。"
+        assert sent.value["result"] == "Message sent to worker."
         assert broadcast.value["result"] == "广播已发送给 2/2 个同级 Agent。"
         assert manager.calls[0][:4] == (
             "spawn",
