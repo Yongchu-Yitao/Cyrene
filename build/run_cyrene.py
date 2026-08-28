@@ -72,7 +72,6 @@ def _run_smoke_test() -> None:
         print(f"{name}={version}")
     for _name, _ver in _smoke_imports.items():
         print(f"{_name}={_ver}")
-    print(f"legacy_module_aliases={len(compatibility_aliases)}")
 
     # The Codex CLI is no longer bundled: codex_cli.py downloads the wheel
     # on demand (the SDK's openai-codex-cli-bin metadata dependency is
