@@ -9,7 +9,14 @@ import threading
 from pathlib import Path
 
 from agent import AgentSession
-from agent.plugin import Plugin, PluginContext, PluginPack, PluginRegistry, PluginRuntime
+from agent.plugin import (
+    Plugin,
+    PluginActivationState,
+    PluginContext,
+    PluginPack,
+    PluginRegistry,
+    PluginRuntime,
+)
 from agent.workbench import WorkbenchSessionBridge
 from cyrene.runtime import inbox
 
@@ -32,7 +39,7 @@ def copy_subagent_pack(plugin_directory: Path) -> None:
 
 
 def model_registry(handler) -> PluginRegistry:
-    registry = PluginRegistry()
+    registry = PluginRegistry(activation=PluginActivationState())
     registry.register_pack(
         PluginPack(
             "model",
@@ -144,7 +151,7 @@ def test_subagent_pack_follows_toolbox_list_describe_invoke(tmp_path, monkeypatc
         )
         plugin_directory = tmp_path / "plugin_impl"
         copy_subagent_pack(plugin_directory)
-        registry = PluginRegistry()
+        registry = PluginRegistry(activation=PluginActivationState())
         assert registry.load_directory(plugin_directory) == ()
         runtime = PluginRuntime(registry)
         manager = StubSubagentManager()
