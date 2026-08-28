@@ -54,6 +54,7 @@
 
 ### Fixes and compatibility
 
+- Windows installed and portable builds now allow up to 120 seconds for the Python backend to start, avoiding premature 30-second exits on ARM64 devices or slower first-run migrations.
 - Fixed missing text, reasoning fragments, incremental tool arguments, finish reasons, returned model names, or usage in some provider streams.
 - Fixed Context panel cases that merged separate plugin contributors, omitted standalone tools, or injected turn context into the system message more than once.
 - Fixed memory learning that could repeat after context updates, recovery, or language changes, or read live project memory instead of the current chat's snapshot.

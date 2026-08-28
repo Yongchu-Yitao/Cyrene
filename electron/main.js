@@ -473,7 +473,7 @@ const DESKTOP_TRANSLATIONS = Object.freeze({
     backendErrorClose: 'The application will now close.',
     backendErrorLog: 'If this keeps happening, check cyrene_error.log in {path}',
     startupTimeoutTitle: 'Cyrene - Startup Timeout',
-    startupTimeoutMessage: 'The Python backend did not start within 30 seconds.',
+    startupTimeoutMessage: 'The Python backend did not start within {seconds} seconds.',
     startupTimeoutLog: 'Check cyrene_error.log in {path} for details.',
     windowErrorTitle: 'Cyrene - Window Error',
     windowErrorMessage: 'The application window could not be rendered.',
@@ -530,7 +530,7 @@ const DESKTOP_TRANSLATIONS = Object.freeze({
     backendErrorClose: '应用即将关闭。',
     backendErrorLog: '如果问题反复出现，请检查 {path} 中的 cyrene_error.log。',
     startupTimeoutTitle: 'Cyrene - 启动超时',
-    startupTimeoutMessage: 'Python 后端未能在 30 秒内启动。',
+    startupTimeoutMessage: 'Python 后端未能在 {seconds} 秒内启动。',
     startupTimeoutLog: '详情请检查 {path} 中的 cyrene_error.log。',
     windowErrorTitle: 'Cyrene - 窗口错误',
     windowErrorMessage: '无法渲染应用窗口。',
@@ -7147,9 +7147,12 @@ async function createMainWindow() {
     return;
   }
 
+  const startupTimeoutMs = (isTerminalLifecycleSoakTest || (!isDev && isWindows))
+    ? 120000
+    : 30000;
   let port;
   try {
-    port = await waitForPort(isTerminalLifecycleSoakTest ? 120000 : 30000);
+    port = await waitForPort(startupTimeoutMs);
   } catch (err) {
     if (isTerminalLifecycleSoakTest) {
       terminalLifecycleSoakFailure(err);
@@ -7160,7 +7163,7 @@ async function createMainWindow() {
     const settings = readDesktopSettings();
     dialog.showErrorBox(
       desktopT('startupTimeoutTitle', settings),
-      `${desktopT('startupTimeoutMessage', settings)}\n\n`
+      `${desktopFormat('startupTimeoutMessage', settings, { seconds: startupTimeoutMs / 1000 })}\n\n`
       + desktopFormat('startupTimeoutLog', settings, { path: getCyreneTempDir() })
     );
     killPython();
