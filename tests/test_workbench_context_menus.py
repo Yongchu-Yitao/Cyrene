@@ -204,7 +204,7 @@ def test_existing_item_action_menus_are_available_from_right_click():
         assert "props.onContextMenu(item, event)" in item
     assert "function openItemContextMenu(item, event)" in library
     assert "wb-lib-context-menu" in library
-    assert 'document.querySelector(".workbench-shell")' in library
+    assert 'document.querySelector(".workbench-shell")' in library_columns
     assert "libraryContextMenuTheme" in library
     assert "function libraryContextMenuTheme()" in library_columns
     assert "portalTheme: libraryContextMenuTheme()" in library_columns
@@ -654,7 +654,10 @@ def test_library_table_title_header_is_localized_and_aligned_to_filenames():
     )
     i18n = workbench_i18n_source()
 
-    assert 'className: "wb-lib-title-head"' in library
+    library_columns = (
+        ROOT / "src/webui/frontend/features/knowledge/library-columns.jsx"
+    ).read_text(encoding="utf-8")
+    assert 'className: "wb-lib-title-head"' in library_columns
     title_rule = css.split(".wb-lib-title-head {", 1)[1].split("}", 1)[0]
     assert "padding-left: 64px" in title_rule
     for key, english, chinese in (
