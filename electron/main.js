@@ -329,6 +329,9 @@ function executeApprovedLifecycle(actionId, action, receipt) {
 const isDesktopSmokeTest = process.argv.includes('--desktop-smoke-test');
 const isTerminalLifecycleSoakTest = process.argv.includes('--terminal-lifecycle-soak-test');
 const isReleaseSmokeTest = isDesktopSmokeTest || isTerminalLifecycleSoakTest;
+const backendStartupTimeoutMs = (isTerminalLifecycleSoakTest || (!isDev && isWindows))
+  ? 120000
+  : 30000;
 let terminalLifecycleSoakStarted = false;
 if (isReleaseSmokeTest) {
   // Keep release smoke tests independent from any resident desktop instance
@@ -7147,12 +7150,9 @@ async function createMainWindow() {
     return;
   }
 
-  const startupTimeoutMs = (isTerminalLifecycleSoakTest || (!isDev && isWindows))
-    ? 120000
-    : 30000;
   let port;
   try {
-    port = await waitForPort(startupTimeoutMs);
+    port = await waitForPort(backendStartupTimeoutMs);
   } catch (err) {
     if (isTerminalLifecycleSoakTest) {
       terminalLifecycleSoakFailure(err);
@@ -7163,7 +7163,7 @@ async function createMainWindow() {
     const settings = readDesktopSettings();
     dialog.showErrorBox(
       desktopT('startupTimeoutTitle', settings),
-      `${desktopFormat('startupTimeoutMessage', settings, { seconds: startupTimeoutMs / 1000 })}\n\n`
+      `${desktopFormat('startupTimeoutMessage', settings, { seconds: backendStartupTimeoutMs / 1000 })}\n\n`
       + desktopFormat('startupTimeoutLog', settings, { path: getCyreneTempDir() })
     );
     killPython();
