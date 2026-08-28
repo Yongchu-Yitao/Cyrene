@@ -330,6 +330,38 @@ def _agent_ephemeral_is_mounted(
     )
 
 
+def _agent_latest_ephemeral_context(path: list[Any]) -> str:
+    latest_user = next(
+        (
+            node
+            for node in reversed(path)
+            if isinstance(node.value, Mapping)
+            and node.value.get("role") == "user"
+        ),
+        None,
+    )
+    if latest_user is None:
+        return ""
+    current_run_id = str(latest_user.value.get("run_id") or "")
+    turn_user = next(
+        (
+            node
+            for node in reversed(path)
+            if isinstance(node.value, Mapping)
+            and node.value.get("role") == "user"
+            and str(node.value.get("run_id") or "") == current_run_id
+            and isinstance(node.value.get("metadata"), Mapping)
+            and "ephemeral_context" in node.value["metadata"]
+        ),
+        None,
+    )
+    return (
+        str(turn_user.value["metadata"].get("ephemeral_context") or "")
+        if turn_user is not None
+        else ""
+    )
+
+
 def _agent_path_plugin_usage(nodes: list[Any]) -> tuple[list[str], list[str]]:
     packs: list[str] = []
     standalone: list[str] = []
@@ -488,34 +520,7 @@ class AgentContextRepository:
             and isinstance(latest_model_node.value.get("model_identity"), Mapping)
             else {}
         )
-        latest_user = next(
-            (
-                node
-                for node in reversed(path)
-                if isinstance(node.value, Mapping)
-                and node.value.get("role") == "user"
-            ),
-            None,
-        )
-        ephemeral_context = ""
-        if latest_user is not None:
-            current_run_id = str(latest_user.value.get("run_id") or "")
-            turn_user = next(
-                (
-                    node
-                    for node in reversed(path)
-                    if isinstance(node.value, Mapping)
-                    and node.value.get("role") == "user"
-                    and str(node.value.get("run_id") or "") == current_run_id
-                    and isinstance(node.value.get("metadata"), Mapping)
-                    and "ephemeral_context" in node.value["metadata"]
-                ),
-                None,
-            )
-            if turn_user is not None:
-                ephemeral_context = str(
-                    turn_user.value["metadata"].get("ephemeral_context") or ""
-                )
+        ephemeral_context = _agent_latest_ephemeral_context(path)
         used_packs, used_standalone = _agent_path_plugin_usage(path)
         context_mounts = [
             {
@@ -713,6 +718,67 @@ def _system_prompt_blocks(
         for (key, text), tokens in zip(populated, allocations, strict=True)
         if tokens > 0
     ]
+
+
+def _agent_system_prefix_layer(
+    state: Mapping[str, Any],
+    messages: list[dict[str, Any]],
+    approx_token_count: Callable[[str], int],
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    if not messages or messages[0].get("role") != "system":
+        return None, messages
+    system_message = messages[0]
+    system_tokens = sum(
+        _agent_context_segments([system_message], approx_token_count).values()
+    )
+    if system_tokens <= 0:
+        return None, messages[1:]
+    context_blocks: list[dict[str, Any]] = []
+    context_tokens = 0
+    raw_mounts = state.get("contextMounts")
+    for mount in raw_mounts if isinstance(raw_mounts, list) else ():
+        if not isinstance(mount, Mapping):
+            continue
+        content = str(mount.get("content") or "")
+        tokens = max(0, int(approx_token_count(content) or 0))
+        if tokens <= 0:
+            continue
+        kind = str(mount.get("kind") or "context")
+        context_tokens += tokens
+        if kind == "system_prompt":
+            context_blocks.extend(
+                _system_prompt_blocks(content, tokens, approx_token_count)
+            )
+            continue
+        context_blocks.append({
+            "id": f"context.{kind}" if kind != "context" else "context",
+            "type": (
+                "memory"
+                if "memory" in kind
+                else "runtime"
+                if kind == "plugin_session"
+                else "system"
+            ),
+            "tokens_est": tokens,
+            "chars": len(content),
+            "contextKind": kind,
+            "source": str(mount.get("source") or "context_tree"),
+            "reason": kind,
+        })
+    root_tokens = max(0, system_tokens - context_tokens)
+    system_blocks = _system_prompt_blocks(
+        str(state.get("systemPrompt") or system_message.get("content") or ""),
+        root_tokens,
+        approx_token_count,
+    )
+    system_blocks.extend(context_blocks)
+    return ({
+        "id": "system_prefix",
+        "label": localized("System Prefix", "系统前缀"),
+        "sublabel": None,
+        "blocks": system_blocks,
+        "totalTokens": system_tokens,
+    }, messages[1:])
 
 
 class ConversationContextQueryService:
@@ -962,70 +1028,14 @@ class ConversationContextQueryService:
             dict(message)
             for message in raw_messages if isinstance(message, Mapping)
         ] if isinstance(raw_messages, list) else []
+        system_layer, conversation_messages = _agent_system_prefix_layer(
+            state,
+            messages,
+            self.approx_token_count,
+        )
         layers: list[dict[str, Any]] = []
-        conversation_messages = messages
-        if messages and messages[0].get("role") == "system":
-            system_message = messages[0]
-            conversation_messages = messages[1:]
-            system_tokens = sum(
-                _agent_context_segments(
-                    [system_message],
-                    self.approx_token_count,
-                ).values()
-            )
-            if system_tokens > 0:
-                context_blocks = []
-                context_tokens = 0
-                raw_mounts = state.get("contextMounts")
-                for mount in raw_mounts if isinstance(raw_mounts, list) else ():
-                    if not isinstance(mount, Mapping):
-                        continue
-                    content = str(mount.get("content") or "")
-                    tokens = max(0, int(self.approx_token_count(content) or 0))
-                    if tokens <= 0:
-                        continue
-                    kind = str(mount.get("kind") or "context")
-                    context_tokens += tokens
-                    if kind == "system_prompt":
-                        context_blocks.extend(_system_prompt_blocks(
-                            content,
-                            tokens,
-                            self.approx_token_count,
-                        ))
-                        continue
-                    context_blocks.append({
-                        "id": f"context.{kind}" if kind != "context" else "context",
-                        "type": (
-                            "memory"
-                            if "memory" in kind
-                            else "runtime"
-                            if kind == "plugin_session"
-                            else "system"
-                        ),
-                        "tokens_est": tokens,
-                        "chars": len(content),
-                        "contextKind": kind,
-                        "source": str(mount.get("source") or "context_tree"),
-                        "reason": kind,
-                    })
-                root_tokens = max(0, system_tokens - context_tokens)
-                system_blocks = _system_prompt_blocks(
-                    str(
-                        state.get("systemPrompt")
-                        or system_message.get("content")
-                        or ""
-                    ),
-                    root_tokens,
-                    self.approx_token_count,
-                )
-                system_blocks.extend(context_blocks)
-                layers.append({
-                    "id": "system_prefix",
-                    "label": localized("System Prefix", "系统前缀"),
-                    "sublabel": None,
-                    "blocks": system_blocks,
-                    "totalTokens": system_tokens,
-                })
+        if system_layer is not None:
+            layers.append(system_layer)
         ephemeral = str(state.get("ephemeralContext") or "").strip()
         if ephemeral and not _agent_ephemeral_is_mounted(state, ephemeral):
             tokens = _agent_ephemeral_tokens(

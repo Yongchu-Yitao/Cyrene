@@ -361,6 +361,9 @@ async def test_terminal_daemon_shutdown_closes_views_and_recovers_shell(
 def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     frontend = Path(__file__).parents[1] / "src/webui/frontend"
     source = (frontend / "terminal/entry.jsx").read_text(encoding="utf-8")
+    zh_catalog = (frontend / "shared/i18n/catalog-zh.jsx").read_text(
+        encoding="utf-8"
+    )
     chat_source = workbench_chat_source()
     feedback = (frontend / "shared/feedback/service.jsx").read_text(encoding="utf-8")
     styles = (frontend / "workbench.css").read_text(encoding="utf-8")
@@ -443,7 +446,7 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert 'className={"wbc-terminal-notice " + notice.kind}' not in source
     assert '.wbc-terminal-notice {' not in terminal_styles
     assert 'actionLabel = notice.reconnect' in source
-    assert '"重新启动"' in source
+    assert '"terminal.restart": "重启"' in zh_catalog
     assert 'var [railMode, setRailMode] = useWbcState("chat")' in chat_source
     assert 'setRailMode(lastWorkRailModeRef.current === "task" ? "task" : "chat");\n    replaceWithTerminal(pending.terminalId' in chat_source
     assert 'railMode={railMode}' in chat_source
