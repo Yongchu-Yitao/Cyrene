@@ -646,9 +646,6 @@ def test_library_card_star_precedes_aligned_selection_control():
 
 
 def test_library_table_title_header_is_localized_and_aligned_to_filenames():
-    library = (ROOT / "src/webui/frontend/workbench-library.jsx").read_text(
-        encoding="utf-8"
-    )
     css = (ROOT / "src/webui/frontend/workbench-library.css").read_text(
         encoding="utf-8"
     )
