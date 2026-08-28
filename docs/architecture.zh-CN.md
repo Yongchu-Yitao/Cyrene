@@ -41,6 +41,55 @@ Identity 以复用 Prompt Cache，标准 Compactor 在不改变持久历史的�
 创建时继承 Main Agent 的初始 Tree，并额外获得 Main Agent 的任务指令，之后通过
 持久 Inbox 协作。
 
+### 插件如何组成一个 Agent
+
+组装分为三个 Scope。Application 组装加载启用的插件包，由它们贡献 Route、
+Service、Background Job、Channel、Settings Panel 与 Workbench View；Session
+组装把同一批插件附着到一个 ContextTree，发布 Session Service 并绑定持久 Hook；
+Run 组装再用当前对话选项触发这些 Hook，得到这一轮实际发送给模型的输入和能力集。
+
+| 组装层 | 提供者 | Agent 实际获得的内容 |
+|---|---|---|
+| Kernel | Agent Runtime | 空 ContextTree Root、恢复/取消机制，以及固定的 `Bash`、`Read`、`Write`、`toolbox` |
+| 基础指令 | `cyrene_system_prompt` | 挂载在 `system` 位置的可编辑 System Prompt；缺失或为空时 Fail Closed |
+| 人格 | `cyrene_soul` | 可选 SOUL.md Block，挂载在 `top`，紧随 System Prompt |
+| 对话选项 | `cyrene_composer_context` | 输入框 Context 菜单选择的 Workspace、MCP Server、Skills 与其他能力 |
+| Runtime 与 Memory | Context、Memory、Entity 和功能插件 | 本轮 Metadata、Project Memory、相关 Entity、Attachment 与功能上下文 Block |
+| 推理 | Model Provider 插件 | Model Catalog、选中的 Profile、Completion Stream、Usage 与 Model Identity |
+| 能力 | 工具包和独立工具插件 | 直接可见工具的 Schema；其他工具通过 `toolbox` 渐进发现其 Metadata 与 Schema |
+| 工作前后行为 | Tree-local Hook | 权限决策、参数归一化、学习记录、Context 计量、收尾与取消 |
+
+Plugin Center 控制全局可用性；Composer Context 插件控制每个对话的选择；工具
+可见性则是第三个独立开关：“Agent 直接可见”会把当前 Schema 放入模型即时 Tool
+List，“Agent 寻找使用”则只通过 Toolbox 发现。两条路径解析的是同一个活动 Plugin，
+经过同一套 Schema 校验和 Hook 审核，不存在第二份工具实现。
+
+ContextTree 不只是 Transcript，也是完整的组装记录。它持久化 System Root、带来源
+的有序 Context Mount、User/Assistant Node、Tool Call/Result、Model Identity 与
+Usage、Compaction Node、Subagent State 和恢复 Checkpoint。“对话上下文”面板和 CLI
+`/context` 都投影这棵 Tree，因此界面显示的构成就是实际发送给模型的构成。
+
+### Hook 生命周期
+
+Hook 属于 ContextTree，并在恢复后保留 Plugin Binding。Session 打开时插件包绑定
+实现；恢复旧 Tree 时会先按相同 Plugin ID 重新绑定，再继续未完成工作。
+
+| Hook | 在 Agent 组装中的职责 |
+|---|---|
+| `SessionStart` | 构建本轮有序 Context Mount：`system` 最前，`top` 其次，普通贡献保持确定性的注册顺序。 |
+| `ContextChange` | 响应已提交的 Tree 变化，让依赖上下文的 Session 工作继续推进，无需轮询另一份状态。 |
+| `ContextUsed` | 接收真实 Model Path 中每个 Block 的 Token 贡献与使用比例，供 Memory 和 Compaction 计量。 |
+| `PreToolUse` | 审核已解析的调用，可归一化参数、允许或阻止；固定 Permission Reviewer 最后看到最终参数。 |
+| `PostToolUse` | 只观察一次已完成结果，让插件持久化 Learning、Activity 或 Integration State。 |
+| `SessionEnd` | Run 已有持久结果后，完成插件拥有的收尾工作。 |
+| `Stop` | 用户停止 Run 或 Session 关闭时，取消或关闭插件拥有的工作。 |
+
+Context Contribution 是普通 Plugin Output，不是 Model Router 内部的字符串拼接。
+每项贡献都有稳定 Tree Identity、Mount Position、Source 与 Failure Policy。System
+Prompt、Composer Context 等必需 Provider Fail Closed；可选的临时 Runtime Context
+可以 Fail Open。稳定 Identity 能复用 Prompt Prefix；切换选项会生成下一轮明确的
+Mount，不会静默改写历史。
+
 ## Runtime 启动与迁移
 
 所有 Host Mode 共享 `RuntimeContext`、`ApplicationLifecycle` 和
@@ -68,9 +117,10 @@ Entry 超过 24 小时后会在组装 Memory Context 时被过滤，但不会仅
 
 ### Multi-Agent 编排
 
-Main Agent 通过 `subagent_tools` 调用 `subagent.spawn`。每个 Subagent 获得
-独立稳定 Wire Bundle；Actor Policy 过滤 Main-only 能力。Agent 通过 Inbox
-发送或广播消息。生命周期为：
+`cyrene_subagent` 插件包通过 `toolbox.list → describe → invoke` 提供创建、定向
+消息、广播和 Round 查询工具；选中的工具也可设为直接可见。每个 Subagent 从 Main
+Agent 的初始 ContextTree 组成加上 Main Agent 的任务指令开始，随后拥有独立 Branch
+和 Model Loop。Actor Policy 移除 Main-only 能力，持久 Inbox 双向传递消息。生命周期为：
 
 ```text
 running → waiting → resumed → done / timeout
@@ -80,10 +130,10 @@ running → waiting → resumed → done / timeout
 
 | 层 | 存储 | 容量/维护 |
 |---|---|---|
-| Conversation Context | 默认历史 Session 使用 `data/state.json`；Named Session 使用 `data/sessions/<session>/state.json` | Agent Session Runtime |
+| Conversation Context | `data/context/` 下的 Tree SQLite Store 与 Tree Index | Agent ContextTree Runtime；完整历史持久化，模型输入按需压缩 |
 | Project Memory | 以 Project Memory Key 保存的 Workbench Document | Workbench Memory Service |
-| 历史 Short-term | `data/short_term.json` | 默认 Session 兼容，由 Compressor/Steward 维护 |
-| Long-term Identity | `workspace/SOUL.md` | 全局唯一，由 Steward Agent 维护 |
+| Short-term Memory | `data/plugin_data/cyrene_memory/short_term.json` | `cyrene_memory` 插件维护跨 Session Summary、过期与退役状态 |
+| Long-term Identity | `workspace/SOUL.md` | 全局唯一，由 `cyrene_soul` 插件与 Steward Agent 维护 |
 
 Short-term Entry 保存情绪、提及次数和 Fact/Pattern/Preference/Emotion 类型。
 

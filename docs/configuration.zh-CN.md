@@ -124,6 +124,14 @@ Settings 页面可以不重启更新：
 - Budget：Estimated Cost、CNY/USD、Billing Start Day、Adaptive Mode 和
   Warn/Block。
 
+Plugin Center 是 Agent 组装的总控制面：插件包开关会整体加入或移除其
+Application、Session、Hook、Context 与 Tool Contribution。每个非核心工具的菜单
+可以编辑模型可见的名称和描述，选择“Agent 直接可见”或“Agent 寻找使用”，也可
+删除用户拥有的 Source；必需 Kernel Plugin 固定保留。每个对话的 Workspace、MCP
+与 Skills 选择则由输入框的 Composer Context 插件单独控制。详见
+[架构说明](architecture.zh-CN.md#插件如何组成一个-agent)和
+[自定义插件](project-plugins.zh-CN.md)。
+
 ### Agent 可见 Typed Settings
 
 Main Agent 只能通过 `cyrene_application` Plugin Pack 使用

@@ -44,6 +44,43 @@
 - **离开之后也会继续工作**：支持一次性与周期性自动任务，并可通过桌面、
   Telegram 或微信接收结果通知。
 
+## 一个由插件组装出来的 Agent
+
+Cyrene 不是“固定 Agent + 外挂扩展层”。每次运行的 Agent 都由当前对话启用的
+插件共同组成：
+
+```text
+空的 ContextTree Root
+  + 可编辑的 System Prompt 插件
+  + SOUL 人格插件（启用时）
+  + Memory、Project、Runtime 与输入框上下文插件
+  + Model Provider 插件
+  + Agent 直接可见工具和可发现工具插件
+  + Lifecycle、Permission、Learning 与 Delivery Hook
+  = 本次运行实际使用的 Agent
+```
+
+每轮开始时，Tree-local `SessionStart` Hook 按顺序挂载 Context Block：System
+Prompt 位于最前，SOUL 紧随其后，其余 Provider 只加入当前对话选择的 Workspace、
+MCP Server、Skills、Memory、Attachment 与 Runtime State。输入框的 Context 菜单由
+专门的 Composer Context 插件负责，因此切换选项会直接改变下一轮上下文构建，
+不会再改动另一份隐藏 Prompt。
+
+模型只会立即看到固定 Kernel Tool 和设为“Agent 直接可见”的工具；其余已启用的
+工具包与独立工具统一通过 `toolbox.list → toolbox.describe → toolbox.invoke` 渐进
+发现。调用前后的 Tree-local Hook 可以校验或修改参数、请求权限、记录学习证据并
+发布结果；`SessionEnd` 与 `Stop` Hook 负责收尾或取消插件拥有的工作。ContextTree
+持久化恢复所需的 Message、Mount、Tool Result、Token Usage、Compaction
+Checkpoint 与 Inbox State。
+
+Subagent 也遵循同一组装方式：创建时继承 Main Agent 的初始 Tree，再加入 Main
+Agent 的任务指令；能力由 Actor Policy 决定，并通过持久 Inbox 通信。Plugin
+Center 则统一控制插件包是否存在、每个工具是直接可见还是由 Agent 寻找使用，
+以及用户编辑后的名称和 Agent 可见描述。
+
+完整生命周期见[架构说明](docs/architecture.zh-CN.md)，插件贡献格式见
+[自定义插件](docs/project-plugins.zh-CN.md)。
+
 ## 快速开始
 
 ### Desktop App
@@ -100,6 +137,7 @@ uv run cyrene status
 - [实时控制 PowerPoint](docs/office-live-control.zh-CN.md)
 - [配置说明](docs/configuration.zh-CN.md)
 - [架构说明](docs/architecture.zh-CN.md)
+- [自定义插件](docs/project-plugins.zh-CN.md)
 - [开发指南](docs/development.zh-CN.md)
 - [当前限制](docs/limitations.zh-CN.md)
 - [开发记录](project-notes/README.md)

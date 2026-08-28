@@ -2,6 +2,8 @@
 
 Cyrene 只有一套插件框架。自定义工具、应用服务、上下文 Hook、模型和 Workbench 界面都由 `Plugin` / `PluginPack` 提供；旧的 `plugin.json`、项目插件子进程和 `cyrene.view` 扩展点已废弃。
 
+[English](project-plugins.md) · [简体中文](project-plugins.zh-CN.md)
+
 ## 目录格式
 
 用户插件位于应用数据目录的 `plugin_impl/`。一个工具可以是直接暴露 `plugin` 的 Python 文件；包含应用界面时使用目录包，并从 `__init__.py` 暴露 `plugin_pack`。
@@ -33,6 +35,70 @@ plugin_pack = PluginPack(
     },
 )
 ```
+
+## Agent 组装与 Context Hook
+
+插件不是在 Agent 创建完成后再“注入”内容；启用的插件包本身就是 Agent 的组成。
+应用启动时，`application_setup` 可以贡献 Route、Service、Background Job 与界面；
+打开对话时，`setup` 收到 `PluginSetupContext`，可以发布 Session Service 并把 Hook
+绑定到当前 ContextTree；每一轮运行再由这些 Tree-local Hook 构建 Context、审核工具、
+记录结果和完成收尾。
+
+一个最小 Context 插件只需在 `SessionStart` 返回一个 Block：
+
+```python
+from agent.hook import SESSION_START, HookEvent
+from agent.plugin import PluginPack, PluginSetupContext
+
+
+def setup(context: PluginSetupContext) -> None:
+    async def mount(_event: HookEvent) -> dict[str, str]:
+        return {
+            "context": "## Project rules\nOnly edit files in this workspace.",
+            "context_position": "",
+        }
+
+    context.hooks.register(
+        SESSION_START,
+        mount,
+        plugin_id="project_rules.mount",
+        hook_id="project-rules-session-start",
+        root_only=True,
+        failure_policy="closed",
+    )
+
+
+plugin_pack = PluginPack(
+    id="project_rules",
+    description="Mount project rules into the Agent context.",
+    plugins=(),
+    setup=setup,
+)
+```
+
+`context_position="system"` 用于基础 System Prompt，`"top"` 用于紧随其后的高
+优先级 Block（例如 SOUL），空值用于普通 Context。普通 Block 保持确定性的注册顺序。
+同一 Hook ID 会随 Tree 持久化；恢复 Session 时插件应通过 `bind_plugin(...,
+replace=True)` 重新绑定实现，而不是建立第二份状态。
+
+| Hook | 适合处理的工作 |
+|---|---|
+| `SessionStart` | 构建本轮 Context Mount |
+| `ContextChange` / `ContextUsed` | 响应 Tree 变化，记录真实 Token 使用与触发压缩/记忆逻辑 |
+| `PreToolUse` | 归一化、允许或阻止工具参数；需要阻止时使用 Fail Closed |
+| `PostToolUse` | 持久化 Tool Result、Learning Evidence 或 Activity |
+| `SessionEnd` | 最终结果落盘后的异步收尾 |
+| `Stop` | 用户取消或 Session 关闭时停止插件拥有的任务 |
+
+输入框选项不是由各插件分别读取 UI State。`cyrene_composer_context` 是唯一的输入框
+上下文插件：它持久化当前对话选择，再在 `SessionStart` 读取已启用的 Workspace、
+MCP 与 Skills Provider 并生成一个明确的 Mount。Plugin Center 负责插件是否可用；
+Composer 菜单负责本对话选中什么；工具菜单负责“Agent 直接可见”或“Agent 寻找使用”。
+三者职责互不重复。
+
+工具包和独立工具共享同一个 `Plugin` 协议。直接可见工具的 Schema 进入即时 Tool
+List；其他工具仍由 `toolbox.list → describe → invoke` 发现。两种方式都会使用当前
+插件的 `input_schema`、Runtime 校验、`PreToolUse` 与 `PostToolUse` Hook。
 
 `project_tools[].view` 必须指向同一包的 `frontend_views[].id`。View 的 `entry` 必须位于插件包内部。启用插件包后，入口显示在 Workbench 左侧栏，打开后成为普通 Pane，支持上下/左右分屏、拖动、恢复和独立窗口。
 

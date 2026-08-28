@@ -47,6 +47,63 @@ immediately below the system prompt. Subagents start with the same initial tree
 as the main Agent plus the main Agent's assignment, then coordinate through the
 durable inbox.
 
+### How plugins become one Agent
+
+Composition happens at three scopes. Application composition loads enabled
+packs and lets them contribute routes, services, background jobs, channels,
+settings panels, and Workbench views. Session composition attaches the same
+packs to one ContextTree, publishes session services, and binds durable Hooks.
+Run composition invokes those Hooks with the current conversation selections
+and produces the exact model input and capability set for one turn.
+
+| Composition layer | Supplied by | What the Agent receives |
+|---|---|---|
+| Kernel | Agent runtime | Empty ContextTree root, recovery/cancellation machinery, and the fixed `Bash`, `Read`, `Write`, and `toolbox` tools |
+| Base instructions | `cyrene_system_prompt` | Editable system prompt mounted at the `system` position; a missing or empty contribution fails closed |
+| Personality | `cyrene_soul` | Optional SOUL.md block mounted at `top`, directly below the system prompt |
+| Conversation choices | `cyrene_composer_context` | The workspaces, MCP servers, skills, and other capabilities selected in the input-box context menu |
+| Runtime and memory | Context, memory, entity, and feature plugins | Turn metadata, project memory, relevant entities, attachments, and feature-specific context blocks |
+| Inference | Model Provider plugins | Model catalog, selected profile, completion stream, usage, and model identity |
+| Capabilities | Tool packs and standalone tool plugins | Direct schemas for tools marked visible; metadata and schemas discoverable through `toolbox` for everything else |
+| Behavior around work | Tree-local Hooks | Permission decisions, argument normalization, learning capture, context accounting, finalization, and cancellation |
+
+Plugin Center controls global availability. The composer-context plugin owns
+per-conversation selections. Tool visibility is a third, independent choice:
+**directly visible** places the current schema in the model's immediate tool
+list, while **Agent finds and uses** keeps it behind toolbox discovery. Both
+paths resolve the same active Plugin object and pass the same schema validation
+and Hook review; there is no duplicate tool implementation.
+
+The ContextTree is the composition record, not only a transcript. It persists
+the system root, ordered context mounts and their sources, user and assistant
+nodes, tool calls and results, model identity and usage, compaction nodes,
+subagent state, and recovery checkpoints. The Conversation Context panel and
+CLI `/context` view project this same tree, so the displayed composition is the
+composition sent to the model.
+
+### Hook lifecycle
+
+Hooks belong to a tree and retain their Plugin binding across recovery. A pack
+binds implementations when the session opens; restored trees rebind the same
+Plugin IDs before pending work resumes.
+
+| Hook | Role in the composed Agent |
+|---|---|
+| `SessionStart` | Builds ordered context mounts for a run. `system` comes first, `top` follows, and ordinary contributions retain deterministic registration order. |
+| `ContextChange` | Reacts to committed tree changes and advances context-dependent session work without polling a separate state store. |
+| `ContextUsed` | Receives the token contribution and usage ratio of the actual model path for memory and compaction accounting. |
+| `PreToolUse` | Reviews a resolved call, may normalize its arguments, allow it, or block it. The fixed permission reviewer sees the final arguments. |
+| `PostToolUse` | Observes the completed result once and lets plugins persist learning, activity, or integration state. |
+| `SessionEnd` | Finalizes plugin-owned work after the run has a durable result. |
+| `Stop` | Cancels or closes plugin-owned work when the user stops a run or the session shuts down. |
+
+Context contributions are ordinary Plugin output, not string concatenation in
+the model router. A contribution has a stable tree identity, mount position,
+source, and failure policy. Required providers such as the system prompt and
+composer context fail closed; optional, transient runtime context may fail open.
+Stable identities preserve reusable prompt prefixes, while replacing a
+selection creates the next explicit mount rather than silently mutating history.
+
 ## Runtime Startup and Migration
 
 All host modes share `RuntimeContext`, `ApplicationLifecycle`, and the ordered
@@ -76,21 +133,22 @@ source document is not silently rewritten merely because an entry expires.
 
 ### Multi-Agent Orchestration
 
-Invoke `subagent.spawn` through `subagent_tools` for parallel work. Each
-sub-agent receives its own stable wire bundle; actor policy filters the
-capabilities returned by module discovery and rejects main-only invocations.
-Subagents communicate through the file-based inbox with
-`subagent.send_message` or `subagent.broadcast`. Lifecycle states are
+The `cyrene_subagent` Plugin pack provides spawn, direct-message, broadcast, and
+round-query tools through `toolbox.list → describe → invoke`; selected tools
+may also be made directly visible. Each subagent starts with the main Agent's
+initial ContextTree composition plus the main Agent's assignment, then owns an
+independent branch and model loop. Actor policy removes main-only capabilities,
+and the durable inbox carries messages in both directions. Lifecycle states are
 `running → waiting → resumed → done / timeout`.
 
 ### Memory Layers
 
 | Layer | Storage | Capacity | Maintained by |
 |---|---|---|---|
-| **Conversation context** | `data/state.json` for the historical default session; `data/sessions/<session>/state.json` for named sessions | Bounded/compacted for model input | Agent session runtime |
+| **Conversation context** | Per-tree SQLite stores under `data/context/` plus its tree index | Durable history; bounded/compacted projection for model input | Agent ContextTree runtime |
 | **Project memory** | Workbench document store, keyed by project memory key | Project-scoped captured facts and summaries | Workbench memory service |
-| **Historical short-term memory** | `data/short_term.json` | Default-session compatibility summaries | Compressor / Steward |
-| **Long-term identity** | `workspace/SOUL.md` | One global structured document | Steward Agent |
+| **Short-term memory** | `data/plugin_data/cyrene_memory/short_term.json` | Cross-session summaries with expiry and retirement state | `cyrene_memory` Plugin |
+| **Long-term identity** | `workspace/SOUL.md` | One global structured document | `cyrene_soul` Plugin / Steward Agent |
 
 The short-term memory tracks emotional valence, mention count, and entry type (fact / pattern / preference / emotion). High-frequency entries (≥3 mentions) and extreme valence entries are preserved automatically.
 

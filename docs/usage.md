@@ -234,6 +234,13 @@ card. It shows message tokens, a colored composition bar, and grouped System
 Prefix, Ephemeral, and Conversation Message blocks. User, assistant, tool, and
 system-injection rows are consistently indented.
 
+These groups are a projection of the durable ContextTree, not a separately
+estimated prompt. Context is assembled by enabled `SessionStart` Hook plugins:
+the editable system prompt first, SOUL next when enabled, then composer-selected
+workspace/MCP/skills context, memory, attachments, and runtime state. Changing
+an input-box context option changes the next explicit mount while preserving
+the previous run. See [Architecture](architecture.md#how-plugins-become-one-agent).
+
 `/config` uses a localized two-axis settings navigator: Left/Right switches
 between General, Models, Tools, Connections, Data, and About tabs; Up/Down
 selects a detailed setting in the active tab; Enter opens it. General and CLI

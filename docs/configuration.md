@@ -135,6 +135,15 @@ Most settings can be edited at runtime through the Web UI **Settings** page with
 - **Budget** — Configure estimated-cost tracking, CNY/USD display, billing
   start day, adaptive mode, and warn/block behavior
 
+Plugin Center is the composition control plane. A pack switch enables or
+removes all of its application, session, Hook, context, and tool contributions.
+Each non-core tool menu can edit the model-facing name and description, choose
+**directly visible** or **Agent finds and uses**, or delete the user-owned
+source. Required kernel plugins remain fixed. Per-conversation workspace, MCP,
+and skills selections are controlled separately by the input box's
+composer-context plugin. See [Architecture](architecture.md#how-plugins-become-one-agent)
+and [Custom plugins](project-plugins.md).
+
 ### Agent-visible typed settings
 
 `CyreneSettingsDescribe`, `CyreneSettingsRead`, and `CyreneSettingsUpdate` are

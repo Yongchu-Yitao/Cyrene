@@ -50,6 +50,47 @@
 - **Automation that keeps working** — schedule one-shot or recurring tasks and
   receive results through desktop, Telegram, or WeChat notifications.
 
+## One Agent, assembled from plugins
+
+Cyrene is not a fixed agent with a separate extension layer. The running Agent
+is assembled from the plugins enabled for that conversation:
+
+```text
+empty ContextTree root
+  + editable system-prompt plugin
+  + SOUL personality plugin (when enabled)
+  + memory, project, runtime, and composer-context plugins
+  + model provider plugin
+  + directly visible tools and discoverable tool plugins
+  + lifecycle, permission, learning, and delivery Hooks
+  = the Agent for this run
+```
+
+At the start of each run, tree-local `SessionStart` Hooks mount ordered context
+blocks. The system-prompt block is first, SOUL sits immediately below it, and
+the remaining providers add only the workspace, MCP servers, skills, memories,
+attachments, and runtime state selected for that conversation. The input box's
+context menu is backed by the composer-context plugin, so changing a selection
+changes the next context build instead of editing a second hidden prompt.
+
+The model receives only the fixed kernel tools plus tools marked **directly
+visible**. Every other enabled toolbox or standalone tool remains available
+through `toolbox.list → toolbox.describe → toolbox.invoke`. Before and after a
+call, tree-local Hooks can validate or modify arguments, request permission,
+record learning evidence, and publish results. `SessionEnd` and `Stop` Hooks
+then finalize or cancel plugin-owned work. The ContextTree persists the exact
+messages, mounts, tool results, token usage, compaction checkpoints, and inbox
+state needed for recovery.
+
+Subagents use the same composition model: each starts from the main Agent's
+initial tree plus its assignment, gets capabilities according to its actor
+policy, and communicates through the durable inbox. Plugin Center controls
+which packs exist, whether individual tools are direct or discoverable, and
+their user-edited names and Agent-facing descriptions.
+
+See [Architecture](docs/architecture.md) for the full lifecycle and
+[Custom plugins](docs/project-plugins.md) for the contribution formats.
+
 ## Quick start
 
 ### Desktop app
@@ -107,6 +148,7 @@ see [Installation](docs/installation.md) and
 - [Live PowerPoint control (简体中文)](docs/office-live-control.zh-CN.md)
 - [Configuration](docs/configuration.md)
 - [Architecture](docs/architecture.md)
+- [Custom plugins](docs/project-plugins.md)
 - [Development](docs/development.md)
 - [Current limitations](docs/limitations.md)
 - [Development status](project-notes/README.md)
