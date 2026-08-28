@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import time
 from collections.abc import Mapping, Sequence
@@ -18,7 +19,11 @@ from uuid import uuid4
 
 import httpx
 
+from agent.observability import log_operation
 from agent.plugin import Plugin, PluginContext
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -473,10 +478,11 @@ def _openai_payload(
     payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "stream": False,
+        "stream": True,
     }
     if provider.id == "minimax":
         payload["reasoning_split"] = True
+        payload["stream_options"] = {"include_usage": True}
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = _tool_choice(arguments.get("tool_choice"))
@@ -487,6 +493,69 @@ def _openai_payload(
     if isinstance(arguments.get("response_format"), Mapping):
         payload["response_format"] = dict(arguments["response_format"])
     return payload
+
+
+async def _complete_stream_endpoint(
+    *,
+    adapter: str,
+    client: httpx.AsyncClient,
+    endpoint: str,
+    request: Any,
+    stream_callback: Any,
+    provider: ModelProvider,
+    context: PluginContext,
+    model: str,
+    started: float,
+    has_fallback: bool,
+) -> dict[str, Any]:
+    from cyrene.model_runtime.protocol_adapters import handle_stream
+
+    attempt_streamed = False
+
+    async def publish_stream(event: dict[str, Any]) -> None:
+        nonlocal attempt_streamed
+        if str(event.get("type") or "").startswith("reply_"):
+            attempt_streamed = True
+        if stream_callback is not None:
+            await stream_callback(event)
+
+    timing: dict[str, float] = {}
+    try:
+        message = await handle_stream(
+            adapter,
+            client,
+            endpoint,
+            request,
+            publish_stream if stream_callback is not None else None,
+            timing,
+        )
+    except Exception:
+        if attempt_streamed and stream_callback is not None and has_fallback:
+            await stream_callback({"type": "reply_start", "reset": True})
+        raise
+    response_id = str(message.get("response_id") or "")
+    returned_model = str(message.get("model") or model)
+    log_operation(
+        logger,
+        "model.provider",
+        "stream",
+        phase="completed",
+        provider=provider.id,
+        model=returned_model,
+        endpoint=endpoint,
+        response_headers_ms=round(float(timing.get("response_headers_ms") or 0.0), 3),
+        ttft_ms=round(float(timing.get("ttft_ms") or 0.0), 3),
+        duration_ms=round((time.perf_counter() - started) * 1000, 3),
+    )
+    return _normalized_result(
+        message,
+        provider,
+        context,
+        response_id=response_id,
+        model=returned_model,
+        latency_ms=(time.perf_counter() - started) * 1000,
+        endpoint=endpoint,
+    )
 
 
 async def complete_model(
@@ -508,6 +577,9 @@ async def complete_model(
     if not model:
         raise ValueError(f"{provider.name} model is not configured")
     started = time.perf_counter()
+    stream_callback = context.services.get("model_stream")
+    if not callable(stream_callback):
+        stream_callback = None
 
     if provider.adapter == "codex_oauth":
         from cyrene.model_runtime.codex_provider import get_codex_provider
@@ -519,7 +591,7 @@ async def complete_model(
             phase=str(context.data.get("model_call_kind") or "model"),
             reasoning_effort=str(arguments.get("reasoning_effort") or ""),
             timeout=_timeout(context, provider),
-            stream_callback=None,
+            stream_callback=stream_callback,
         )
         if not isinstance(message, Mapping):
             raise RuntimeError("Codex OAuth returned no assistant message")
@@ -538,7 +610,7 @@ async def complete_model(
 
     from cyrene.model_runtime.protocol_adapters import (
         NATIVE_PROTOCOL_ADAPTERS,
-        parse_response,
+        PreparedRequest,
         prepare_request,
         protocol_endpoints,
         runtime_adapter_for_provider,
@@ -570,7 +642,7 @@ async def complete_model(
                 if arguments.get("max_tokens") is not None
                 else None
             ),
-            stream=False,
+            stream=True,
             response_format=(
                 dict(arguments["response_format"])
                 if isinstance(arguments.get("response_format"), Mapping)
@@ -597,46 +669,18 @@ async def complete_model(
     async with httpx.AsyncClient(
         **_client_options(context, provider, discovery=False)
     ) as client:
-        for endpoint in ordered_endpoints:
+        for endpoint_index, endpoint in enumerate(ordered_endpoints):
             try:
-                response = await client.post(endpoint, headers=headers, json=payload)
-                if response.is_error:
-                    detail = response.text.strip().replace("\n", " ")[:500]
-                    raise RuntimeError(
-                        f"{provider.name} HTTP {response.status_code}: {detail}"
-                    )
-                body = response.json()
-                if not isinstance(body, Mapping):
-                    raise RuntimeError(f"{provider.name} returned an invalid response")
-
-                if adapter in NATIVE_PROTOCOL_ADAPTERS:
-                    message = parse_response(adapter, dict(body))
-                    response_id = str(body.get("id") or body.get("responseId") or "")
-                    returned_model = str(body.get("model") or model)
-                else:
-                    choices = body.get("choices")
-                    if not isinstance(choices, list) or not choices:
-                        raise RuntimeError(f"{provider.name} returned no choices")
-                    choice = choices[0]
-                    message = choice.get("message") if isinstance(choice, Mapping) else None
-                    if not isinstance(message, Mapping):
-                        raise RuntimeError(
-                            f"{provider.name} returned no assistant message"
-                        )
-                    message = dict(message)
-                    message["finish_reason"] = str(choice.get("finish_reason") or "")
-                    message["usage"] = dict(_mapping(body.get("usage")))
-                    response_id = str(body.get("id") or "")
-                    returned_model = str(body.get("model") or model)
-
-                return _normalized_result(
-                    message,
-                    provider,
-                    context,
-                    response_id=response_id,
-                    model=returned_model,
-                    latency_ms=(time.perf_counter() - started) * 1000,
-                    endpoint=endpoint,
+                request = (
+                    prepared
+                    if adapter in NATIVE_PROTOCOL_ADAPTERS
+                    else PreparedRequest(payload, headers)
+                )
+                return await _complete_stream_endpoint(
+                    adapter=adapter, client=client, endpoint=endpoint, request=request,
+                    stream_callback=stream_callback, provider=provider, context=context,
+                    model=model, started=started,
+                    has_fallback=endpoint_index + 1 < len(ordered_endpoints),
                 )
             except Exception as exc:
                 failures.append(f"{endpoint}: {exc}")

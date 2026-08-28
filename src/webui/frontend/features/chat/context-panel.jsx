@@ -331,7 +331,14 @@ function WbcContextUsage({ data, compact }) {
   );
 }
 
-function WbcOverviewUsage({ usage }) {
+function wbcCacheRateLabel(hit, miss) {
+  var denominator = Number(hit || 0) + Number(miss || 0);
+  if (denominator <= 0) return "";
+  var rounded = Math.round((Number(hit || 0) / denominator * 100) * 10) / 10;
+  return (Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)) + "%";
+}
+
+function WbcOverviewUsage({ usage, latestUsage }) {
   usage = usage || {};
   var hit = Number(usage.prompt_cache_hit_tokens || 0);
   var miss = Number(usage.prompt_cache_miss_tokens || 0);
@@ -339,16 +346,30 @@ function WbcOverviewUsage({ usage }) {
   var completion = Number(usage.completion_tokens || 0);
   var total = Number(usage.total_tokens || 0) || (prompt + completion);
   var cacheTotal = hit + miss;
-  var cacheRate = cacheTotal > 0 ? Math.round(hit / cacheTotal * 100) : 0;
+  latestUsage = latestUsage || {};
+  var latestHit = Number(latestUsage.prompt_cache_hit_tokens || 0);
+  var latestMiss = Number(latestUsage.prompt_cache_miss_tokens || 0);
+  var latestCacheTotal = latestHit + latestMiss;
+  var shownHit = latestCacheTotal > 0 ? latestHit : hit;
+  var shownMiss = latestCacheTotal > 0 ? latestMiss : miss;
+  var shownTotal = shownHit + shownMiss;
+  var cacheRate = shownTotal > 0 ? shownHit / shownTotal * 100 : 0;
+  var latestRateLabel = wbcCacheRateLabel(shownHit, shownMiss);
+  var totalRateLabel = wbcCacheRateLabel(hit, miss);
+  var cacheRateLabel = latestCacheTotal > 0
+    ? latestRateLabel + " / " + (totalRateLabel || "—")
+    : totalRateLabel;
   return (
     <section className="workbench-side-section wbc-overview-usage" aria-label={wbcT("chat.runSummary", "Run summary")}>
       {cacheTotal > 0 && (
         <div className="wbc-overview-cache-row">
-          <span>{wbcT("workbenchChat.cacheHitRate", "Cache hit rate")}</span>
-          <b>{cacheRate + "%"}</b>
+          <span>{latestCacheTotal > 0
+            ? wbcT("workbenchChat.cacheHitRateLatestTotal", "Cache hit rate (latest / total)")
+            : wbcT("workbenchChat.cacheHitRate", "Cache hit rate")}</span>
+          <b>{cacheRateLabel}</b>
           <div className="wbc-overview-cache-track" role="progressbar"
             aria-label={wbcT("workbenchChat.cacheHitRate", "Cache hit rate")}
-            aria-valuemin="0" aria-valuemax="100" aria-valuenow={cacheRate}>
+            aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(cacheRate * 10) / 10}>
             <i style={{ width: cacheRate + "%" }} />
           </div>
         </div>
@@ -672,7 +693,7 @@ function WbcOverviewTab({ chat, loading, detailed, runtime }) {
           </div>
         </div>
       </section>
-      {overviewShowUsage ? <WbcOverviewUsage usage={usage} /> : null}
+      {overviewShowUsage ? <WbcOverviewUsage usage={usage} latestUsage={chat.latestUsage} /> : null}
       {detailed && liveData && <WbcContextUsage data={liveData} compact={true} />}
       {convertedTitle && (
         <section className="workbench-side-section wbc-overview-converted">
@@ -691,6 +712,8 @@ function wbcBlockLabel(block) {
   // key exists. wbcT returns the key itself when it does not, so never render
   // that value as user-facing copy.
   if (label && label !== key) return label;
+  if (id.startsWith("context.plugin_session")) return wbcT("workbenchChat.ctxBlock.context.plugin_session", "Plugin session context");
+  if (id.startsWith("context.turn_context")) return wbcT("workbenchChat.ctxBlock.context", "Turn context");
   // Context kinds may be supplied by user plugins, so unknown kinds use one
   // stable label instead of leaking a generated identifier.
   if (id.startsWith("context.")) return wbcT("workbenchChat.ctxBlock.context", "Turn context");
@@ -1150,6 +1173,9 @@ function wbcUsedPluginPacks(contextBlocks) {
   (contextBlocks && Array.isArray(contextBlocks.usedPluginPacks)
     ? contextBlocks.usedPluginPacks
     : []).forEach(addReportedPackage);
+  (contextBlocks && Array.isArray(contextBlocks.usedStandalonePlugins)
+    ? contextBlocks.usedStandalonePlugins
+    : []).forEach(addReportedPackage);
   return used;
 }
 
@@ -1167,15 +1193,15 @@ function WbcContextTab({ chat, contextBlocks, inboxView }) {
         <WbcContextBlockList data={contextBlocks} compact={false} />
       </section>
       {!externalAgent && <WbcInboxCard liveView={inboxView} hideTitle={true} />}
-      {!externalAgent && <section className="workbench-side-section" aria-label={wbcT("workbenchChat.usedPluginPacks", "Used Plugin packs")}>
+      {!externalAgent && <section className="workbench-side-section" aria-label={wbcT("workbenchChat.usedPluginPacks", "Used plugins")}>
         <div className="wbc-context-empty-head wbc-plugin-pack-head">
-          <span className="wbc-context-empty-label">{wbcT("workbenchChat.usedPluginPacks", "Used Plugin packs")}</span>
+          <span className="wbc-context-empty-label">{wbcT("workbenchChat.usedPluginPacks", "Used plugins")}</span>
           {usedPluginPacks.length === 0 ? <b>{wbcT("workbenchChat.notUsed", "Not used")}</b> : null}
         </div>
         {usedPluginPacks.length === 0 ? (
           <div className="wbc-context-empty-module">
             <div className="wbc-side-empty">
-              <p>{wbcT("workbenchChat.noUsedPluginPacks", "The agent has not used a Plugin pack in this chat.")}</p>
+              <p>{wbcT("workbenchChat.noUsedPluginPacks", "The agent has not used a plugin in this chat.")}</p>
             </div>
           </div>
         ) : usedPluginPacks.map(function (packId) {

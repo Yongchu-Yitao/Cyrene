@@ -29,6 +29,8 @@ var STORAGE_LABEL = {
   opencv_runtime: "settings.storageOpencvRuntime",
   browser: "settings.storageBrowser",
   caches: "settings.storageCaches",
+  extensions: "settings.storageExtensions",
+  media: "settings.storageMedia",
   maps: "settings.storageMaps",
 };
 
@@ -50,6 +52,8 @@ var STORAGE_COLORS = {
   maps: "#38bdf8",
   browser: "#6366f1",
   caches: "#78716c",
+  extensions: "#7c3aed",
+  media: "#fb7185",
 };
 
 // DataPanel is intentionally remounted when the user switches settings tabs.

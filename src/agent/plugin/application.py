@@ -628,9 +628,31 @@ def active_plugin_service(name: str) -> Any | None:
     return host.service(name) if host is not None else None
 
 
+def resolve_agent_plugin_registry(
+    plugin_directory: str | Path,
+) -> tuple[PluginRegistry, bool]:
+    """Return the authoritative Registry and whether a session must load it.
+
+    The application host owns the editable Plugin directory for the lifetime
+    of the process. Agent sessions using that same directory share its loaded
+    contribution definitions and keep only their Hooks/services session-local.
+    Standalone embedders and alternate directories retain the isolated loader.
+    """
+
+    root = Path(plugin_directory).expanduser().resolve()
+    host = active_plugin_application_host()
+    if host is not None and host.plugin_directory == root:
+        return host.registry, False
+    seed_builtin_plugin_directory(root)
+    registry = PluginRegistry()
+    ensure_model_router(registry)
+    return registry, True
+
+
 __all__ = [
     "PluginApplicationHost",
     "active_plugin_application_host",
     "active_plugin_service",
+    "resolve_agent_plugin_registry",
     "set_active_plugin_application_host",
 ]

@@ -32,7 +32,17 @@ from .context.compaction import (
     messages_token_estimate,
     replace_compacted_summary,
 )
-from .hook import CONTEXT_CHANGE, SESSION_START, HookEvent, HookRegistration
+from .context.projection import (
+    project_context_message,
+    selected_context_node_ids,
+)
+from .hook import (
+    CONTEXT_CHANGE,
+    SESSION_START,
+    TURN_START,
+    HookEvent,
+    HookRegistration,
+)
 from .observability import log_operation, operation
 from .plugin import (
     PluginBatchRunner,
@@ -44,6 +54,8 @@ from .plugin import (
     PluginRegistry,
     PluginRuntime,
     PluginSetupContext,
+    plugin_session_state,
+    with_plugin_session_state,
 )
 from .plugin.core_impl import (
     PERMISSION_DECIDE_TOOL,
@@ -60,6 +72,7 @@ _REQUIRED_PRODUCT_SESSION_PACK_IDS = frozenset({
     "cyrene_context",
     "cyrene_system_prompt",
 })
+_AGENT_LIFECYCLE_STATE_ID = "agent.lifecycle"
 
 
 def _l(en: str, zh: str, **values: Any) -> str:
@@ -73,6 +86,12 @@ AgentEventType = Literal[
     "tool.completed",
     "tools.completed",
     "assistant.completed",
+    "assistant.stream.started",
+    "assistant.stream.delta",
+    "assistant.stream.done",
+    "assistant.reasoning.started",
+    "assistant.reasoning.delta",
+    "assistant.reasoning.done",
     "run.failed",
     "run.cancelled",
 ]
@@ -144,6 +163,21 @@ class _SessionPackAttachment:
     driver: Any = None
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedModelInput:
+    """One internally consistent projection used by a model transition."""
+
+    trigger_id: str
+    registry_sync_token: tuple[int, int, int, int]
+    messages: list[dict[str, Any]]
+    tools: list[dict[str, Any]]
+    message_tokens: int
+    tool_tokens: int
+    compaction_tokens: int
+    routing_tokens: int
+    services: dict[str, Any]
+
+
 class AgentSession:
     """One tree whose passive trigger nodes advance the Agent state machine."""
 
@@ -211,6 +245,7 @@ class AgentSession:
                 self.runtime,
             )
         self._plugin_reconcile_lock = threading.RLock()
+        self._session_start_build_lock = threading.Lock()
         self._plugin_pack_attachments: dict[str, _SessionPackAttachment] = {}
         self._plugin_setup_failures: dict[str, str] = {}
         self._plugin_load_failures: tuple[PluginLoadFailure, ...] = tuple(failures)
@@ -256,6 +291,7 @@ class AgentSession:
         self._cancelled_run_ids: set[str] = set()
         self._model_calls = 0
         self._max_model_calls = max(1, int(max_model_calls))
+        self._streamed_transition_keys: set[str] = set()
         self._session_driver: Any = None
         self._owns_session_driver = False
         self._closed = False
@@ -445,7 +481,7 @@ class AgentSession:
         self,
         details: Mapping[str, Any] | None = None,
     ) -> str:
-        """Build Plugin SessionStart context for non-transcript model calls."""
+        """Return the conversation's stable, cached SessionStart context."""
 
         mounts = await self.build_session_mounts(details)
         return "\n\n".join(str(mount["content"]) for mount in mounts)
@@ -454,35 +490,211 @@ class AgentSession:
         self,
         details: Mapping[str, Any] | None = None,
     ) -> tuple[dict[str, str], ...]:
-        """Build stable system-prompt and ordinary Plugin context mounts."""
+        """Build SessionStart once and durably reuse its byte-stable mounts."""
 
         self.reconcile_plugins()
         self._ensure_required_session_packs()
-        contributions = await self.hooks.session_start_mounts(dict(details or {}))
-        system = [
-            str(item.get("context") or "").strip()
-            for item in contributions
-            if str(item.get("position") or "") == "system"
-        ]
-        ordinary = [
-            str(item.get("context") or "").strip()
-            for item in contributions
-            if str(item.get("position") or "") != "system"
-        ]
-        mounts = []
-        if system:
-            mounts.append({
-                "kind": "system_prompt",
-                "content": "\n\n".join(filter(None, system)),
-                "source": "cyrene_system_prompt",
+        await asyncio.to_thread(self._session_start_build_lock.acquire)
+        try:
+            fingerprint = await self._session_start_fingerprint(details)
+            cached = self._cached_session_start_mounts(fingerprint)
+            if cached is not None:
+                return tuple(cached)
+            contributions = await self.hooks.session_start_mounts(dict(details or {}))
+            mounts = self._contribution_mounts(
+                contributions,
+                system_kind="system_prompt",
+                ordinary_kind="plugin_session",
+                system_source="SessionStart",
+                ordinary_source="SessionStart",
+                lifecycle="session",
+            )
+            with self._linearized_context_commit():
+                root = self.store.get_node(self.tree.id, self.tree.root_id)
+                state = {
+                    "session_start_complete": True,
+                    "fingerprint": fingerprint,
+                    "session_start_mounts": deepcopy(mounts),
+                }
+                root_value = with_plugin_session_state(
+                    root.value,
+                    _AGENT_LIFECYCLE_STATE_ID,
+                    state,
+                )
+                self.store.update_node(self.tree.id, root.id, root_value)
+            return tuple(mounts)
+        finally:
+            self._session_start_build_lock.release()
+
+    async def build_turn_mounts(
+        self,
+        details: Mapping[str, Any] | None = None,
+    ) -> tuple[dict[str, str], ...]:
+        """Build the dynamic context suffix for one user turn."""
+
+        self.reconcile_plugins()
+        self._ensure_required_session_packs()
+        contributions = await self.hooks.turn_start_mounts(dict(details or {}))
+        return tuple(self._contribution_mounts(
+            contributions,
+            system_kind="turn_system_prompt",
+            ordinary_kind="turn_context",
+            system_source="TurnStart",
+            ordinary_source="TurnStart",
+            lifecycle="turn",
+        ))
+
+    async def build_model_context(
+        self,
+        details: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Return stable SessionStart followed by this call's TurnStart suffix."""
+
+        mounts = await self.build_model_mounts(details)
+        return "\n\n".join(
+            mount["content"] for mount in mounts if mount["content"]
+        )
+
+    async def build_model_mounts(
+        self,
+        details: Mapping[str, Any] | None = None,
+    ) -> tuple[dict[str, str], ...]:
+        """Return stable mounts first and dynamic mounts second."""
+
+        stable = await self.build_session_mounts(details)
+        dynamic = await self.build_turn_mounts(details)
+        return tuple(self._unique_context_mounts([*stable, *dynamic]))
+
+    def _cached_session_start_mounts(
+        self,
+        fingerprint: str | None = None,
+    ) -> list[dict[str, str]] | None:
+        root = self.store.get_node(self.tree.id, self.tree.root_id)
+        state = plugin_session_state(root.value, _AGENT_LIFECYCLE_STATE_ID)
+        if state.get("session_start_complete") is not True:
+            return None
+        if fingerprint is not None and str(state.get("fingerprint") or "") != fingerprint:
+            return None
+        return self._stored_context_mounts(state.get("session_start_mounts"))
+
+    async def _session_start_fingerprint(
+        self,
+        details: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Hash only explicit inputs that can alter the stable prompt prefix."""
+
+        hooks = self.hooks.list(SESSION_START)
+        hook_ids = {hook.id for hook in hooks}
+        pack_versions = []
+        for pack_id, attachment in sorted(self._plugin_pack_attachments.items()):
+            if not hook_ids.intersection(attachment.hooks):
+                continue
+            pack_versions.append({
+                "id": pack_id,
+                "source": attachment.source,
+                "setup": attachment.setup_fingerprint,
+                "version": attachment.pack.metadata.get("version"),
             })
-        if ordinary:
+
+        hook_dependencies = await self.hooks.session_start_fingerprints(details)
+
+        payload = {
+            "schema": 1,
+            "hooks": [
+                {
+                    "id": hook.id,
+                    "plugin_id": hook.plugin_id,
+                    "root_only": hook.root_only,
+                    "matcher": hook.matcher,
+                    "failure_policy": hook.failure_policy,
+                    "config": dict(hook.config),
+                    "enabled": hook.enabled,
+                }
+                for hook in hooks
+            ],
+            "packs": pack_versions,
+            "hook_dependencies": hook_dependencies,
+        }
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _stored_context_mounts(raw_mounts: Any) -> list[dict[str, str]]:
+        if not isinstance(raw_mounts, list):
+            return []
+        return [
+            {
+                "kind": str(item.get("kind") or "context"),
+                "content": str(item.get("content") or "").strip(),
+                "source": str(item.get("source") or "context_tree"),
+                "lifecycle": str(item.get("lifecycle") or ""),
+            }
+            for item in raw_mounts
+            if isinstance(item, Mapping)
+            and str(item.get("content") or "").strip()
+        ]
+
+    @staticmethod
+    def _unique_context_mounts(
+        mounts: tuple[dict[str, str], ...] | list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        """Keep later turn mounts from shadowing an earlier stable kind."""
+
+        result: list[dict[str, str]] = []
+        used_names: set[str] = set()
+        next_suffix: dict[str, int] = {}
+        for raw in mounts:
+            mount = dict(raw)
+            base = str(mount.get("kind") or "context")
+            kind = base
+            if kind in used_names:
+                suffix = max(2, next_suffix.get(base, 2))
+                while f"{base}.{suffix}" in used_names:
+                    suffix += 1
+                kind = f"{base}.{suffix}"
+                next_suffix[base] = suffix + 1
+            used_names.add(kind)
+            mount["kind"] = kind
+            result.append(mount)
+        return result
+
+    @staticmethod
+    def _contribution_mounts(
+        contributions: tuple[dict[str, str], ...],
+        *,
+        system_kind: str,
+        ordinary_kind: str,
+        system_source: str,
+        ordinary_source: str,
+        lifecycle: str,
+    ) -> list[dict[str, str]]:
+        mounts: list[dict[str, str]] = []
+        used_kinds: dict[str, int] = {}
+        for item in contributions:
+            content = str(item.get("context") or "").strip()
+            if not content:
+                continue
+            is_system = str(item.get("position") or "") == "system"
+            base_kind = str(item.get("context_kind") or "").strip() or (
+                system_kind if is_system else ordinary_kind
+            )
+            occurrence = used_kinds.get(base_kind, 0) + 1
+            used_kinds[base_kind] = occurrence
+            kind = base_kind if occurrence == 1 else f"{base_kind}.{occurrence}"
             mounts.append({
-                "kind": "plugin_session",
-                "content": "\n\n".join(filter(None, ordinary)),
-                "source": "SessionStart",
+                "kind": kind,
+                "content": content,
+                "source": str(item.get("context_source") or "").strip()
+                or (system_source if is_system else ordinary_source),
+                "lifecycle": lifecycle,
             })
-        return tuple(mounts)
+        return mounts
 
     def _plugin_data(self, *, run_id: str = "", **details: Any) -> dict[str, Any]:
         data = dict(self._plugin_context_data)
@@ -513,6 +725,52 @@ class AgentSession:
             data["run_context"] = run_context
         data.update(details)
         return data
+
+    def _has_context_provider(self) -> bool:
+        return bool(
+            self.hooks.list(SESSION_START)
+            or self.hooks.list(TURN_START)
+            or self._cached_session_start_mounts() is not None
+        )
+
+    def _model_stream_sink(
+        self,
+        *,
+        run_id: str,
+        trigger_id: str,
+        transition_key: str,
+    ) -> Callable[[Mapping[str, Any]], Any]:
+        """Translate Provider stream chunks into transient Agent events."""
+
+        event_types = {
+            "reply_start": "assistant.stream.started",
+            "reply_delta": "assistant.stream.delta",
+            "reply_done": "assistant.stream.done",
+            "reasoning_start": "assistant.reasoning.started",
+            "reasoning_delta": "assistant.reasoning.delta",
+            "reasoning_done": "assistant.reasoning.done",
+        }
+
+        async def publish(event: Mapping[str, Any]) -> None:
+            source_type = str(event.get("type") or "")
+            event_type = event_types.get(source_type)
+            if event_type is None or self._is_cancelled(run_id):
+                return
+            if source_type.startswith("reply_"):
+                with self._state_lock:
+                    self._streamed_transition_keys.add(transition_key)
+            self._emit_event(
+                event_type,
+                run_id=run_id,
+                node_id=trigger_id,
+                data={
+                    key: deepcopy(value)
+                    for key, value in event.items()
+                    if key != "type"
+                },
+            )
+
+        return publish
 
     def _attach_plugin_packs(self) -> None:
         """Attach the initially available session contributions."""
@@ -1738,7 +1996,7 @@ class AgentSession:
             )
             return
         if value.get("role") == "user" and value.get("trigger_model") is False:
-            has_context_provider = bool(self.hooks.list(SESSION_START))
+            has_context_provider = self._has_context_provider()
             if has_context_provider:
                 self._set_state(
                     "queued",
@@ -1852,7 +2110,7 @@ class AgentSession:
                 else self._permission_request_for_run(normalized_run_id) or content
             )
         normalized_metadata = deepcopy(dict(metadata or {}))
-        has_session_context = bool(self.hooks.list(SESSION_START))
+        has_session_context = self._has_context_provider()
         with self._state_lock:
             if self._closed:
                 raise RuntimeError(_l("The Agent session is closed.", "Agent 会话已关闭。"))
@@ -2048,50 +2306,42 @@ class AgentSession:
         with self._state_lock:
             if self._closed or run_id in self._cancelled_run_ids:
                 return
-        if value.get("session_start_complete") is not True:
-            mounts = list(await self.build_session_mounts(
-                {
-                    "run_id": run_id,
-                    "agent_id": self.agent_id,
-                    "parent_agent_id": self.parent_agent_id,
-                    "user_request": str(value.get("content") or ""),
-                    "user_node_id": source.id,
-                    "metadata": deepcopy(dict(metadata)),
-                }
-            ))
-        else:
-            raw_mounts = value.get("session_start_mounts")
-            mounts = [
-                {
-                    "kind": str(item.get("kind") or "plugin_session"),
-                    "content": str(item.get("content") or "").strip(),
-                    "source": str(item.get("source") or "SessionStart"),
-                }
-                for item in raw_mounts
-                if isinstance(item, Mapping)
-                and str(item.get("content") or "").strip()
-            ] if isinstance(raw_mounts, list) else []
+        details = {
+            "run_id": run_id,
+            "agent_id": self.agent_id,
+            "parent_agent_id": self.parent_agent_id,
+            "user_request": str(value.get("content") or ""),
+            "user_node_id": source.id,
+            "metadata": deepcopy(dict(metadata)),
+        }
+        if value.get("turn_start_complete") is True:
+            mounts = self._stored_context_mounts(value.get("context_mounts"))
+        elif value.get("session_start_complete") is True:
+            # Compatibility with turns frozen by builds where SessionStart was
+            # incorrectly used as TurnStart. Finish that exact turn without
+            # rerunning any provider; the next turn adopts the new lifecycle.
+            mounts = self._stored_context_mounts(value.get("session_start_mounts"))
             if not mounts:
-                session_context = str(
-                    value.get("session_start_context") or ""
-                ).strip()
+                session_context = str(value.get("session_start_context") or "").strip()
                 if session_context:
                     mounts = [{
                         "kind": "plugin_session",
                         "content": session_context,
                         "source": "SessionStart",
                     }]
+        else:
+            stable_mounts = await self.build_session_mounts(details)
+            turn_mounts = await self.build_turn_mounts(details)
+            # Stable mounts always lead. A changing per-turn suffix therefore
+            # cannot invalidate the provider cache for the stable prefix.
+            mounts = self._unique_context_mounts([*stable_mounts, *turn_mounts])
         with self._linearized_context_commit():
             if self._closed or run_id in self._cancelled_run_ids:
                 return
             source_value = dict(value)
-            if value.get("session_start_complete") is not True:
-                source_value["session_start_complete"] = True
-                if mounts:
-                    source_value["session_start_mounts"] = deepcopy(mounts)
-                    source_value["session_start_context"] = "\n\n".join(
-                        str(mount["content"]) for mount in mounts
-                    )
+            if value.get("turn_start_complete") is not True:
+                source_value["turn_start_complete"] = True
+                source_value["context_mounts"] = deepcopy(mounts)
                 self.store.update_node(self.tree.id, source.id, source_value)
             if not mounts:
                 # A malformed provider payload must not strand the user turn.
@@ -2125,6 +2375,7 @@ class AgentSession:
                         "content": mount["content"],
                         "context_kind": mount["kind"],
                         "context_source": mount["source"],
+                        "context_lifecycle": str(mount.get("lifecycle") or ""),
                         "source_node_id": source.id,
                         "context_index": index,
                         "metadata": {"source": mount["source"]},
@@ -2140,8 +2391,15 @@ class AgentSession:
                     else {}
                 )
                 should_trigger = index == len(mounts) - 1
+                changed = False
                 if child_value.get("trigger_model") is not should_trigger:
                     child_value["trigger_model"] = should_trigger
+                    changed = True
+                lifecycle = str(mount.get("lifecycle") or "")
+                if str(child_value.get("context_lifecycle") or "") != lifecycle:
+                    child_value["context_lifecycle"] = lifecycle
+                    changed = True
+                if changed:
                     child = self.store.update_node(
                         self.tree.id,
                         child.id,
@@ -2174,7 +2432,7 @@ class AgentSession:
 
     def _model_tool_tokens(self) -> int:
         self.reconcile_plugins()
-        self.registry.refresh_customizations()
+        self._ensure_required_session_packs()
         self._model_tools = self.registry.direct_tool_definitions(agent_id=self.agent_id)
         if not self._model_tools:
             return 0
@@ -2184,6 +2442,52 @@ class AgentSession:
                 "tools": list(self._model_tools),
             }
         )
+
+    def _prepare_model_input(self, trigger: ContextNode) -> _PreparedModelInput:
+        """Build the sole messages/tools/token snapshot for one transition."""
+
+        from .plugin.model_router import request_token_estimate
+
+        with operation(
+            logger,
+            "agent.session",
+            "prepare_model_input",
+            tree_id=self.tree.id,
+            node_id=trigger.id,
+        ) as op:
+            self.reconcile_plugins()
+            self._ensure_required_session_packs()
+            self._model_tools = self.registry.direct_tool_definitions(
+                agent_id=self.agent_id
+            )
+            tools = deepcopy(list(self._model_tools))
+            messages = self._messages(trigger.id)
+            message_tokens = messages_token_estimate(messages)
+            tool_tokens = (
+                message_token_estimate({"role": "system", "tools": tools})
+                if tools
+                else 0
+            )
+            prepared = _PreparedModelInput(
+                trigger_id=trigger.id,
+                registry_sync_token=self.registry.sync_token,
+                messages=messages,
+                tools=tools,
+                message_tokens=message_tokens,
+                tool_tokens=tool_tokens,
+                compaction_tokens=message_tokens + tool_tokens,
+                routing_tokens=request_token_estimate(messages, tools),
+                services=dict(self._plugin_service_values),
+            )
+            op.finish(
+                message_count=len(messages),
+                tool_count=len(tools),
+                message_tokens=message_tokens,
+                tool_tokens=tool_tokens,
+                routing_tokens=prepared.routing_tokens,
+                registry_sync_token=prepared.registry_sync_token,
+            )
+            return prepared
 
     @staticmethod
     def _mechanical_compaction_summary(
@@ -2275,11 +2579,10 @@ class AgentSession:
         force: bool,
         reason: str,
         resume_model: bool,
+        prepared: _PreparedModelInput | None = None,
     ) -> tuple[ContextNode | None, dict[str, Any]]:
         limit = max(0, int(context_limit or 0))
-        messages = self._messages(trigger.id)
-        reserved_tokens = self._model_tool_tokens()
-        before = messages_token_estimate(messages) + reserved_tokens
+        messages, reserved_tokens, before = self._compaction_input(trigger, prepared)
         base_result: dict[str, Any] = {
             "compacted": False,
             "before": before,
@@ -2402,6 +2705,16 @@ class AgentSession:
             "node_id": node.id,
             "distilled": distilled,
         }
+
+    def _compaction_input(
+        self,
+        trigger: ContextNode,
+        prepared: _PreparedModelInput | None,
+    ) -> tuple[list[dict[str, Any]], int, int]:
+        model_input = prepared or self._prepare_model_input(trigger)
+        if model_input.trigger_id != trigger.id:
+            raise ValueError("prepared model input does not match compaction trigger")
+        return model_input.messages, model_input.tool_tokens, model_input.compaction_tokens
 
     async def compact_context(
         self,
@@ -2526,6 +2839,38 @@ class AgentSession:
             return
         self._enqueue_transition("advance", node)
 
+    async def _automatic_compaction(
+        self,
+        trigger: ContextNode,
+        prepared: _PreparedModelInput,
+        run_id: str,
+    ) -> tuple[ContextNode, _PreparedModelInput, str]:
+        with operation(
+            logger,
+            "agent.session",
+            "compaction_gate",
+            tree_id=self.tree.id,
+            run_id=run_id,
+            node_id=trigger.id,
+            before_tokens=prepared.compaction_tokens,
+        ) as op:
+            compacted_node, result = await self._compact_at_node(
+                trigger,
+                context_limit=self._configured_compaction_limit(),
+                force=False,
+                reason="automatic_60_percent",
+                resume_model=True,
+                prepared=prepared,
+            )
+            op.finish(
+                compacted=compacted_node is not None,
+                reason=str(result.get("reason") or ""),
+                limit=int(result.get("limit") or 0),
+            )
+        if compacted_node is None:
+            return trigger, prepared, run_id
+        return compacted_node, self._prepare_model_input(compacted_node), self._node_run_id(compacted_node)
+
     async def _advance(self, trigger: ContextNode) -> None:
         run_id = self._node_run_id(trigger)
         if self._is_cancelled(run_id):
@@ -2542,22 +2887,12 @@ class AgentSession:
             else:
                 await self._finish_success(existing)
             return
-        self.reconcile_plugins()
-        self._ensure_required_session_packs()
-        trigger_value = (
-            trigger.value if isinstance(trigger.value, Mapping) else {}
-        )
+        prepared = self._prepare_model_input(trigger)
+        trigger_value = trigger.value if isinstance(trigger.value, Mapping) else {}
         if trigger_value.get("role") != "context_compaction":
-            compacted_node, _compaction = await self._compact_at_node(
-                trigger,
-                context_limit=self._configured_compaction_limit(),
-                force=False,
-                reason="automatic_60_percent",
-                resume_model=True,
+            trigger, prepared, run_id = await self._automatic_compaction(
+                trigger, prepared, run_id
             )
-            if compacted_node is not None:
-                trigger = compacted_node
-                run_id = self._node_run_id(trigger)
         if self._is_cancelled(run_id):
             return
         with self._state_lock:
@@ -2591,13 +2926,18 @@ class AgentSession:
                 ),
             )
         self._emit_state_snapshot(model_state)
-        self.reconcile_plugins()
-        self._ensure_required_session_packs()
-        self.registry.refresh_customizations()
-        self._model_tools = self.registry.direct_tool_definitions(agent_id=self.agent_id)
         arguments = {
-            "messages": self._messages(trigger.id),
-            "tools": deepcopy(list(self._model_tools)),
+            "messages": prepared.messages,
+            "tools": prepared.tools,
+        }
+        transition_key = self._transition_key(trigger)
+        model_services = {
+            **prepared.services,
+            "model_stream": self._model_stream_sink(
+                run_id=run_id,
+                trigger_id=trigger.id,
+                transition_key=transition_key,
+            ),
         }
         result = await self.runtime.call(
             self.model_plugin,
@@ -2611,8 +2951,9 @@ class AgentSession:
                     run_id=run_id,
                     model_call_kind="agent",
                     user_request=self.current_user_request,
+                    prepared_request_tokens=prepared.routing_tokens,
                 ),
-                services=self._plugin_services(),
+                services=model_services,
             ),
         )
         if self._is_cancelled(run_id):
@@ -2632,7 +2973,9 @@ class AgentSession:
         output = dict(result.value)
         calls = output.get("tool_calls")
         calls = calls if isinstance(calls, list) else []
-        transition_key = self._transition_key(trigger)
+        with self._state_lock:
+            streamed = transition_key in self._streamed_transition_keys
+            self._streamed_transition_keys.discard(transition_key)
         batch_key = self._stable_id(
             "batch",
             transition_key
@@ -2663,6 +3006,7 @@ class AgentSession:
                     ),
                     "finish_reason": str(output.get("finish_reason") or ""),
                     "response_id": str(output.get("response_id") or ""),
+                    "streamed": streamed,
                     "run_id": run_id,
                     "caused_by": transition_key,
                     "batch_key": batch_key,
@@ -3035,14 +3379,7 @@ class AgentSession:
             ),
             "",
         )
-        current_context_by_kind = {
-            str(node.value.get("context_kind") or node.id): node.id
-            for node in path
-            if isinstance(node.value, Mapping)
-            and node.value.get("role") == "context"
-            and str(node.value.get("run_id") or "") == current_run_id
-        }
-        current_context_ids = set(current_context_by_kind.values())
+        active_context_ids = selected_context_node_ids(path, current_run_id)
         root_value = (
             path[0].value
             if path and isinstance(path[0].value, Mapping)
@@ -3083,26 +3420,12 @@ class AgentSession:
                 content = str(value.get("content") or "")
                 messages.append({"role": role, "content": content})
             elif role == "context":
-                if node.id not in current_context_ids:
+                if node.id not in active_context_ids:
                     continue
                 content = str(value.get("content") or "").strip()
                 if not content:
                     continue
-                system = next(
-                    (
-                        message
-                        for message in messages
-                        if str(message.get("role") or "") == "system"
-                    ),
-                    None,
-                )
-                if system is None:
-                    messages.insert(0, {"role": "system", "content": content})
-                else:
-                    current = str(system.get("content") or "").strip()
-                    system["content"] = "\n\n".join(
-                        part for part in (current, content) if part
-                    )
+                project_context_message(messages, value)
             elif role == "assistant":
                 message: dict[str, Any] = {
                     "role": "assistant",

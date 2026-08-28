@@ -1,9 +1,30 @@
 // Permission operations use namespaced IDs while runtime activity uses Plugin
-// names. Map the two current identifiers only at the presentation boundary.
+// names. Historical conversations can also retain the old progressive tool
+// group wire names. Normalize both forms only at the presentation boundary.
 var WORKBENCH_TOOL_NAME_ALIASES = {
   "Ask User": "ask_user",
   "AskUser": "ask_user",
   "ask-user": "ask_user",
+  "browser_tools": "cyrene_browser",
+  "code_tools": "cyrene_code",
+  "collaboration_tools": "cyrene_subagent",
+  "cyrene_tools": "cyrene_application",
+  "delivery_tools": "cyrene_delivery",
+  "desktop_tools": "cyrene_desktop",
+  "entity_tools": "cyrene_entity",
+  "integration_tools": "cyrene_mcp",
+  "knowledge_tools": "cyrene_knowledge",
+  "map_tools": "cyrene_map",
+  "media_tools": "cyrene_media",
+  "memory_tools": "cyrene_memory",
+  "office_tools": "cyrene_office",
+  "registry_tools": "cyrene_extensions",
+  "remote_tools": "cyrene_remote",
+  "research_tools": "cyrene_knowledge",
+  "skill_tools": "cyrene_skills",
+  "subagent_tools": "cyrene_subagent",
+  "task_tools": "cyrene_task",
+  "work_tools": "cyrene_task",
   "code.shell.start": "StartShell",
   "code.shell.send": "SendShell",
   "code.shell.list": "ListShells",

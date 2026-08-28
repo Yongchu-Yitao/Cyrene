@@ -2,6 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent.plugin import PluginContext
+from agent.plugin.plugin_impl.cyrene_composer_context import plugin_pack
 from agent.plugin.plugin_impl.cyrene_composer_context.application import (
     ComposerContextService,
 )
@@ -17,6 +19,30 @@ def _catalog(*, enabled: bool = True):
         "mcpServers": [{"id": "docs", "enabled": enabled, "available": enabled}],
         "skills": [{"id": "writer", "enabled": enabled, "available": enabled}],
         "pluginPacks": [{"id": "code_tools", "enabled": enabled, "available": enabled}],
+    }
+
+
+def test_composer_context_pack_exposes_one_fixed_mount_plugin() -> None:
+    assert [plugin.name for plugin in plugin_pack.plugins] == [
+        "cyrene_composer_context.mount"
+    ]
+    assert plugin_pack.plugins[0].model_visible is False
+    assert plugin_pack.plugins[0].metadata["required"] is True
+
+    result = plugin_pack.plugins[0].handler(
+        {},
+        PluginContext(
+            workspace="/workspace",
+            data={"resolved_context_activations": {"skills": ["writer"]}},
+            services={"composer_context": SimpleNamespace(
+                build_session_context=lambda *_args, **_kwargs: "selected context"
+            )},
+        ),
+    )
+    assert result == {
+        "context": "selected context",
+        "context_kind": "composer_context",
+        "context_source": "cyrene_composer_context",
     }
 
 
@@ -108,7 +134,7 @@ def test_input_context_state_prunes_unavailable_toggle_but_session_fails_closed(
         "selected": False,
     }
 
-    with pytest.raises(RuntimeError, match="SOUL context is enabled"):
+    with pytest.raises(RuntimeError, match="SOUL (?:context is enabled|上下文已启用)"):
         service.resolve_input_context(
             soul_active=True,
             workspace_active=False,
@@ -178,10 +204,12 @@ async def test_runtime_and_composer_context_are_independent_hooks() -> None:
     composer_hook = next(
         item
         for item in registered
-        if item[2]["hook_id"] == "cyrene-composer-context-session-start"
+        if item[2]["hook_id"] == "cyrene-composer-context-turn-start"
     )
     assert await composer_hook[1](SimpleNamespace(payload={})) == {
-        "context": "selected context"
+        "context": "selected context",
+        "context_kind": "composer_context",
+        "context_source": "cyrene_composer_context",
     }
     assert composer_hook[2]["failure_policy"] == "closed"
 

@@ -242,6 +242,9 @@ class Plugin:
         main_only = metadata.get("main_only", False)
         if not isinstance(main_only, bool):
             raise TypeError("Plugin metadata.main_only must be a boolean")
+        required = metadata.get("required", False)
+        if not isinstance(required, bool):
+            raise TypeError("Plugin metadata.required must be a boolean")
         exposure = metadata.get("agent_exposure")
         if exposure is not None and exposure not in {
             "direct",
@@ -277,6 +280,12 @@ class Plugin:
         """Whether only the main Agent may discover or execute this Plugin."""
 
         return bool(self.metadata.get("main_only", False))
+
+    @property
+    def required(self) -> bool:
+        """Whether the Plugin is a fixed capability while its pack is enabled."""
+
+        return bool(self.metadata.get("required", False))
 
     @property
     def canonical_name(self) -> str:

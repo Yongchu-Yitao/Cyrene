@@ -213,6 +213,7 @@ async def test_background_extractor_accepts_verified_tool_facts(monkeypatch, tmp
                             "content": "远程设备配备16GB内存。",
                             "category": "fact",
                             "confidence": "high",
+                            "evidence": "Memory: 16GB",
                         }]
                     }, ensure_ascii=False),
                 },
@@ -247,6 +248,49 @@ async def test_background_extractor_accepts_verified_tool_facts(monkeypatch, tmp
     )
     assert stored[0]["source"] == "conversation"
     assert stored[0]["content"] == "远程设备配备16GB内存。"
+
+
+@pytest.mark.asyncio
+async def test_background_extractor_rejects_assistant_only_memory(
+    monkeypatch,
+    tmp_path,
+):
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    captured = {}
+
+    async def fake_call_llm(messages, **kwargs):
+        captured["messages"] = messages
+        return {
+            "content": "",
+            "tool_calls": [{
+                "id": "memory-result-unsupported",
+                "type": "function",
+                "function": {
+                    "name": "submit_memory_result",
+                    "arguments": json.dumps({
+                        "memories": [{
+                            "content": "你长期维护多个工程项目。",
+                            "category": "project",
+                            "confidence": "high",
+                            "evidence": "多个工程项目",
+                        }]
+                    }, ensure_ascii=False),
+                },
+            }],
+        }
+
+    added = await memory.capture_from_exchange(
+        "project-test",
+        "你能做什么",
+        "我可以帮助你维护多个工程项目。",
+        verified_evidence="",
+        model_gateway=_MemoryGateway(fake_call_llm),
+    )
+
+    assert added == 0
+    work_record = captured["messages"][1]["content"]
+    assert '"assistant_summary": ""' in work_record
+    assert not (tmp_path / "wb_memory_project-test.json").exists()
 
 
 def test_language_neutral_path_does_not_require_translation():

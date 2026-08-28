@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from agent.plugin import PluginApplicationContext, PluginPack
 
+from .runtime_plugin import plugin as runtime_plugin
+
 
 def run_telegram() -> None:
     """CLI launcher kept inside the editable channel pack."""
@@ -22,7 +24,7 @@ def application_setup(context: PluginApplicationContext) -> None:
 plugin_pack = PluginPack(
     id="cyrene_channels",
     description="Configure and run Telegram and WeChat messaging channels.",
-    plugins=(),
+    plugins=(runtime_plugin,),
     application_setup=application_setup,
     metadata={
         "runtime_launchers": {"telegram": run_telegram},
@@ -40,4 +42,4 @@ plugin_pack = PluginPack(
 )
 
 
-__all__ = ["application_setup", "plugin_pack", "run_telegram"]
+__all__ = ["application_setup", "plugin_pack", "run_telegram", "runtime_plugin"]

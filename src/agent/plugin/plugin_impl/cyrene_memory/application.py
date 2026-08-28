@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import re
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -724,10 +727,74 @@ class MemoryApplication:
         archive_path.unlink(missing_ok=True)
         return existed
 
-    def current_snapshot(self, project_id: str) -> dict[str, str]:
-        from .project_memory import current_snapshot
+    def freeze_snapshot(
+        self,
+        project_id: str,
+        snapshot: Mapping[str, Any] | None = None,
+    ) -> dict[str, str]:
+        """Return the complete memory snapshot captured by one Workbench chat.
 
-        return current_snapshot(project_id)
+        The versioned project-memory prompt was already frozen when a chat was
+        created.  Short-term and structured memories must follow the same
+        contract: background learning updates the project store, but an
+        existing chat keeps the exact memory context it started with.
+        """
+
+        from .project_memory import current_snapshot as load_project_snapshot
+        from .short_term import get_context
+        from .structured import render_memory_for_injection
+
+        frozen = (
+            {str(key): str(value or "") for key, value in snapshot.items()}
+            if isinstance(snapshot, Mapping)
+            else dict(load_project_snapshot(project_id))
+        )
+        language = app_language()
+        if "shortTermContext" not in frozen:
+            try:
+                frozen["shortTermContext"] = get_context(
+                    max_chars=2500,
+                    header=localized(
+                        "[Short-term cross-session memory:]",
+                        "[跨会话短期记忆：]",
+                        language=language,
+                    ),
+                ).strip()
+            except Exception:
+                logger.exception("Failed to freeze short-term memory context")
+                frozen["shortTermContext"] = ""
+        if "structuredContext" not in frozen:
+            try:
+                frozen["structuredContext"] = render_memory_for_injection(
+                    project_id,
+                    limit=20,
+                    max_chars=2400,
+                    header=localized(
+                        "Project durable memories:",
+                        "项目持久记忆：",
+                        language=language,
+                    ),
+                    language=language,
+                ).strip()
+            except Exception:
+                logger.exception("Failed to freeze structured memory context")
+                frozen["structuredContext"] = ""
+        digest_payload = json.dumps(
+            {
+                "shortTermContext": frozen.get("shortTermContext", ""),
+                "structuredContext": frozen.get("structuredContext", ""),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        frozen["memoryContextHash"] = hashlib.sha256(
+            digest_payload.encode("utf-8")
+        ).hexdigest()
+        return frozen
+
+    def current_snapshot(self, project_id: str) -> dict[str, str]:
+        return self.freeze_snapshot(project_id)
 
     def delete_workspace(self, workspace_id: str) -> None:
         from .structured import delete_workspace_memory

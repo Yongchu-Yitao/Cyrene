@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from agent.hook import SESSION_START, HookEvent
+from agent.hook import (
+    SESSION_START,
+    HookEvent,
+    with_session_start_cache_fingerprint,
+)
 from agent.plugin import PluginSetupContext
 from cyrene.localization import app_language, localized
 
@@ -45,7 +49,23 @@ def setup_soul(context: PluginSetupContext) -> None:
                 content=content,
             ),
             "context_position": "top",
+            "context_kind": "persona",
+            "context_source": "cyrene_soul",
         }
+
+    def cache_fingerprint(_event: HookEvent) -> dict[str, object]:
+        enabled = _enabled(context.data)
+        if not enabled:
+            return {"enabled": False, "language": language}
+        soul = context.services.get("soul")
+        reader = getattr(soul, "persona_context", None)
+        return {
+            "enabled": True,
+            "language": language,
+            "content": str(reader() or "") if callable(reader) else None,
+        }
+
+    with_session_start_cache_fingerprint(mount_soul, cache_fingerprint)
 
     hook_id = "cyrene-soul-session-start"
     plugin_id = "cyrene_soul.mount"

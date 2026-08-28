@@ -779,7 +779,7 @@ def test_chat_sidebar_context_is_flat_and_overview_is_integrated():
     overview_source = source.split("function WbcOverviewTab(", 1)[1].split(
         "function wbcBlockLabel(", 1
     )[0]
-    assert '<WbcOverviewUsage usage={usage} />' in overview_source
+    assert '<WbcOverviewUsage usage={usage} latestUsage={chat.latestUsage} />' in overview_source
     assert "WbcQuickActionItems" not in overview_source
     assert "wbc-overview-actions" not in overview_source
     context_source = source.split("function WbcContextTab(", 1)[1].split(
@@ -2752,7 +2752,7 @@ def test_project_text_files_use_codemirror_with_live_markdown_and_conflict_contr
     assert "root.CyreneCodeMirror = Object.freeze({" in editor
     assert "Editor: Editor," in editor
     assert 'key: "Mod-s"' in editor
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta1">' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta2">' in index
     assert 'import "../code/editor.jsx"' in (
         root / "src/webui/frontend/entry/app.jsx"
     ).read_text(encoding="utf-8")
@@ -2948,6 +2948,9 @@ def test_memory_detail_uses_shared_floating_card_and_animated_accordion():
     library_styles = (
         root / "src" / "webui" / "frontend" / "workbench-library.css"
     ).read_text(encoding="utf-8")
+    schedule_styles = (
+        root / "src" / "webui" / "frontend" / "features" / "schedule" / "schedule.css"
+    ).read_text(encoding="utf-8")
 
     card_css = styles.split(".wb-floating-detail-card {", 1)[1].split("}", 1)[0]
     shell_css = styles.split(".wb-floating-detail-shell {", 1)[1].split("}", 1)[0]
@@ -2979,9 +2982,21 @@ def test_memory_detail_uses_shared_floating_card_and_animated_accordion():
         "var(--wb-floating-card-bottom-gap);"
     )
     assert shared_detail_padding in shell_css
-    assert shared_detail_padding in detail_css
-    assert "--wb-floating-detail-width: 350px;" in shared_width_css
+    assert (
+        "padding: var(--wb-floating-card-top-gap) 12px "
+        "var(--wb-floating-card-bottom-gap) 4px;" in detail_css
+    )
+    assert ".wb-lib-right:is(.wb-floating-detail-shell) { padding-left: 4px; }" in library_styles
+    assert "--wb-floating-detail-width: calc(var(--wb-right-w, 350px) - 8px);" in shared_width_css
+    assert "@media (max-width: 1320px)" in styles
+    assert "--wb-floating-detail-width: calc(var(--wb-right-w, 280px) - 8px);" in styles
     assert "flex: 0 0 var(--wb-floating-detail-width);" in detail_css
+    assert "flex: 1 1 0%;" in styles.split(".wb-mem-main {", 1)[1].split("}", 1)[0]
+    assert "flex: 1 1 0%;" in library_styles.split(".wb-lib-main {", 1)[1].split("}", 1)[0]
+    assert "flex: 1 1 0%;" in schedule_styles.split(".wb-sched-main {", 1)[1].split("}", 1)[0]
+    assert "flex: 0 0 calc(var(--wb-right-w, 350px) - 8px);" in schedule_styles
+    assert "flex-basis: calc(var(--wb-right-w, 280px) - 8px);" in schedule_styles
+    assert "padding-left: 4px;" in schedule_styles
     assert (
         ".wb-detail-accordion-trigger.active { background: transparent; }"
         in styles
@@ -3138,6 +3153,16 @@ def test_library_workspace_tabs_are_integrated_into_the_floating_right_inspector
     assert 'tabId === "citation" && h(CitationWorkspace' in right_panel
     assert 'window.localStorage.getItem("cyrene.library.viewMode")' in page
     assert 'window.localStorage.setItem("cyrene.library.viewMode", view)' in page
+    columns = frontend_module_source("features/knowledge/library-columns.jsx")
+    persisted_view_handler = columns.split("function selectLibraryView(nextView, setView)", 1)[1].split(
+        "export {", 1
+    )[0]
+    assert 'window.localStorage.setItem("cyrene.library.viewMode", nextView)' in persisted_view_handler
+    assert persisted_view_handler.index("localStorage.setItem") < persisted_view_handler.index(
+        "setView(nextView)"
+    )
+    assert 'onClick: function () { selectLibraryView("table", setView); }' in page
+    assert 'onClick: function () { selectLibraryView("grid", setView); }' in page
     card_grid_css = styles.split(".wb-lib-card-grid {", 1)[1].split("}", 1)[0]
     card_css = styles.split(".wb-lib-card {", 1)[1].split("}", 1)[0]
     card_body_css = styles.split(".wb-lib-card-body {", 1)[1].split("}", 1)[0]
@@ -5466,7 +5491,7 @@ def test_workbench_chat_model_label_and_context_usage_use_live_data():
     assert "wbcCurrentModel(chat, null, runtime, liveData)" not in overview
     assert "var usage = Object.assign({}, (liveData && liveData.usage) || {}, runtimeUsage);" in overview
     assert "chat.usage" not in overview
-    assert '<WbcOverviewUsage usage={usage} />' in overview
+    assert '<WbcOverviewUsage usage={usage} latestUsage={chat.latestUsage} />' in overview
     assert '<WbcContextUsage data={liveData} compact={true} />' in overview
     assert '{!compact && (' not in usage
     assert 'className={"wbc-ctx-bar level-" + fillLevel}' in usage
@@ -5752,7 +5777,7 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in composer
     assert "if (running) { onInterrupt(); return; }" not in composer
     assert "输入内容以引导正在运行的 Agent" in workbench_i18n_source()
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta1"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta2"></script>' in index
 
 
 def test_task_answer_resume_uses_interrupt_not_pause_and_suppresses_cancel_error():
@@ -6512,6 +6537,7 @@ def test_voice_settings_are_scoped_and_context_shows_plugin_disclosure():
     assert 'compositionSource === "public_transcript"' not in context_tab
     assert 'compositionSource === "agent_report"' not in context_tab
     assert "contextBlocks.usedPluginPacks" in disclosure
+    assert "contextBlocks.usedStandalonePlugins" in disclosure
     assert ".forEach(addReportedPackage)" in disclosure
     assert "contextBlocks.messageCount" in context_tab
     assert "contextBlocks.updatedAt" in context_tab
@@ -6563,13 +6589,16 @@ def test_voice_settings_are_scoped_and_context_shows_plugin_disclosure():
     assert "@media (prefers-reduced-motion: reduce)" in css
     assert '"workbenchChat.inbox.title": "Session inbox"' in i18n
     assert '"workbenchChat.inbox.title": "Agent 收件箱"' in i18n
-    assert '"workbenchChat.usedPluginPacks": "Used Plugin packs"' in i18n
-    assert '"workbenchChat.usedPluginPacks": "已使用的插件包"' in i18n
+    assert '"workbenchChat.usedPluginPacks": "Used plugins"' in i18n
+    assert '"workbenchChat.usedPluginPacks": "已使用的插件"' in i18n
     assert '"workbenchChat.inbox.agentMessage": "Agent message"' in i18n
     assert '"workbenchChat.inbox.subagentResult": "Subagent 结果"' in i18n
     assert '"workbenchChat.ctxBlock.system.root": "Agent instructions"' in i18n
     assert '"workbenchChat.ctxBlock.context.project_memory": "项目记忆"' in i18n
     assert '"workbenchChat.ctxBlock.context.plugin_session": "Plugin session context"' in i18n
+    assert '"workbenchChat.ctxBlock.context.persona": "Persona"' in i18n
+    assert '"workbenchChat.ctxBlock.context.memory": "Memory"' in i18n
+    assert '"workbenchChat.ctxBlock.context.learned_skills": "Learned skills"' in i18n
     assert 'id.startsWith("context.")' in chat
     assert '"workbenchChat.inbox.live"' not in i18n
 
@@ -6582,7 +6611,8 @@ def test_new_context_projection_drives_used_plugin_pack_list():
     script = f"""
 eval({json.dumps(helper)});
 process.stdout.write(JSON.stringify(wbcUsedPluginPacks({{
-  usedPluginPacks: ["cyrene_subagent", "", "cyrene_code", "cyrene_subagent"]
+  usedPluginPacks: ["cyrene_subagent", "", "cyrene_code", "cyrene_subagent"],
+  usedStandalonePlugins: ["CustomLint", "cyrene_code"]
 }})));
 """
     completed = subprocess.run(
@@ -6592,7 +6622,11 @@ process.stdout.write(JSON.stringify(wbcUsedPluginPacks({{
         text=True,
     )
 
-    assert json.loads(completed.stdout) == ["cyrene_subagent", "cyrene_code"]
+    assert json.loads(completed.stdout) == [
+        "cyrene_subagent",
+        "cyrene_code",
+        "CustomLint",
+    ]
 
 
 def test_plugin_center_replaces_the_legacy_plugin_activation_page():
@@ -6912,6 +6946,55 @@ def test_board_search_filters_conversations_and_tasks():
     assert 'line-height: 0;' in search_icon_css
     assert '"taskBoard.searchPlaceholder": "Search conversations and tasks"' in translations
     assert '"taskBoard.searchPlaceholder": "搜索对话和任务"' in translations
+
+
+def test_board_chat_navigation_uses_the_work_module_gate():
+    navigation = frontend_module_source("features/shell/shell-navigation.jsx")
+    navigation = "\n".join(
+        line for line in navigation.splitlines() if not line.startswith("import ")
+    ).rsplit("\nexport {", 1)[0]
+    script = """
+const opened = [];
+const workbenchServices = {
+  navigation: () => ({setPending: () => {}, clearPending: () => {}}),
+};
+const setTimeout = () => 0;
+""" + navigation + """
+const project = {id: "project-1", sessions: []};
+wbNavigateFromSearch({
+  store: {projects: [project], activeProject: project, activeProjectId: project.id},
+  enabledModules: ["schedule", "board", "work", "knowledge", "memory"],
+  setFullPage: (page) => opened.push(page),
+  getSelectProject: () => () => {},
+}, {type: "chat", projectId: project.id, chatId: "chat-1"});
+process.stdout.write(JSON.stringify(opened));
+"""
+
+    result = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(result.stdout) == ["chat"]
+
+
+def test_module_target_navigation_is_consumed_across_mount_and_slow_load():
+    root = Path(__file__).resolve().parent.parent
+    library = (root / "src/webui/frontend/workbench-library.jsx").read_text(encoding="utf-8")
+    memory = (root / "src/webui/frontend/workbench-memory.jsx").read_text(encoding="utf-8")
+    pending = (root / "src/webui/frontend/shared/runtime/pending-module-selection.jsx").read_text(encoding="utf-8")
+
+    assert 'if (!pending || pending.type !== "knowledge") return false;' in pending
+    assert 'var documentId = String(pending.docId || pending.id || "");' in pending
+    assert 'var directId = React.useRef("");' in pending
+    assert "pendingKnowledge.isDirect(currentId)" in library
+    assert 'window.addEventListener("cyrene:workbench-navigate", onNavigate);' in pending
+    assert "apply();" in pending
+    assert "createPendingMemorySelection" in memory
+    assert "pendingMemorySelection.capture();" in memory
+    assert "load({ background: !!cached }).then(applyPendingMemorySelection);" in memory
+    assert "var id = pendingId || capture(pending);" in pending
 
 
 def test_board_chat_cards_share_task_card_background():
@@ -8316,6 +8399,9 @@ def test_workbench_chat_context_and_browser_trace_have_dynamic_i18n_labels():
     assert "function wbcLocalizedToolName(toolName)" in chat
     assert '"workbenchChat.ctxBlock.system.root": "Agent instructions"' in i18n
     assert '"workbenchChat.ctxBlock.context.plugin_session": "插件会话上下文"' in i18n
+    assert '"workbenchChat.ctxBlock.context.persona": "人格"' in i18n
+    assert '"workbenchChat.ctxBlock.context.memory": "记忆"' in i18n
+    assert '"workbenchChat.ctxBlock.context.learned_skills": "已学习技能"' in i18n
     assert '"toolName.browser_user_events": "User browser operations"' in i18n
     assert '"toolName.browser_user_events": "用户浏览器操作"' in i18n
     assert '"toolName.browser_upload_files": "Upload files"' in i18n
@@ -8334,6 +8420,10 @@ def test_tool_i18n_fallbacks_do_not_leak_internal_keys_after_classic_removal():
   askUserZh: window.WorkbenchI18n.toolName("Ask User", "zh"),
   askUserEn: window.WorkbenchI18n.toolName("Ask User", "en"),
   globZh: window.WorkbenchI18n.toolName("Glob", "zh"),
+  browserToolsZh: window.WorkbenchI18n.toolName("browser_tools", "zh"),
+  skillToolsZh: window.WorkbenchI18n.toolName("skill_tools", "zh"),
+  codeToolsEn: window.WorkbenchI18n.toolName("code_tools", "en"),
+  cyreneToolsZh: window.WorkbenchI18n.toolName("cyrene_tools", "zh"),
   appSnapshot: window.WorkbenchI18n.toolName("AppUISnapshot", "zh"),
   powerPointShapesZh: window.WorkbenchI18n.toolName("PowerPointListShapes", "zh"),
   powerPointShapesEn: window.WorkbenchI18n.toolName("PowerPointListShapes", "en"),
@@ -8354,6 +8444,10 @@ def test_tool_i18n_fallbacks_do_not_leak_internal_keys_after_classic_removal():
         "askUserZh": "询问用户",
         "askUserEn": "Ask user",
         "globZh": "查找文件",
+        "browserToolsZh": "浏览器工具",
+        "skillToolsZh": "技能工具",
+        "codeToolsEn": "Code tools",
+        "cyreneToolsZh": "Cyrene 应用工具",
         "appSnapshot": "快照应用界面",
         "powerPointShapesZh": "列出页面元素",
         "powerPointShapesEn": "List slide elements",
@@ -8368,6 +8462,96 @@ def test_tool_i18n_fallbacks_do_not_leak_internal_keys_after_classic_removal():
     assert not (classic_root / "chat.jsx").exists()
     assert not (classic_root / "chat-surface.jsx").exists()
     assert not (classic_root / "evolution.jsx").exists()
+
+
+def test_all_builtin_model_visible_tools_have_frontend_i18n(tmp_path):
+    from agent.plugin import PluginRegistry
+    from agent.plugin.native_tools import seed_builtin_plugin_directory
+
+    root = Path(__file__).resolve().parent.parent
+    catalog_paths = {
+        lang: root
+        / "src"
+        / "webui"
+        / "frontend"
+        / "shared"
+        / "i18n"
+        / f"catalog-{lang}.jsx"
+        for lang in ("en", "zh")
+    }
+    catalogs = {
+        lang: set(
+            re.findall(
+                r'^\s*"toolName\.([^"\\]+)"\s*:',
+                path.read_text(encoding="utf-8"),
+                re.M,
+            )
+        )
+        for lang, path in catalog_paths.items()
+    }
+    alias_path = (
+        root
+        / "src"
+        / "webui"
+        / "frontend"
+        / "shared"
+        / "i18n"
+        / "tool-name-aliases.jsx"
+    )
+    aliases = dict(
+        re.findall(
+            r'^\s*"([^"\\]+)"\s*:\s*"([^"\\]+)"\s*,?$',
+            alias_path.read_text(encoding="utf-8"),
+            re.M,
+        )
+    )
+
+    plugin_directory = tmp_path / "plugin_impl"
+    seed_builtin_plugin_directory(plugin_directory)
+    registry = PluginRegistry()
+    assert registry.load_directory(plugin_directory) == ()
+    visible_tool_names = {
+        registered.plugin.name
+        for registered in registry.list_plugins()
+        if registered.plugin.kind == "tool" and registered.plugin.model_visible
+    }
+
+    for lang in ("en", "zh"):
+        missing = sorted(
+            name
+            for name in visible_tool_names
+            if name not in catalogs[lang] and aliases.get(name) not in catalogs[lang]
+        )
+        assert missing == [], (lang, missing)
+    assert catalogs["en"] == catalogs["zh"]
+    assert all(
+        target in catalogs["en"] and target in catalogs["zh"]
+        for target in aliases.values()
+    )
+
+    legacy_tool_groups = {
+        "browser_tools": "cyrene_browser",
+        "code_tools": "cyrene_code",
+        "collaboration_tools": "cyrene_subagent",
+        "cyrene_tools": "cyrene_application",
+        "delivery_tools": "cyrene_delivery",
+        "desktop_tools": "cyrene_desktop",
+        "entity_tools": "cyrene_entity",
+        "integration_tools": "cyrene_mcp",
+        "knowledge_tools": "cyrene_knowledge",
+        "map_tools": "cyrene_map",
+        "media_tools": "cyrene_media",
+        "memory_tools": "cyrene_memory",
+        "office_tools": "cyrene_office",
+        "registry_tools": "cyrene_extensions",
+        "remote_tools": "cyrene_remote",
+        "research_tools": "cyrene_knowledge",
+        "skill_tools": "cyrene_skills",
+        "subagent_tools": "cyrene_subagent",
+        "task_tools": "cyrene_task",
+        "work_tools": "cyrene_task",
+    }
+    assert legacy_tool_groups.items() <= aliases.items()
 
 
 def test_profile_top_tools_use_shared_tool_name_i18n():
@@ -8385,6 +8569,7 @@ def test_profile_top_tools_use_shared_tool_name_i18n():
 
 def test_settings_storage_keeps_last_snapshot_across_tab_remounts():
     overlay = workbench_settings_source()
+    i18n = workbench_i18n_source()
     storage = overlay.split("var DATA_PANEL_STORAGE_TTL_MS", 1)[1].split(
         "function resetData()", 1
     )[0]
@@ -8405,6 +8590,12 @@ def test_settings_storage_keeps_last_snapshot_across_tab_remounts():
     assert "if (mounted && !dataPanelStorageCache) setStorageError" in storage
     assert "return function () { mounted = false; };" in storage
     assert 'settingsFetch("/api/settings/storage")' in storage
+    assert 'extensions: "settings.storageExtensions"' in overlay
+    assert 'media: "settings.storageMedia"' in overlay
+    assert 'extensions: "#7c3aed"' in overlay
+    assert 'media: "#fb7185"' in overlay
+    assert i18n.count('"settings.storageExtensions"') == 2
+    assert i18n.count('"settings.storageMedia"') == 2
 
     settings_page = overlay.split("function SettingsPage(", 1)[1].split(
         "// ── Remote Control Panel", 1
@@ -8507,7 +8698,7 @@ wbcToolPreviewText("invoke, skill_tools, {'name': '播放首页推荐首个视�
 """
     )
 
-    assert result == "调用能力, skill_tools, name: 播放首页推荐首个视频, auto: True"
+    assert result == "调用能力, 技能工具, name: 播放首页推荐首个视频, auto: True"
 
 
 def test_workbench_chat_last_user_message_has_retry_action():
@@ -8931,7 +9122,7 @@ def test_workbench_task_panel_reuses_conversation_panel_structure_and_styles():
     assert 'html[data-theme="dark"] .wbc-page .wbc-side-card.wb-task-detail-card' in styles
     assert '"task.side.detailPanel": "Task panel"' in i18n
     assert '"task.side.detailPanel": "任务面板"' in i18n
-    assert "workbench.css?v=0.9.0-beta1" in index
+    assert "workbench.css?v=0.9.0-beta2" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -8953,7 +9144,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.9.0-beta1" in index
+    assert "workbench.css?v=0.9.0-beta2" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -9024,7 +9215,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta1"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta2"></script>' in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -9479,7 +9670,7 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     assert 'className={"wbc-send"' in chat
     assert ".wbc-send span" not in styles
     assert "transform: none;" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta1"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta2"></script>' in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -9491,7 +9682,7 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert 'window.prompt("后续任务标题"' not in source
     assert "model.createFollowUp(sid, options)" in source
     assert '"/follow-up"' in model
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta1"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta2"></script>' in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -9615,7 +9806,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "if (!response.ok)" in source
     assert 'requestJson("/api/settings/model-config")' in source
     assert "store.setConfig(snapshot);" in source
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta1"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta2"></script>' in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -11102,6 +11293,41 @@ def test_workbench_library_list_uses_explicit_pagination():
     assert "library.loadMore" in source
 
 
+def test_workbench_library_table_header_context_menu_controls_visible_columns():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(encoding="utf-8")
+    columns = (root / "src" / "webui" / "frontend" / "features" / "knowledge" / "library-columns.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench-library.css").read_text(encoding="utf-8")
+    english = (root / "src" / "webui" / "frontend" / "shared" / "i18n" / "catalog-en.jsx").read_text(encoding="utf-8")
+    chinese = (root / "src" / "webui" / "frontend" / "shared" / "i18n" / "catalog-zh.jsx").read_text(encoding="utf-8")
+
+    assert 'onContextMenu: function (event)' in columns.split("function LibraryTableHead", 1)[1].split("function useLibraryColumns", 1)[0]
+    assert "props.onColumnContextMenu(event)" in columns
+    assert 'window.localStorage.getItem("cyrene.library.tableColumns")' in columns
+    assert 'window.localStorage.setItem("cyrene.library.tableColumns"' in columns
+    assert 'role: "menuitemcheckbox"' in columns
+    assert "libraryTableGridTemplate(visible)" in source
+    assert "visibleColumns: visibleColumns" in source
+    assert "cursor: context-menu;" in styles
+    assert ".wb-lib-column-menu" in styles
+    assert '"library.displayedColumns": "Displayed columns"' in english
+    assert '"library.displayedColumns": "显示的列"' in chinese
+
+
+def test_workbench_library_table_columns_fill_space_without_wrapping_dates():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "features" / "knowledge" / "library-columns.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench-library.css").read_text(encoding="utf-8")
+
+    widths = source.split("var LIBRARY_TABLE_COLUMN_WIDTHS = {", 1)[1].split("};", 1)[0]
+    assert 'title: "minmax(0, 4fr)"' in widths
+    assert 'added: "minmax(118px, .85fr)"' in widths
+    assert 'tags: "minmax(0, .9fr)"' in widths
+    assert ".wb-lib-table-grid > * { min-width: 0; }" in styles
+    assert ".wb-lib-table-head > span, .wb-lib-row > span" in styles
+    assert "text-overflow: ellipsis; white-space: nowrap;" in styles
+
+
 def test_workbench_library_does_not_merge_stale_detail_when_switching_items():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(
@@ -11112,10 +11338,10 @@ def test_workbench_library_does_not_merge_stale_detail_when_switching_items():
         "detail && String(detail.id) === String(selectedId) ? detail : null"
         in source
     )
-    assert (
-        'function select(id) { setDetail(null); setSelectedId(String(id));'
-        in source
-    )
+    select = source.split("function select(id)", 1)[1].split("function replaceItem", 1)[0]
+    assert 'setDetail(null);' in select
+    assert 'setSelectedId(String(id));' in select
+    assert select.index("setDetail(null)") < select.index("setSelectedId(String(id))")
 
 
 def test_packaged_electron_preserves_explicit_runtime_path_overrides():
@@ -11535,7 +11761,7 @@ def test_workbench_assistant_message_mounts_charts_and_contract_teaches_chart():
     assert ".wbc-chart-spec" in styles
     assert ":::chart line" in contract
     assert "y-binds" in contract
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta1">' in index_html
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta2">' in index_html
     entry_html = (root / "src/webui/frontend/entry/app.jsx").read_text(encoding="utf-8")
     assert 'import "../shared/chart/spec.jsx"' in entry_html
     assert 'import "../shared/chart/mount.jsx"' in entry_html

@@ -629,6 +629,45 @@ def test_chat_summary_exposes_live_run_status_without_stale_running_state():
     assert summary["runStatus"] == "idle"
 
 
+def test_chat_summary_separates_latest_request_usage_from_lifetime_usage():
+    from cyrene.workbench.chat_application import public_chat_light as _public_chat_light
+
+    summary = _public_chat_light(
+        {
+            "id": "cache-rate-semantics-chat",
+            "projectId": "project-1",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "usage": {
+                        "prompt_tokens": 1000,
+                        "completion_tokens": 10,
+                        "total_tokens": 1010,
+                        "prompt_cache_hit_tokens": 0,
+                        "prompt_cache_miss_tokens": 1000,
+                    },
+                },
+                {
+                    "role": "assistant",
+                    "usage": {
+                        "prompt_tokens": 1010,
+                        "completion_tokens": 10,
+                        "total_tokens": 1020,
+                        "prompt_cache_hit_tokens": 1000,
+                        "prompt_cache_miss_tokens": 10,
+                    },
+                },
+            ],
+        },
+        composer_context=_ComposerContextStub(),
+    )
+
+    assert summary["usage"]["prompt_cache_hit_tokens"] == 1000
+    assert summary["usage"]["prompt_cache_miss_tokens"] == 1010
+    assert summary["latestUsage"]["prompt_cache_hit_tokens"] == 1000
+    assert summary["latestUsage"]["prompt_cache_miss_tokens"] == 10
+
+
 def test_chat_summary_preserves_failed_cancelled_and_awaiting_run_outcomes():
     from cyrene.workbench.chat_application import public_chat_light as _public_chat_light
 
@@ -963,4 +1002,5 @@ def test_resource_shelf_fills_topbar_gap_with_a_left_aligned_pin_hint():
     assert '<path d="M5 17h14" />' in empty_hint
     assert "width: 100%" in shelf_css
     assert "max-width: none" in shelf_css
+    assert "-webkit-app-region: no-drag" in shelf_css
     assert "margin-left: 0" in empty_hint_css

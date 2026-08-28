@@ -94,17 +94,28 @@ creating another state store.
 
 | Hook | Appropriate work |
 |---|---|
-| `SessionStart` | Build the run's context mounts |
+| `SessionStart` | Freeze stable context once when the conversation starts |
+| `TurnStart` | Build dynamic context for each user turn |
 | `ContextChange` / `ContextUsed` | React to tree changes, account for actual token use, and drive memory or compaction logic |
 | `PreToolUse` | Normalize, allow, or block tool arguments; use fail-closed behavior when failure must block |
 | `PostToolUse` | Persist a tool result, learning evidence, or activity state |
 | `SessionEnd` | Finalize asynchronous work after the durable result exists |
 | `Stop` | Stop plugin-owned tasks when the user cancels or the session closes |
 
+A `SessionStart` callable whose output depends on mutable stable input should
+attach a provider with `with_session_start_cache_fingerprint(hook, provider)`.
+The provider returns any JSON-serializable projection of those dependencies.
+The kernel treats it as opaque, combines it with Hook topology and pack
+implementation versions, and rebuilds the stable prefix once when the value
+changes. Bound Hook owners may instead implement
+`session_start_cache_fingerprint(event)` directly. This keeps SOUL, memory,
+learned skills, CLI Hooks, and third-party providers inside their own plugin
+boundaries.
+
 Input-box selections are not read independently by every provider.
 `cyrene_composer_context` is the single composer-context plugin: it persists the
 conversation's choices, then asks enabled workspace, MCP, and skills providers
-for their `SessionStart` contribution and produces an explicit mount. Plugin
+for their `TurnStart` contribution and produces an explicit mount. Plugin
 Center controls whether a plugin is available; the composer menu controls what
 this conversation selects; the tool menu controls **directly visible** versus
 **Agent finds and uses**. These are separate responsibilities.

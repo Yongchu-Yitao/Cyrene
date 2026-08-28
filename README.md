@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.9.0-beta1-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.9.0-beta2-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Status">
 </p>
@@ -66,12 +66,11 @@ empty ContextTree root
   = the Agent for this run
 ```
 
-At the start of each run, tree-local `SessionStart` Hooks mount ordered context
-blocks. The system-prompt block is first, SOUL sits immediately below it, and
-the remaining providers add only the workspace, MCP servers, skills, memories,
-attachments, and runtime state selected for that conversation. The input box's
-context menu is backed by the composer-context plugin, so changing a selection
-changes the next context build instead of editing a second hidden prompt.
+At the start of a conversation, tree-local `SessionStart` Hooks freeze the
+stable system prompt, SOUL, memory, and learned-skill prefix. Each `TurnStart`
+then appends only the workspace, MCP servers, attachments, runtime state, and
+other context selected for that turn. Stable bytes always lead the changing
+suffix so provider prompt caches can reuse the longest possible prefix.
 
 The model receives only the fixed kernel tools plus tools marked **directly
 visible**. Every other enabled toolbox or standalone tool remains available

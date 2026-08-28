@@ -812,7 +812,10 @@ class PluginRegistry:
 
     @staticmethod
     def _plugin_locked(registered: RegisteredPlugin) -> bool:
-        return registered.source == "core"
+        return (
+            registered.source == "core"
+            or registered.plugin.required
+        )
 
     def _registered_value(self, name: str) -> RegisteredPlugin:
         with self._lock:
@@ -831,7 +834,7 @@ class PluginRegistry:
         return registered
 
     def _registered_enabled(self, registered: RegisteredPlugin) -> bool:
-        if self._plugin_locked(registered):
+        if registered.source == "core":
             return True
         if not _user_source_available(
             registered.source,
@@ -843,6 +846,8 @@ class PluginRegistry:
             and not self.pack_configured_enabled(registered.pack_id)
         ):
             return False
+        if registered.plugin.required:
+            return True
         return self._activation.plugin_enabled(
             registered.plugin.canonical_name,
             default=bool(registered.plugin.metadata.get("default_enabled", True)),

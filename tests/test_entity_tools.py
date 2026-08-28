@@ -141,8 +141,8 @@ async def test_entity_pack_mounts_attention_context_only_for_proactive_runs(tmp_
         services={"entities": Entities()},
     ))
 
-    assert await hooks.session_start({"metadata": {}}) == ""
-    mounted = await hooks.session_start({"metadata": {"proactive": True}})
+    assert await hooks.turn_start({"metadata": {}}) == ""
+    mounted = await hooks.turn_start({"metadata": {"proactive": True}})
     assert "Publish release" in mounted
     assert "Choose rollout strategy" in mounted
     store.close()

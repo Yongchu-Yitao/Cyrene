@@ -87,6 +87,7 @@ class WorkbenchChatResult:
     text: str
     node_id: str
     usage: Mapping[str, int]
+    latest_request_usage: Mapping[str, int]
     model: str
     model_identity: Mapping[str, Any]
     generation_duration_ms: float | None
@@ -178,13 +179,17 @@ def _normalized_usage(raw: Any) -> dict[str, int]:
     }
 
 
+_TurnMetrics = tuple[
+    dict[str, int], dict[str, int], str, dict[str, Any], float | None, float | None
+]
+
+
 def _turn_metrics(
     snapshot: Mapping[str, Any],
     run_id: str,
     final_node_id: str,
-) -> tuple[dict[str, int], str, dict[str, Any], float | None, float | None]:
+) -> _TurnMetrics:
     """Project one Agent run's model usage without counting ContextTree nodes twice."""
-
     raw_nodes = snapshot.get("nodes")
     nodes = (
         [item for item in raw_nodes if isinstance(item, Mapping)]
@@ -197,6 +202,7 @@ def _turn_metrics(
         if str(item.get("id") or "")
     }
     totals = {key: 0 for key in _USAGE_KEYS}
+    latest_request_usage = {key: 0 for key in _USAGE_KEYS}
     model = ""
     model_identity: dict[str, Any] = {}
     model_calls: list[tuple[str, float]] = []
@@ -232,6 +238,7 @@ def _turn_metrics(
                 add_usage(entry.get("usage"))
                 remember_call(entry)
         if str(item.get("id") or "") == final_node_id:
+            latest_request_usage = _normalized_usage(value.get("usage"))
             model = str(value.get("model") or "")
             identity = value.get("model_identity")
             if isinstance(identity, Mapping):
@@ -274,12 +281,11 @@ def _turn_metrics(
         for observation_id, latency_ms in model_calls
         if not observation_id or observation_id not in observation_ids
     )
-
     duration = generation_duration_ms if generation_duration_ms > 0 else None
     rate = None
     if duration is not None and totals["completion_tokens"] > 0:
         rate = totals["completion_tokens"] * 1000.0 / duration
-    return totals, model, model_identity, duration, rate
+    return totals, latest_request_usage, model, model_identity, duration, rate
 
 
 def _turn_plan(snapshot: Mapping[str, Any], run_id: str) -> Any:
@@ -480,11 +486,69 @@ def _envelope(
     }
 
 
+def _stream_events(
+    event: AgentSessionEvent,
+    data: Mapping[str, Any],
+) -> tuple[dict[str, Any], ...] | None:
+    mapping = {
+        "assistant.stream.started": ("reply_start", "stream", "started", None),
+        "assistant.stream.delta": ("reply_delta", "stream", "delta", "delta"),
+        "assistant.stream.done": ("reply_done", "stream", "done", "response"),
+        "assistant.reasoning.started": ("reasoning_start", "reasoning", "started", None),
+        "assistant.reasoning.delta": ("reasoning_delta", "reasoning", "delta", "delta"),
+        "assistant.reasoning.done": ("reasoning_done", "reasoning", "done", "response"),
+    }
+    projection = mapping.get(event.type)
+    if projection is None:
+        return None
+    event_type, channel, phase, content_key = projection
+    payload = {
+        **_envelope(
+            event,
+            event_type,
+            f"agent:{event.tree_id}:{event.run_id}:{channel}:{event.sequence}:{phase}",
+        ),
+        "type": event_type,
+    }
+    if content_key is not None:
+        payload[content_key] = str(data.get(content_key) or "")
+    return (payload,)
+
+
+def _assistant_completed_events(
+    event: AgentSessionEvent,
+    data: Mapping[str, Any],
+    event_id: str,
+) -> tuple[dict[str, Any], ...]:
+    if data.get("intermediate") is True:
+        return ()
+    content = str(data.get("content") or "")
+    completed = {
+        **_envelope(event, "reply_done", event_id + ":completed"),
+        "type": "reply_done",
+        "response": content,
+    }
+    if data.get("streamed") is True:
+        return (completed,)
+    return (
+        {**_envelope(event, "reply_start", event_id + ":started"), "type": "reply_start"},
+        {
+            **_envelope(event, "reply_delta", event_id + ":delta"),
+            "type": "reply_delta",
+            "delta": content,
+        },
+        completed,
+    )
+
+
 def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
     """Project one Agent observation into the versioned Workbench Chat protocol."""
 
     data = dict(event.data)
     event_id = f"agent:{event.tree_id}:{event.node_id or event.sequence}:{event.type}"
+    stream_projection = _stream_events(event, data)
+    if stream_projection is not None:
+        return stream_projection
     if event.type == "input.accepted":
         return (_envelope(event, "run.started", event_id, {"status": "running"}),)
     if event.type == "input.answered":
@@ -600,25 +664,7 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
             )
         return tuple(projected)
     if event.type == "assistant.completed":
-        if data.get("intermediate") is True:
-            return ()
-        content = str(data.get("content") or "")
-        return (
-            {
-                **_envelope(event, "reply_start", event_id + ":started"),
-                "type": "reply_start",
-            },
-            {
-                **_envelope(event, "reply_delta", event_id + ":delta"),
-                "type": "reply_delta",
-                "delta": content,
-            },
-            {
-                **_envelope(event, "reply_done", event_id + ":completed"),
-                "type": "reply_done",
-                "response": content,
-            },
-        )
+        return _assistant_completed_events(event, data, event_id)
     if event.type == "run.failed":
         message = str(data.get("content") or data.get("error") or "Agent run failed")
         return (
@@ -731,6 +777,7 @@ class WorkbenchSessionBridge:
         plugin_directory: str | Path,
         *,
         registry: PluginRegistry,
+        load_plugins: bool = True,
         model_plugin: str,
         chat_id: str,
         host_context: Mapping[str, Any] | None = None,
@@ -744,6 +791,7 @@ class WorkbenchSessionBridge:
                 workspace,
                 plugin_directory,
                 registry=registry,
+                load_plugins=load_plugins,
                 model_plugin=model_plugin,
                 tree_id=str(chat_id),
                 host_context=host_context,
@@ -786,7 +834,7 @@ class WorkbenchSessionBridge:
             raise AgentSessionRunError(str(output.get("content") or "Agent run failed"))
         node_id = str(output.get("node_id") or "")
         snapshot = self.session.snapshot()
-        usage, model, identity, generation_duration_ms, rate = _turn_metrics(
+        usage, latest_usage, model, identity, generation_duration_ms, rate = _turn_metrics(
             snapshot,
             str(run_id),
             node_id,
@@ -798,6 +846,7 @@ class WorkbenchSessionBridge:
             text=str(output.get("content") or ""),
             node_id=node_id,
             usage=usage,
+            latest_request_usage=latest_usage,
             model=model,
             model_identity=identity,
             generation_duration_ms=generation_duration_ms,
@@ -823,7 +872,7 @@ class WorkbenchSessionBridge:
             if isinstance(item, Mapping) and str(item.get("id") or "") == node_id:
                 parent_id = str(item.get("parent_id") or "")
                 break
-        usage, model, identity, generation_duration_ms, rate = _turn_metrics(
+        usage, latest_usage, model, identity, generation_duration_ms, rate = _turn_metrics(
             snapshot,
             str(run_id),
             parent_id,
@@ -834,6 +883,7 @@ class WorkbenchSessionBridge:
             text=pending.text,
             node_id=node_id,
             usage=usage,
+            latest_request_usage=latest_usage,
             model=model,
             model_identity=identity,
             generation_duration_ms=generation_duration_ms,

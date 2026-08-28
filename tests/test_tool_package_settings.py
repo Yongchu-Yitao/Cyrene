@@ -87,6 +87,22 @@ def test_settings_api_exposes_registry_packs_and_standalone_plugins(monkeypatch,
     core = next(item for item in payload["packs"] if item["id"] == "core")
     assert core["locked"] is True
     assert core["source"] == "core"
+    infrastructure = {
+        item["id"]: item
+        for item in payload["packs"]
+        if item["id"] in {"cyrene_channels", "cyrene_composer_context"}
+    }
+    assert set(infrastructure) == {
+        "cyrene_channels",
+        "cyrene_composer_context",
+    }
+    assert all(item["plugin_count"] == 1 for item in infrastructure.values())
+    assert all(len(item["plugins"]) == 1 for item in infrastructure.values())
+    assert all(item["plugins"][0]["locked"] for item in infrastructure.values())
+    assert all(
+        item["plugins"][0]["model_visible"] is False
+        for item in infrastructure.values()
+    )
 
     plugins = {item["name"]: item for item in payload["plugins"]}
     assert plugins["toolbox"]["pack_id"] == "core"

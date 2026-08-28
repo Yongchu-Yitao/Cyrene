@@ -662,12 +662,10 @@ def parse_response(adapter_id: str, data: dict[str, Any]) -> dict[str, Any]:
     return message
 
 
-async def _sse_payloads(response: httpx.Response):
+async def _stream_payloads(response: httpx.Response):
     async for raw_line in response.aiter_lines():
         line = str(raw_line or "").strip()
-        if not line.startswith("data:"):
-            continue
-        value = line[5:].strip()
+        value = line[5:].strip() if line.startswith("data:") else line
         if not value or value == "[DONE]":
             continue
         try:
@@ -676,6 +674,93 @@ async def _sse_payloads(response: httpx.Response):
             continue
         if isinstance(data, dict):
             yield data
+
+
+async def _openai_chat_stream_event(
+    adapter: str,
+    data: dict[str, Any],
+    emit_text: Callable[[str], Awaitable[None]],
+    callback: Callable[[dict[str, Any]], Awaitable[None]] | None,
+    reasoning_parts: list[str],
+    tool_calls: dict[str, dict[str, Any]],
+    usage: dict[str, int],
+    reasoning_started: bool,
+) -> tuple[str, bool]:
+    choices = data.get("choices") if isinstance(data.get("choices"), list) else []
+    choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+    delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
+    if not delta and isinstance(choice.get("message"), dict):
+        delta = choice["message"]
+    await emit_text(str(delta.get("content") or ""))
+    reasoning = str(delta.get("reasoning_content") or delta.get("reasoning") or "")
+    if not reasoning:
+        details = delta.get("reasoning_details")
+        reasoning = "".join(
+            str(detail.get("text") or "")
+            for detail in details
+            if isinstance(detail, dict)
+        ) if isinstance(details, list) else ""
+    if reasoning:
+        if callback and not reasoning_started:
+            await callback({"type": "reasoning_start"})
+            reasoning_started = True
+        reasoning_parts.append(reasoning)
+        if callback:
+            await callback({"type": "reasoning_delta", "delta": reasoning})
+    raw_calls = delta.get("tool_calls")
+    for raw_call in raw_calls if isinstance(raw_calls, list) else ():
+        if not isinstance(raw_call, dict):
+            continue
+        key = str(raw_call.get("index") or 0)
+        function = raw_call.get("function") if isinstance(raw_call.get("function"), dict) else {}
+        call = tool_calls.setdefault(key, {
+            "id": str(raw_call.get("id") or f"call_{uuid.uuid4().hex}"),
+            "name": "",
+            "arguments": "",
+        })
+        if raw_call.get("id"):
+            call["id"] = str(raw_call["id"])
+        if function.get("name"):
+            call["name"] += str(function["name"])
+        if function.get("arguments"):
+            call["arguments"] += str(function["arguments"])
+    if isinstance(data.get("usage"), dict):
+        usage.update(_usage(adapter, data))
+    return str(choice.get("finish_reason") or ""), reasoning_started
+
+
+def _completed_stream_message(
+    text_parts: list[str],
+    reasoning_parts: list[str],
+    tool_calls: dict[str, dict[str, Any]],
+    usage: dict[str, int],
+    finish: str,
+    response_id: str,
+    returned_model: str,
+) -> dict[str, Any]:
+    message: dict[str, Any] = {
+        "role": "assistant",
+        "content": "".join(text_parts),
+        "usage": usage,
+    }
+    if reasoning_parts:
+        message["reasoning_content"] = "".join(reasoning_parts)
+    if tool_calls:
+        message["tool_calls"] = [
+            {
+                "id": value["id"],
+                "type": "function",
+                "function": {"name": value["name"], "arguments": value["arguments"] or "{}"},
+            }
+            for _key, value in sorted(tool_calls.items(), key=lambda item: item[0])
+        ]
+    if finish:
+        message["finish_reason"] = "length" if finish.lower() in {"max_tokens", "max_tokens_reached"} else finish.lower()
+    if response_id:
+        message["response_id"] = response_id
+    if returned_model:
+        message["model"] = returned_model
+    return message
 
 
 async def handle_stream(
@@ -696,6 +781,8 @@ async def handle_stream(
     tool_calls: dict[str, dict[str, Any]] = {}
     usage: dict[str, int] = {}
     finish = ""
+    response_id = ""
+    returned_model = ""
     started = False
     reasoning_started = False
 
@@ -714,9 +801,11 @@ async def handle_stream(
         if timing is not None:
             timing["response_headers_ms"] = (time.monotonic() - request_started) * 1000
         response.raise_for_status()
-        async for data in _sse_payloads(response):
+        async for data in _stream_payloads(response):
             if timing is not None and "ttft_ms" not in timing:
                 timing["ttft_ms"] = (time.monotonic() - request_started) * 1000
+            response_id = str(data.get("id") or response_id)
+            returned_model = str(data.get("model") or returned_model)
             if adapter == "anthropic":
                 event_type = str(data.get("type") or "")
                 if event_type == "message_start":
@@ -806,6 +895,12 @@ async def handle_stream(
                     }
                 usage.update(parsed.get("usage") or {})
                 finish = str(parsed.get("finish_reason") or finish)
+            elif adapter in OPENAI_CHAT_ADAPTERS:
+                event_finish, reasoning_started = await _openai_chat_stream_event(
+                    adapter, data, emit_text, callback, reasoning_parts,
+                    tool_calls, usage, reasoning_started,
+                )
+                finish = event_finish or finish
 
     if not started and callback:
         await callback({"type": "reply_start"})
@@ -813,21 +908,10 @@ async def handle_stream(
         await callback({"type": "reasoning_done", "response": "".join(reasoning_parts)})
     if callback:
         await callback({"type": "reply_done", "response": "".join(text_parts)})
-    message: dict[str, Any] = {"role": "assistant", "content": "".join(text_parts), "usage": usage}
-    if reasoning_parts:
-        message["reasoning_content"] = "".join(reasoning_parts)
-    if tool_calls:
-        message["tool_calls"] = [
-            {
-                "id": value["id"],
-                "type": "function",
-                "function": {"name": value["name"], "arguments": value["arguments"] or "{}"},
-            }
-            for _key, value in sorted(tool_calls.items(), key=lambda item: item[0])
-        ]
-    if finish:
-        message["finish_reason"] = "length" if finish.lower() in {"max_tokens", "max_tokens_reached"} else finish.lower()
-    return message
+    return _completed_stream_message(
+        text_parts, reasoning_parts, tool_calls, usage, finish,
+        response_id, returned_model,
+    )
 
 
 __all__ = [

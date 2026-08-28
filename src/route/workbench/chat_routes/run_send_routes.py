@@ -762,11 +762,7 @@ class _SendOperation:
 
         from agent.commands import command_system_prompt
 
-        memory_snapshot = (
-            self.chat.get("projectMemorySnapshot")
-            if isinstance(self.chat.get("projectMemorySnapshot"), dict)
-            else None
-        )
+        memory_snapshot = self.service.ensure_chat_memory_snapshot(self.chat)
         turn_system_extras = [
             command_system_prompt(self.command),
             self.dynamic_command_prompt,
@@ -839,6 +835,7 @@ class _SendOperation:
             publish=run.publish,
         )
         self.external.usage = dict(result.usage)
+        self.external.latest_request_usage = dict(result.latest_request_usage)
         self.external.model = str(result.model or "")
         self.external.model_identity = dict(result.model_identity)
         self.external.generation_duration_ms = result.generation_duration_ms

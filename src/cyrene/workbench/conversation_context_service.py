@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from agent.plugin import plugin_public_session_snapshot
+from agent.context.projection import (
+    context_is_turn,
+    project_context_message,
+    selected_context_node_ids,
+)
 from cyrene.localization import localized
 
 logger = logging.getLogger(__name__)
@@ -66,9 +71,8 @@ def _agent_path_messages(nodes: list[Any]) -> list[dict[str, Any]]:
     """Project one ContextTree path into the messages sent to the model."""
 
     messages: list[dict[str, Any]] = []
-    current_context_ids = {
-        node.id for node in _agent_active_context_nodes(nodes)
-    }
+    current_run_id = _agent_current_run_id(nodes)
+    active_context_ids = selected_context_node_ids(nodes, current_run_id)
     for node in nodes:
         value = node.value if isinstance(node.value, Mapping) else {}
         role = str(value.get("role") or "")
@@ -85,26 +89,12 @@ def _agent_path_messages(nodes: list[Any]) -> list[dict[str, Any]]:
             messages.append({"role": role, "content": str(value.get("content") or "")})
             continue
         if role == "context":
-            if node.id not in current_context_ids:
+            if node.id not in active_context_ids:
                 continue
             content = str(value.get("content") or "").strip()
             if not content:
                 continue
-            system_message = next(
-                (
-                    message
-                    for message in messages
-                    if str(message.get("role") or "") == "system"
-                ),
-                None,
-            )
-            if system_message is None:
-                messages.insert(0, {"role": "system", "content": content})
-            else:
-                current = str(system_message.get("content") or "").strip()
-                system_message["content"] = "\n\n".join(
-                    part for part in (current, content) if part
-                )
+            project_context_message(messages, value)
             continue
         if role == "assistant":
             message: dict[str, Any] = {
@@ -289,22 +279,22 @@ def _agent_ephemeral_tokens(
     extra = str(ephemeral_context or "").strip()
     if not extra:
         return 0
-    system = next(
+    user = next(
         (
             message
-            for message in messages
-            if str(message.get("role") or "") == "system"
+            for message in reversed(messages)
+            if str(message.get("role") or "") == "user"
         ),
         None,
     )
-    if system is None:
+    if user is None:
         return sum(
             _agent_context_segments(
-                [{"role": "system", "content": extra}],
+                [{"role": "user", "content": extra}],
                 approx_token_count,
             ).values()
         )
-    current = str(system.get("content") or "").strip()
+    current = str(user.get("content") or "").strip()
     merged = "\n\n".join(part for part in (current, extra) if part)
     return max(
         0,
@@ -328,6 +318,76 @@ def _agent_ephemeral_is_mounted(
         for mount in (mounts if isinstance(mounts, list) else ())
         if isinstance(mount, Mapping)
     )
+
+
+def _agent_turn_context_layer(
+    state: Mapping[str, Any],
+    messages: list[dict[str, Any]],
+    approx_token_count: Callable[[str], int],
+) -> tuple[dict[str, Any] | None, int]:
+    mounts = [
+        dict(mount)
+        for mount in state.get("contextMounts") or ()
+        if isinstance(mount, Mapping)
+        and context_is_turn({
+            "context_lifecycle": mount.get("lifecycle"),
+            "context_kind": mount.get("kind"),
+            "context_source": mount.get("source"),
+        })
+        and str(mount.get("content") or "").strip()
+    ]
+    if not mounts:
+        return None, 0
+    tail = "\n\n".join(str(mount["content"]).strip() for mount in mounts)
+    user = next(
+        (
+            message
+            for message in reversed(messages)
+            if str(message.get("role") or "") == "user"
+        ),
+        None,
+    )
+    merged = str(user.get("content") or "").strip() if user is not None else tail
+    base = merged
+    if merged == tail:
+        base = ""
+    elif merged.endswith("\n\n" + tail):
+        base = merged[: -(len(tail) + 2)].rstrip()
+    tokens = max(
+        0,
+        int(approx_token_count(merged) or 0)
+        - int(approx_token_count(base) or 0),
+    )
+    if tokens <= 0:
+        return None, 0
+    weights = [
+        max(1, int(approx_token_count(str(mount["content"])) or 0))
+        for mount in mounts
+    ]
+    total_weight = sum(weights)
+    allocations = [tokens * weight // total_weight for weight in weights]
+    for index in range(tokens - sum(allocations)):
+        allocations[index % len(allocations)] += 1
+    blocks = [
+        {
+            "id": f"context.{mount.get('kind') or 'turn'}",
+            "type": "ephemeral",
+            "tokens_est": allocation,
+            "chars": len(str(mount.get("content") or "")),
+            "contextKind": str(mount.get("kind") or "turn_context"),
+            "source": str(mount.get("source") or "TurnStart"),
+            "reason": str(mount.get("kind") or "turn_context"),
+        }
+        for mount, allocation in zip(mounts, allocations, strict=True)
+        if allocation > 0
+    ]
+    return ({
+        "id": "turn_context",
+        "label": localized("Turn Context", "每轮上下文"),
+        "sublabel": None,
+        "blocks": blocks,
+        "totalTokens": tokens,
+    }, tokens)
 
 
 def _agent_latest_ephemeral_context(path: list[Any]) -> str:
@@ -362,7 +422,29 @@ def _agent_latest_ephemeral_context(path: list[Any]) -> str:
     )
 
 
-def _agent_path_plugin_usage(nodes: list[Any]) -> tuple[list[str], list[str]]:
+def _active_plugin_owner(name: str) -> tuple[str | None, str] | None:
+    """Resolve one executed direct tool to its live Plugin owner."""
+
+    normalized = str(name or "").strip()
+    if not normalized:
+        return None
+    try:
+        from agent.plugin import active_plugin_application_host
+
+        host = active_plugin_application_host()
+        if host is None:
+            return None
+        registered = host.registry.registered(normalized)
+    except Exception:
+        return None
+    pack_id = str(registered.pack_id or "").strip() or None
+    return pack_id, str(registered.plugin.name or normalized).strip() or normalized
+
+
+def _agent_path_plugin_usage(
+    nodes: list[Any],
+    plugin_owner: Callable[[str], tuple[str | None, str] | None] | None = None,
+) -> tuple[list[str], list[str]]:
     packs: list[str] = []
     standalone: list[str] = []
     seen_packs: set[str] = set()
@@ -378,19 +460,30 @@ def _agent_path_plugin_usage(nodes: list[Any]) -> tuple[list[str], list[str]]:
             return
         if call_id:
             seen_calls.add(call_key)
+        result_name = str(result.get("name") or "").strip()
         toolbox_value = result.get("value")
         if (
-            str(result.get("name") or "") != "toolbox"
-            or not isinstance(toolbox_value, Mapping)
-            or toolbox_value.get("operation") != "invoke"
+            result_name == "toolbox"
+            and isinstance(toolbox_value, Mapping)
+            and toolbox_value.get("operation") == "invoke"
         ):
+            pack_id = str(toolbox_value.get("pack") or "").strip()
+            plugin_name = str(toolbox_value.get("name") or "").strip()
+        else:
+            owner = plugin_owner(result_name) if plugin_owner is not None else None
+            if owner is None:
+                return
+            raw_pack_id, raw_plugin_name = owner
+            pack_id = str(raw_pack_id or "").strip()
+            plugin_name = str(raw_plugin_name or result_name).strip()
+        if not pack_id and not plugin_name:
             return
-        pack_id = str(toolbox_value.get("pack") or "").strip()
-        plugin_name = str(toolbox_value.get("name") or "").strip()
-        if pack_id and pack_id not in seen_packs:
-            seen_packs.add(pack_id)
-            packs.append(pack_id)
-        elif plugin_name and plugin_name not in seen_standalone:
+        if pack_id:
+            if pack_id not in seen_packs:
+                seen_packs.add(pack_id)
+                packs.append(pack_id)
+            return
+        if plugin_name and plugin_name not in seen_standalone:
             seen_standalone.add(plugin_name)
             standalone.append(plugin_name)
 
@@ -428,8 +521,16 @@ def _agent_context_limit_key(state: Mapping[str, Any], fallback: str) -> str:
 class AgentContextRepository:
     """Read the new Agent kernel's durable ContextTree without opening a session."""
 
-    def __init__(self, context_directory: str | Path) -> None:
+    def __init__(
+        self,
+        context_directory: str | Path,
+        *,
+        plugin_owner: Callable[
+            [str], tuple[str | None, str] | None
+        ] | None = None,
+    ) -> None:
         self.context_directory = Path(context_directory).expanduser().resolve()
+        self.plugin_owner = plugin_owner or _active_plugin_owner
 
     def read(self, tree_id: str) -> dict[str, Any]:
         target = str(tree_id or "").strip()
@@ -521,13 +622,17 @@ class AgentContextRepository:
             else {}
         )
         ephemeral_context = _agent_latest_ephemeral_context(path)
-        used_packs, used_standalone = _agent_path_plugin_usage(path)
+        used_packs, used_standalone = _agent_path_plugin_usage(
+            path,
+            self.plugin_owner,
+        )
         context_mounts = [
             {
                 "id": node.id,
                 "kind": str(node.value.get("context_kind") or "context"),
                 "content": str(node.value.get("content") or ""),
                 "source": str(node.value.get("context_source") or "context_tree"),
+                "lifecycle": str(node.value.get("context_lifecycle") or ""),
             }
             for node in _agent_active_context_nodes(path)
             if isinstance(node.value, Mapping)
@@ -582,6 +687,7 @@ class AgentContextRepository:
                 mounted_system_prompt
                 or str(root_value.get("content") or "")
             ),
+            "rootSystemPrompt": str(root_value.get("content") or ""),
             "usage": _agent_path_usage(path),
             "model": model,
             "modelIdentity": model_identity,
@@ -739,6 +845,12 @@ def _agent_system_prefix_layer(
     for mount in raw_mounts if isinstance(raw_mounts, list) else ():
         if not isinstance(mount, Mapping):
             continue
+        if context_is_turn({
+            "context_lifecycle": mount.get("lifecycle"),
+            "context_kind": mount.get("kind"),
+            "context_source": mount.get("source"),
+        }):
+            continue
         content = str(mount.get("content") or "")
         tokens = max(0, int(approx_token_count(content) or 0))
         if tokens <= 0:
@@ -765,13 +877,34 @@ def _agent_system_prefix_layer(
             "source": str(mount.get("source") or "context_tree"),
             "reason": kind,
         })
-    root_tokens = max(0, system_tokens - context_tokens)
+    root_content = str(
+        state.get("rootSystemPrompt")
+        if "rootSystemPrompt" in state
+        else state.get("systemPrompt") or ""
+    )
+    root_content_tokens = min(
+        max(0, system_tokens - context_tokens),
+        max(0, int(approx_token_count(root_content) or 0)),
+    )
+    overhead_tokens = max(
+        0,
+        system_tokens - context_tokens - root_content_tokens,
+    )
     system_blocks = _system_prompt_blocks(
-        str(state.get("systemPrompt") or system_message.get("content") or ""),
-        root_tokens,
+        root_content,
+        root_content_tokens,
         approx_token_count,
     )
     system_blocks.extend(context_blocks)
+    if overhead_tokens > 0:
+        system_blocks.append({
+            "id": "system.message_overhead",
+            "type": "overhead",
+            "tokens_est": overhead_tokens,
+            "chars": 0,
+            "source": "message_envelope",
+            "reason": "message_overhead",
+        })
     return ({
         "id": "system_prefix",
         "label": localized("System Prefix", "系统前缀"),
@@ -961,7 +1094,7 @@ class ConversationContextQueryService:
         segments = _agent_context_segments(messages, self.approx_token_count)
         ephemeral = str(state.get("ephemeralContext") or "").strip()
         if ephemeral and not _agent_ephemeral_is_mounted(state, ephemeral):
-            segments["system"] = int(segments.get("system") or 0) + (
+            segments["user"] = int(segments.get("user") or 0) + (
                 _agent_ephemeral_tokens(
                     messages,
                     ephemeral,
@@ -1036,6 +1169,13 @@ class ConversationContextQueryService:
         layers: list[dict[str, Any]] = []
         if system_layer is not None:
             layers.append(system_layer)
+        turn_layer, turn_tokens = _agent_turn_context_layer(
+            state,
+            messages,
+            self.approx_token_count,
+        )
+        if turn_layer is not None:
+            layers.append(turn_layer)
         ephemeral = str(state.get("ephemeralContext") or "").strip()
         if ephemeral and not _agent_ephemeral_is_mounted(state, ephemeral):
             tokens = _agent_ephemeral_tokens(
@@ -1059,6 +1199,7 @@ class ConversationContextQueryService:
             conversation_messages,
             self.approx_token_count,
         )
+        segments["user"] = max(0, int(segments.get("user") or 0) - turn_tokens)
         message_total = sum(segments.values())
         message_layer = _message_layer(segments, message_total)
         if message_layer is not None:

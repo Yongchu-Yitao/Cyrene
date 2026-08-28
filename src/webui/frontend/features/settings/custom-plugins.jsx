@@ -81,6 +81,16 @@ function MoreIcon() {
   )
 }
 
+function DisclosureIcon(props) {
+  return React.createElement("svg", {
+    className: "wb-registry-pack-chevron" + (props.expanded ? " expanded" : ""),
+    viewBox: "0 0 24 24", width: 20, height: 20, "aria-hidden": "true",
+  }, React.createElement("path", {
+    d: "M6 9l6 6 6-6", fill: "none", stroke: "currentColor", strokeWidth: 2,
+    strokeLinecap: "round", strokeLinejoin: "round",
+  }))
+}
+
 function useToolMenuDismissal(open, setOpen, menuRootRef, triggerRef) {
   useEffectSt(function () {
     if (!open) return undefined
@@ -407,23 +417,54 @@ function PluginPackCard(props) {
   var pack = props.pack
   var packId = String(pack.id || "")
   var members = Array.isArray(pack.plugins) ? pack.plugins : []
-  return React.createElement("article", { className: "wb-extension-card wb-registry-pack-card" },
+  var [expanded, setExpanded] = useStateSt(false)
+  var packName = packLabel(pack, c.t)
+  var membersId = "wb-registry-pack-members-" + encodeURIComponent(packId)
+  var disclosureLabel = expanded
+    ? c.t("settings.collapsePackage", { name: packName }, "Collapse " + packName)
+    : c.t("settings.expandPackage", { name: packName }, "Expand " + packName)
+  function toggleFromCard(event) {
+    if (!members.length) return
+    var interactive = event.target && event.target.closest && event.target.closest([
+      "button", "a", "input", "select", "textarea", "label", "form",
+      "[role='button']", "[role='switch']", "[role='menuitem']", "[role='dialog']",
+      "[contenteditable='true']", ".wb-tool-dialog-backdrop",
+    ].join(","))
+    if (interactive) return
+    setExpanded(function (value) { return !value })
+  }
+  function toggleFromDisclosure() {
+    setExpanded(function (value) { return !value })
+  }
+  return React.createElement("article", {
+    className: "wb-extension-card wb-registry-pack-card", onClick: toggleFromCard,
+  },
     React.createElement("div", { className: "wb-extension-card-main" },
-      React.createElement("span", { className: "wb-extension-glyph extension-agent", "aria-hidden": "true" },
-        React.createElement("span", { className: "wb-extension-glyph-text" }, packLabel(pack, c.t).slice(0, 1).toUpperCase())),
-      React.createElement("div", { className: "wb-extension-copy" },
-        React.createElement("div", { className: "wb-extension-title-row" },
-          React.createElement("strong", null, packLabel(pack, c.t)), React.createElement(RegistryBadges, { item: pack, t: c.t })),
-        React.createElement("span", { className: "wb-extension-description" }, itemDescription(pack, c.t, true)),
-        React.createElement("div", { className: "wb-extension-meta" },
-          React.createElement("code", { title: pack.source_path || "" }, packId),
-          React.createElement("span", null, c.t("settings.pluginMemberCount", { n: members.length }, String(members.length) + " plugins")))
+      React.createElement("div", { className: "wb-registry-pack-summary" },
+        React.createElement("span", { className: "wb-extension-glyph extension-agent", "aria-hidden": "true" },
+          React.createElement("span", { className: "wb-extension-glyph-text" }, packName.slice(0, 1).toUpperCase())),
+        React.createElement("span", { className: "wb-extension-copy" },
+          React.createElement("span", { className: "wb-extension-title-row" },
+            React.createElement("strong", null, packName), React.createElement(RegistryBadges, { item: pack, t: c.t })),
+          React.createElement("span", { className: "wb-extension-description" }, itemDescription(pack, c.t, true)),
+          React.createElement("span", { className: "wb-extension-meta" },
+            React.createElement("code", { title: pack.source_path || "" }, packId),
+            React.createElement("span", null, c.t("settings.pluginMemberCount", { n: members.length }, String(members.length) + " plugins")))
+        )
       ),
       React.createElement("div", { className: "wb-extension-actions" },
         Toggle(configuredEnabled(pack), function () { c.updateEnabled("pack", pack, !configuredEnabled(pack)) },
-          c.disabled || pack.locked === true, packLabel(pack, c.t)))
+          c.disabled || pack.locked === true, packName)),
+      members.length > 0 && React.createElement("button", {
+        type: "button", className: "wb-registry-pack-disclosure",
+        "aria-expanded": expanded ? "true" : "false", "aria-controls": membersId,
+        "aria-label": disclosureLabel, title: disclosureLabel,
+        onClick: toggleFromDisclosure,
+      }, React.createElement(DisclosureIcon, { expanded: expanded }))
     ),
-    members.length > 0 && React.createElement("div", { className: "wb-registry-pack-members" }, members.map(function (item) {
+    members.length > 0 && React.createElement("div", {
+      className: "wb-registry-pack-members", id: membersId, hidden: !expanded,
+    }, members.map(function (item) {
       return React.createElement(RegistryMember, { key: item.id || item.name, item: item, t: c.t,
         disabled: c.disabled, parentEnabled: effectiveEnabled(pack), onToggle: c.updateEnabled,
         onUpdate: c.updateTool, onDelete: c.deleteTool })

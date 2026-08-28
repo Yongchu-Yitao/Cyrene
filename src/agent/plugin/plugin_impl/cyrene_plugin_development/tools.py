@@ -590,7 +590,8 @@ from agent.plugin import PluginSetupContext
 
 def setup_context(context: PluginSetupContext) -> None:
     async def mount(_event: HookEvent) -> dict[str, str]:
-        # Read dynamic values from context.data/services here when needed.
+        # Keep SessionStart output stable. Use TurnStart for per-turn values;
+        # attach a cache fingerprint provider for mutable stable dependencies.
         return {{"context": {mounted!r}}}
 
     existing = {{item.id for item in context.hooks.list()}}

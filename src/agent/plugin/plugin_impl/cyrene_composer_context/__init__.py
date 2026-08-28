@@ -3,6 +3,7 @@
 from agent.plugin import PluginApplicationContext, PluginPack
 
 from .context_mount import setup_composer_context
+from .mount_plugin import plugin as mount_plugin
 
 
 def application_setup(context: PluginApplicationContext) -> None:
@@ -16,7 +17,7 @@ plugin_pack = PluginPack(
     description=(
         "Validate and mount context explicitly selected in the message composer."
     ),
-    plugins=(),
+    plugins=(mount_plugin,),
     setup=setup_composer_context,
     application_setup=application_setup,
     metadata={
@@ -41,4 +42,9 @@ plugin_pack = PluginPack(
 )
 
 
-__all__ = ["application_setup", "plugin_pack", "setup_composer_context"]
+__all__ = [
+    "application_setup",
+    "mount_plugin",
+    "plugin_pack",
+    "setup_composer_context",
+]

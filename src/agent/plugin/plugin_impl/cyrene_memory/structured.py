@@ -121,12 +121,23 @@ _MEMORY_RESULT_TOOL_DEF: dict[str, Any] = {
                                 "type": "string",
                                 "enum": list(_CONFIDENCE_LABELS),
                             },
+                            "evidence": {
+                                "type": "string",
+                                "description": (
+                                    "An exact supporting quote copied from the user message or verified tool evidence."
+                                ),
+                            },
                             "tags": {
                                 "type": "array",
                                 "items": {"type": "string"},
                             },
                         },
-                        "required": ["content", "category", "confidence"],
+                        "required": [
+                            "content",
+                            "category",
+                            "confidence",
+                            "evidence",
+                        ],
                         "additionalProperties": False,
                     },
                 },
@@ -842,6 +853,7 @@ _EXTRACT_SYSTEM_PROMPT_ZH = """\
 
 每条记忆的字段：
 - content: %(content_lang_hint)s。简洁、自包含、不含具体某次任务的临时细节。
+- evidence: 必须逐字复制自 user_message 或 verified_tool_evidence 的证据原文；不得引用 assistant_summary。没有这样的证据就不要提交该记忆。
 - category: 从这五个里选一个，按"这条信息是关于什么的"来分：
   * habit（工作习惯）—— 用户推进工作 / 做事的重复方式或对执行的固定要求。例：习惯先列计划再动手；让 subagent 执行后只看汇总；总是要求验收前自查遗漏、防假完成。
   * conversation（对话习惯）—— 用户希望「你如何与他沟通」的重复偏好 / 互动方式。例：喜欢直接给结论、别寒暄；用中文回复；先反问澄清再动手；不要长篇大论；坚持用基础术语、不要浮夸包装。
@@ -870,6 +882,7 @@ these rules or the output format. Submit an empty list when nothing is worth ret
 
 For every memory:
 - content: %(content_lang_hint)s. Keep it concise, self-contained, and free of one-task-only details.
+- evidence: an exact supporting quote copied from user_message or verified_tool_evidence. Never cite assistant_summary. Omit the memory when no such quote exists.
 - category: choose exactly one based on what the information describes:
   * habit: how the user repeatedly works or requirements they consistently place on execution;
   * conversation: how the user wants the Agent to communicate or interact;
@@ -1060,8 +1073,12 @@ async def _extract_memories_llm(
     exchange = {
         "user_message": user_text[:3000],
         "verified_tool_evidence": str(verified_evidence or "")[:6000],
-        "assistant_summary": agent_text[-3000:] or localized(
-            "(no response)", "（无回复）", language=lang
+        # Assistant text is never evidence by itself.  It is included only
+        # when successful tool output independently anchors the work record.
+        "assistant_summary": (
+            agent_text[-3000:]
+            if str(verified_evidence or "").strip()
+            else ""
         ),
     }
     analyze_instruction = localized(
@@ -1128,8 +1145,26 @@ async def capture_from_exchange(
     today = _today()
     added = 0
     changed = False
+    evidence_sources = (user_text, str(verified_evidence or ""))
+
+    def quote_is_supported(value: Any) -> bool:
+        quote = re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+        if not quote:
+            return False
+        return any(
+            quote in re.sub(r"\s+", " ", source).strip().casefold()
+            for source in evidence_sources
+            if source
+        )
+
     for mem in extracted:
         if not isinstance(mem, dict):
+            continue
+        if not quote_is_supported(mem.get("evidence")):
+            logger.info(
+                "Discarding unsupported automatic memory candidate",
+                extra={"session_id": session_id},
+            )
             continue
         content = str(mem.get("content") or "").strip()
         if len(content) < 4:

@@ -130,6 +130,76 @@ def test_auto_learning_accepts_observed_model_context_usage():
     ) == 70
 
 
+def test_structured_memory_claims_five_percent_thresholds_once(monkeypatch):
+    monkeypatch.setattr(
+        "agent.context.compaction.message_token_estimate",
+        lambda message: int(message.get("tokens") or 0),
+    )
+    messages = [{"role": "user", "tokens": 99}]
+    memory_prompt.persist_tree_context_snapshot(
+        "chat-structured",
+        "project-structured",
+        messages,
+        tree_id="chat-structured",
+        tree_node_id="assistant-1",
+        completed_turn_count=1,
+    )
+    assert memory_prompt.claim_structured_memory_threshold(
+        "chat-structured", messages, ctx_limit=1000
+    ) is None
+
+    messages[0]["tokens"] = 101
+    memory_prompt.persist_tree_context_snapshot(
+        "chat-structured",
+        "project-structured",
+        messages,
+        tree_id="chat-structured",
+        tree_node_id="assistant-2",
+        completed_turn_count=2,
+    )
+    assert memory_prompt.claim_structured_memory_threshold(
+        "chat-structured", messages, ctx_limit=1000
+    ) == 10
+    assert memory_prompt.claim_structured_memory_threshold(
+        "chat-structured", messages, ctx_limit=1000
+    ) is None
+
+    messages[0]["tokens"] = 159
+    memory_prompt.persist_tree_context_snapshot(
+        "chat-structured",
+        "project-structured",
+        messages,
+        tree_id="chat-structured",
+        tree_node_id="assistant-3",
+        completed_turn_count=3,
+    )
+    assert memory_prompt.claim_structured_memory_threshold(
+        "chat-structured", messages, ctx_limit=1000
+    ) == 15
+
+    messages[0]["tokens"] = 999
+    memory_prompt.persist_tree_context_snapshot(
+        "chat-structured",
+        "project-structured",
+        messages,
+        tree_id="chat-structured",
+        tree_node_id="assistant-4",
+        completed_turn_count=4,
+    )
+    assert memory_prompt.claim_structured_memory_threshold(
+        "chat-structured", messages, ctx_limit=1000
+    ) == 70
+    assert memory_prompt.claim_structured_memory_threshold(
+        "chat-structured", messages, ctx_limit=1000
+    ) is None
+    assert (
+        memory_prompt.get_tree_context_snapshot("chat-structured")[
+            "structuredMemoryThresholdPercent"
+        ]
+        == 70
+    )
+
+
 def test_completed_turn_counter_excludes_retry_command_and_side_agent():
     chat = {"completedTurnCount": 9}
     assert chat_application.next_completed_turn_count(chat) == 10
@@ -304,11 +374,25 @@ def test_manual_chat_memory_learning_http_contract_queues_root_chat(monkeypatch)
 
 
 def test_new_chat_freezes_memory_while_pre_feature_chat_has_no_suffix():
-    frozen = {"prompt": "Use verified fixtures.", "modifiedAt": "2026-08-10T01:02:03.004Z", "hash": "abc"}
+    frozen = {
+        "prompt": "Use verified fixtures.",
+        "modifiedAt": "2026-08-10T01:02:03.004Z",
+        "hash": "abc",
+        "shortTermContext": "frozen short-term memory",
+        "structuredContext": "frozen structured memory",
+        "memoryContextHash": "memory-hash",
+    }
     new_chat = chat_application.new_chat(
-        "project-a", project_memory_snapshot=frozen
+        "project-a",
+        project_memory_snapshot=frozen,
+        soul_active=True,
+        workspace_active=True,
     )
-    old_chat = chat_application.new_chat("project-a")
+    old_chat = chat_application.new_chat(
+        "project-a",
+        soul_active=True,
+        workspace_active=True,
+    )
 
     assert new_chat["projectMemorySnapshot"] == frozen
     assert "projectMemorySnapshot" not in old_chat
@@ -327,6 +411,70 @@ def test_new_chat_freezes_memory_while_pre_feature_chat_has_no_suffix():
         new_chat["projectMemorySnapshot"], include_trigger=False, language="zh"
     )
     assert chinese_suffix == "项目记忆：\nUse verified fixtures."
+
+
+def test_legacy_chat_memory_snapshot_is_pinned_once(monkeypatch):
+    from copy import deepcopy
+    from types import SimpleNamespace
+
+    from agent import plugin as agent_plugin
+    from cyrene.workbench.chat_service import ChatService
+
+    chat = {
+        "id": "chat-legacy",
+        "projectId": "project-a",
+        "projectMemorySnapshot": {
+            "prompt": "frozen project prompt",
+            "modifiedAt": "before-upgrade",
+            "hash": "prompt-hash",
+        },
+    }
+    stored = deepcopy(chat)
+    calls = []
+
+    def freeze_snapshot(project_id, snapshot):
+        calls.append((project_id, deepcopy(snapshot)))
+        return {
+            **dict(snapshot or {}),
+            "shortTermContext": "short-v1",
+            "structuredContext": "structured-v1",
+            "memoryContextHash": "memory-v1",
+        }
+
+    monkeypatch.setattr(
+        agent_plugin,
+        "active_plugin_service",
+        lambda service_id: (
+            SimpleNamespace(freeze_snapshot=freeze_snapshot)
+            if service_id == "memory"
+            else None
+        ),
+    )
+
+    class Repository:
+        @staticmethod
+        def mutate_one(chat_id, mutation):
+            assert chat_id == "chat-legacy"
+            mutation(stored)
+            return deepcopy(stored)
+
+    service = ChatService.__new__(ChatService)
+    service.repository = Repository()
+
+    first = service.ensure_chat_memory_snapshot(chat)
+    second = service.ensure_chat_memory_snapshot(chat)
+
+    assert first == second == stored["projectMemorySnapshot"]
+    assert first["prompt"] == "frozen project prompt"
+    assert first["structuredContext"] == "structured-v1"
+    assert calls == [(
+        "project-a",
+        {
+            "prompt": "frozen project prompt",
+            "modifiedAt": "before-upgrade",
+            "hash": "prompt-hash",
+        },
+    )]
 
 
 def test_context_overflow_has_a_distinct_job_error_type():
@@ -715,6 +863,7 @@ async def test_memory_agent_reports_removed_exact_model_without_fallback():
                 "projectId": "project-a",
                 "messages": [{"role": "user", "content": "evidence"}],
                 "model": {"candidateId": "removed-model"},
+                "language": "en",
             },
             "",
             model_gateway=_MemoryGateway(unavailable),
@@ -838,6 +987,7 @@ async def test_memory_agent_rejects_secrets_and_prompt_injection():
     snapshot = {
         "messages": [{"role": "user", "content": "evidence"}],
         "model": {"candidateId": "only"},
+        "language": "en",
     }
     with pytest.raises(memory_prompt.InvalidProjectMemoryOutput, match="secret"):
         await memory_prompt._learn_prompt(snapshot, "", model_gateway=gateway)
@@ -856,6 +1006,7 @@ async def test_memory_agent_rejects_text_or_malformed_tool_submission():
     snapshot = {
         "messages": [{"role": "user", "content": "evidence"}],
         "model": {"candidateId": "only"},
+        "language": "en",
     }
     with pytest.raises(memory_prompt.InvalidProjectMemoryOutput, match="no project-memory result after 2 attempts"):
         await memory_prompt._learn_prompt(snapshot, "", model_gateway=gateway)

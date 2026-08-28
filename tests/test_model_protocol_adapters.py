@@ -584,6 +584,105 @@ def _sse_response(events: list[dict[str, object]]) -> httpx.Response:
 
 
 @pytest.mark.asyncio
+async def test_openai_chat_sse_accumulates_content_reasoning_tools_and_usage() -> None:
+    events = [
+        {
+            "id": "chatcmpl_1",
+            "model": "MiniMax-M2.1",
+            "choices": [{"index": 0, "delta": {"content": "Hel"}}],
+        },
+        {
+            "id": "chatcmpl_1",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "content": "lo",
+                    "reasoning_content": "Think",
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_1",
+                        "function": {"name": "weather", "arguments": '{"city"'},
+                    }],
+                },
+            }],
+        },
+        {
+            "id": "chatcmpl_1",
+            "choices": [{
+                "index": 0,
+                "delta": {"tool_calls": [{
+                    "index": 0,
+                    "function": {"arguments": ':"Paris"}'},
+                }]},
+                "finish_reason": "tool_calls",
+            }],
+        },
+        {
+            "id": "chatcmpl_1",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 8,
+                "total_tokens": 108,
+                "prompt_tokens_details": {"cached_tokens": 80},
+            },
+        },
+    ]
+    callbacks: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["stream"] is True
+        return _sse_response(events)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        parsed = await handle_stream(
+            "openai_compatible",
+            client,
+            "https://api.minimaxi.com/v1/chat/completions",
+            PreparedRequest({"stream": True}, {"Authorization": "Bearer key"}),
+            lambda event: _record_event(callbacks, event),
+        )
+
+    assert callbacks == [
+        {"type": "reply_start"},
+        {"type": "reply_delta", "delta": "Hel"},
+        {"type": "reply_delta", "delta": "lo"},
+        {"type": "reasoning_start"},
+        {"type": "reasoning_delta", "delta": "Think"},
+        {"type": "reasoning_done", "response": "Think"},
+        {"type": "reply_done", "response": "Hello"},
+    ]
+    assert parsed == {
+        "role": "assistant",
+        "content": "Hello",
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 8,
+            "total_tokens": 108,
+            "prompt_cache_hit_tokens": 80,
+            "prompt_cache_miss_tokens": 20,
+        },
+        "reasoning_content": "Think",
+        "tool_calls": [{
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "weather", "arguments": '{"city":"Paris"}'},
+        }],
+        "finish_reason": "tool_calls",
+        "response_id": "chatcmpl_1",
+        "model": "MiniMax-M2.1",
+    }
+
+
+async def _record_event(
+    target: list[dict[str, object]],
+    event: dict[str, object],
+) -> None:
+    target.append(event)
+
+
+@pytest.mark.asyncio
 async def test_anthropic_sse_accumulates_text_tool_arguments_usage_and_finish() -> None:
     events = [
         {

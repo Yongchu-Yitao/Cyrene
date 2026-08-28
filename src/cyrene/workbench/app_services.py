@@ -110,9 +110,17 @@ def _new_chat_record(project_id: str, title: str, model: str) -> dict[str, Any]:
         ))
     input_context = defaults()
 
+    memory = active_plugin_service("memory")
+    snapshot_loader = getattr(memory, "current_snapshot", None)
+    memory_snapshot = None
+    if callable(snapshot_loader):
+        loaded = snapshot_loader(str(project_id or ""))
+        if isinstance(loaded, Mapping):
+            memory_snapshot = deepcopy(dict(loaded))
+
     now = _utc_now_iso()
     normalized_title = str(title or "").strip()
-    return {
+    chat = {
         "id": _short_id("wbchat"),
         "projectId": str(project_id or ""),
         "kind": "chat",
@@ -130,6 +138,9 @@ def _new_chat_record(project_id: str, title: str, model: str) -> dict[str, Any]:
         "remoteDeviceIds": list(input_context["remoteDeviceIds"]),
         "contextActivations": dict(input_context["contextActivations"]),
     }
+    if memory_snapshot is not None:
+        chat["projectMemorySnapshot"] = memory_snapshot
+    return chat
 
 
 def _public_message(message: Any) -> Any:
@@ -493,6 +504,10 @@ async def fork_chat(chat_id: str, message_id: str, content: str) -> dict[str, An
         str(source.get("title") or ""),
         str(source.get("model") or ""),
     )
+    if isinstance(source.get("projectMemorySnapshot"), Mapping):
+        forked["projectMemorySnapshot"] = deepcopy(
+            dict(source["projectMemorySnapshot"])
+        )
     forked["forkedFromChatId"] = chat_id
     forked["forkedAtMessageId"] = message_id
     forked["forkMessage"] = text.replace("\n", " ")[:80]

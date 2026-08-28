@@ -151,6 +151,58 @@ class ChatService:
             )
         )
 
+    def ensure_chat_memory_snapshot(
+        self,
+        chat: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Lazily freeze legacy chats to the first complete memory snapshot.
+
+        New chats already persist short-term and structured memory alongside
+        the versioned project prompt.  Chats created by older builds lack
+        those fields, so pin them once before their next run and never replace
+        the pinned values with later background-learning writes.
+        """
+
+        raw = chat.get("projectMemorySnapshot")
+        existing = dict(raw) if isinstance(raw, Mapping) else {}
+        required = {"shortTermContext", "structuredContext"}
+        if required.issubset(existing):
+            return existing
+
+        from agent.plugin import active_plugin_service
+
+        memory = active_plugin_service("memory")
+        freezer = getattr(memory, "freeze_snapshot", None)
+        if not callable(freezer):
+            return existing or None
+        candidate = freezer(
+            str(chat.get("projectId") or ""),
+            existing or None,
+        )
+        if not isinstance(candidate, Mapping):
+            return existing or None
+        candidate = dict(candidate)
+
+        def persist(stored: dict[str, Any]) -> None:
+            stored_raw = stored.get("projectMemorySnapshot")
+            stored_snapshot = (
+                dict(stored_raw) if isinstance(stored_raw, Mapping) else {}
+            )
+            if required.issubset(stored_snapshot):
+                return
+            stored["projectMemorySnapshot"] = copy.deepcopy(candidate)
+
+        chat_id = str(chat.get("id") or "")
+        updated = self.repository.mutate_one(chat_id, persist) if chat_id else None
+        final_raw = (
+            updated.get("projectMemorySnapshot")
+            if isinstance(updated, Mapping)
+            else candidate
+        )
+        final = dict(final_raw) if isinstance(final_raw, Mapping) else candidate
+        chat["projectMemorySnapshot"] = copy.deepcopy(final)
+        return final
+
     def public_chat_light(self, chat: dict[str, Any]) -> ChatSummaryDTO:
         run = self.run_manager.get(str(chat.get("id") or ""))
         return cast(ChatSummaryDTO, public_chat_light(chat, active_run=run))
@@ -667,6 +719,7 @@ class ChatService:
                     context_activations=stored_activations,
                     strict=True,
                 )
+                memory_snapshot = self.ensure_chat_memory_snapshot(chat)
                 config = ConversationConfig(
                     session_id=chat_id,
                     workspace_dir=workspace_dir,
@@ -683,11 +736,7 @@ class ChatService:
                     ),
                     system_extra=system_extra,
                     project_id=project_id,
-                    project_memory_snapshot=(
-                        chat.get("projectMemorySnapshot")
-                        if isinstance(chat.get("projectMemorySnapshot"), Mapping)
-                        else None
-                    ),
+                    project_memory_snapshot=memory_snapshot,
                     session_title=str(chat.get("title") or ""),
                     completed_turn_count=(
                         completed_turn_count(chat) + (1 if agent_originated else 0)

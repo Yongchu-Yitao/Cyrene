@@ -83,15 +83,23 @@ replace=True)` 重新绑定实现，而不是建立第二份状态。
 
 | Hook | 适合处理的工作 |
 |---|---|
-| `SessionStart` | 构建本轮 Context Mount |
+| `SessionStart` | 对话开始时只运行一次并冻结稳定 Context |
+| `TurnStart` | 为每个用户轮次构建动态 Context |
 | `ContextChange` / `ContextUsed` | 响应 Tree 变化，记录真实 Token 使用与触发压缩/记忆逻辑 |
 | `PreToolUse` | 归一化、允许或阻止工具参数；需要阻止时使用 Fail Closed |
 | `PostToolUse` | 持久化 Tool Result、Learning Evidence 或 Activity |
 | `SessionEnd` | 最终结果落盘后的异步收尾 |
 | `Stop` | 用户取消或 Session 关闭时停止插件拥有的任务 |
 
+如果 `SessionStart` Callable 的输出依赖可能变化的稳定输入，应通过
+`with_session_start_cache_fingerprint(hook, provider)` 挂载 Provider；Provider
+返回任意可 JSON 序列化的依赖投影。绑定方法的宿主对象也可以直接实现
+`session_start_cache_fingerprint(event)`。Kernel 将其视为不透明值，与 Hook 拓扑及
+插件包实现版本一起计算指纹；值变化时只重建一次稳定前缀。SOUL、Memory、已学习
+技能、CLI Hook 与第三方 Provider 的依赖逻辑因此仍归各自插件所有。
+
 输入框选项不是由各插件分别读取 UI State。`cyrene_composer_context` 是唯一的输入框
-上下文插件：它持久化当前对话选择，再在 `SessionStart` 读取已启用的 Workspace、
+上下文插件：它持久化当前对话选择，再在 `TurnStart` 读取已启用的 Workspace、
 MCP 与 Skills Provider 并生成一个明确的 Mount。Plugin Center 负责插件是否可用；
 Composer 菜单负责本对话选中什么；工具菜单负责“Agent 直接可见”或“Agent 寻找使用”。
 三者职责互不重复。

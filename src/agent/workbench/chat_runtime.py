@@ -10,8 +10,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, TypeAlias
 
-from ..plugin import PluginRegistry, default_plugin_impl_directory
-from ..plugin.model_gateway import ensure_model_router
+from ..plugin import default_plugin_impl_directory, resolve_agent_plugin_registry
 from ..plugin.model_router import MODEL_ROUTER_PLUGIN
 from ..permission import runtime_permission_mode
 from .bridge import WorkbenchChatResult, WorkbenchSessionBridge
@@ -181,13 +180,7 @@ async def run_workbench_chat(
         return result.result(timeout=30)
 
     def open_bridge() -> WorkbenchSessionBridge:
-        # The seed operation is idempotent and only fills missing built-ins. It
-        # must happen before AgentSession takes its Plugin directory snapshot.
-        from ..plugin import native_tools
-
-        native_tools.seed_builtin_plugin_directory(plugin_root)
-        registry = PluginRegistry()
-        ensure_model_router(registry)
+        registry, load_plugins = resolve_agent_plugin_registry(plugin_root)
         from agent.plugin import active_plugin_application_host
 
         application_host = active_plugin_application_host()
@@ -201,6 +194,7 @@ async def run_workbench_chat(
             workspace_dir,
             plugin_root,
             registry=registry,
+            load_plugins=load_plugins,
             model_plugin=MODEL_ROUTER_PLUGIN,
             chat_id=normalized_session_id,
             host_context={

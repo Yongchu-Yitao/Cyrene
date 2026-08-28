@@ -2,6 +2,64 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta2] - 2026-08-28
+
+`0.9.0-beta2` contains only user-visible changes since `0.9.0-beta1`. It focuses on multi-turn context, streaming replies, memory reliability, Plugin Center, and Knowledge workflows in the plugin-native Agent.
+
+### Multi-turn context and model caching
+
+- System instructions, `SOUL.md`, memory, and learned skills are now kept as a reusable conversation prefix. Each message adds only that turn's selected workspace, MCP, attachments, runtime state, and other dynamic context, improving cache reuse in long conversations and follow-ups.
+- Composer context changes affect the next turn without rewriting earlier conversation state. Retry, recovery, and reopening a chat preserve the context ordering actually used at the time.
+- Changes to personality, memory, learned skills, plugin versions, or related settings refresh the stable context when needed, while unchanged content continues to be reused.
+- The Context panel now identifies system instructions, personality, memory, learned skills, plugin session contributions, and per-turn context by their actual contributor. Unknown third-party context receives a readable generic label.
+- Context accounting no longer assigns message-format overhead to plugin blocks, and dynamic turn context is measured separately from the ordinary user message.
+
+### Streaming replies and run metrics
+
+- More OpenAI Chat-compatible models now stream answer text, reasoning, tool calls, and usage live instead of showing the entire response only after completion.
+- When a streaming connection falls back to another endpoint or model candidate, partial output from the failed attempt is cleared to avoid duplicated, mixed, or stale text.
+- Recovered streams no longer replay the complete response after already displaying its deltas, and completion does not create a duplicate message.
+- Conversation Overview now shows cache hit rate for the latest request alongside the conversation total, while retaining cumulative input, output, and total token counts.
+- Per-message request usage is stored separately from lifetime chat usage, keeping step tokens and output speed correct after reopening conversation history.
+- Compaction decisions, model routing, and final metrics now use the same request snapshot, reducing inconsistent counts near context limits.
+
+### Memory and learning reliability
+
+- Each chat freezes the project memory, cross-session short-term memory, and structured memory it started with. Background learning no longer silently changes context already used by an older chat.
+- Existing beta1 chats automatically receive a pinned memory snapshot the first time they continue, with no manual migration required.
+- Structured-memory checks begin at 10% context use and advance in 5% increments, with each threshold handled once for smoother learning and background activity.
+- Automatic memories must cite exact user text or verified tool evidence. Content inferred only from the Agent's own summary is no longer written as durable memory.
+- Project memory, short-term memory, and learned skills follow the active application language and refresh future context after a language change.
+
+### Plugins, tools, and subagents
+
+- Plugin packs are collapsed by default in Plugin Center. Cards and dedicated disclosure buttons open their members without switches, tool menus, or other controls accidentally toggling the disclosure; keyboard and accessibility state stays synchronized.
+- “Used plugins” in the conversation panel includes both tool packages and successfully invoked standalone tools, including directly visible tools.
+- Every built-in model-visible tool now has readable Chinese and English names, and former tool-group identifiers are shown with localized labels.
+- Required plugin members follow their parent pack switch. They remain protected from individual deletion, but disabling the pack removes them from the Agent.
+- The Subagent plugin now exposes a clear spawn policy. With spawning off, the Main Agent continues in single-Agent mode; when enabled, spawn guidance is provided only to the Main Agent and is not inherited by children.
+- Subagent tools use the same list, describe, and invoke experience as other on-demand tools, with a clear localized explanation when policy disables spawning.
+- Channel runtime is represented by one fixed plugin member so Telegram, WeChat, and related channel availability always follows the parent plugin pack.
+
+### Knowledge, Memory, and Schedule interfaces
+
+- The Knowledge table header now has a right-click column menu for Author, Year, Source, Added, and Tags. Title always remains visible, and the choice persists locally.
+- Knowledge columns distribute available width responsively, with dates and text staying on one ellipsized line instead of squeezing or wrapping unpredictably.
+- Table and card view selection is saved immediately and restored on the next visit.
+- Opening a Knowledge result from global search, a citation, or another page now waits for slow list loading and reliably selects the requested item instead of being overwritten by an older request or default selection.
+- Memory deep links likewise wait for the current project's data and no longer carry a pending item from another project.
+- Knowledge, Memory, and Schedule now share responsive main-content and inspector widths, reducing gaps, clipping, and horizontal pressure across normal and compact desktop windows.
+- Global search now checks the correct Work module switch when opening a conversation, fixing navigation that could be rejected because of an internal page-name mismatch.
+- Storage Settings now reports Extensions and Media as their own localized, color-coded categories.
+
+### Fixes and compatibility
+
+- Fixed missing text, reasoning fragments, incremental tool arguments, finish reasons, returned model names, or usage in some provider streams.
+- Fixed Context panel cases that merged separate plugin contributors, omitted standalone tools, or injected turn context into the system message more than once.
+- Fixed memory learning that could repeat after context updates, recovery, or language changes, or read live project memory instead of the current chat's snapshot.
+- Fixed Plugin Center card clicks conflicting with switches and menus, and collapsed members remaining exposed to assistive technology.
+- Fixed stale Knowledge details overriding a newer selection, lost cross-page targets, and inconsistent table widths in responsive layouts.
+
 ## [0.9.0-beta1] - 2026-08-28
 
 `0.9.0-beta1` brings together every user-visible feature and interface change since `0.7.13`. This release completes Cyrene's plugin transformation: Agents, context, tools, Knowledge, schedules, proactive work, channels, and Workbench extensions now come from one plugin framework, while PowerPoint, media generation, model services, search, browser automation, terminals, memory, remote collaboration, and desktop capabilities remain available and continue to improve. This section contains only changes users can use or see, without internal implementation details.

@@ -1,4 +1,12 @@
 import { workbenchServices } from "./shared/runtime/services.jsx"
+import {
+  LibraryTableHead,
+  libraryContextMenuTheme,
+  libraryTableGridTemplate,
+  selectLibraryView,
+  useLibraryColumns,
+} from "./features/knowledge/library-columns.jsx"
+import { usePendingKnowledgeSelection } from "./shared/runtime/pending-module-selection.jsx"
 // Project-scoped literature library for the Workbench.
 //
 // The page intentionally owns no sample data. Every count, collection, tag and
@@ -439,18 +447,14 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       props.moduleDock);
   }
 
-  function TableHead(props) {
-    return h("div", { className: "wb-lib-table-head wb-lib-table-grid", role: "row" },
-      h("label", { className: "wb-lib-check" }, h("input", { type: "checkbox", checked: props.allSelected, onChange: props.onToggleAll, "aria-label": L("library.selectAll", "Select all knowledge") }), h("span")),
-      h("span", { className: "wb-lib-title-head" }, L("library.column.title", "Title")), h("span", null, L("library.column.author", "Author")), h("span", null, L("library.column.year", "Year")), h("span", null, L("library.column.source", "Source")), h("span", null, L("library.column.added", "Added")), h("span", null, L("library.column.tags", "Tags")));
-  }
-
   function LibraryRow(props) {
     var item = props.item;
     var tags = itemTags(item);
     var isTrash = props.trash;
+    var visible = props.visibleColumns;
     return h("div", {
       className: "wb-lib-row wb-lib-table-grid" + (props.active ? " active" : ""), role: "row", tabIndex: 0,
+      style: { gridTemplateColumns: libraryTableGridTemplate(visible) },
       "data-cyrene-context-menu": "true",
       draggable: !!props.onDragStart,
       onDragStart: function (event) { if (props.onDragStart) props.onDragStart(event, item); },
@@ -464,15 +468,15 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       onKeyDown: function (event) { if (event.key === "Enter") props.onSelect(item.id); },
     },
       h(StopClick, null, h("label", { className: "wb-lib-check" }, h("input", { type: "checkbox", checked: props.checked, onChange: function () { props.onToggle(item.id); }, "aria-label": L("library.selectItem", "Select {name}", { name: itemTitle(item) }) }), h("span"))),
-      h("div", { className: "wb-lib-title-cell" },
+      visible.indexOf("title") >= 0 && h("div", { className: "wb-lib-title-cell" },
         h(StopClick, null, h("button", { type: "button", className: "wb-lib-star" + (item.starred ? " active" : ""), onClick: function () { props.onStar(item); }, title: item.starred ? L("library.removeStar", "Remove star") : L("library.addStar", "Add star") }, icon("star", 16))),
         h(PdfMark, { item: item }),
         h("span", { className: "wb-lib-title-text", title: itemTitle(item) }, itemTitle(item))),
-      h("span", { className: "wb-lib-truncate", title: authorText(item, true) }, authorText(item)),
-      h("span", null, item.year || (item.date_text && String(item.date_text).slice(0, 4)) || "—"),
-      h("span", { className: "wb-lib-truncate", title: item.venue || item.publication_title || "" }, item.venue || item.publication_title || "—"),
-      h("span", null, formatDate(item.added_at || item.created_at)),
-      h("div", { className: "wb-lib-row-tags" }, tags.slice(0, 2).map(function (tag) { return h("span", { key: tag }, tag); }), tags.length > 2 && h("small", null, "+" + (tags.length - 2)),
+      visible.indexOf("author") >= 0 && h("span", { className: "wb-lib-truncate", title: authorText(item, true) }, authorText(item)),
+      visible.indexOf("year") >= 0 && h("span", null, item.year || (item.date_text && String(item.date_text).slice(0, 4)) || "—"),
+      visible.indexOf("source") >= 0 && h("span", { className: "wb-lib-truncate", title: item.venue || item.publication_title || "" }, item.venue || item.publication_title || "—"),
+      visible.indexOf("added") >= 0 && h("span", null, formatDate(item.added_at || item.created_at)),
+      visible.indexOf("tags") >= 0 && h("div", { className: "wb-lib-row-tags" }, tags.slice(0, 2).map(function (tag) { return h("span", { key: tag }, tag); }), tags.length > 2 && h("small", null, "+" + (tags.length - 2)),
         isTrash && h(StopClick, null, h("button", { type: "button", className: "wb-lib-row-action", onClick: function () { props.onRestore(item); }, title: L("library.restore", "Restore") }, icon("restore", 14)))));
   }
 
@@ -1265,6 +1269,8 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     var batchDeletingState = useState(false); var batchDeleting = batchDeletingState[0]; var setBatchDeleting = batchDeletingState[1];
     var menuState = useState(""); var menu = menuState[0]; var setMenu = menuState[1];
     var contextMenuState = useState(null); var contextMenu = contextMenuState[0]; var setContextMenu = contextMenuState[1];
+    var columns = useLibraryColumns({ t: L, icon: icon, closeMenus: function () { setMenu(""); setContextMenu(null); } });
+    var visibleColumns = columns.visible;
     var rightTabState = useState("detail"); var rightTab = rightTabState[0]; var setRightTab = rightTabState[1];
     var rightOpenState = useState(true); var rightOpen = rightOpenState[0]; var setRightOpen = rightOpenState[1];
     var manualState = useState(false); var manualOpen = manualState[0]; var setManualOpen = manualState[1];
@@ -1277,6 +1283,10 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     var loadMoreSeq = useRef(0);
     var detailSeq = useRef(0);
     var readMarksRef = useRef({});
+    var pendingKnowledge = usePendingKnowledgeSelection({
+      active: props.active, navigation: workbenchServices.navigation(), workspace: workspace,
+      onSelect: function (id) { setDetail(null); setSelectedId(id); setRightTab("detail"); setRightOpen(true); },
+    });
 
     function loadEmbeddingStatus() {
       if (!client) return Promise.resolve();
@@ -1360,10 +1370,10 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
           collections: values.length > 1 ? ((values[2] && values[2].collections) || []) : prev.collections,
           tags: values.length > 1 ? ((values[3] && values[3].tags) || []) : prev.tags,
         }; });
-        if (selectedId && !nextItems.some(function (item) { return String(item.id) === String(selectedId); })) {
-          setSelectedId("");
-          setDetail(null);
-        }
+        setSelectedId(function (currentId) {
+          if (!currentId || pendingKnowledge.isDirect(currentId)) return currentId;
+          return nextItems.some(function (item) { return String(item.id) === String(currentId); }) ? currentId : "";
+        });
         setChecked(function (prev) { return prev.filter(function (id) { return nextItems.some(function (item) { return String(item.id) === String(id); }); }); });
         setLoading(false);
       }).catch(function (err) { if (seq === requestSeq.current) { setError(String(err.message || err)); setLoading(false); } });
@@ -1400,6 +1410,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     }
 
     useEffect(function () {
+      pendingKnowledge.clear();
       setScope({ type: "all" }); setSelectedId(""); setDetail(null); setChecked([]); setData({ items: [], total: 0, stats: {}, collections: [], tags: [] });
     }, [workspace]);
     useEffect(function () { if (props.active !== false) reload(); }, [client, workspace, debouncedQuery, scope.type, scope.value, sort, order, filters.file_type, filters.item_type, filters.status, filters.year, props.active]);
@@ -1437,7 +1448,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     var currentDetail = detail && String(detail.id) === String(selectedId) ? detail : null;
     var selectedItem = currentDetail ? Object.assign({}, listItem || {}, currentDetail) : listItem;
 
-    function select(id) { setDetail(null); setSelectedId(String(id)); setRightTab("detail"); setRightOpen(true); }
+    function select(id) { pendingKnowledge.clear(); setDetail(null); setSelectedId(String(id)); setRightTab("detail"); setRightOpen(true); }
     function replaceItem(item) {
       if (!item) return;
       setData(function (prev) { return Object.assign({}, prev, { items: prev.items.map(function (old) { return String(old.id) === String(item.id) ? Object.assign({}, old, item) : old; }) }); });
@@ -1518,26 +1529,13 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     function openItemContextMenu(item, event) {
       var menuWidth = 220;
       var menuHeight = scope.type === "trash" ? 128 : 250;
-      var portalTheme = {};
-      var themeSource = document.querySelector(".workbench-shell");
-      if (themeSource && typeof getComputedStyle === "function") {
-        var computedTheme = getComputedStyle(themeSource);
-        [
-          "--wb-card-bg", "--wb-surface", "--wb-line", "--wb-line-2",
-          "--wb-text", "--wb-muted", "--wb-row-hover-bg", "--wb-red",
-          "--wb-ui-font-scale",
-        ].forEach(function (name) {
-          portalTheme[name] = computedTheme.getPropertyValue(name);
-        });
-        portalTheme.fontFamily = computedTheme.fontFamily;
-        portalTheme.colorScheme = computedTheme.colorScheme;
-      }
       setMenu("");
+      columns.close();
       setContextMenu({
         item: item,
         left: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
         top: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
-        portalTheme: portalTheme,
+        portalTheme: libraryContextMenuTheme(),
       });
     }
     function showLibraryItemInFolder(item) {
@@ -1671,7 +1669,6 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
             : h("button", { type: "button", role: "menuitem", className: "danger", onClick: function () { var item = contextMenu.item; setContextMenu(null); removeItem(item); } }, icon("trash", 15), L("library.moveToTrash", "Move to trash"))
         )), document.body)
       : null;
-
     if (!workspace) return h("section", { className: "wb-lib-page no-project" }, h(StatePanel, { title: L("library.selectProject", "Select a project first"), body: L("library.projectIsolation", "Each project has an isolated knowledge base.") }));
 
     return h("section", { className: "wb-lib-page" },
@@ -1697,7 +1694,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
               h("label", null, L("library.year", "Year"), h("input", { type: "number", value: filters.year, onChange: function (event) { setFilters(Object.assign({}, filters, { year: event.target.value })); }, placeholder: L("library.yearPlaceholder", "e.g. 2025") })),
               activeFilters > 0 && h("button", { type: "button", className: "wb-lib-clear-filter", onClick: function () { setFilters({ file_type: "", item_type: "", status: "", year: "" }); } }, L("library.clearFilters", "Clear filters")))),
             h("div", { className: "wb-lib-menu-wrap" }, h("button", { type: "button", className: "wb-workbench-filter-tool wb-lib-tool active", onClick: function () { setMenu(menu === "sort" ? "" : "sort"); } }, h("span", null, activeSortLabel), icon("chevron", 13)), h(Dropdown, { open: menu === "sort", onClose: function () { setMenu(""); }, className: "sort" }, sortOptions.map(function (option) { return h("button", { key: option.id, type: "button", className: sort === option.id ? "selected" : "", onClick: function () { setSort(option.id); setMenu(""); } }, option.label, sort === option.id && icon("check", 14)); }), h("button", { type: "button", onClick: function () { setOrder(order === "desc" ? "asc" : "desc"); setMenu(""); } }, order === "desc" ? L("library.desc", "Descending") : L("library.asc", "Ascending")))),
-            h("div", { className: "wb-lib-view-toggle" }, h("button", { type: "button", className: view === "table" ? "active" : "", onClick: function () { setView("table"); }, title: L("library.tableView", "Table view") }, icon("list", 16)), h("button", { type: "button", className: view === "grid" ? "active" : "", onClick: function () { setView("grid"); }, title: L("library.cardView", "Card view") }, icon("grid", 16))),
+            h("div", { className: "wb-lib-view-toggle" }, h("button", { type: "button", className: view === "table" ? "active" : "", onClick: function () { selectLibraryView("table", setView); }, title: L("library.tableView", "Table view") }, icon("list", 16)), h("button", { type: "button", className: view === "grid" ? "active" : "", onClick: function () { selectLibraryView("grid", setView); }, title: L("library.cardView", "Card view") }, icon("grid", 16))),
             !rightOpen && selectedItem && h("button", { type: "button", className: "wb-lib-tool compact", onClick: function () { setRightOpen(true); }, title: L("library.openDetails", "Open details") }, icon("panel", 16))))),
         checked.length > 0 && h("div", { className: "wb-lib-batch" },
           h("b", null, L("library.selectedCount", "{count} selected", { count: checked.length })),
@@ -1709,12 +1706,13 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
         error && h("div", { className: "wb-lib-error" }, h("span", null, error), h("button", { type: "button", onClick: function () { reload(); } }, icon("restore", 14), " ", L("library.retry", "Retry"))),
         h("section", { className: "wb-lib-results" },
           loading && !data.items.length ? h(StatePanel, { loading: true, title: L("library.loading", "Loading knowledge base…") }) : !data.items.length ? h(StatePanel, { title: query || activeFilters || scope.type !== "all" ? L("library.noMatch", "No matching knowledge") : L("library.noItems", "This project has no knowledge items yet"), body: query || activeFilters || scope.type !== "all" ? L("library.emptyHint", "Try adjusting your search, categories or filters.") : L("library.importHint", "Upload documents, images, audio or video, or import RIS, BibTeX and Zotero references."), action: query || activeFilters || scope.type !== "all" ? function () { setQuery(""); setFilters({ file_type: "", item_type: "", status: "", year: "" }); setScope({ type: "all" }); } : function () { fileRef.current && fileRef.current.click(); }, actionLabel: query || activeFilters || scope.type !== "all" ? L("library.clearConditions", "Clear conditions") : L("library.importFirstItem", "Import the first item"), actionIcon: query || activeFilters || scope.type !== "all" ? "restore" : "upload" }) :
-            view === "table" ? h("div", { className: "wb-lib-table", role: "table" }, h(TableHead, { allSelected: data.items.length > 0 && checked.length === data.items.length, onToggleAll: toggleAll }), h("div", { className: "wb-lib-table-body" }, data.items.map(function (item) { return h(LibraryRow, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, trash: scope.type === "trash", onSelect: select, onContextMenu: openItemContextMenu, onToggle: toggleChecked, onStar: toggleStar, onRestore: restore, onDragStart: scope.type === "trash" ? null : startLibraryItemDrag, onDragEnd: endLibraryItemDrag }); }))) :
+            view === "table" ? h("div", { className: "wb-lib-table", role: "table" }, h(LibraryTableHead, { t: L, allSelected: data.items.length > 0 && checked.length === data.items.length, onToggleAll: toggleAll, visibleColumns: visibleColumns, onColumnContextMenu: columns.open }), h("div", { className: "wb-lib-table-body" }, data.items.map(function (item) { return h(LibraryRow, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, trash: scope.type === "trash", visibleColumns: visibleColumns, onSelect: select, onContextMenu: openItemContextMenu, onToggle: toggleChecked, onStar: toggleStar, onRestore: restore, onDragStart: scope.type === "trash" ? null : startLibraryItemDrag, onDragEnd: endLibraryItemDrag }); }))) :
               h("div", { className: "wb-lib-card-grid" }, data.items.map(function (item) { return h(LibraryCard, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, onSelect: select, onContextMenu: openItemContextMenu, onToggle: toggleChecked, onStar: toggleStar, onDragStart: scope.type === "trash" ? null : startLibraryItemDrag, onDragEnd: endLibraryItemDrag }); })),
           data.items.length < data.total && h("button", { type: "button", className: "wb-lib-load-more", disabled: loadingMore, onClick: loadMore }, loadingMore ? h(Spinner) : null, loadingMore ? L("library.loadingMore", "Loading…") : L("library.loadMore", "Load more ({shown} / {total})", { shown: data.items.length, total: data.total })),
           loading && data.items.length > 0 && h("div", { className: "wb-lib-loading-bar" }, h(Spinner), " ", L("library.updating", "Updating…")))),
       h(RightPanel, { item: selectedItem, open: rightOpen, onClose: function () { setRightOpen(false); }, tab: rightTab, onTab: setRightTab, onContentViewed: function () { markSelectedRead(selectedId); }, rawUrl: selectedId ? client.rawUrl(selectedId) : "", collections: data.collections, onCollectionsUpdate: updateSelectedCollections, citation: citation.text, bibtex: citation.bibtex, citationLoading: citation.loading, citationProps: citationProps, onCopyCitation: copyCitation, onAddNote: addNote, onUpdate: updateSelected, onDelete: scope.type !== "trash" ? removeSelected : null }),
       contextMenuPortal,
+      columns.portal,
       manualOpen && h(ManualItemModal, { onClose: function () { setManualOpen(false); }, onSave: createItem }),
       collectionModalOpen && h(CollectionModal, { onClose: function () { setCollectionModalOpen(false); }, onSave: createCollection }));
   }

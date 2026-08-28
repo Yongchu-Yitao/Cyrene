@@ -165,6 +165,9 @@ def test_existing_item_action_menus_are_available_from_right_click():
     library = (ROOT / "src/webui/frontend/workbench-library.jsx").read_text(
         encoding="utf-8"
     )
+    library_columns = (
+        ROOT / "src/webui/frontend/features/knowledge/library-columns.jsx"
+    ).read_text(encoding="utf-8")
 
     # Project cards were consolidated into the top-bar switcher. Its current
     # entry exposes the project actions through a visible per-project button;
@@ -202,7 +205,9 @@ def test_existing_item_action_menus_are_available_from_right_click():
     assert "function openItemContextMenu(item, event)" in library
     assert "wb-lib-context-menu" in library
     assert 'document.querySelector(".workbench-shell")' in library
-    assert "portalTheme: portalTheme" in library
+    assert "libraryContextMenuTheme" in library
+    assert "function libraryContextMenuTheme()" in library_columns
+    assert "portalTheme: libraryContextMenuTheme()" in library_columns
 
 
 def test_chat_page_blank_area_context_menu_reuses_quick_actions():

@@ -316,14 +316,13 @@ def test_production_runtime_seeds_forwards_context_and_leaves_final_reply_to_lif
     tmp_path,
     monkeypatch,
 ):
-    from agent.plugin import native_tools
-
-    seeded = []
+    resolved = []
     opened = {}
     published = []
 
-    def fake_seed(directory):
-        seeded.append(directory)
+    def fake_resolve(directory):
+        resolved.append(directory)
+        return PluginRegistry(), True
 
     class FakeBridge:
         def snapshot(self):
@@ -376,7 +375,11 @@ def test_production_runtime_seeds_forwards_context_and_leaves_final_reply_to_lif
         async def publish(self, event):
             published.append(event)
 
-    monkeypatch.setattr(native_tools, "seed_builtin_plugin_directory", fake_seed)
+    monkeypatch.setattr(
+        chat_runtime,
+        "resolve_agent_plugin_registry",
+        fake_resolve,
+    )
     monkeypatch.setattr(chat_runtime.WorkbenchSessionBridge, "open", fake_open)
 
     result = run(
@@ -402,7 +405,7 @@ def test_production_runtime_seeds_forwards_context_and_leaves_final_reply_to_lif
     )
 
     assert result.text == "done"
-    assert seeded == [(tmp_path / "plugins").resolve()]
+    assert resolved == [(tmp_path / "plugins").resolve()]
     assert opened["model_plugin"] == chat_runtime.MODEL_ROUTER_PLUGIN
     assert opened["chat_id"] == "chat-production"
     assert opened["host_context"]["chat_id"] == "host-chat"
@@ -446,6 +449,11 @@ def test_builtin_workbench_route_always_uses_new_runtime(
         return SimpleNamespace(
             text="new-kernel-reply",
             usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            latest_request_usage={
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+            },
             model="provider/model",
             model_identity={"provider": "provider"},
             generation_duration_ms=250.0,
@@ -493,6 +501,7 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     operation.service = SimpleNamespace(
         chat_soul_active=lambda _chat: True,
         chat_workspace_active=lambda _chat: False,
+        ensure_chat_memory_snapshot=lambda chat: chat.get("projectMemorySnapshot"),
         run_manager=SimpleNamespace(
             conversation_runtime=SimpleNamespace(send=fake_runtime),
         ),

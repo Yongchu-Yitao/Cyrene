@@ -22,6 +22,7 @@ from .hook import (
     SESSION_END,
     SESSION_START,
     STOP,
+    TURN_START,
     ContextUsed,
     Hook,
     HookBlocked,
@@ -30,6 +31,8 @@ from .hook import (
     HookRegistration,
     HookSet,
     PluginRegistry,
+    SessionStartCacheFingerprint,
+    with_session_start_cache_fingerprint,
 )
 from .session import AgentEventListener, AgentSession, AgentSessionEvent
 
@@ -51,6 +54,7 @@ __all__ = [
     "HookRegistration",
     "HookSet",
     "PluginRegistry",
+    "SessionStartCacheFingerprint",
     "AgentEventListener",
     "AgentSession",
     "AgentSessionEvent",
@@ -64,4 +68,6 @@ __all__ = [
     "SESSION_END",
     "SESSION_START",
     "STOP",
+    "TURN_START",
+    "with_session_start_cache_fingerprint",
 ]

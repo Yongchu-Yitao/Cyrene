@@ -1,40 +1,34 @@
-"""Single SessionStart projection for all composer-attached context."""
+"""Single TurnStart projection for all composer-attached context."""
 
 from __future__ import annotations
 
-from agent.hook import SESSION_START, HookEvent
+from agent.hook import TURN_START, HookEvent
 from agent.plugin import PluginSetupContext
 
-_HOOK_ID = "cyrene-composer-context-session-start"
-_PLUGIN_ID = "cyrene_composer_context.mount"
+from .mount_plugin import PLUGIN_NAME, build_composer_context
+
+_HOOK_ID = "cyrene-composer-context-turn-start"
+_LEGACY_HOOK_ID = "cyrene-composer-context-session-start"
 
 
 def setup_composer_context(context: PluginSetupContext) -> None:
     async def mount(_event: HookEvent) -> dict[str, str]:
-        service = context.services.get("composer_context")
-        builder = getattr(service, "build_session_context", None)
-        if not callable(builder):
-            raise RuntimeError(
-                "required composer_context application service is unavailable"
-            )
-        content = str(
-            builder(
-                context.data,
-                workspace=context.workspace,
-                services=context.services,
-            )
-            or ""
-        ).strip()
-        return {"context": content} if content else {}
+        return build_composer_context(
+            data=context.data,
+            workspace=context.workspace,
+            services=context.services,
+        )
 
-    existing = {hook.id for hook in context.hooks.list()}
+    existing = {hook.id: hook for hook in context.hooks.list()}
+    if _LEGACY_HOOK_ID in existing:
+        context.hooks.unregister(_LEGACY_HOOK_ID)
     if _HOOK_ID in existing:
-        context.hooks.bind_plugin(_PLUGIN_ID, mount, replace=True)
+        context.hooks.bind_plugin(PLUGIN_NAME, mount, replace=True)
         return
     context.hooks.register(
-        SESSION_START,
+        TURN_START,
         mount,
-        plugin_id=_PLUGIN_ID,
+        plugin_id=PLUGIN_NAME,
         hook_id=_HOOK_ID,
         root_only=True,
         failure_policy="closed",

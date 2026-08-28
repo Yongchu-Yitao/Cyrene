@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from agent.hook import POST_TOOL_USE, PRE_TOOL_USE, SESSION_END, SESSION_START, STOP
+from agent.hook import (
+    POST_TOOL_USE,
+    PRE_TOOL_USE,
+    SESSION_END,
+    SESSION_START,
+    STOP,
+    TURN_START,
+    with_session_start_cache_fingerprint,
+)
 from agent.plugin import Plugin, PluginApplicationContext, PluginPack, PluginSetupContext
 
 from .tools import definitions
@@ -22,11 +30,19 @@ def setup(context: PluginSetupContext) -> None:
     if hooks_service is None or context.hooks is None:
         return
     existing = {hook.id for hook in context.hooks.list()}
-    for event in (PRE_TOOL_USE, POST_TOOL_USE, SESSION_START, SESSION_END, STOP):
+    for event in (
+        PRE_TOOL_USE,
+        POST_TOOL_USE,
+        SESSION_START,
+        TURN_START,
+        SESSION_END,
+        STOP,
+    ):
         slug = {
             PRE_TOOL_USE: "pre-tool-use",
             POST_TOOL_USE: "post-tool-use",
             SESSION_START: "session-start",
+            TURN_START: "turn-start",
             SESSION_END: "session-end",
             STOP: "stop",
         }[event]
@@ -36,6 +52,17 @@ def setup(context: PluginSetupContext) -> None:
         async def dispatch(hook_event, *, _hooks=hooks_service):
             return await _hooks.dispatch(hook_event)
 
+        if event == SESSION_START:
+            def cache_fingerprint(_event, *, _hooks=hooks_service):
+                return [
+                    hook
+                    for hook in _hooks.list()
+                    if str(hook.get("event") or "") == SESSION_START
+                    and hook.get("enabled", True) is not False
+                ]
+
+            with_session_start_cache_fingerprint(dispatch, cache_fingerprint)
+
         if hook_id in existing:
             context.hooks.bind_plugin(plugin_id, dispatch, replace=True)
         else:
@@ -44,7 +71,7 @@ def setup(context: PluginSetupContext) -> None:
                 dispatch,
                 plugin_id=plugin_id,
                 hook_id=hook_id,
-                root_only=event in {SESSION_START, SESSION_END},
+                root_only=event in {SESSION_START, TURN_START, SESSION_END},
                 failure_policy="open",
             )
 

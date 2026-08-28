@@ -197,11 +197,19 @@ def new_chat(
     if reasoning_effort:
         chat["reasoningEffort"] = str(reasoning_effort)
     if isinstance(project_memory_snapshot, Mapping):
-        chat["projectMemorySnapshot"] = {
+        frozen_snapshot = {
             "prompt": str(project_memory_snapshot.get("prompt") or ""),
             "modifiedAt": str(project_memory_snapshot.get("modifiedAt") or ""),
             "hash": str(project_memory_snapshot.get("hash") or ""),
         }
+        for key in (
+            "shortTermContext",
+            "structuredContext",
+            "memoryContextHash",
+        ):
+            if key in project_memory_snapshot:
+                frozen_snapshot[key] = str(project_memory_snapshot.get(key) or "")
+        chat["projectMemorySnapshot"] = frozen_snapshot
     return chat
 
 
@@ -474,6 +482,44 @@ def aggregate_usage(messages: list[Any]) -> dict[str, int]:
     return totals
 
 
+def latest_request_usage(messages: list[Any]) -> dict[str, int]:
+    """Return the newest model request usage without changing lifetime totals."""
+
+    for message in reversed(messages):
+        if not isinstance(message, Mapping):
+            continue
+        usage = message.get("latestRequestUsage")
+        if not isinstance(usage, Mapping):
+            usage = message.get("usage")
+        if not isinstance(usage, Mapping):
+            continue
+        latest = {key: 0 for key in _USAGE_KEYS}
+        for key in _USAGE_KEYS:
+            try:
+                latest[key] = max(0, int(usage.get(key) or 0))
+            except (TypeError, ValueError, OverflowError):
+                pass
+        if not latest["total_tokens"]:
+            latest["total_tokens"] = (
+                latest["prompt_tokens"] + latest["completion_tokens"]
+            )
+        return latest
+    return {key: 0 for key in _USAGE_KEYS}
+
+
+def _public_usage(
+    chat: Mapping[str, Any],
+    projected_usage: Any,
+) -> tuple[dict[str, int], dict[str, int]]:
+    messages = list(chat.get("messages") or ())
+    totals = (
+        {key: int(projected_usage.get(key) or 0) for key in _USAGE_KEYS}
+        if isinstance(projected_usage, Mapping)
+        else aggregate_usage(messages)
+    )
+    return totals, latest_request_usage(messages)
+
+
 def public_message(message: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(message, dict):
         return message
@@ -505,11 +551,7 @@ def public_chat_light(
     projected_usage = (
         projection.get("usage") if isinstance(projection, Mapping) else None
     )
-    usage = (
-        {key: int(projected_usage.get(key) or 0) for key in _USAGE_KEYS}
-        if isinstance(projected_usage, Mapping)
-        else aggregate_usage(list(chat.get("messages") or ()))
-    )
+    usage, latest_usage = _public_usage(chat, projected_usage)
     persisted_status = str(chat.get("status") or "idle")
     last_run = chat.get("lastRun") if isinstance(chat.get("lastRun"), Mapping) else {}
     if active_run is not None:
@@ -575,6 +617,7 @@ def public_chat_light(
             else len(chat.get("messages") or ())
         ),
         "usage": usage,
+        "latestUsage": latest_usage,
         "pendingQuestion": chat.get("pendingQuestion") or None,
         "firstMessage": chat_first_message(chat),
     }

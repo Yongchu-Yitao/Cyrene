@@ -9,6 +9,7 @@ from agent.plugin.native_runtime import plugin_localized
 
 from ._service import current_agent_id, current_effect_key, subagent_manager
 from .definitions import get_native_tool_def
+from .policy import current_spawn_policy
 
 TOOL_NAME = 'spawn_subagent'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -33,6 +34,15 @@ async def _tool_spawn_subagent(
             context,
             "Only the main agent can spawn subagents.",
             "只有主 Agent 可以创建子 Agent。",
+        )
+    if current_spawn_policy() == "off":
+        return plugin_localized(
+            context,
+            "Subagent spawning is disabled by the current spawn policy "
+            "(`off`). Continue in single-Agent mode unless the user changes "
+            "this setting.",
+            "当前生成策略为 `off`，已禁用子 Agent 创建。请继续以单 Agent "
+            "模式执行，除非用户更改此设置。",
         )
 
     await subagent_manager(context).spawn(

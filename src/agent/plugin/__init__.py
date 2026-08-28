@@ -8,6 +8,7 @@ from .application import (
     PluginApplicationHost,
     active_plugin_application_host,
     active_plugin_service,
+    resolve_agent_plugin_registry,
     set_active_plugin_application_host,
 )
 from .core_impl import (
@@ -91,6 +92,7 @@ __all__ = [
     "TOOLBOX_PLUGIN_NAME",
     "active_plugin_application_host",
     "active_plugin_service",
+    "resolve_agent_plugin_registry",
     "default_plugin_impl_directory",
     "ensure_model_router",
     "set_active_plugin_application_host",

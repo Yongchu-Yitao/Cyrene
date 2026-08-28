@@ -1,11 +1,14 @@
 import base64
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from agent.plugin import PluginContext
 
 
 def test_qr_image_data_uri_is_self_contained():
@@ -20,6 +23,26 @@ def test_qr_image_data_uri_is_self_contained():
     svg = base64.b64decode(data_uri.removeprefix(prefix)).decode("utf-8")
     assert "<svg" in svg
     assert "path" in svg
+
+
+def test_channels_pack_exposes_one_fixed_runtime_plugin():
+    from agent.plugin.plugin_impl.cyrene_channels import plugin_pack
+
+    assert [plugin.name for plugin in plugin_pack.plugins] == [
+        "cyrene_channels.runtime"
+    ]
+    assert plugin_pack.plugins[0].model_visible is False
+    assert plugin_pack.plugins[0].metadata["required"] is True
+
+    result = plugin_pack.plugins[0].handler(
+        {},
+        PluginContext(
+            services={"channels": SimpleNamespace(
+                status=lambda: {"running": True, "connected": True}
+            )},
+        ),
+    )
+    assert result == {"ok": True, "running": True, "connected": True}
 
 
 def test_qr_login_route_returns_local_qr_image(monkeypatch):

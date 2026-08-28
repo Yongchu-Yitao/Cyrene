@@ -15,6 +15,7 @@ from agent.hook import (
     SESSION_END,
     SESSION_START,
     STOP,
+    TURN_START,
     HookBlocked,
     HookRegistration,
 )
@@ -189,7 +190,11 @@ def test_post_tool_and_lifecycle_compatibility_hooks(tmp_path):
         hooks = store.hooks_for(tree.id)
         events = []
 
-        hooks.register(SESSION_START, lambda _event: {"context": "first"})
+        hooks.register(SESSION_START, lambda _event: {
+            "context": "first",
+            "context_kind": "memory",
+            "context_source": "test.memory",
+        })
         hooks.register(SESSION_START, lambda _event: "second")
         hooks.register(
             SESSION_START,
@@ -202,8 +207,16 @@ def test_post_tool_and_lifecycle_compatibility_hooks(tmp_path):
         hooks.register(POST_TOOL_USE, lambda event: events.append(event))
         hooks.register(SESSION_END, lambda event: events.append(event))
         hooks.register(STOP, lambda event: events.append(event))
+        hooks.register(TURN_START, lambda event: {"context": event.payload["turn"]})
 
         assert await hooks.session_start() == "base\n\nsoul\n\nfirst\n\nsecond"
+        session_mounts = await hooks.session_start_mounts()
+        memory_mount = next(
+            mount for mount in session_mounts if mount["context"] == "first"
+        )
+        assert memory_mount["context_kind"] == "memory"
+        assert memory_mount["context_source"] == "test.memory"
+        assert await hooks.turn_start({"turn": "dynamic"}) == "dynamic"
         await hooks.post_tool_use(
             "Read",
             {"path": "file"},

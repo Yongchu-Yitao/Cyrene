@@ -162,7 +162,7 @@
 
 /* ── main column (column 3) ────────────────────────────────────────── */
 .wb-sched-main {
-  flex: 1 1 auto; min-width: 0; min-height: 0;
+  flex: 1 1 0%; min-width: 0; min-height: 0;
   display: flex; flex-direction: column;
   border-right: 0;
 }
@@ -328,8 +328,10 @@
 .wb-sched-month-more:hover { color: var(--wb-text); }
 
 /* ── detail panel (column 4) ───────────────────────────────────────── */
-.wb-sched-detail {
-  flex: 0 0 340px; width: 340px;
+.wb-sched-detail:is(.wb-floating-detail-shell) {
+  flex: 0 0 calc(var(--wb-right-w, 350px) - 8px);
+  width: calc(var(--wb-right-w, 350px) - 8px);
+  padding-left: 4px;
 }
 .wb-sched-detail-card {
   width: 100%;
@@ -450,12 +452,17 @@
   .wb-sched-create-grid { grid-template-columns: 1fr; }
 }
 
+/* Match the conversation panel's compact desktop default. */
+@media (max-width: 1320px) {
+  .wb-sched-detail:is(.wb-floating-detail-shell) {
+    flex-basis: calc(var(--wb-right-w, 280px) - 8px);
+    width: calc(var(--wb-right-w, 280px) - 8px);
+  }
+}
 /* responsive: collapse the detail panel on narrow widths */
 @media (max-width: 1240px) {
   .wb-sched-rail { flex-basis: 220px; width: min(220px, 100%); }
-  .wb-sched-detail { flex-basis: 300px; width: 300px; }
 }
 @media (max-width: 980px) {
   .wb-sched-detail { display: none; }
 }
-

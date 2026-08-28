@@ -26,6 +26,7 @@ from .hook import (
     SESSION_END,
     SESSION_START,
     STOP,
+    TURN_START,
     Hook,
     HookEvent,
     HookPlugin,
@@ -1021,9 +1022,13 @@ class HookSet:
             if isinstance(result, Mapping):
                 value = str(result.get("context") or "").strip()
                 position = str(result.get("context_position") or "").strip()
+                context_kind = str(result.get("context_kind") or "").strip()
+                context_source = str(result.get("context_source") or "").strip()
             else:
                 value = str(result or "").strip()
                 position = ""
+                context_kind = ""
+                context_source = ""
             if value:
                 priority = (
                     -1
@@ -1033,7 +1038,101 @@ class HookSet:
                 contexts.append((
                     priority,
                     index,
-                    {"context": value, "position": position},
+                    {
+                        "context": value,
+                        "position": position,
+                        "context_kind": context_kind,
+                        "context_source": context_source,
+                    },
+                ))
+        return tuple(value for _priority, _index, value in sorted(contexts))
+
+    async def session_start_fingerprints(
+        self,
+        details: Mapping[str, Any] | None = None,
+        *,
+        time: datetime | None = None,
+    ) -> tuple[dict[str, Any], ...]:
+        """Collect optional opaque cache dependencies from SessionStart Hooks."""
+
+        await self._prepare_dispatch()
+        event = HookEvent(
+            SESSION_START,
+            self.tree_id,
+            time or _utc_now(),
+            payload=dict(details or {}),
+            node_id=self.root_id,
+            is_root=True,
+        )
+        values: list[dict[str, Any]] = []
+        for hook in self._snapshot(event):
+            plugin = self._plugins.resolve(hook.plugin_id)
+            provider = getattr(plugin, "session_start_cache_fingerprint", None)
+            if not callable(provider):
+                owner = getattr(plugin, "__self__", None)
+                provider = getattr(owner, "session_start_cache_fingerprint", None)
+            if not callable(provider):
+                continue
+            try:
+                value = provider(event)
+                if inspect.isawaitable(value):
+                    value = await value
+            except Exception as exc:
+                value = {
+                    "error": type(exc).__name__,
+                    "message": str(exc),
+                }
+            values.append({"hook_id": hook.id, "value": value})
+        return tuple(sorted(values, key=lambda item: str(item["hook_id"])))
+
+    async def turn_start(
+        self,
+        details: Mapping[str, Any] | None = None,
+        *,
+        time: datetime | None = None,
+    ) -> str:
+        mounts = await self.turn_start_mounts(details, time=time)
+        return "\n\n".join(str(mount["context"]) for mount in mounts)
+
+    async def turn_start_mounts(
+        self,
+        details: Mapping[str, Any] | None = None,
+        *,
+        time: datetime | None = None,
+    ) -> tuple[dict[str, str], ...]:
+        """Return ordered context contributions for the current user turn."""
+
+        event = HookEvent(
+            TURN_START,
+            self.tree_id,
+            time or _utc_now(),
+            payload=dict(details or {}),
+            node_id=self.root_id,
+            is_root=True,
+        )
+        contexts: list[tuple[int, int, dict[str, str]]] = []
+        for index, result in enumerate(await self.dispatch(event)):
+            if isinstance(result, Mapping):
+                value = str(result.get("context") or "").strip()
+                position = str(result.get("context_position") or "").strip()
+                context_kind = str(result.get("context_kind") or "").strip()
+                context_source = str(result.get("context_source") or "").strip()
+            else:
+                value = str(result or "").strip()
+                position = ""
+                context_kind = ""
+                context_source = ""
+            if value:
+                priority = -1 if position == "system" else (0 if position == "top" else 1)
+                contexts.append((
+                    priority,
+                    index,
+                    {
+                        "context": value,
+                        "position": position,
+                        "context_kind": context_kind,
+                        "context_source": context_source,
+                    },
                 ))
         return tuple(value for _priority, _index, value in sorted(contexts))
 

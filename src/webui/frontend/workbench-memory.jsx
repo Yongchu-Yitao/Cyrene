@@ -1,4 +1,5 @@
 import { workbenchServices } from "./shared/runtime/services.jsx"
+import { createPendingMemorySelection } from "./shared/runtime/pending-module-selection.jsx"
 // Workbench Memory page.
 //
 // This page owns its model, components and styles, and talks to the
@@ -1040,6 +1041,9 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     var learningSessionSelState = useState(""); var selectedLearningSessionId = learningSessionSelState[0]; var setSelectedLearningSessionId = learningSessionSelState[1];
     var workspaceRef = useRef(workspace); workspaceRef.current = workspace;
     var learningProjectRef = useRef(learningProject); learningProjectRef.current = learningProject;
+    var pendingMemorySelectionRef = useRef(null);
+    if (!pendingMemorySelectionRef.current) pendingMemorySelectionRef.current = createPendingMemorySelection(workbenchServices.navigation(), workspaceRef, function (id) { setSelectedId(id); setActivePanel(""); });
+    var pendingMemorySelection = pendingMemorySelectionRef.current;
     var learningActive = skillsEnabled && activePanel === "learning";
 
     var client = useMemo(function () { return api(workspace); }, [workspace]);
@@ -1164,14 +1168,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
         .finally(function () { setLearningBusy(""); });
     }
     function applyPendingMemorySelection() {
-      var navigation = workbenchServices.navigation();
-      var pending = navigation.getPending();
-      var pendingMemId = pending && pending.type === "memory" ? (pending.memId || pending.id) : "";
-      if (pendingMemId) {
-        setSelectedId(pendingMemId);
-        setActivePanel("");
-        navigation.clearPending(pending);
-      }
+      pendingMemorySelection.apply();
     }
 
     useEffect(function () {
@@ -1188,6 +1185,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       setSelectedLearningCandidateId("");
       setSelectedLearningChainId("");
       setSelectedLearningSessionId("");
+      pendingMemorySelection.reset();
       setActiveCat("all");
       setSourceFilter("");
     }, [workspace, learningProject]);
@@ -1195,6 +1193,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     useEffect(function () {
       if (!active) return;
       var cached = memoryPageCache.payloads[workspace];
+      pendingMemorySelection.capture();
       load({ background: !!cached }).then(applyPendingMemorySelection);
     }, [workspace, active]);
 
@@ -1232,8 +1231,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       function onNavigate(event) {
         var detail = event && event.detail;
         if (!detail || detail.type !== "memory") return;
-        var id = detail.memId || detail.id;
-        if (id) { setSelectedId(id); setActivePanel(""); }
+        pendingMemorySelection.captureAndApply(detail);
       }
       window.addEventListener("cyrene:workbench-navigate", onNavigate);
       return function () { window.removeEventListener("cyrene:workbench-navigate", onNavigate); };

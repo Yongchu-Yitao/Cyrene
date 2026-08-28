@@ -107,7 +107,7 @@ def test_soul_plugin_mounts_before_other_session_context(tmp_path):
         tree_id=tree.id,
         root_id=tree.root_id,
         hooks=hooks,
-        data={"soul_enabled": True},
+        data={"soul_enabled": True, "language": "en"},
         services={"soul": SoulService()},
     ))
 
@@ -180,9 +180,9 @@ def test_runtime_context_plugin_mounts_only_the_durable_turn_value(tmp_path):
         services={},
     ))
 
-    assert {hook.id for hook in hooks.list()} == {"cyrene-context-session-start"}
-    assert asyncio.run(hooks.session_start({
+    assert {hook.id for hook in hooks.list()} == {"cyrene-context-turn-start"}
+    assert asyncio.run(hooks.turn_start({
         "metadata": {"ephemeral_context": "current turn context"},
     })) == "current turn context"
-    assert asyncio.run(hooks.session_start({"metadata": {}})) == ""
+    assert asyncio.run(hooks.turn_start({"metadata": {}})) == ""
     store.close()

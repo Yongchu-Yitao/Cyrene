@@ -46,7 +46,7 @@ def _normalize_tool_calls(raw_calls: Any) -> list[dict[str, Any]]:
     return calls
 
 
-def _request_token_estimate(
+def request_token_estimate(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
 ) -> int:
@@ -85,8 +85,13 @@ def _eligible_candidates(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
     max_tokens: Any,
+    *,
+    estimated_input_tokens: Any = None,
 ) -> list[dict[str, Any]]:
-    required = _request_token_estimate(messages, tools)
+    try:
+        required = max(0, int(estimated_input_tokens))
+    except (TypeError, ValueError):
+        required = request_token_estimate(messages, tools)
     try:
         required += max(0, int(max_tokens or 0))
     except (TypeError, ValueError):
@@ -302,6 +307,27 @@ async def _publish_fallback(
         return
 
 
+async def _reset_model_stream(context: PluginContext) -> None:
+    sink = context.services.get("model_stream")
+    if not callable(sink):
+        return
+    result = sink({"type": "reply_start", "reset": True})
+    if hasattr(result, "__await__"):
+        await result
+
+
+async def _publish_next_fallback(
+    context: PluginContext,
+    candidate: Mapping[str, Any],
+    eligible: list[dict[str, Any]],
+    index: int,
+) -> None:
+    if index + 1 >= len(eligible):
+        return
+    await _reset_model_stream(context)
+    await _publish_fallback(context, candidate, eligible[index + 1])
+
+
 async def route_model_call(
     arguments: dict[str, Any],
     context: PluginContext,
@@ -321,10 +347,8 @@ async def route_model_call(
     route = str(arguments.get("route") or context.data.get("model_route") or "primary").strip().lower()
     if route not in {"primary", "secondary", "vision"}:
         raise ValueError(f"Unsupported chat model route: {route}")
-    # SessionStart context providers own transcript enrichment.  The router
-    # must forward that durable projection unchanged so host context is neither
-    # duplicated nor lost when a run is restored.
-    model_messages = [dict(message) for message in messages]
+    # AgentSession already supplies the cache-friendly transcript projection.
+    model_messages = messages if all(isinstance(item, dict) for item in messages) else [dict(item) for item in messages]
     requested_identity = context.data.get("model_identity")
     if isinstance(requested_identity, Mapping):
         from .model_catalog import resolve_exact_model_candidate
@@ -360,6 +384,7 @@ async def route_model_call(
         model_messages,
         tools if isinstance(tools, list) else None,
         arguments.get("max_tokens"),
+        estimated_input_tokens=context.data.get("prepared_request_tokens"),
     )
     execution = require_plugin_execution()
     # Provider Plugins receive the complete explicit PluginContext below. No
@@ -385,8 +410,7 @@ async def route_model_call(
                 status="failed",
                 error=error,
             )
-            if index + 1 < len(eligible):
-                await _publish_fallback(context, candidate, eligible[index + 1])
+            await _publish_next_fallback(context, candidate, eligible, index)
             continue
         provider_context = replace(
             context,
@@ -419,8 +443,7 @@ async def route_model_call(
                 status="failed",
                 error=error,
             )
-            if index + 1 < len(eligible):
-                await _publish_fallback(context, candidate, eligible[index + 1])
+            await _publish_next_fallback(context, candidate, eligible, index)
             continue
 
         try:
@@ -439,8 +462,7 @@ async def route_model_call(
                 status="failed",
                 error=error,
             )
-            if index + 1 < len(eligible):
-                await _publish_fallback(context, candidate, eligible[index + 1])
+            await _publish_next_fallback(context, candidate, eligible, index)
             continue
         await _publish_llm_event(
             context,
@@ -504,5 +526,6 @@ __all__ = [
     "EXACT_MODEL_UNAVAILABLE",
     "MODEL_ROUTER_PLUGIN",
     "create_model_router_plugin",
+    "request_token_estimate",
     "route_model_call",
 ]

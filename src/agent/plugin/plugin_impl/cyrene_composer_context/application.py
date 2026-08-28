@@ -75,7 +75,7 @@ class ProjectResolver:
 
 
 class ComposerContextService:
-    """Authoritative input-context state and SessionStart prompt builder."""
+    """Authoritative input-context state and TurnStart prompt builder."""
 
     def __init__(
         self,
@@ -708,7 +708,7 @@ class ComposerContextService:
         workspace: Path,
         services: Mapping[str, Any],
     ) -> str:
-        """Build one fail-closed SessionStart contribution for input context."""
+        """Build one fail-closed TurnStart contribution for input context."""
 
         run_context = _mapping(data.get("run_context"))
         requested = data.get("context_activations")

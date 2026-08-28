@@ -16,6 +16,7 @@ from . import (
     send_agent_message,
     spawn_subagent,
 )
+from .policy import setup_spawn_policy_context
 
 
 def setup(context: PluginSetupContext) -> None:
@@ -35,6 +36,7 @@ def setup(context: PluginSetupContext) -> None:
     from .manager import SubagentManager
 
     manager = SubagentManager(owner)
+    setup_spawn_policy_context(context)
     context.provide("subagents", manager)
     context.provide("session_driver", manager)
 

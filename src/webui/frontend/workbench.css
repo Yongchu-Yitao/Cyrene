@@ -1808,6 +1808,9 @@ html[data-platform="darwin"] .workbench-top-project-menu {
   border: 1px solid transparent;
   border-radius: 10px;
   transition: border-color 140ms ease, background-color 140ms ease;
+  /* This entire track is a drop target. Electron's native titlebar drag region
+     otherwise captures the pointer before HTML drag events can reach it. */
+  -webkit-app-region: no-drag;
 }
 
 .workbench-browser-manager-anchor {

@@ -6,6 +6,7 @@ from cyrene.workbench.conversation_context_service import (
     AgentContextRepository,
     ConversationContextQueryService,
     ConversationInboxQueryService,
+    _agent_path_messages,
     _agent_path_usage,
     _agent_path_plugin_usage,
 )
@@ -74,6 +75,56 @@ def test_agent_path_usage_normalizes_openai_cache_details():
     }
 
 
+def test_agent_path_messages_preserve_each_turn_suffix_and_stable_system_prefix():
+    nodes = [
+        SimpleNamespace(id="root", value={"role": "system", "content": "base"}),
+        SimpleNamespace(id="user-1", value={
+            "role": "user", "content": "first", "run_id": "run-1",
+        }),
+        SimpleNamespace(id="stable-1", value={
+            "role": "context",
+            "content": "stable",
+            "context_kind": "stable",
+            "context_lifecycle": "session",
+            "run_id": "run-1",
+        }),
+        SimpleNamespace(id="turn-1", value={
+            "role": "context",
+            "content": "dynamic-1",
+            "context_kind": "third_party_turn",
+            "context_lifecycle": "turn",
+            "run_id": "run-1",
+        }),
+        SimpleNamespace(id="assistant-1", value={
+            "role": "assistant", "content": "answer-1", "run_id": "run-1",
+        }),
+        SimpleNamespace(id="user-2", value={
+            "role": "user", "content": "second", "run_id": "run-2",
+        }),
+        SimpleNamespace(id="stable-2", value={
+            "role": "context",
+            "content": "stable",
+            "context_kind": "stable",
+            "context_lifecycle": "session",
+            "run_id": "run-2",
+        }),
+        SimpleNamespace(id="turn-2", value={
+            "role": "context",
+            "content": "dynamic-2",
+            "context_kind": "third_party_turn",
+            "context_lifecycle": "turn",
+            "run_id": "run-2",
+        }),
+    ]
+
+    assert _agent_path_messages(nodes) == [
+        {"role": "system", "content": "base\n\nstable"},
+        {"role": "user", "content": "first\n\ndynamic-1"},
+        {"role": "assistant", "content": "answer-1"},
+        {"role": "user", "content": "second\n\ndynamic-2"},
+    ]
+
+
 def test_mounted_ephemeral_context_is_not_projected_as_a_second_layer(tmp_path):
     service = _context_service(tmp_path, {"id": "chat_1", "model": "model"})
     state = {
@@ -101,6 +152,73 @@ def test_mounted_ephemeral_context_is_not_projected_as_a_second_layer(tmp_path):
         "messages",
     ]
     assert blocks["contextUsed"] == summary["ctxUsed"]
+
+
+def test_system_message_framing_overhead_is_not_split_across_prompt_sections(tmp_path):
+    service = _context_service(tmp_path, {"id": "chat_1", "model": "model"})
+    prompt = "You are A.\nFollow rules.\ntoolbox. Use tools."
+    state = {
+        "messages": [{"role": "system", "content": prompt}],
+        "systemPrompt": prompt,
+        "rootSystemPrompt": "",
+        "contextMounts": [{
+            "kind": "system_prompt",
+            "content": prompt,
+            "source": "cyrene_system_prompt",
+        }],
+    }
+
+    blocks = service._agent_blocks({"model": "model"}, state)
+    system_blocks = blocks["layers"][0]["blocks"]
+
+    assert [block["id"] for block in system_blocks] == [
+        "system.identity",
+        "system.behavior",
+        "system.tools",
+        "system.message_overhead",
+    ]
+    assert system_blocks[-1] == {
+        "id": "system.message_overhead",
+        "type": "overhead",
+        "tokens_est": 10,
+        "chars": 0,
+        "source": "message_envelope",
+        "reason": "message_overhead",
+    }
+
+
+def test_plugin_session_context_is_disclosed_per_contributor(tmp_path):
+    service = _context_service(tmp_path, {"id": "chat_1", "model": "model"})
+    state = {
+        "messages": [{
+            "role": "system",
+            "content": "persona\n\nmemory\n\nlearned",
+        }],
+        "rootSystemPrompt": "",
+        "contextMounts": [
+            {"kind": "persona", "content": "persona", "source": "cyrene_soul"},
+            {"kind": "memory", "content": "memory", "source": "cyrene_memory"},
+            {
+                "kind": "learned_skills",
+                "content": "learned",
+                "source": "cyrene_skills",
+            },
+        ],
+    }
+
+    blocks = service._agent_blocks({"model": "model"}, state)
+    system_blocks = blocks["layers"][0]["blocks"]
+
+    assert [block["id"] for block in system_blocks[:3]] == [
+        "context.persona",
+        "context.memory",
+        "context.learned_skills",
+    ]
+    assert [block["source"] for block in system_blocks[:3]] == [
+        "cyrene_soul",
+        "cyrene_memory",
+        "cyrene_skills",
+    ]
 
 
 @pytest.mark.asyncio
@@ -321,7 +439,7 @@ async def test_new_agent_context_tree_drives_summary_blocks_and_plugin_usage(tmp
         "compacted", "system", "user", "assistant", "tool",
     ]
     segments = {item["key"]: item["tokens"] for item in summary["segments"]}
-    assert segments["system"] == 53
+    assert segments["system"] == 39
     assert sum(segments.values()) == summary["ctxUsed"]
     assert blocks["compositionSource"] == "agent_tree"
     assert [layer["id"] for layer in blocks["layers"]] == [
@@ -333,7 +451,7 @@ async def test_new_agent_context_tree_drives_summary_blocks_and_plugin_usage(tmp
     assert blocks["layers"][0]["blocks"] == [{
         "id": "system.behavior",
         "type": "instructions",
-        "tokens_est": 25,
+        "tokens_est": 13,
         "chars": 13,
         "source": "context_tree",
         "reason": "behavior",
@@ -345,6 +463,13 @@ async def test_new_agent_context_tree_drives_summary_blocks_and_plugin_usage(tmp
         "contextKind": "project_memory",
         "source": "context_tree",
         "reason": "project_memory",
+    }, {
+        "id": "system.message_overhead",
+        "type": "overhead",
+        "tokens_est": 12,
+        "chars": 0,
+        "source": "message_envelope",
+        "reason": "message_overhead",
     }]
     assert blocks["layers"][1]["totalTokens"] == 14
     assert blocks["layers"][2]["totalTokens"] == blocks["messageTokens"]
@@ -448,6 +573,32 @@ def test_plugin_usage_scopes_reused_call_ids_to_their_assistant_batch():
         ["cyrene_code", "cyrene_memory"],
         [],
     )
+
+
+def test_plugin_usage_includes_successful_direct_tools_via_registry_ownership():
+    result = {
+        "call_id": "call_1",
+        "name": "Bash",
+        "success": True,
+        "value": {"exit_code": 0},
+    }
+    nodes = [
+        SimpleNamespace(
+            id="assistant_1",
+            parent_id="user_1",
+            value={"role": "assistant", "effect_results": {"call_1": result}},
+        ),
+        SimpleNamespace(
+            id="tools_1",
+            parent_id="assistant_1",
+            value={"role": "tool_results", "results": [result]},
+        ),
+    ]
+
+    assert _agent_path_plugin_usage(
+        nodes,
+        lambda name: ("core", name),
+    ) == (["core"], [])
 
 
 @pytest.mark.asyncio

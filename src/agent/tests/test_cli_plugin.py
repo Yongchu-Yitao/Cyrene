@@ -74,7 +74,7 @@ def test_cli_pack_binds_all_supported_events_to_the_new_hook_set(cli_hook_settin
     setup(context)
 
     assert {event for event, _handler, _options in registered} == {
-        "PreToolUse", "PostToolUse", "SessionStart", "SessionEnd", "Stop",
+        "PreToolUse", "PostToolUse", "SessionStart", "TurnStart", "SessionEnd", "Stop",
     }
     assert all(options["plugin_id"].startswith("cyrene_cli.") for _event, _handler, options in registered)
     assert all(options["hook_id"].startswith("cyrene-cli-") for _event, _handler, options in registered)

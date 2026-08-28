@@ -340,11 +340,7 @@ class _AnswerOperation:
             ),
             "",
         )
-        memory_snapshot = (
-            self.chat.get("projectMemorySnapshot")
-            if isinstance(self.chat.get("projectMemorySnapshot"), dict)
-            else None
-        )
+        memory_snapshot = self.service.ensure_chat_memory_snapshot(self.chat)
         input_context = self.service.resolve_composer_input_context(
             self.chat,
             self.workspace_dir,

@@ -194,11 +194,10 @@ Ctrl+O、Esc、Q 或 Ctrl+C 返回后详情会真正从界面消失，不写入�
 总数、彩色比例条，以及“系统前缀 / 临时注入 / 对话消息”分组。用户、助手、
 工具和各系统注入块均缩进显示，并使用与 App 对应的语义颜色。
 
-这些分组直接投影持久 ContextTree，不是另一套 Prompt 估算。启用的
-`SessionStart` Hook 插件负责组装 Context：可编辑 System Prompt 最先，启用时的
-SOUL 紧随其后，然后是输入框选择的 Workspace/MCP/Skills Context、Memory、
-Attachment 与 Runtime State。切换输入框 Context 选项只改变下一轮明确的 Mount，
-并保留上一轮历史。详见[架构说明](architecture.zh-CN.md#插件如何组成一个-agent)。
+这些分组直接投影持久 ContextTree，不是另一套 Prompt 估算。`SessionStart` 在每个
+对话中只冻结一次 System Prompt、SOUL、Memory 与已学习技能；`TurnStart` 每轮追加
+输入框选择的 Workspace、MCP、Attachment 与 Runtime Context。稳定前缀逐字节复用，
+变化只发生在其后的动态后缀。详见[架构说明](architecture.zh-CN.md#插件如何组成一个-agent)。
 
 `/config` 使用本地化的两轴设置导航：←/→ 在“常规、模型、工具、连接、数据、
 关于”Tab 之间切换，↑/↓ 选择当前 Tab 的详细设置项，Enter 打开。常规设置和

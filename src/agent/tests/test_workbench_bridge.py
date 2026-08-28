@@ -113,7 +113,7 @@ def test_turn_metrics_aggregate_model_usage_and_generation_time():
         ]
     }
 
-    usage, model, identity, duration_ms, rate = _turn_metrics(
+    usage, latest_usage, model, identity, duration_ms, rate = _turn_metrics(
         snapshot,
         "run-1",
         "assistant-final",
@@ -123,6 +123,13 @@ def test_turn_metrics_aggregate_model_usage_and_generation_time():
         "prompt_tokens": 155,
         "completion_tokens": 35,
         "total_tokens": 190,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 0,
+    }
+    assert latest_usage == {
+        "prompt_tokens": 40,
+        "completion_tokens": 10,
+        "total_tokens": 50,
         "prompt_cache_hit_tokens": 0,
         "prompt_cache_miss_tokens": 0,
     }
@@ -323,7 +330,7 @@ def test_plain_chat_bridge_submits_publishes_and_forwards_plugin_context(tmp_pat
         tree_id="chat-1",
         registry=registry,
         host_context={"bot": object(), "chat_id": "chat-1"},
-        plugin_context_data={"db_path": "/tmp/workbench.sqlite3"},
+        plugin_context_data={"db_path": "/tmp/workbench.sqlite3", "language": "en"},
     )
     bridge = WorkbenchSessionBridge(session)
     published = []
@@ -371,6 +378,49 @@ def test_plain_chat_bridge_submits_publishes_and_forwards_plugin_context(tmp_pat
     assert snapshot["status"] == "idle"
     assert snapshot["run_id"] == "run-chat-1"
     assert session.final_output("run-chat-1")["content"] == "echo=hello"
+    bridge.close()
+
+
+def test_bridge_projects_provider_stream_without_replaying_full_content_delta(tmp_path):
+    async def model(_arguments, context):
+        stream = context.services["model_stream"]
+        await stream({"type": "reply_start"})
+        await stream({"type": "reply_delta", "delta": "Hel"})
+        await stream({"type": "reply_delta", "delta": "lo"})
+        await stream({"type": "reply_done", "response": "Hello"})
+        return {"content": "Hello", "tool_calls": []}
+
+    registry = model_registry(model)
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        tree_id="stream-chat",
+        registry=registry,
+    )
+    bridge = WorkbenchSessionBridge(session)
+    published = []
+
+    async def scenario():
+        return await bridge.submit(
+            "stream",
+            run_id="stream-run",
+            publish=lambda event: published.append(event),
+        )
+
+    assert run(scenario()) == "Hello"
+    assert [
+        event["delta"]
+        for event in published
+        if event["type"] == "reply_delta"
+    ] == ["Hel", "lo"]
+    assert [
+        event["response"]
+        for event in published
+        if event["type"] == "reply_done"
+    ] == ["Hello", "Hello"]
     bridge.close()
 
 

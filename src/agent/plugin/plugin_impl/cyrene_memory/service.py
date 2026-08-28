@@ -12,7 +12,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from agent.hook import CONTEXT_USED, SESSION_END, SESSION_START, STOP, ContextUsed, HookEvent
+from agent.hook import (
+    CONTEXT_USED,
+    SESSION_END,
+    SESSION_START,
+    STOP,
+    TURN_START,
+    ContextUsed,
+    HookEvent,
+)
+from agent.context.projection import (
+    project_context_message,
+    selected_context_node_ids,
+)
 from agent.plugin import PluginContext, PluginSetupContext
 from cyrene.localization import app_language, localized
 from .definitions import MEMORY_TOOL_NAMES
@@ -127,55 +139,69 @@ class MemoryService:
         project_memory.configure_store(self.db_path)
 
     def context_block(self) -> str:
-        """Render the frozen memory context used by one Agent run."""
+        """Render the stable memory snapshot used by one conversation epoch."""
 
         parts: list[str] = []
         run_data = self.run_data
         language = self.language
-        try:
-            from .short_term import get_context
-
-            short = get_context(
-                max_chars=2500,
-                header=localized(
-                    "[Short-term cross-session memory:]",
-                    "[跨会话短期记忆：]",
-                    language=language,
-                ),
-            ).strip()
+        raw_snapshot = self.data.get("project_memory_snapshot")
+        snapshot = (
+            copy.deepcopy(dict(raw_snapshot))
+            if isinstance(raw_snapshot, Mapping)
+            else None
+        )
+        if snapshot is not None and "shortTermContext" in snapshot:
+            short = str(snapshot.get("shortTermContext") or "").strip()
             if short:
                 parts.append(short)
-        except Exception:
-            logger.exception("Failed to render short-term memory")
+        else:
+            try:
+                from .short_term import get_context
+
+                short = get_context(
+                    max_chars=2500,
+                    header=localized(
+                        "[Short-term cross-session memory:]",
+                        "[跨会话短期记忆：]",
+                        language=language,
+                    ),
+                ).strip()
+                if short:
+                    parts.append(short)
+            except Exception:
+                logger.exception("Failed to render short-term memory")
 
         project_id = self.project_id
         if project_id:
             self.configure_stores()
-            try:
-                from .structured import render_memory_for_injection
-
-                structured = render_memory_for_injection(
-                    project_id,
-                    limit=20,
-                    max_chars=2400,
-                    header=localized(
-                        "Project durable memories:",
-                        "项目持久记忆：",
-                        language=language,
-                    ),
-                    language=language,
-                ).strip()
+            if snapshot is not None and "structuredContext" in snapshot:
+                structured = str(snapshot.get("structuredContext") or "").strip()
                 if structured:
                     parts.append(structured)
-            except Exception:
-                logger.exception("Failed to render structured project memory")
+            else:
+                try:
+                    from .structured import render_memory_for_injection
+
+                    structured = render_memory_for_injection(
+                        project_id,
+                        limit=20,
+                        max_chars=2400,
+                        header=localized(
+                            "Project durable memories:",
+                            "项目持久记忆：",
+                            language=language,
+                        ),
+                        language=language,
+                    ).strip()
+                    if structured:
+                        parts.append(structured)
+                except Exception:
+                    logger.exception("Failed to render structured project memory")
             try:
                 from .project_memory import (
                     build_main_agent_suffix,
                 )
 
-                raw_snapshot = self.data.get("project_memory_snapshot")
-                snapshot = copy.deepcopy(dict(raw_snapshot)) if isinstance(raw_snapshot, Mapping) else None
                 include_trigger = self.is_main and _bool(
                     self.data,
                     run_data,
@@ -224,21 +250,16 @@ class MemoryService:
             None,
         )
         current_run_id = str(current_user.value.get("run_id") if current_user is not None and isinstance(current_user.value, Mapping) else "")
-        current_context_by_kind = {
-            str(node.value.get("context_kind") or node.id): node.id
-            for node in path
-            if isinstance(node.value, Mapping) and node.value.get("role") == "context" and str(node.value.get("run_id") or "") == current_run_id
-        }
-        current_context_ids = set(current_context_by_kind.values())
+        active_context_ids = selected_context_node_ids(path, current_run_id)
         for node in path:
             value = node.value if isinstance(node.value, Mapping) else {}
             role = str(value.get("role") or "")
             if role in {"system", "user"}:
                 messages.append({"role": role, "content": str(value.get("content") or "")})
             elif role == "context":
-                if node.id not in current_context_ids:
+                if node.id not in active_context_ids:
                     continue
-                self._append_system(messages, str(value.get("content") or ""))
+                project_context_message(messages, value)
             elif role == "assistant":
                 message: dict[str, Any] = {
                     "role": "assistant",
@@ -288,21 +309,6 @@ class MemoryService:
                         }
                     )
         return messages
-
-    @staticmethod
-    def _append_system(messages: list[dict[str, Any]], content: str) -> None:
-        clean = str(content or "").strip()
-        if not clean:
-            return
-        system = next(
-            (message for message in messages if message.get("role") == "system"),
-            None,
-        )
-        if system is None:
-            messages.insert(0, {"role": "system", "content": clean})
-        else:
-            existing = str(system.get("content") or "").strip()
-            system["content"] = "\n\n".join(part for part in (existing, clean) if part)
 
     def verified_evidence(self, node_id: str, *, max_chars: int = 6000) -> str:
         names: dict[str, str] = {}
@@ -389,21 +395,67 @@ class MemoryService:
         return header + "\n" + conversations
 
     async def on_session_start(self, event: HookEvent) -> dict[str, str]:
-        parts = [self.context_block()]
+        context = self.context_block().strip()
+        return {
+            "context": context,
+            "context_kind": "memory",
+            "context_source": "cyrene_memory",
+        } if context else {}
+
+    def session_start_cache_fingerprint(self, _event: HookEvent) -> object:
+        """Return only stable inputs that can change the mounted memory block."""
+
+        raw = self.data.get("project_memory_snapshot")
+        if isinstance(raw, Mapping) and {
+            "shortTermContext",
+            "structuredContext",
+        }.issubset(raw):
+            return {
+                "language": self.language,
+                "project_id": self.project_id,
+                "memory_trigger_enabled": _bool(
+                    self.data,
+                    self.run_data,
+                    "memory_trigger_enabled",
+                    True,
+                ),
+                "snapshot": {
+                    key: raw.get(key)
+                    for key in (
+                        "prompt",
+                        "shortTermContext",
+                        "structuredContext",
+                        "language",
+                    )
+                    if key in raw
+                },
+            }
+        # Embedded/legacy hosts without a complete frozen snapshot still get
+        # correctness: hash the exact block rather than teaching the kernel
+        # how memory storage works.
+        return self.context_block()
+
+    async def on_turn_start(self, event: HookEvent) -> dict[str, str]:
+        """Add only context whose value is specific to this proactive turn."""
+
         details = event.payload if isinstance(event.payload, Mapping) else {}
         metadata = details.get("metadata")
         metadata = metadata if isinstance(metadata, Mapping) else {}
-        if bool(metadata.get("proactive")):
-            parts.append(await self._proactive_conversation_context())
-        context = "\n\n".join(part for part in parts if part).strip()
-        return {"context": context} if context else {}
+        if not bool(metadata.get("proactive")):
+            return {}
+        context = (await self._proactive_conversation_context()).strip()
+        return {
+            "context": context,
+            "context_kind": "proactive_memory",
+            "context_source": "cyrene_memory",
+        } if context else {}
 
     async def on_context_used(self, event: HookEvent) -> None:
         usage = event.payload
         if not isinstance(usage, ContextUsed) or usage.usage_ratio <= 0:
             return
-        reached = min(70, int(usage.usage_ratio * 100) // 10 * 10)
-        if reached >= 20:
+        reached = min(70, int(usage.usage_ratio * 100) // 5 * 5)
+        if reached >= 10:
             self._context_threshold = max(self._context_threshold, reached)
 
     def _archive_completed_exchange(
@@ -509,6 +561,20 @@ class MemoryService:
         )
         if snapshot is None:
             return
+        try:
+            from .project_memory import claim_structured_memory_threshold
+
+            structured_threshold = claim_structured_memory_threshold(
+                self.session_id,
+                messages,
+                observed_percent=(self._context_threshold or None),
+            )
+        except Exception:
+            logger.exception("Could not evaluate structured-memory threshold")
+            return
+        if structured_threshold is None:
+            return
+        snapshot["structuredMemoryThresholdPercent"] = structured_threshold
         evidence = self.verified_evidence(assistant_node_id)
         coroutine = self._capture_and_learn(
             tree_user_text,
@@ -723,6 +789,7 @@ def setup_memory(context: PluginSetupContext) -> None:
     service.configure_stores()
     context.provide(MEMORY_SERVICE_ID, service, replace=True)
     _bind_hook(context, SESSION_START, "session_start", service.on_session_start, root_only=True)
+    _bind_hook(context, TURN_START, "turn_start", service.on_turn_start, root_only=True)
     _bind_hook(context, CONTEXT_USED, "context_used", service.on_context_used)
     _bind_hook(context, SESSION_END, "session_end", service.on_session_end, root_only=True)
     _bind_hook(context, STOP, "stop", service.on_stop)

@@ -74,11 +74,11 @@
     "cyrene_context": {
       "en": {
         "name": "Runtime context",
-        "description": "Mount per-turn Workbench context through the SessionStart hook."
+        "description": "Mount per-turn Workbench context through the TurnStart hook."
       },
       "zh": {
         "name": "运行上下文",
-        "description": "通过 SessionStart Hook 挂载每轮 Workbench 上下文。"
+        "description": "通过 TurnStart Hook 挂载每轮 Workbench 上下文。"
       }
     },
     "cyrene_control": {
@@ -2071,6 +2071,26 @@
       "zh": {
         "name": "广播消息",
         "description": "向当前会话中的所有其他代理广播一条消息。"
+      }
+    },
+    "cyrene_channels.runtime": {
+      "en": {
+        "name": "Messaging channel runtime",
+        "description": "Provide the configured Telegram and WeChat channel runtime."
+      },
+      "zh": {
+        "name": "消息渠道运行时",
+        "description": "提供已配置的 Telegram 与微信消息渠道运行时。"
+      }
+    },
+    "cyrene_composer_context.mount": {
+      "en": {
+        "name": "Mount composer context",
+        "description": "Validate and mount context selected in the message composer."
+      },
+      "zh": {
+        "name": "挂载输入框上下文",
+        "description": "校验并挂载在消息输入框中选择的上下文。"
       }
     },
     "browser.user": {

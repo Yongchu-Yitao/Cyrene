@@ -20,6 +20,7 @@ function wbNavigateFromSearch(context, requestedPayload) {
     : context.store.activeProject;
   if (!project) return;
   var pageMap = { chat: "chat", knowledge: "knowledge", memory: "memory", schedule: "schedule" };
+  var moduleMap = { chat: "work", knowledge: "knowledge", memory: "memory", schedule: "schedule" };
   if (type === "task" && project && payload.sessionId) {
     var session = project.sessions.find(function (item) { return item.id === payload.sessionId; });
     if (session) {
@@ -45,7 +46,7 @@ function wbNavigateFromSearch(context, requestedPayload) {
     if (project && project.id !== context.store.activeProjectId) context.getSelectProject()(project.id);
     if (pageMap[type] && (
       !Array.isArray(context.enabledModules)
-      || context.enabledModules.indexOf(pageMap[type]) >= 0
+      || context.enabledModules.indexOf(moduleMap[type]) >= 0
     )) context.setFullPage(pageMap[type]);
   }
   var navigation = workbenchServices.navigation();

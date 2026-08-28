@@ -32,6 +32,13 @@ def test_builtin_agent_metrics_are_persisted_on_assistant_message():
             "completion_tokens": 30,
             "total_tokens": 150,
         },
+        latest_request_usage={
+            "prompt_tokens": 118,
+            "completion_tokens": 30,
+            "total_tokens": 148,
+            "prompt_cache_hit_tokens": 110,
+            "prompt_cache_miss_tokens": 8,
+        },
         model="provider/model",
         model_identity={"provider": "provider", "model": "model"},
         generation_duration_ms=750.0,
@@ -62,6 +69,7 @@ def test_builtin_agent_metrics_are_persisted_on_assistant_message():
     )
 
     assert assistant["usage"] == projection.usage
+    assert assistant["latestRequestUsage"] == projection.latest_request_usage
     assert assistant["model"] == "provider/model"
     assert assistant["modelIdentity"] == projection.model_identity
     assert assistant["modelGenerationDurationMs"] == 750.0

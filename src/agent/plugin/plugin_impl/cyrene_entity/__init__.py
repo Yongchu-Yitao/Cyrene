@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 
-from agent.hook import SESSION_START, HookEvent
+from agent.hook import TURN_START, HookEvent
 from agent.plugin import (
     PluginApplicationContext,
     PluginPack,
@@ -26,6 +26,26 @@ def _session_id(data: Mapping[str, object]) -> str:
     if isinstance(run_context, Mapping):
         return str(run_context.get("session_id") or "").strip()
     return ""
+
+
+def _register_proactive_context_hook(context: PluginSetupContext, plugin) -> None:
+    hook_id = "cyrene-entity-proactive-turn-start"
+    legacy_hook_id = "cyrene-entity-proactive-session-start"
+    plugin_id = "cyrene_entity.proactive_context"
+    existing = {hook.id: hook for hook in context.hooks.list()}
+    if legacy_hook_id in existing:
+        context.hooks.unregister(legacy_hook_id)
+    if hook_id in existing:
+        context.hooks.bind_plugin(plugin_id, plugin, replace=True)
+        return
+    context.hooks.register(
+        TURN_START,
+        plugin,
+        plugin_id=plugin_id,
+        hook_id=hook_id,
+        root_only=True,
+        failure_policy="open",
+    )
 
 
 def setup(context: PluginSetupContext) -> None:
@@ -128,22 +148,12 @@ def setup(context: PluginSetupContext) -> None:
                 "## 需要关注的事务\n{items}",
                 language=language,
                 items="\n".join(lines),
-            )
+            ),
+            "context_kind": "proactive_entities",
+            "context_source": "cyrene_entity",
         }
 
-    hook_id = "cyrene-entity-proactive-session-start"
-    plugin_id = "cyrene_entity.proactive_context"
-    if hook_id in {hook.id for hook in context.hooks.list()}:
-        context.hooks.bind_plugin(plugin_id, mount_proactive_entities, replace=True)
-    else:
-        context.hooks.register(
-            SESSION_START,
-            mount_proactive_entities,
-            plugin_id=plugin_id,
-            hook_id=hook_id,
-            root_only=True,
-            failure_policy="open",
-        )
+    _register_proactive_context_hook(context, mount_proactive_entities)
 
 
 def application_setup(context: PluginApplicationContext) -> None:

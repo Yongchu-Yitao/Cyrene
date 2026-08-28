@@ -162,9 +162,9 @@ def test_memory_pack_mounts_session_context_through_hook(monkeypatch, tmp_path):
         "assistant",
     ]
     mounted = nodes[2]["value"]
-    assert mounted["context_kind"] == "plugin_session"
-    assert mounted["context_source"] == "SessionStart"
-    assert mounted["metadata"] == {"source": "SessionStart"}
+    assert mounted["context_kind"] == "memory"
+    assert mounted["context_source"] == "cyrene_memory"
+    assert mounted["metadata"] == {"source": "cyrene_memory"}
     assert "Project memory:\nUse the verified design." in captured[0][0]["content"]
     session.close()
 
@@ -175,7 +175,7 @@ def test_memory_plugin_mounts_recent_conversation_for_proactive_run(
 ):
     from datetime import datetime, timezone
 
-    from agent.hook import HookEvent, SESSION_START
+    from agent.hook import HookEvent, TURN_START
     from agent.plugin.plugin_impl.cyrene_memory import archive
     from agent.plugin.plugin_impl.cyrene_memory.service import MemoryService
 
@@ -192,16 +192,130 @@ def test_memory_plugin_mounts_recent_conversation_for_proactive_run(
         data={},
     )
     event = HookEvent(
-        SESSION_START,
+        TURN_START,
         "proactive",
         datetime.now(timezone.utc),
         payload={"metadata": {"proactive": True}},
     )
 
-    result = run(service.on_session_start(event))
+    result = run(service.on_turn_start(event))
 
-    assert result["context"].startswith("base memory\n\n## Recent conversation")
+    assert result["context"].startswith("## ")
     assert "ship the release" in result["context"]
+
+
+def test_memory_context_uses_chat_snapshot_instead_of_live_project_store(
+    monkeypatch,
+    tmp_path,
+):
+    from agent.plugin.plugin_impl.cyrene_memory import project_memory, short_term, structured
+    from agent.plugin.plugin_impl.cyrene_memory.service import MemoryService
+
+    monkeypatch.setattr(
+        short_term,
+        "get_context",
+        lambda **_kwargs: "live short-term memory",
+    )
+    monkeypatch.setattr(
+        structured,
+        "render_memory_for_injection",
+        lambda *_args, **_kwargs: "live structured memory",
+    )
+    monkeypatch.setattr(
+        project_memory,
+        "build_main_agent_suffix",
+        lambda *_args, **_kwargs: "frozen versioned project memory",
+    )
+    service = MemoryService(
+        workspace=tmp_path,
+        tree=None,
+        tree_id="chat-frozen",
+        data={
+            "project_id": "project-frozen",
+            "project_memory_snapshot": {
+                "prompt": "frozen versioned project memory",
+                "shortTermContext": "frozen short-term memory",
+                "structuredContext": "frozen structured memory",
+            },
+        },
+    )
+
+    context = service.context_block()
+
+    assert context == (
+        "frozen short-term memory\n\n"
+        "frozen structured memory\n\n"
+        "frozen versioned project memory"
+    )
+    assert "live short-term memory" not in context
+    assert "live structured memory" not in context
+
+
+def test_memory_transcript_uses_the_shared_context_lifecycle_projection(tmp_path):
+    from types import SimpleNamespace
+
+    from agent.plugin.plugin_impl.cyrene_memory.service import MemoryService
+
+    path = [
+        SimpleNamespace(id="root", value={"role": "system", "content": "base"}),
+        SimpleNamespace(id="user-1", value={
+            "role": "user", "content": "first", "run_id": "run-1",
+        }),
+        SimpleNamespace(id="stable-1", value={
+            "role": "context",
+            "content": "stable",
+            "context_kind": "stable",
+            "context_lifecycle": "session",
+            "run_id": "run-1",
+        }),
+        SimpleNamespace(id="turn-1", value={
+            "role": "context",
+            "content": "dynamic-1",
+            "context_kind": "third_party_turn",
+            "context_lifecycle": "turn",
+            "run_id": "run-1",
+        }),
+        SimpleNamespace(id="assistant-1", value={
+            "role": "assistant", "content": "answer-1", "run_id": "run-1",
+        }),
+        SimpleNamespace(id="user-2", value={
+            "role": "user", "content": "second", "run_id": "run-2",
+        }),
+        SimpleNamespace(id="stable-2", value={
+            "role": "context",
+            "content": "stable",
+            "context_kind": "stable",
+            "context_lifecycle": "session",
+            "run_id": "run-2",
+        }),
+        SimpleNamespace(id="turn-2", value={
+            "role": "context",
+            "content": "dynamic-2",
+            "context_kind": "third_party_turn",
+            "context_lifecycle": "turn",
+            "run_id": "run-2",
+        }),
+    ]
+
+    class Tree:
+        def get_path(self, tree_id, node_id):
+            assert tree_id == "tree"
+            assert node_id == "turn-2"
+            return path
+
+    service = MemoryService(
+        workspace=tmp_path,
+        tree=Tree(),
+        tree_id="tree",
+        data={},
+    )
+
+    assert service.messages("turn-2") == [
+        {"role": "system", "content": "base\n\nstable"},
+        {"role": "user", "content": "first\n\ndynamic-1"},
+        {"role": "assistant", "content": "answer-1"},
+        {"role": "user", "content": "second\n\ndynamic-2"},
+    ]
 
 
 def test_memory_plugin_session_end_owns_automatic_capture(monkeypatch, tmp_path):
@@ -247,6 +361,10 @@ def test_memory_plugin_session_end_owns_automatic_capture(monkeypatch, tmp_path)
 
     monkeypatch.setattr(MemoryService, "_persist_learning_snapshot", persist)
     monkeypatch.setattr(MemoryService, "_capture_and_learn", capture)
+    monkeypatch.setattr(
+        "agent.plugin.plugin_impl.cyrene_memory.project_memory.claim_structured_memory_threshold",
+        lambda *_args, **_kwargs: 10,
+    )
 
     with ContextStoreRouter(tmp_path / "context") as store:
         tree = store.create_tree(
@@ -309,6 +427,7 @@ def test_memory_plugin_session_end_owns_automatic_capture(monkeypatch, tmp_path)
     assert captured["capture"]["snapshot"] == {
         "chatId": "chat-memory",
         "projectId": "project-memory",
+        "structuredMemoryThresholdPercent": 10,
     }
 
 

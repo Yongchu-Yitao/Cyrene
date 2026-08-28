@@ -114,6 +114,10 @@ class ChatReplyFinalizationApplicationService:
             effective_usage.update(request.projection.usage)
         if any(effective_usage.values()):
             assistant["usage"] = effective_usage
+        if any(request.projection.latest_request_usage.values()):
+            assistant["latestRequestUsage"] = dict(
+                request.projection.latest_request_usage
+            )
         if request.projection.model_identity:
             assistant["modelIdentity"] = dict(request.projection.model_identity)
         generation_duration_ms = request.projection.generation_duration_ms

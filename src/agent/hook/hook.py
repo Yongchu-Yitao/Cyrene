@@ -12,6 +12,7 @@ CONTEXT_USED = "ContextUsed"
 PRE_TOOL_USE = "PreToolUse"
 POST_TOOL_USE = "PostToolUse"
 SESSION_START = "SessionStart"
+TURN_START = "TurnStart"
 SESSION_END = "SessionEnd"
 STOP = "Stop"
 
@@ -22,6 +23,7 @@ HOOK_EVENTS = frozenset(
         PRE_TOOL_USE,
         POST_TOOL_USE,
         SESSION_START,
+        TURN_START,
         SESSION_END,
         STOP,
     }
@@ -59,8 +61,23 @@ class HookEvent:
 
 
 HookPlugin: TypeAlias = Callable[[HookEvent], Any | Awaitable[Any]]
+SessionStartCacheFingerprint: TypeAlias = Callable[
+    [HookEvent], Any | Awaitable[Any]
+]
 HookMatcher: TypeAlias = Callable[[HookEvent], bool]
 FailurePolicy: TypeAlias = Literal["open", "block", "closed"]
+
+
+def with_session_start_cache_fingerprint(
+    plugin: HookPlugin,
+    provider: SessionStartCacheFingerprint,
+) -> HookPlugin:
+    """Attach an opaque stable-dependency provider to a SessionStart Hook."""
+
+    if not callable(plugin) or not callable(provider):
+        raise TypeError("plugin and fingerprint provider must be callable")
+    setattr(plugin, "session_start_cache_fingerprint", provider)
+    return plugin
 
 
 @dataclass(frozen=True, slots=True)

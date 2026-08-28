@@ -446,7 +446,7 @@ html[data-theme="dark"] .wb-lib-commandbar::before {
   --wb-mem-toolbar-overlay-height: 66px;
   --wb-mem-toolbar-clearance: 4px;
   position: relative;
-  flex: 1 1 auto; min-width: 0; min-height: 0;
+  flex: 1 1 0%; min-width: 0; min-height: 0;
   display: flex; flex-direction: column;
   border-right: 0;
 }
@@ -1944,7 +1944,7 @@ html[data-theme="dark"] .wb-mem-main {
   animation: wb-floating-detail-in 170ms cubic-bezier(.2, .8, .2, 1) both;
 }
 .wb-mem-page,
-.wb-lib-page { --wb-floating-detail-width: 350px; }
+.wb-lib-page { --wb-floating-detail-width: calc(var(--wb-right-w, 350px) - 8px); }
 .wb-floating-detail-card.empty { min-height: 160px; }
 .wb-floating-detail-card .wb-detail-empty-state {
   width: 100%;
@@ -2481,7 +2481,7 @@ html[data-theme="dark"] .wbc-page .wbc-side-card.wb-task-detail-card {
   --wb-mem-detail-tabs-overlay-height: 0px;
   position: relative;
   flex: 0 0 var(--wb-floating-detail-width); width: var(--wb-floating-detail-width); min-width: 0; min-height: 0;
-  padding: var(--wb-floating-card-top-gap) 12px var(--wb-floating-card-bottom-gap);
+  padding: var(--wb-floating-card-top-gap) 12px var(--wb-floating-card-bottom-gap) 4px;
   background: transparent;
   overflow: hidden;
 }
@@ -2497,7 +2497,7 @@ html[data-theme="dark"] .wbc-page .wbc-side-card.wb-task-detail-card {
 .wb-mem-detail.wb-mem-skill-panel {
   display: flex;
   flex-direction: column;
-  padding: var(--wb-floating-card-top-gap) 12px var(--wb-floating-card-bottom-gap);
+  padding: var(--wb-floating-card-top-gap) 12px var(--wb-floating-card-bottom-gap) 4px;
   background: transparent;
   overflow: visible;
 }
@@ -2977,10 +2977,14 @@ html[data-theme="dark"] .wbc-page .wbc-side-card.wb-task-detail-card {
 
 .wb-mem-scrim { position: fixed; inset: 0; z-index: 30; }
 
+/* Keep the memory and library inspectors in lock-step with the conversation
+   panel's responsive default instead of maintaining a second width scale. */
+@media (max-width: 1320px) {
+  .wb-mem-page,
+  .wb-lib-page { --wb-floating-detail-width: calc(var(--wb-right-w, 280px) - 8px); }
+}
 /* responsive: collapse the detail panel, then the rail, on narrow widths */
 @media (max-width: 1240px) {
-  .wb-mem-page,
-  .wb-lib-page { --wb-floating-detail-width: 312px; }
   .wb-mem-rail { flex-basis: 240px; width: 240px; }
 }
 @media (max-width: 1080px) {
@@ -3043,4 +3047,3 @@ html[data-theme="dark"] .wbc-page .wbc-side-card.wb-task-detail-card {
   width: 0;
   height: 0;
 }
-

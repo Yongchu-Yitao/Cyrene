@@ -128,8 +128,16 @@ class StubSubagentManager:
         return {"round_id": round_id, "subagents": []}
 
 
-def test_subagent_pack_follows_toolbox_list_describe_invoke(tmp_path):
+def test_subagent_pack_follows_toolbox_list_describe_invoke(tmp_path, monkeypatch):
     async def scenario() -> None:
+        from cyrene.runtime import settings_store
+
+        configured = {"spawn_policy": "conservative"}
+        monkeypatch.setattr(
+            settings_store,
+            "get",
+            lambda key, default=None: configured.get(key, default),
+        )
         plugin_directory = tmp_path / "plugin_impl"
         copy_subagent_pack(plugin_directory)
         registry = PluginRegistry()
@@ -215,6 +223,80 @@ def test_subagent_pack_follows_toolbox_list_describe_invoke(tmp_path):
         )
         assert manager.calls[0][4]
 
+        configured["spawn_policy"] = "off"
+        blocked = await runtime.call(
+            "toolbox",
+            {
+                "operation": "invoke",
+                "name": "spawn_subagent",
+                "arguments": {
+                    "agent_id": "blocked-worker",
+                    "task": "must not start",
+                },
+            },
+            context,
+        )
+        assert "disabled by the current spawn policy" in blocked.value["result"]
+        assert not any(
+            call[0] == "spawn" and call[2] == "blocked-worker"
+            for call in manager.calls
+        )
+
+    run(scenario())
+
+
+def test_subagent_pack_mounts_dynamic_spawn_policy_for_main_only(
+    tmp_path,
+    monkeypatch,
+):
+    async def scenario() -> None:
+        from cyrene.runtime import settings_store
+
+        configured = {"spawn_policy": "aggressive"}
+        monkeypatch.setattr(
+            settings_store,
+            "get",
+            lambda key, default=None: configured.get(key, default),
+        )
+        plugin_directory = tmp_path / "plugin_impl"
+        copy_subagent_pack(plugin_directory)
+        registry = model_registry(lambda _arguments, _context: answer("unused"))
+        assert registry.load_directory(plugin_directory) == ()
+
+        main = AgentSession(
+            tmp_path / "data",
+            tmp_path / "workspace",
+            plugin_directory,
+            tree_id="spawn-policy-main",
+            registry=registry,
+            load_plugins=False,
+        )
+        child = AgentSession(
+            tmp_path / "data",
+            tmp_path / "workspace",
+            plugin_directory,
+            tree_id="spawn-policy-child",
+            registry=registry,
+            agent_id="worker",
+            parent_agent_id="main",
+            load_plugins=False,
+        )
+        try:
+            aggressive = await main.build_model_context()
+            assert "## Subagent Spawn Policy" in aggressive
+            assert "Current policy: aggressive." in aggressive
+            assert "spawn_subagent" in aggressive
+
+            configured["spawn_policy"] = "off"
+            disabled = await main.build_model_context()
+            assert "Current policy: off." in disabled
+            assert "Do not invoke `spawn_subagent`." in disabled
+
+            assert await child.build_model_context() == ""
+        finally:
+            child.close()
+            main.close()
+
     run(scenario())
 
 
@@ -240,6 +322,7 @@ def test_disabled_subagent_pack_does_not_attach_session_driver(tmp_path):
         assert session.session_driver is None
         assert "subagents" not in session.plugin_services
         assert "session_driver" not in session.plugin_services
+        assert run(session.build_session_context()) == ""
     finally:
         session.close()
 
@@ -266,7 +349,7 @@ def test_agent_session_subagent_tree_inbox_and_workbench_output(tmp_path, monkey
             last = arguments["messages"][-1]
             if last["role"] == "user":
                 content = str(last["content"])
-                if agent_id == "main" and content == "delegate":
+                if agent_id == "main" and content.split("\n\n", 1)[0] == "delegate":
                     return tool_call("main-list", {"operation": "list"})
                 if agent_id == "researcher" and content == "research this":
                     return tool_call("child-list", {"operation": "list"})

@@ -17,6 +17,7 @@ class ChatMessageDTO(TypedDict, total=False):
     attachments: list[dict[str, Any]]
     trace: list[dict[str, Any]]
     usage: dict[str, int]
+    latestRequestUsage: dict[str, int]
     model: str
     modelIdentity: dict[str, Any]
     processingDurationMs: int
@@ -37,6 +38,8 @@ class ChatSummaryDTO(TypedDict, total=False):
     createdAt: str
     updatedAt: str
     running: bool
+    usage: dict[str, int]
+    latestUsage: dict[str, int]
 
 
 class ChatDetailDTO(ChatSummaryDTO, total=False):

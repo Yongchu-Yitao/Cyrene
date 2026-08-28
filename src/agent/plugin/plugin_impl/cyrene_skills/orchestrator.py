@@ -1056,6 +1056,10 @@ async def build_learned_skill_block(session_id: str='', max_skills: int=20, *, s
     return await _lifecycle_service().build_learned_skill_block(session_id, max_skills, scope=scope)
 
 
+async def session_start_fingerprint(session_id: str='', max_skills: int=20) -> list[tuple[str, int, str, str]]:
+    return await _lifecycle_service().session_start_fingerprint(session_id, max_skills)
+
+
 async def get_learned_skill(skill_id: str) -> dict[str, Any] | None:
     return await _lifecycle_service().get_learned_skill(skill_id)
 

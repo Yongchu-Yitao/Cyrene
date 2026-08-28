@@ -14,7 +14,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from agent.hook import POST_TOOL_USE, SESSION_END, SESSION_START, STOP, HookEvent
+from agent.hook import (
+    POST_TOOL_USE,
+    SESSION_END,
+    SESSION_START,
+    STOP,
+    TURN_START,
+    HookEvent,
+)
 from agent.plugin import PluginSetupContext
 
 logger = logging.getLogger(__name__)
@@ -126,8 +133,6 @@ class LearningCaptureHooks:
         return captured
 
     async def on_session_start(self, event: HookEvent) -> dict[str, str]:
-        details = _mapping(event.payload)
-        run_id = str(details.get("run_id") or "").strip()
         from . import orchestrator as learning
 
         # The learning database belongs to the Plugin pack's application data
@@ -140,8 +145,37 @@ class LearningCaptureHooks:
         learned_context = await learning.build_learned_skill_block(
             session_id=self.session_id,
         )
+        return {
+            "context": learned_context,
+            "context_kind": "learned_skills",
+            "context_source": "cyrene_skills",
+        } if learned_context else {}
+
+    async def session_start_cache_fingerprint(
+        self,
+        _event: HookEvent,
+    ) -> list[tuple[str, int, str, str]]:
+        from . import orchestrator as learning
+
+        await learning.ensure_initialized(
+            self.learning_data_directory,
+            self.setup.workspace,
+        )
+        return await learning.session_start_fingerprint(self.session_id)
+
+    async def on_turn_start(self, event: HookEvent) -> dict[str, str]:
+        """Open the durable learning record for exactly one model turn."""
+
+        details = _mapping(event.payload)
+        run_id = str(details.get("run_id") or "").strip()
+        from . import orchestrator as learning
+
+        await learning.ensure_initialized(
+            self.learning_data_directory,
+            self.setup.workspace,
+        )
         if not run_id or run_id in self._turns:
-            return {"context": learned_context} if learned_context else {}
+            return {}
         metadata = _mapping(details.get("metadata"))
         user_message = str(
             metadata.get("public_user_message")
@@ -169,7 +203,7 @@ class LearningCaptureHooks:
             "round_id": str(captured.get("round_id") or run_id),
         }
         self._active_run_id = run_id
-        return {"context": learned_context} if learned_context else {}
+        return {}
 
     async def on_post_tool_use(self, event: HookEvent) -> None:
         run_id = self._active_run_id or self._latest_tree_run_id()
@@ -272,6 +306,7 @@ def setup_learning_capture(context: PluginSetupContext) -> None:
         return
     hooks = LearningCaptureHooks(context)
     _bind(context, SESSION_START, "session-start", hooks.on_session_start, root_only=True)
+    _bind(context, TURN_START, "turn-start", hooks.on_turn_start, root_only=True)
     _bind(context, POST_TOOL_USE, "post-tool-use", hooks.on_post_tool_use)
     _bind(context, SESSION_END, "session-end", hooks.on_session_end, root_only=True)
     _bind(context, STOP, "stop", hooks.on_stop, root_only=True)

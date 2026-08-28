@@ -1,6 +1,6 @@
 import { workbenchServices, useStateSt, useEffectSt, readSettingsResponse, settingsFetch } from "./shared.jsx"
 
-var EVENTS = ["PreToolUse", "PostToolUse", "SessionStart", "SessionEnd", "Stop"]
+var EVENTS = ["PreToolUse", "PostToolUse", "SessionStart", "TurnStart", "SessionEnd", "Stop"]
 
 function request(path, init) {
   return settingsFetch(path, init).then(readSettingsResponse).then(function (payload) {

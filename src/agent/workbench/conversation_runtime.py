@@ -14,12 +14,11 @@ from typing import Any
 
 from ..context import ContextError, ContextStoreRouter, TreeNotFoundError
 from ..permission import runtime_permission_mode
-from ..plugin import PluginRegistry, default_plugin_impl_directory
+from ..plugin import default_plugin_impl_directory, resolve_agent_plugin_registry
 from ..plugin.session_state import (
     plugin_child_context_ids,
     without_plugin_session_state,
 )
-from ..plugin.model_gateway import ensure_model_router
 from ..plugin.model_router import MODEL_ROUTER_PLUGIN
 from .bridge import (
     WorkbenchChatResult,
@@ -362,14 +361,10 @@ class ConversationRuntime:
         owner_loop: asyncio.AbstractEventLoop,
         raw_publisher: WorkbenchPublisher | None,
     ) -> WorkbenchSessionBridge:
-        from ..plugin import native_tools
-
         plugin_root = Path(
             config.plugin_directory or default_plugin_impl_directory()
         ).expanduser().resolve()
-        native_tools.seed_builtin_plugin_directory(plugin_root)
-        registry = PluginRegistry()
-        ensure_model_router(registry)
+        registry, load_plugins = resolve_agent_plugin_registry(plugin_root)
 
         worker_publisher: WorkbenchPublisher | None = None
         if raw_publisher is not None:
@@ -447,6 +442,7 @@ class ConversationRuntime:
             config.workspace_dir,
             plugin_root,
             registry=registry,
+            load_plugins=load_plugins,
             model_plugin=MODEL_ROUTER_PLUGIN,
             chat_id=str(config.session_id),
             host_context={
@@ -560,7 +556,7 @@ class ConversationRuntime:
                 bridge.prepare_retry()
             turn_metadata = dict(metadata or {})
             # Runtime context is a per-turn durable input mounted exclusively
-            # by the cyrene_context SessionStart Hook.
+            # by the cyrene_context TurnStart Hook.
             turn_metadata["ephemeral_context"] = str(config.system_extra or "")
             return await bridge.submit_result(
                 str(text or "").strip(),

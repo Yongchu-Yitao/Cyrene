@@ -89,7 +89,8 @@ Plugin IDs before pending work resumes.
 
 | Hook | Role in the composed Agent |
 |---|---|
-| `SessionStart` | Builds ordered context mounts for a run. `system` comes first, `top` follows, and ordinary contributions retain deterministic registration order. |
+| `SessionStart` | Runs once per conversation and freezes the ordered, cache-stable context prefix. |
+| `TurnStart` | Builds the current turn's dynamic context suffix and freezes it for retries. |
 | `ContextChange` | Reacts to committed tree changes and advances context-dependent session work without polling a separate state store. |
 | `ContextUsed` | Receives the token contribution and usage ratio of the actual model path for memory and compaction accounting. |
 | `PreToolUse` | Reviews a resolved call, may normalize its arguments, allow it, or block it. The fixed permission reviewer sees the final arguments. |
@@ -101,8 +102,16 @@ Context contributions are ordinary Plugin output, not string concatenation in
 the model router. A contribution has a stable tree identity, mount position,
 source, and failure policy. Required providers such as the system prompt and
 composer context fail closed; optional, transient runtime context may fail open.
-Stable identities preserve reusable prompt prefixes, while replacing a
-selection creates the next explicit mount rather than silently mutating history.
+Session mounts always precede turn mounts. Stable identities and byte-for-byte
+reuse preserve provider prompt-cache prefixes, while replacing a selection
+creates the next explicit suffix rather than silently mutating history.
+Only SessionStart mounts are projected into the leading system message.
+TurnStart mounts are appended to the current user message, producing the cache
+order `stable system → prior history → current user + dynamic turn suffix`.
+The frozen prefix is keyed by a durable dependency fingerprint covering the
+SessionStart Hook topology, contributing pack implementation versions, SOUL
+state/content, stable memory snapshots, and learned-skill revisions. A changed
+fingerprint creates one new stable epoch; unchanged later turns reuse it.
 
 ## Runtime Startup and Migration
 

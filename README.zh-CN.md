@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.9.0-beta1-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.9.0-beta2-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Status">
 </p>
@@ -60,11 +60,10 @@ Cyrene 不是“固定 Agent + 外挂扩展层”。每次运行的 Agent 都由
   = 本次运行实际使用的 Agent
 ```
 
-每轮开始时，Tree-local `SessionStart` Hook 按顺序挂载 Context Block：System
-Prompt 位于最前，SOUL 紧随其后，其余 Provider 只加入当前对话选择的 Workspace、
-MCP Server、Skills、Memory、Attachment 与 Runtime State。输入框的 Context 菜单由
-专门的 Composer Context 插件负责，因此切换选项会直接改变下一轮上下文构建，
-不会再改动另一份隐藏 Prompt。
+对话开始时，Tree-local `SessionStart` Hook 会冻结稳定的 System Prompt、SOUL、
+Memory 与已学习技能前缀。随后每次 `TurnStart` 只追加本轮选择的 Workspace、MCP
+Server、Attachment、Runtime State 等动态上下文。稳定字节始终位于变化后缀之前，
+让模型 Provider 尽可能复用最长的 Prompt Cache 前缀。
 
 模型只会立即看到固定 Kernel Tool 和设为“Agent 直接可见”的工具；其余已启用的
 工具包与独立工具统一通过 `toolbox.list → toolbox.describe → toolbox.invoke` 渐进

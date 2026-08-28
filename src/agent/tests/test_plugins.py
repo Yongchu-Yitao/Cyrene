@@ -20,6 +20,7 @@ from agent.plugin import (
     PluginRegistry,
     PluginRuntime,
     PluginCustomizationState,
+    PluginRegistryError,
     PluginUnavailableError,
     ensure_model_router,
 )
@@ -124,6 +125,37 @@ def test_plugin_activation_defaults_come_from_contribution_metadata():
     assert registry.plugin_enabled("OptInTool") is False
     registry.configure_activation(plugins={"OptInTool": True}, packs={})
     assert registry.plugin_enabled("OptInTool") is True
+
+
+def test_required_pack_plugin_is_locked_but_still_follows_the_pack_switch():
+    async def handler(_arguments, _context):
+        return "ok"
+
+    registry = PluginRegistry(include_core=False)
+    registry.register_pack(
+        PluginPack(
+            id="infrastructure",
+            description="infrastructure",
+            plugins=(Plugin(
+                name="infrastructure.runtime",
+                description="runtime",
+                input_schema={"type": "object", "properties": {}},
+                handler=handler,
+                metadata={"model_visible": False, "required": True},
+            ),),
+        ),
+        source="test",
+    )
+
+    assert registry.plugin_locked("infrastructure.runtime") is True
+    assert registry.plugin_configured_enabled("infrastructure.runtime") is True
+    assert registry.plugin_enabled("infrastructure.runtime") is True
+    with pytest.raises(PluginRegistryError, match="activation is locked"):
+        registry.set_plugin_enabled("infrastructure.runtime", False)
+
+    registry.set_pack_enabled("infrastructure", False)
+    assert registry.plugin_configured_enabled("infrastructure.runtime") is True
+    assert registry.plugin_enabled("infrastructure.runtime") is False
 
 
 def test_user_model_plugins_are_mutable_but_core_model_router_stays_locked():

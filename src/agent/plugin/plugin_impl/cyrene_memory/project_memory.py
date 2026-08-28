@@ -479,6 +479,70 @@ _AUTO_CONTEXT_START_PERCENT = 20
 _AUTO_CONTEXT_STEP_PERCENT = 10
 _AUTO_CONTEXT_FINAL_PERCENT = 70
 
+_STRUCTURED_CONTEXT_START_PERCENT = 10
+_STRUCTURED_CONTEXT_STEP_PERCENT = 5
+_STRUCTURED_CONTEXT_FINAL_PERCENT = 70
+
+
+def _reached_context_percent(
+    messages: list[dict[str, Any]],
+    *,
+    step_percent: int,
+    final_percent: int,
+    ctx_limit: int | None = None,
+    observed_percent: int | None = None,
+) -> int:
+    from agent.context.compaction import message_token_estimate
+
+    if observed_percent is not None:
+        percent = max(0, int(observed_percent))
+    else:
+        limit = int(ctx_limit or 0)
+        if limit <= 0 or not messages:
+            return 0
+        used = sum(
+            message_token_estimate(message)
+            for message in messages
+            if isinstance(message, dict)
+        )
+        percent = used * 100 // limit
+    return min(final_percent, percent // step_percent * step_percent)
+
+
+def claim_structured_memory_threshold(
+    chat_id: str,
+    messages: list[dict[str, Any]],
+    *,
+    ctx_limit: int | None = None,
+    observed_percent: int | None = None,
+) -> int | None:
+    """Atomically claim a newly crossed 10%..70% structured-memory threshold."""
+
+    from agent.plugin.model_catalog import configured_context_limit
+
+    resolved_limit = ctx_limit
+    if observed_percent is None and resolved_limit is None:
+        resolved_limit = configured_context_limit(chat_id)
+    reached = _reached_context_percent(
+        messages,
+        step_percent=_STRUCTURED_CONTEXT_STEP_PERCENT,
+        final_percent=_STRUCTURED_CONTEXT_FINAL_PERCENT,
+        ctx_limit=resolved_limit,
+        observed_percent=observed_percent,
+    )
+    if reached < _STRUCTURED_CONTEXT_START_PERCENT:
+        return None
+    with _WRITE_LOCK:
+        snapshot = _load_context_snapshot(chat_id)
+        if snapshot is None:
+            return None
+        previous = int(snapshot.get("structuredMemoryThresholdPercent") or 0)
+        if reached <= previous:
+            return None
+        snapshot["structuredMemoryThresholdPercent"] = reached
+        _save_context_snapshot(chat_id, snapshot)
+    return reached
+
 
 def context_auto_trigger_threshold(
     project_id: str,
@@ -494,33 +558,18 @@ def context_auto_trigger_threshold(
     compaction. If one turn crosses several thresholds, only the highest reached
     threshold is returned. Seventy percent is the final automatic trigger.
     """
-    from agent.context.compaction import message_token_estimate
     from agent.plugin.model_catalog import configured_context_limit
 
-    if observed_percent is not None:
-        reached = min(
-            _AUTO_CONTEXT_FINAL_PERCENT,
-            max(0, int(observed_percent)) // _AUTO_CONTEXT_STEP_PERCENT
-            * _AUTO_CONTEXT_STEP_PERCENT,
-        )
-    else:
-        limit = int(
-            ctx_limit
-            if ctx_limit is not None
-            else configured_context_limit(chat_id)
-        )
-        if limit <= 0 or not messages:
-            return None
-        used = sum(
-            message_token_estimate(message)
-            for message in messages
-            if isinstance(message, dict)
-        )
-        reached = min(
-            _AUTO_CONTEXT_FINAL_PERCENT,
-            (used * 100 // limit // _AUTO_CONTEXT_STEP_PERCENT)
-            * _AUTO_CONTEXT_STEP_PERCENT,
-        )
+    resolved_limit = ctx_limit
+    if observed_percent is None and resolved_limit is None:
+        resolved_limit = configured_context_limit(chat_id)
+    reached = _reached_context_percent(
+        messages,
+        step_percent=_AUTO_CONTEXT_STEP_PERCENT,
+        final_percent=_AUTO_CONTEXT_FINAL_PERCENT,
+        ctx_limit=resolved_limit,
+        observed_percent=observed_percent,
+    )
     if reached < _AUTO_CONTEXT_START_PERCENT:
         return None
 
@@ -571,26 +620,33 @@ def persist_tree_context_snapshot(
     if not copied:
         raise ValueError("project-memory learning context cannot be empty")
     requested_language = str(language or "").strip().lower()
-    snapshot = {
-        "schemaVersion": _SCHEMA_VERSION,
-        "chatId": str(chat_id or ""),
-        "projectId": str(project_id or ""),
-        "treeId": normalized_tree_id,
-        "treeNodeId": normalized_node_id,
-        "roundId": str(round_id or ""),
-        "completedTurnCount": max(0, int(completed_turn_count or 0)),
-        "capturedAt": _next_modified_at(""),
-        "messages": copied,
-        "contextHash": _context_hash(copied),
-        "model": copy.deepcopy(dict(model or {})),
-        "language": (
-            requested_language
-            if requested_language in {"en", "zh"}
-            else _preferred_project_memory_language()
-        ),
-        "snapshotSource": "context_tree_node",
-    }
-    return _save_context_snapshot(chat_id, snapshot)
+    with _WRITE_LOCK:
+        previous = _load_context_snapshot(chat_id) or {}
+        snapshot = {
+            "schemaVersion": _SCHEMA_VERSION,
+            "chatId": str(chat_id or ""),
+            "projectId": str(project_id or ""),
+            "treeId": normalized_tree_id,
+            "treeNodeId": normalized_node_id,
+            "roundId": str(round_id or ""),
+            "completedTurnCount": max(0, int(completed_turn_count or 0)),
+            "capturedAt": _next_modified_at(""),
+            "messages": copied,
+            "contextHash": _context_hash(copied),
+            "model": copy.deepcopy(dict(model or {})),
+            "language": (
+                requested_language
+                if requested_language in {"en", "zh"}
+                else _preferred_project_memory_language()
+            ),
+            "snapshotSource": "context_tree_node",
+        }
+        structured_threshold = int(
+            previous.get("structuredMemoryThresholdPercent") or 0
+        )
+        if structured_threshold:
+            snapshot["structuredMemoryThresholdPercent"] = structured_threshold
+        return _save_context_snapshot(chat_id, snapshot)
 
 
 def get_tree_context_snapshot(chat_id: str) -> dict[str, Any] | None:
@@ -1394,6 +1450,7 @@ __all__ = [
     "build_main_agent_suffix",
     "cancel_chat_jobs",
     "cancel_project_jobs",
+    "claim_structured_memory_threshold",
     "context_auto_trigger_threshold",
     "configure_store",
     "current_snapshot",

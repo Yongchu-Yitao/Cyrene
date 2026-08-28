@@ -376,7 +376,7 @@ class LifecycleService:
         current_sid = str(session_id or self.ports.current_session_id.get() or '').strip()
         resolved_scope = scope or self.ports.project_scope_for_session(current_sid or None)
         async with self.ports.connect() as conn:
-            cursor = await conn.execute("\n            SELECT *\n            FROM learned_skills\n            WHERE status = 'active' AND project_id = ?\n            ORDER BY updated_at DESC\n            LIMIT ?\n            ", (resolved_scope['project_id'], max(int(max_skills or 20), 1)))
+            cursor = await conn.execute("\n            SELECT *\n            FROM learned_skills\n            WHERE status = 'active' AND project_id = ?\n            ORDER BY updated_at DESC, skill_id ASC\n            LIMIT ?\n            ", (resolved_scope['project_id'], max(int(max_skills or 20), 1)))
             rows = await cursor.fetchall()
         if not rows:
             return ''
@@ -393,6 +393,37 @@ class LifecycleService:
                     entry += f': {desc[:120]}'
                 lines.append(entry)
         return '\n'.join(lines) if len(lines) > 1 else ''
+
+    async def session_start_fingerprint(
+        self,
+        session_id: str = '',
+        max_skills: int = 20,
+    ) -> list[tuple[str, int, str, str]]:
+        """Return the small stable projection that controls the learned-skill block."""
+
+        current_sid = str(session_id or self.ports.current_session_id.get() or '').strip()
+        scope = self.ports.project_scope_for_session(current_sid or None)
+        async with self.ports.connect() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT skill_id, version, name, description
+                FROM learned_skills
+                WHERE status = 'active' AND project_id = ?
+                ORDER BY updated_at DESC, skill_id ASC
+                LIMIT ?
+                """,
+                (scope['project_id'], max(int(max_skills or 20), 1)),
+            )
+            rows = await cursor.fetchall()
+        return [
+            (
+                str(row['skill_id'] or ''),
+                int(row['version'] or 0),
+                str(row['name'] or ''),
+                str(row['description'] or ''),
+            )
+            for row in rows
+        ]
 
     async def get_learned_skill(self, skill_id: str) -> dict[str, Any] | None:
         async with self.ports.connect() as conn:

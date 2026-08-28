@@ -17,6 +17,7 @@ from agent.plugin import (
     PluginPack,
     PluginRegistry,
     PluginRuntime,
+    resolve_agent_plugin_registry,
 )
 from agent.plugin.application import set_active_plugin_application_host
 from agent.plugin.background import BackgroundPluginHost, background_job_spec
@@ -33,6 +34,21 @@ def _host(tmp_path: Path, registry: PluginRegistry) -> PluginApplicationHost:
         data_directory=tmp_path / "data",
         plugin_directory=tmp_path / "plugin_impl",
     )
+
+
+def test_agent_registry_reuses_matching_application_host(tmp_path):
+    registry = PluginRegistry()
+    host = _host(tmp_path, registry)
+    set_active_plugin_application_host(host)
+    try:
+        resolved, load_plugins = resolve_agent_plugin_registry(
+            tmp_path / "plugin_impl"
+        )
+    finally:
+        set_active_plugin_application_host(None)
+
+    assert resolved is registry
+    assert load_plugins is False
 
 
 def test_background_interval_provider_is_lazy() -> None:

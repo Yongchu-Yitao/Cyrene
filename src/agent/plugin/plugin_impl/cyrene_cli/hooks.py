@@ -21,6 +21,7 @@ from agent.hook import (
     SESSION_END,
     SESSION_START,
     STOP,
+    TURN_START,
     HookEvent,
 )
 from cyrene.config import DATA_DIR
@@ -30,7 +31,14 @@ from cyrene.runtime.settings_store import get as get_setting, set_ as set_settin
 
 logger = logging.getLogger(__name__)
 
-CLI_HOOK_EVENTS = (PRE_TOOL_USE, POST_TOOL_USE, SESSION_START, SESSION_END, STOP)
+CLI_HOOK_EVENTS = (
+    PRE_TOOL_USE,
+    POST_TOOL_USE,
+    SESSION_START,
+    TURN_START,
+    SESSION_END,
+    STOP,
+)
 _HOOKS_KEY = "cli_plugin_hooks"
 _PROPOSALS_KEY = "cli_plugin_hook_proposals"
 _RESULTS_KEY = "cli_plugin_hook_configuration_results"
@@ -485,13 +493,13 @@ class CliHookService:
                             return {"decision": "block", "reason": "CLI Hook returned invalid arguments"}
                     else:
                         current_arguments = dict(output["arguments"])
-            elif event.name == SESSION_START:
+            elif event.name in {SESSION_START, TURN_START}:
                 context = str(output.get("context") or "").strip()
                 if context:
                     contexts.append(context[:16000])
         if event.name == PRE_TOOL_USE:
             return {"decision": "modify" if current_arguments != dict(tool.get("arguments") or {}) else "allow", "arguments": current_arguments or {}}
-        if event.name == SESSION_START and contexts:
+        if event.name in {SESSION_START, TURN_START} and contexts:
             return {"context": "\n\n".join(contexts)}
         return {}
 

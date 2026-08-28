@@ -33,7 +33,7 @@ _PROPOSAL_TOOL = {
             "properties": {
                 "action": {"type": "string", "enum": ["no_hook", "propose"]},
                 "rationale": {"type": "string"},
-                "event": {"type": "string", "enum": ["PreToolUse", "PostToolUse", "SessionStart", "SessionEnd", "Stop"]},
+                "event": {"type": "string", "enum": ["PreToolUse", "PostToolUse", "SessionStart", "TurnStart", "SessionEnd", "Stop"]},
                 "matcher": {"type": "string"},
                 "executable": {"type": "string"},
                 "args": {"type": "array", "items": {"type": "string"}},

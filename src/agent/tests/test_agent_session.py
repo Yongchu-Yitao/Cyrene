@@ -4,7 +4,12 @@ import asyncio
 import threading
 
 from agent.session import AgentSession
-from agent.hook import CONTEXT_CHANGE, SESSION_START
+from agent.hook import (
+    CONTEXT_CHANGE,
+    SESSION_START,
+    TURN_START,
+    with_session_start_cache_fingerprint,
+)
 from agent.plugin import Plugin, PluginContext, PluginPack, PluginRegistry
 
 
@@ -15,6 +20,9 @@ def run(coroutine):
 def test_context_change_hook_mounts_turn_context_before_model(tmp_path):
     captured_messages = []
     memory_context = ["Project memory:\nKeep the verified decision."]
+    stable_dependency = ["memory-snapshot-v1"]
+    session_start_calls = 0
+    turn_start_calls = 0
 
     async def fake_model(arguments, _context):
         captured_messages.append(arguments["messages"])
@@ -27,16 +35,47 @@ def test_context_change_hook_mounts_turn_context_before_model(tmp_path):
     registry = PluginRegistry()
 
     async def session_memory(_event):
+        nonlocal session_start_calls
+        session_start_calls += 1
         return {"context": memory_context[0]}
 
+    with_session_start_cache_fingerprint(
+        session_memory,
+        lambda _event: stable_dependency[0],
+    )
+
+    async def turn_context(event):
+        nonlocal turn_start_calls
+        turn_start_calls += 1
+        return {"context": f"Turn runtime: {event.payload['run_id']}"}
+
     def setup_memory(context):
-        context.hooks.register(
-            SESSION_START,
-            session_memory,
-            plugin_id="test.memory.session_start",
-            hook_id="test-memory-session-start",
-            root_only=True,
+        existing = {hook.id for hook in context.hooks.list()}
+        bindings = (
+            (
+                SESSION_START,
+                session_memory,
+                "test.memory.session_start",
+                "test-memory-session-start",
+            ),
+            (
+                TURN_START,
+                turn_context,
+                "test.runtime.turn_start",
+                "test-runtime-turn-start",
+            ),
         )
+        for event, handler, plugin_id, hook_id in bindings:
+            if hook_id in existing:
+                context.hooks.bind_plugin(plugin_id, handler, replace=True)
+            else:
+                context.hooks.register(
+                    event,
+                    handler,
+                    plugin_id=plugin_id,
+                    hook_id=hook_id,
+                    root_only=True,
+                )
 
     registry.register_pack(
         PluginPack(
@@ -72,12 +111,16 @@ def test_context_change_hook_mounts_turn_context_before_model(tmp_path):
         "system",
         "user",
         "context",
+        "context",
         "assistant",
     ]
     mounted = snapshot["nodes"][2]["value"]
     assert mounted["context_kind"] == "plugin_session"
     assert mounted["context_source"] == "SessionStart"
     assert mounted["metadata"] == {"source": "SessionStart"}
+    turn_mount = snapshot["nodes"][3]["value"]
+    assert turn_mount["context_kind"] == "turn_context"
+    assert turn_mount["context_source"] == "TurnStart"
     assert captured_messages[0][0]["role"] == "system"
     assert "Project memory:\nKeep the verified decision." in captured_messages[0][0]["content"]
     assert [message["role"] for message in captured_messages[0]] == ["system", "user"]
@@ -87,8 +130,94 @@ def test_context_change_hook_mounts_turn_context_before_model(tmp_path):
     run(session.drain())
 
     second_system = captured_messages[1][0]["content"]
-    assert "Keep the verified decision." not in second_system
-    assert second_system.count("Project memory:\nUse the revised decision.") == 1
+    assert "Keep the verified decision." in second_system
+    assert "Project memory:\nUse the revised decision." not in second_system
+    assert "Turn runtime: run_1" in captured_messages[0][-1]["content"]
+    assert "Turn runtime: run_1" not in second_system
+    assert "Turn runtime: run_2" in captured_messages[1][-1]["content"]
+    stable_prefix_1 = captured_messages[0][0]["content"]
+    assert second_system == stable_prefix_1
+    assert captured_messages[1][:-1] == [
+        *captured_messages[0],
+        {"role": "assistant", "content": "done"},
+    ]
+    assert session_start_calls == 1
+    assert turn_start_calls == 2
+    session.close()
+
+    reopened = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        registry=registry,
+    )
+    reopened.submit("after reopen", run_id="run_3")
+    run(reopened.drain())
+    third_system = captured_messages[2][0]["content"]
+    assert third_system == stable_prefix_1
+    assert "Turn runtime: run_3" in captured_messages[2][-1]["content"]
+    assert session_start_calls == 1
+    assert turn_start_calls == 3
+    reopened.close()
+
+    stable_dependency[0] = "memory-snapshot-v2"
+    invalidated = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        registry=registry,
+    )
+    invalidated.submit("stable dependency changed", run_id="run_4")
+    run(invalidated.drain())
+    rebuilt_system = captured_messages[3][0]["content"]
+    assert "Project memory:\nUse the revised decision." in rebuilt_system
+    assert session_start_calls == 2
+    assert turn_start_calls == 4
+
+    invalidated.submit("stable again", run_id="run_5")
+    run(invalidated.drain())
+    stable_again = captured_messages[4][0]["content"]
+    assert stable_again == rebuilt_system
+    assert session_start_calls == 2
+    assert turn_start_calls == 5
+    invalidated.close()
+
+
+def test_model_transition_builds_messages_once_when_compaction_is_not_needed(tmp_path):
+    async def fake_model(_arguments, _context):
+        return {"content": "done", "tool_calls": []}
+
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "model",
+            (Plugin("MiniMax", "fake", {"type": "object"}, fake_model, kind="model"),),
+        ),
+        source="test",
+    )
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        registry=registry,
+    )
+    session._configured_compaction_limit = lambda: 100_000
+    original_messages = session._messages
+    calls = 0
+
+    def counted_messages(node_id):
+        nonlocal calls
+        calls += 1
+        return original_messages(node_id)
+
+    session._messages = counted_messages
+    session.submit("hello", run_id="run-once")
+    run(session.drain())
+
+    assert calls == 1
     session.close()
 
 

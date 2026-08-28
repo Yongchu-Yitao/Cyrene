@@ -76,7 +76,8 @@ Hook 属于 ContextTree，并在恢复后保留 Plugin Binding。Session 打开�
 
 | Hook | 在 Agent 组装中的职责 |
 |---|---|
-| `SessionStart` | 构建本轮有序 Context Mount：`system` 最前，`top` 其次，普通贡献保持确定性的注册顺序。 |
+| `SessionStart` | 每个对话只运行一次，并冻结有序且可缓存的稳定 Context 前缀。 |
+| `TurnStart` | 构建本轮动态 Context 后缀，并为重试冻结结果。 |
 | `ContextChange` | 响应已提交的 Tree 变化，让依赖上下文的 Session 工作继续推进，无需轮询另一份状态。 |
 | `ContextUsed` | 接收真实 Model Path 中每个 Block 的 Token 贡献与使用比例，供 Memory 和 Compaction 计量。 |
 | `PreToolUse` | 审核已解析的调用，可归一化参数、允许或阻止；固定 Permission Reviewer 最后看到最终参数。 |
@@ -87,8 +88,13 @@ Hook 属于 ContextTree，并在恢复后保留 Plugin Binding。Session 打开�
 Context Contribution 是普通 Plugin Output，不是 Model Router 内部的字符串拼接。
 每项贡献都有稳定 Tree Identity、Mount Position、Source 与 Failure Policy。System
 Prompt、Composer Context 等必需 Provider Fail Closed；可选的临时 Runtime Context
-可以 Fail Open。稳定 Identity 能复用 Prompt Prefix；切换选项会生成下一轮明确的
-Mount，不会静默改写历史。
+可以 Fail Open。Session Mount 始终位于 Turn Mount 之前；稳定 Identity 与逐字节复用
+能保留 Provider Prompt Cache 前缀，切换选项只生成下一轮明确的动态后缀。
+只有 SessionStart Mount 会投影到首条 System Message；TurnStart Mount 追加到当前
+User Message，形成 `稳定 system → 既有历史 → 当前 user + 动态后缀` 的缓存顺序。
+冻结前缀带有持久依赖指纹，覆盖 SessionStart Hook 拓扑、贡献插件包实现版本、SOUL
+状态与内容、稳定 Memory Snapshot，以及已学习技能版本。指纹变化只创建一次新的稳定
+Epoch，之后未变化的轮次继续复用。
 
 ## Runtime 启动与迁移
 

@@ -1,14 +1,15 @@
-"""SessionStart context contribution for host-owned run metadata."""
+"""TurnStart context contribution for host-owned run metadata."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
 
-from agent.hook import SESSION_START, HookEvent
+from agent.hook import TURN_START, HookEvent
 from agent.plugin import PluginSetupContext
 
-_RUNTIME_HOOK_ID = "cyrene-context-session-start"
+_RUNTIME_HOOK_ID = "cyrene-context-turn-start"
+_LEGACY_HOOK_ID = "cyrene-context-session-start"
 _RUNTIME_PLUGIN_ID = "cyrene_context.mount"
 
 
@@ -26,9 +27,15 @@ def setup_runtime_context(context: PluginSetupContext) -> None:
         # and belongs to one exact turn.  Every host must submit this field;
         # there is deliberately no process-local compatibility fallback.
         content = str(metadata.get("ephemeral_context") or "").strip()
-        return {"context": content} if content else {}
+        return {
+            "context": content,
+            "context_kind": "runtime_context",
+            "context_source": "cyrene_context",
+        } if content else {}
 
-    existing = {hook.id for hook in context.hooks.list()}
+    existing = {hook.id: hook for hook in context.hooks.list()}
+    if _LEGACY_HOOK_ID in existing:
+        context.hooks.unregister(_LEGACY_HOOK_ID)
     if _RUNTIME_HOOK_ID in existing:
         context.hooks.bind_plugin(
             _RUNTIME_PLUGIN_ID,
@@ -37,7 +44,7 @@ def setup_runtime_context(context: PluginSetupContext) -> None:
         )
         return
     context.hooks.register(
-        SESSION_START,
+        TURN_START,
         mount_runtime_context,
         plugin_id=_RUNTIME_PLUGIN_ID,
         hook_id=_RUNTIME_HOOK_ID,

@@ -20,16 +20,15 @@ from typing import Any
 from uuid import uuid4
 
 from agent.context import ContextStoreRouter, TreeNotFoundError
+from agent.context.projection import project_context_message
 from agent.plugin import (
     PluginContext,
-    PluginRegistry,
     default_plugin_impl_directory,
     plugin_child_context_ids,
 )
 from agent.plugin.model_router import (
     MODEL_ROUTER_PLUGIN,
 )
-from agent.plugin.model_gateway import ensure_model_router
 from agent.plugin.model_catalog import (
     set_session_model_preference as persist_session_model_preference,
 )
@@ -440,11 +439,11 @@ class TaskAgentRuntime:
         owner_loop: asyncio.AbstractEventLoop,
         tree_id: str = "",
     ) -> WorkbenchSessionBridge:
-        from agent.plugin import native_tools
+        from agent.plugin import resolve_agent_plugin_registry
 
-        native_tools.seed_builtin_plugin_directory(self.plugin_directory)
-        registry = PluginRegistry()
-        ensure_model_router(registry)
+        registry, load_plugins = resolve_agent_plugin_registry(
+            self.plugin_directory
+        )
         normalized_mode = str(permission_mode or "default").strip().lower()
         if normalized_mode == "workspace_only":
             normalized_mode = "default"
@@ -532,6 +531,7 @@ class TaskAgentRuntime:
             self._workspace(project),
             self.plugin_directory,
             registry=registry,
+            load_plugins=load_plugins,
             model_plugin=MODEL_ROUTER_PLUGIN,
             chat_id=context_tree_id,
             host_context={
@@ -624,7 +624,7 @@ class TaskAgentRuntime:
                         "command": str(command or ""),
                         "client_request_id": str(client_request_id or ""),
                         **dict(metadata or {}),
-                        # Persist the exact host context that SessionStart must
+                        # Persist the exact host context that TurnStart must
                         # mount.  Reopened runs must not rebuild it from mutable
                         # Task state such as plan/status fields.
                         "ephemeral_context": system_extra,
@@ -879,7 +879,7 @@ class TaskAgentRuntime:
                 "messages": messages,
                 "max_tokens": max(1, int(max_tokens)),
             }
-            session_context = await bridge.session.build_session_context(
+            context_mounts = await bridge.session.build_model_mounts(
                 {
                     "run_id": run_id,
                     "agent_id": bridge.session.agent_id,
@@ -896,25 +896,17 @@ class TaskAgentRuntime:
                     },
                 }
             )
-            if session_context:
+            if context_mounts:
                 contextualized = [dict(message) for message in messages]
-                system = next(
-                    (
-                        message
-                        for message in contextualized
-                        if str(message.get("role") or "") == "system"
-                    ),
-                    None,
-                )
-                if system is None:
-                    contextualized.insert(
-                        0,
-                        {"role": "system", "content": session_context},
-                    )
-                else:
-                    current = str(system.get("content") or "").strip()
-                    system["content"] = "\n\n".join(
-                        part for part in (current, session_context) if part
+                for mount in context_mounts:
+                    project_context_message(
+                        contextualized,
+                        {
+                            "content": mount.get("content"),
+                            "context_lifecycle": mount.get("lifecycle"),
+                            "context_kind": mount.get("kind"),
+                            "context_source": mount.get("source"),
+                        },
                     )
                 arguments["messages"] = contextualized
             if response_format is not None:

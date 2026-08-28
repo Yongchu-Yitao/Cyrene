@@ -155,6 +155,8 @@ class ChannelChatService:
             context_activations=chat.get("contextActivations"),
             strict=True,
         )
+        mutable_chat = dict(chat)
+        memory_snapshot = self.service.ensure_chat_memory_snapshot(mutable_chat)
         return ConversationConfig(
             session_id=self.session_id,
             workspace_dir=workspace,
@@ -178,11 +180,7 @@ class ChannelChatService:
                 "the user explicitly requests another language."
             ),
             project_id=project_id,
-            project_memory_snapshot=(
-                dict(chat.get("projectMemorySnapshot") or {})
-                if isinstance(chat.get("projectMemorySnapshot"), Mapping)
-                else None
-            ),
+            project_memory_snapshot=memory_snapshot,
             session_title=str(chat.get("title") or ""),
             completed_turn_count=int(chat.get("completedTurnCount") or 0) + 1,
             conversation_source=self.channel,
