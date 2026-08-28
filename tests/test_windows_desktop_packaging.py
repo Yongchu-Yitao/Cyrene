@@ -133,9 +133,10 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert 'SuccessMarker "Cyrene smoke test OK:"' in smoke
     assert 'SuccessMarker "DESKTOP_SMOKE_TEST=ok"' in smoke
     assert 'SuccessMarker "CYRENE_WINDOWS_TERMINAL_SMOKE=ok"' in smoke
-    assert 'SuccessMarker "CYRENE_WINDOWS_TERMINAL_LIFECYCLE_SOAK=ok cycles=20"' in smoke
+    assert '$installedLifecycleCycles = if ($Arch -eq "arm64") { 10 } else { 20 }' in smoke
+    assert 'SuccessMarker "CYRENE_WINDOWS_TERMINAL_LIFECYCLE_SOAK=ok cycles=$installedLifecycleCycles"' in smoke
     assert 'SuccessMarker "CYRENE_WINDOWS_TERMINAL_LIFECYCLE_SOAK=ok cycles=5"' in smoke
-    assert '$env:CYRENE_TERMINAL_SOAK_CYCLES = "20"' in smoke
+    assert '$env:CYRENE_TERMINAL_SOAK_CYCLES = [string]$installedLifecycleCycles' in smoke
     assert '$env:CYRENE_TERMINAL_SOAK_CYCLES = "5"' in smoke
     assert "installed-terminal-lifecycle-result.log" in smoke
     assert "portable-terminal-lifecycle-result.log" in smoke

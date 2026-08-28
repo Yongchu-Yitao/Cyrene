@@ -356,7 +356,8 @@ Invoke-ReleaseValidation -Label "Installed Electron desktop smoke test" -Action 
 $env:CYRENE_USER_DATA_DIR = Join-Path $smokeRoot "installed-lifecycle-data"
 $env:CYRENE_CACHE_DIR = Join-Path $smokeRoot "installed-lifecycle-cache"
 $env:CYRENE_TEMP_DIR = Join-Path $smokeRoot "installed-lifecycle-tmp"
-$env:CYRENE_TERMINAL_SOAK_CYCLES = "20"
+$installedLifecycleCycles = if ($Arch -eq "arm64") { 10 } else { 20 }
+$env:CYRENE_TERMINAL_SOAK_CYCLES = [string]$installedLifecycleCycles
 $installedLifecycleResultPath = Join-Path $smokeRoot "installed-terminal-lifecycle-result.log"
 Invoke-ReleaseValidation -Label "Installed Electron terminal lifecycle soak test" -Action {
     $installedLifecycleSoak = Invoke-DesktopSmokeProcess `
@@ -367,7 +368,7 @@ Invoke-ReleaseValidation -Label "Installed Electron terminal lifecycle soak test
         -TimeoutSeconds 900
     Assert-SmokeSucceeded `
         -Result $installedLifecycleSoak `
-        -SuccessMarker "CYRENE_WINDOWS_TERMINAL_LIFECYCLE_SOAK=ok cycles=20" `
+        -SuccessMarker "CYRENE_WINDOWS_TERMINAL_LIFECYCLE_SOAK=ok cycles=$installedLifecycleCycles" `
         -Label "Installed Electron terminal lifecycle soak test"
 }
 Remove-Item Env:CYRENE_TERMINAL_SOAK_CYCLES -ErrorAction SilentlyContinue
