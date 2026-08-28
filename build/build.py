@@ -646,30 +646,6 @@ def run_electron_builder(arch: str = "x64") -> None:
             print(f"  created: {dmg_path.name}")
 
 
-def write_buildinfo(ui_mode: str) -> None:
-    """Write runtime/buildinfo.py before PyInstaller bundles it."""
-    # Historical callers may still pass "agent"; Workbench is now the sole UI.
-    ui_mode = "workbench"
-    buildinfo = PROJECT_ROOT / "src" / "cyrene" / "runtime" / "buildinfo.py"
-    buildinfo.write_text(
-        f"# Generated at build time by build/build.py — do not edit manually.\n"
-        f'DEFAULT_UI_MODE: str = "{ui_mode}"\n',
-        encoding="utf-8",
-    )
-    print(f"  [buildinfo] DEFAULT_UI_MODE = {ui_mode!r}")
-
-
-def restore_buildinfo() -> None:
-    """Restore runtime/buildinfo.py to the default after building."""
-    buildinfo = PROJECT_ROOT / "src" / "cyrene" / "runtime" / "buildinfo.py"
-    buildinfo.write_text(
-        "# Generated at build time by build/build.py — do not edit manually.\n"
-        "# Historical build UI modes are normalized to Workbench.\n"
-        'DEFAULT_UI_MODE: str = "workbench"\n',
-        encoding="utf-8",
-    )
-
-
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Build Cyrene")
@@ -687,12 +663,6 @@ def main() -> None:
         help="构建 WoA 使用的 x64 OCR/SimpleXNG sidecar",
     )
     parser.add_argument(
-        "--ui-mode",
-        choices=["workbench", "agent"],
-        default="workbench",
-        help="兼容参数；agent 已弃用并会规范化为 workbench",
-    )
-    parser.add_argument(
         "--arch",
         choices=["x64", "arm64"],
         default="x64",
@@ -702,9 +672,6 @@ def main() -> None:
 
     print(f"Cyrene Builder — {sys.platform}")
     print(f"  project: {PROJECT_ROOT}")
-    if args.ui_mode == "agent":
-        print("  warning: --ui-mode agent is deprecated; using workbench")
-    print("  ui-mode: workbench")
     print(f"  arch: {args.arch}")
 
     if args.clean:
@@ -724,11 +691,7 @@ def main() -> None:
 
     configure_playwright_bundle(args.bundle_playwright)
 
-    try:
-        write_buildinfo("workbench")
-        run_pyinstaller(arch=args.arch)
-    finally:
-        restore_buildinfo()
+    run_pyinstaller(arch=args.arch)
 
     if args.pyinstaller_only:
         print(f"\nDone: {DIST_DIR / 'Cyrene'}")

@@ -196,10 +196,10 @@ The repository has two GitHub Actions workflows:
   build the WebUI, verify `src/webui/static/app` is current, and run Electron
   App Use tests.
 - `.github/workflows/release.yml` runs for version tags (`v*`) or manual
-  dispatch. The compatibility `ui_mode` input still accepts `workbench` or
-  historical `agent`, but the build normalizes both values to the sole
-  Workbench UI. It builds PyInstaller + Electron artifacts for macOS, Windows
-  (x64/ARM64), and Linux and runs the packaged app `--smoke-test`.
+  dispatch. It builds the Workbench application as PyInstaller + Electron
+  artifacts for macOS, Windows (x64/ARM64), and Linux, then validates the
+  packaged backend, rendered desktop, installers, portable builds, terminal
+  lifecycle, and platform-specific recovery paths.
 
 The PR workflow does not replace real-platform packaged smoke, visual,
 credentialed external-service, upgrade, or installer checks. Complete those

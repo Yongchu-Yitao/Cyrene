@@ -182,10 +182,10 @@ Repository 有两个 GitHub Actions Workflow：
   pytest（把未处理 Thread Warning 提升为 Error）、构建 WebUI、确认
   `src/webui/static/app` 已同步提交，并执行 Electron App Use Test。
 - `.github/workflows/release.yml` 在 Version Tag (`v*`) 或手工 Dispatch 时
-  执行。手工触发仍可传入兼容 `ui_mode` 值 `workbench` 或历史 `agent`，但构建
-  会把两者规范化为唯一 Workbench UI；随后为 macOS、Windows x64/ARM64 和
-  Linux 构建 PyInstaller + Electron，并执行冻结产物 `--smoke-test`。
+  执行。它会为唯一的 Workbench 应用构建 macOS、Windows x64/ARM64 和 Linux
+  的 PyInstaller + Electron 产物，并验证打包后端、桌面渲染、安装包、便携版、
+  终端生命周期以及各平台特有的恢复路径。
 
 PR Workflow 不能替代真实平台打包 Smoke、视觉、带 Credential 外部服务、
 原地升级或 Installer 检查；Tag 前仍须完成这些 Release Gate。冻结 Smoke
-会导入关键编译依赖和全部历史模块 Alias。
+会导入当前发布所需的关键编译依赖。

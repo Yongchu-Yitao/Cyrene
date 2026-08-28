@@ -1,3 +1,2 @@
-# Generated at build time by build/build.py — do not edit manually.
-# Historical build UI modes are normalized to Workbench.
+# Workbench is Cyrene's sole application surface.
 DEFAULT_UI_MODE: str = "workbench"

@@ -368,8 +368,6 @@ if __name__ == "__main__":
             sys.argv.remove("--electron")
             sys.argv.append("--electron-mode")
         else:
-            # Historical buildinfo values such as "agent" or "legacy" are
-            # normalized to the sole supported Workbench surface.
             sys.argv.append("--workbench")
         try:
             from cyrene.runtime.host import main

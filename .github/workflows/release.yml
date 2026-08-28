@@ -15,15 +15,6 @@ on:
           - windows
           - windows-x64
           - windows-arm64
-      ui_mode:
-        description: "Compatibility build mode (agent is normalized to the sole Workbench UI)"
-        required: false
-        default: "workbench"
-        type: choice
-        options:
-          - workbench
-          - agent
-
 permissions:
   actions: read
   checks: read
@@ -31,7 +22,6 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.12"
-  UI_MODE: ${{ inputs.ui_mode || 'workbench' }}
 
 jobs:
   # ==========================================================================
@@ -83,7 +73,7 @@ jobs:
         run: python -c "from typing_extensions import Sentinel; from pydantic_core import core_schema; print('imports-ok')"
 
       - name: Full build (PyInstaller + Electron)
-        run: python build/build.py --ui-mode ${{ env.UI_MODE }}
+        run: python build/build.py
 
       - name: Install and smoke test macOS package
         id: macos_package_smoke
@@ -298,7 +288,7 @@ jobs:
           if-no-files-found: error
 
       - name: Full build (PyInstaller + Electron)
-        run: python build/build.py --ui-mode ${{ env.UI_MODE }}
+        run: python build/build.py
 
       - name: Install and smoke test Windows package
         id: windows_package_smoke
@@ -515,7 +505,7 @@ jobs:
           if-no-files-found: error
 
       - name: Full build (PyInstaller + Electron)
-        run: python build/build.py --ui-mode ${{ env.UI_MODE }} --arch arm64
+        run: python build/build.py --arch arm64
 
       - name: Install and smoke test Windows package
         id: windows_arm_package_smoke
@@ -619,7 +609,7 @@ jobs:
           python -c "from typing_extensions import Sentinel; from pydantic_core import core_schema; import anyio, httpx, httpcore, sniffio, aiosqlite, apscheduler, websockets, simplexng, jinja2, mcp, google.genai, onnxruntime, openai_codex; assert onnxruntime.__version__.startswith('1.26.'); assert 'CPUExecutionProvider' in onnxruntime.get_available_providers(); print('imports-ok')"
 
       - name: Full build (PyInstaller + Electron)
-        run: python build/build.py --ui-mode ${{ env.UI_MODE }}
+        run: python build/build.py
 
       - name: Smoke test packaged Python app
         id: linux_python_smoke
