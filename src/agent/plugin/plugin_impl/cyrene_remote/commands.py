@@ -997,7 +997,12 @@ def _remote_map_data(chat_id: str) -> dict[str, Any]:
     service = active_plugin_service("maps")
     if service is None:
         return {"pins": [], "routes": []}
-    data = service.snapshot(chat_id)
+    try:
+        data = service.snapshot(chat_id)
+    except RuntimeError:
+        # Map is an optional sibling Plugin. A remote chat snapshot remains
+        # usable while that Plugin is disabled or still starting.
+        return {"pins": [], "routes": []}
     return {
         "pins": [
             dict(item)

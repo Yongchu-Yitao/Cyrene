@@ -528,6 +528,14 @@ class AgentContextRepository:
             if isinstance(node.value, Mapping)
         ]
         root_value = path[0].value if path and isinstance(path[0].value, Mapping) else {}
+        mounted_system_prompt = next(
+            (
+                str(mount.get("content") or "")
+                for mount in context_mounts
+                if str(mount.get("kind") or "") == "system_prompt"
+            ),
+            "",
+        )
         raw_subagents = plugin_public_session_snapshot(root_value).get("subagents")
         subagents = {
             str(agent_id): dict(record)
@@ -565,7 +573,10 @@ class AgentContextRepository:
             "rootId": tree.root_id,
             "leafId": leaf.id,
             "messages": _agent_path_messages(path),
-            "systemPrompt": str(root_value.get("content") or ""),
+            "systemPrompt": (
+                mounted_system_prompt
+                or str(root_value.get("content") or "")
+            ),
             "usage": _agent_path_usage(path),
             "model": model,
             "modelIdentity": model_identity,
@@ -975,6 +986,13 @@ class ConversationContextQueryService:
                         continue
                     kind = str(mount.get("kind") or "context")
                     context_tokens += tokens
+                    if kind == "system_prompt":
+                        context_blocks.extend(_system_prompt_blocks(
+                            content,
+                            tokens,
+                            self.approx_token_count,
+                        ))
+                        continue
                     context_blocks.append({
                         "id": f"context.{kind}" if kind != "context" else "context",
                         "type": (

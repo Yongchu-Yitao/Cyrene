@@ -33,7 +33,6 @@ from agent.plugin.model_gateway import ensure_model_router
 from agent.plugin.model_catalog import (
     set_session_model_preference as persist_session_model_preference,
 )
-from agent.prompt import DEFAULT_SYSTEM_PROMPT
 from agent.workbench.bridge import (
     AgentSessionCancelledError,
     AgentSessionRunError,
@@ -440,7 +439,6 @@ class TaskAgentRuntime:
         attachments: Sequence[Mapping[str, Any]],
         owner_loop: asyncio.AbstractEventLoop,
         tree_id: str = "",
-        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     ) -> WorkbenchSessionBridge:
         from agent.plugin import native_tools
 
@@ -536,7 +534,6 @@ class TaskAgentRuntime:
             registry=registry,
             model_plugin=MODEL_ROUTER_PLUGIN,
             chat_id=context_tree_id,
-            system_prompt=str(system_prompt or DEFAULT_SYSTEM_PROMPT),
             host_context={
                 "bot": self.bot,
                 "chat_id": session_id,

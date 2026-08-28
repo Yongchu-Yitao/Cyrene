@@ -1324,7 +1324,7 @@ cyrene stop</code></pre></div>
           <span class="tool-tag">Shared terminals</span>
         </div>
         <h3>Context and subagents</h3>
-        <p>The composer-context plugin owns per-chat workspace, MCP, Skills, and capability selections. When enabled, the SOUL plugin mounts personality immediately below the system prompt. Stable context-tree blocks preserve prompt-cache reuse, and long conversations keep the unified compaction behavior. A subagent inherits the main Agent's initial tree plus its assignment and then collaborates through the inbox.</p>
+        <p>The required system-prompt plugin mounts the editable base Agent instructions first, while the kernel creates only an empty system root. The composer-context plugin owns per-chat workspace, MCP, Skills, and capability selections. When enabled, the SOUL plugin mounts personality immediately below the system prompt. Stable context-tree blocks preserve prompt-cache reuse, and long conversations keep the unified compaction behavior. A subagent inherits the main Agent's initial tree plus its assignment and then collaborates through the inbox.</p>
       </section>
       <section data-topic="self-control">
         <h2>Cyrene Self-Control</h2>
@@ -2270,7 +2270,7 @@ python -m cyrene --workbench --verbose</code></pre></div>
         <p>详细模式下，事件写入带时间戳的 JSONL 文件：</p>
         <div class="code-block"><pre><code>data/debug_20260617_133426.jsonl</code></pre></div>
         <p>每行是一个 JSON 对象，包含：</p>
-        <div class="code-block"><pre><code>{"type": "llm_call", "caller": "main_agent", "phase": "phase1",
+        <div class="code-block"><pre><code>{"type": "llm_call", "caller": "main_agent", "phase": "agent_run",
  "messages": [...], "response": {...}, "duration_ms": 423.0}
 
 {"type": "tool_call", "caller": "subagent_poet", "tool": "send_agent_message",
@@ -2370,7 +2370,7 @@ python -m cyrene --workbench --verbose</code></pre></div>
 
         <h3>Debug Logs</h3>
         <p>In verbose mode, events are written to timestamped JSONL files. Each line is a JSON object:</p>
-        <div class="code-block"><pre><code>{"type": "llm_call", "caller": "main_agent", "phase": "phase1",
+        <div class="code-block"><pre><code>{"type": "llm_call", "caller": "main_agent", "phase": "agent_run",
  "messages": [...], "response": {...}, "duration_ms": 423.0}
 
 {"type": "tool_call", "caller": "subagent_poet", "tool": "send_agent_message",

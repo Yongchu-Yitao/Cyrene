@@ -65,8 +65,12 @@ def plugin_language(context: PluginContext | None = None) -> str:
     """Resolve the language frozen into a Plugin invocation, then app fallback."""
 
     from cyrene.localization import app_language
+    from .execution import current_plugin_execution
 
-    active = context or current_plugin_context()
+    execution = current_plugin_execution()
+    active = context or (execution.context if execution is not None else None)
+    if active is None:
+        return app_language()
     explicit = (
         active.data.get("language")
         or run_context_value(active, "language", "")

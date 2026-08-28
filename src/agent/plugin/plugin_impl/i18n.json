@@ -301,6 +301,16 @@
         "description": "创建并协调 Cyrene 子 Agent。"
       }
     },
+    "cyrene_system_prompt": {
+      "en": {
+        "name": "System prompt",
+        "description": "Mount the base Agent instructions at the start of system context."
+      },
+      "zh": {
+        "name": "系统提示词",
+        "description": "在系统上下文最前方挂载 Agent 的基础指令。"
+      }
+    },
     "cyrene_task": {
       "en": {
         "name": "Task tools",

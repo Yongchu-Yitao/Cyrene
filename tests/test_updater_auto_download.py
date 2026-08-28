@@ -185,7 +185,7 @@ async def test_run_update_check_once_auto_downloads_and_notifies(fresh_auto_stat
 
     assert updater._download_progress["verified"] is True
     titles = [item["title"] for item in notifications.list_notifications()["items"]]
-    assert any("已就绪" in title for title in titles), titles
+    assert any("is ready" in title for title in titles), titles
 
 
 def test_persist_then_restore_verified_state(fresh_auto_state, monkeypatch, tmp_path):

@@ -44,7 +44,7 @@ async def test_terminal_daemon_returns_unexpected_operation_errors(
     assert messages == [{
         "ok": False,
         "code": "operation_failed",
-        "error": "OSError: synthetic terminal failure",
+        "error": "The terminal operation failed.",
     }]
 
 
@@ -430,7 +430,7 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert "workbenchServices.feedback()" in source
     assert 'showTerminalRecoveryToast(message.terminal)' in source
     assert 'showTerminalExitToast(message.terminal, restartTerminal)' in source
-    assert '"终端已退出：" + terminalExitMessage(terminal)' in source
+    assert 'terminalT("terminal.exitedWithReason"' in source
     assert 'actionLabel: recoverable ? "重新启动" : ""' in source
     assert 'else if (connection === "exited") {' not in source
     assert 'className="workbench-toast-action"' in feedback

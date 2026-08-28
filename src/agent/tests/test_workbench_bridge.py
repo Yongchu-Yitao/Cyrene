@@ -361,7 +361,7 @@ def test_plain_chat_bridge_submits_publishes_and_forwards_plugin_context(tmp_pat
             "bot": session.plugin_context_data["bot"],
             "chat_id": "chat-1",
                 "db_path": "/tmp/workbench.sqlite3",
-                "language": "zh",
+                "language": "en",
                 "run_id": "run-chat-1",
             "model_call_kind": "tool",
             "user_request": "use the probe",

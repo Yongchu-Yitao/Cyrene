@@ -119,18 +119,21 @@ def test_candidate_does_not_borrow_a_key_from_another_profile():
 
 
 def test_candidate_reads_the_canonical_model_graph(monkeypatch):
+    from types import SimpleNamespace
+
+    import agent.plugin
     from agent.plugin.plugin_impl.cyrene_content import deepseek_web_search as dws
 
     monkeypatch.setattr(dws, "model_plugin_catalog", lambda: [{"id": "deepseek"}])
-    monkeypatch.setattr(
-        dws,
-        "get_model_configuration",
-        lambda: {"profiles": [{"id": "profile-deepseek"}]},
+    configuration = {"profiles": [{"id": "profile-deepseek"}]}
+    service = SimpleNamespace(
+        get_model_configuration=lambda: configuration,
+        candidate_for_profile=lambda _profile_id, _configuration: _official_model(),
     )
     monkeypatch.setattr(
-        dws,
-        "candidate_for_profile",
-        lambda _profile_id, _configuration: _official_model(),
+        agent.plugin,
+        "active_plugin_service",
+        lambda name: service if name == "model_configuration" else None,
     )
 
     selected = dws.find_official_deepseek_search_candidate()

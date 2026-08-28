@@ -513,7 +513,7 @@ def test_project_memory_editor_and_manual_chat_trigger_are_wired_end_to_end():
     assert '"/memory-learning"' in model_api
     assert 'body: JSON.stringify({ lang: lang === "zh" ? "zh" : "en" })' in model_api
     assert "model.generateMemory(activeChat.id, memoryLanguage)" in chat_page
-    assert "onGenerateMemory={handleGenerateMemory}" in chat_page
+    assert "onGenerateMemory={memoryAvailable ? handleGenerateMemory : null}" in chat_page
     assert "onClick={run(onGenerateMemory)}" in context_panel
     for text in (
         '"rail.editMemory": "Edit memory"',

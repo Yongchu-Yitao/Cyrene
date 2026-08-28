@@ -798,7 +798,7 @@ async def test_codex_completion_uses_structured_cyrene_actions_without_leaking_j
     assert events == []
     assert seen_turn_params["outputSchema"]["properties"]["tool_calls"][
         "minItems"
-    ] == 1
+    ] == 0
     action_names = seen_turn_params["outputSchema"]["properties"]["tool_calls"][
         "items"
     ]["properties"]["name"]["enum"]
@@ -838,7 +838,7 @@ def test_codex_structured_action_preserves_only_terminal_content() -> None:
         tools,
     )
 
-    assert response["content"] == "完成。"
+    assert response["content"] == ""
     assert response["tool_calls"][0]["function"]["name"] == "quit"
 
 

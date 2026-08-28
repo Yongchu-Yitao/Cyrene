@@ -133,7 +133,7 @@ def test_selected_text_is_materialized_as_pinned_markdown_file(tmp_path, monkeyp
     assert item["sourceKind"] == "snippet"
     assert item["name"] == "设计说明.md"
     assert item["content_type"] == "text/markdown"
-    assert item["url"].startswith("/api/chat/export/")
+    assert item["url"].startswith("/api/workbench/exports/")
     assert item["path"].endswith(".md")
     assert re.fullmatch(r"[0-9a-f]{32}\.md", item["file"]["id"])
     assert (export_dir / item["file"]["id"]).read_text(encoding="utf-8") == "第一段\n\n第二段\n"

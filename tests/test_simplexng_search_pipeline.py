@@ -15,7 +15,7 @@ async def test_simplexng_fetches_pages_and_returns_evidence(monkeypatch):
         }
     ]
 
-    async def fake_search(_query):
+    async def fake_search(_query, **_kwargs):
         return [dict(item) for item in results]
 
     async def fake_fetch(_url, session=None, **_kwargs):
@@ -36,7 +36,7 @@ async def test_simplexng_fetches_pages_and_returns_evidence(monkeypatch):
 async def test_simplexng_preview_fetches_only_first_three_pages(monkeypatch):
     from agent.plugin.plugin_impl.cyrene_content import search_backend as search
 
-    async def fake_search(_query):
+    async def fake_search(_query, **_kwargs):
         return [
             {
                 "title": f"Weather source {index}",
@@ -104,7 +104,7 @@ async def test_preview_gives_remaining_page_five_seconds_after_first_success(mon
 async def test_simplexng_pipeline_makes_no_internal_model_calls(monkeypatch):
     from agent.plugin.plugin_impl.cyrene_content import search_backend as search
 
-    async def fake_search(_query):
+    async def fake_search(_query, **_kwargs):
         return [{
             "title": "Source",
             "url": "https://example.test/source",
@@ -215,7 +215,7 @@ async def test_simplexng_genuine_empty_result_remains_empty(monkeypatch):
 async def test_simplexng_result_without_snippet_or_page_content_is_unusable(monkeypatch):
     from agent.plugin.plugin_impl.cyrene_content import search_backend as search
 
-    async def fake_search(_query):
+    async def fake_search(_query, **_kwargs):
         return [{
             "title": "Empty source",
             "url": "https://example.test/empty",

@@ -14,7 +14,6 @@ from ..plugin import PluginRegistry, default_plugin_impl_directory
 from ..plugin.model_gateway import ensure_model_router
 from ..plugin.model_router import MODEL_ROUTER_PLUGIN
 from ..permission import runtime_permission_mode
-from ..prompt import DEFAULT_SYSTEM_PROMPT
 from .bridge import WorkbenchChatResult, WorkbenchSessionBridge
 from cyrene.localization import app_language
 
@@ -204,7 +203,6 @@ async def run_workbench_chat(
             registry=registry,
             model_plugin=MODEL_ROUTER_PLUGIN,
             chat_id=normalized_session_id,
-            system_prompt=DEFAULT_SYSTEM_PROMPT,
             host_context={
                 "bot": bot,
                 "chat_id": host_chat_id,

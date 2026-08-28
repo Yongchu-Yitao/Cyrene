@@ -35,10 +35,11 @@ Proactive、Knowledge 和 SOUL.md 都由插件提供。工具包和独立工具�
 
 启用的上下文插件把 Block 发布到可追踪的 Context Tree；稳定 Block 保持稳定
 Identity 以复用 Prompt Cache，标准 Compactor 在不改变持久历史的前提下控制长
-对话长度。Composer Context 插件负责输入框中的 Workspace、MCP、Skills 等上下文
-选择；SOUL 插件启用时把人格 Block 挂载在 System Prompt 正下方。Subagent 创建时
-继承 Main Agent 的初始 Tree，并额外获得 Main Agent 的任务指令，之后通过持久
-Inbox 协作。
+对话长度。必需的 System Prompt 插件首先挂载可编辑的 Agent 基础指令，内核只创建
+空的 System Root。Composer Context 插件负责输入框中的 Workspace、MCP、Skills 等
+上下文选择；SOUL 插件启用时把人格 Block 挂载在 System Prompt 正下方。Subagent
+创建时继承 Main Agent 的初始 Tree，并额外获得 Main Agent 的任务指令，之后通过
+持久 Inbox 协作。
 
 ## Runtime 启动与迁移
 

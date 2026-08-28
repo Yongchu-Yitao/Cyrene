@@ -108,7 +108,7 @@ def test_input_context_state_prunes_unavailable_toggle_but_session_fails_closed(
         "selected": False,
     }
 
-    with pytest.raises(RuntimeError, match="SOUL 上下文已启用"):
+    with pytest.raises(RuntimeError, match="SOUL context is enabled"):
         service.resolve_input_context(
             soul_active=True,
             workspace_active=False,

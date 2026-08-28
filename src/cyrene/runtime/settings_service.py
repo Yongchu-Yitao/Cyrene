@@ -223,10 +223,19 @@ def _active_plugin_setting_contributions(
         if id(service) in seen:
             continue
         seen.add(id(service))
-        provider = getattr(service, provider_name, None)
+        try:
+            provider = getattr(service, provider_name, None)
+        except (AttributeError, RuntimeError):
+            # Some application adapters are attached before their enabled
+            # pack completes startup. They do not contribute settings until
+            # their service has been bound.
+            continue
         if not callable(provider):
             continue
-        values = provider()
+        try:
+            values = provider()
+        except RuntimeError:
+            continue
         if not isinstance(values, (tuple, list)) or any(
             not isinstance(item, expected_type) for item in values
         ):

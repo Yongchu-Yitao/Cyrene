@@ -112,7 +112,7 @@ def test_soul_plugin_mounts_before_other_session_context(tmp_path):
     ))
 
     assert asyncio.run(hooks.session_start()) == (
-        "## 人格记忆\n## SELF:IDENTITY\n- Cyrene\n\nmemory"
+        "## Persona memory\n## SELF:IDENTITY\n- Cyrene\n\nmemory"
     )
     store.close()
 

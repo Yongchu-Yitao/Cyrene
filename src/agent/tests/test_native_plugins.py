@@ -48,6 +48,7 @@ CONTEXT_PACK_IDS = frozenset({
     "cyrene_composer_context",
     "cyrene_context",
     "cyrene_soul",
+    "cyrene_system_prompt",
 })
 
 
@@ -89,6 +90,7 @@ def test_seeded_canonical_plugins_complete_toolbox_chain(tmp_path):
         assert CONTEXT_PACK_IDS <= set(user_packs)
         assert registry.pack_locked("cyrene_context") is True
         assert registry.pack_locked("cyrene_composer_context") is True
+        assert registry.pack_locked("cyrene_system_prompt") is True
         business_names = {
             plugin.name
             for pack_id in TOOL_PACK_IDS

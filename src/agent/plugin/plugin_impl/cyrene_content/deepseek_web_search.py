@@ -128,6 +128,8 @@ def find_official_deepseek_search_candidate(
         ):
             continue
         api_key = str(item.get("api_key") or "").strip()
+        if len(api_key) >= 2 and api_key[0] == api_key[-1] and api_key[0] in {'"', "'"}:
+            api_key = api_key[1:-1].strip()
         if not api_key:
             continue
         return DeepSeekSearchCandidate(

@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from agent.plugin import PluginContext, PluginPack, PluginRegistry, PluginRuntime
+from agent.plugin.customization import PluginCustomizationState
 from agent.plugin.plugin_impl.cyrene_mcp import service as native_mcp
 
 
@@ -65,7 +66,7 @@ async def test_mcp_server_is_a_dynamic_pack_through_toolbox(
     monkeypatch.setattr(service, "configs", lambda **_kwargs: [dict(configs[0])])
     monkeypatch.setattr(native_mcp, "MCPServerConnection", _FakeConnection)
 
-    registry = PluginRegistry()
+    registry = PluginRegistry(customizations=PluginCustomizationState())
     service.attach_registry(registry)
     await service.startup()
     runtime = PluginRuntime(registry)
@@ -129,7 +130,7 @@ async def test_mcp_raw_invoke_obeys_dynamic_pack_and_tool_activation(
     }
     monkeypatch.setattr(service, "configs", lambda **_kwargs: [dict(config)])
     monkeypatch.setattr(native_mcp, "MCPServerConnection", _FakeConnection)
-    registry = PluginRegistry()
+    registry = PluginRegistry(customizations=PluginCustomizationState())
     service.attach_registry(registry, authoritative=True)
     await service.startup()
 
@@ -171,7 +172,7 @@ async def test_mcp_raw_invoke_rejects_deleted_dynamic_tool(
     }
     monkeypatch.setattr(service, "configs", lambda **_kwargs: [dict(config)])
     monkeypatch.setattr(native_mcp, "MCPServerConnection", _FakeConnection)
-    registry = PluginRegistry()
+    registry = PluginRegistry(customizations=PluginCustomizationState())
     service.attach_registry(registry, authoritative=True)
     await service.startup()
 
@@ -198,12 +199,12 @@ async def test_mcp_registry_collision_marks_connected_server_as_error(
     monkeypatch.setattr(service, "configs", lambda **_kwargs: [dict(config)])
     monkeypatch.setattr(native_mcp, "MCPServerConnection", _FakeConnection)
 
-    conflicting_registry = PluginRegistry()
+    conflicting_registry = PluginRegistry(customizations=PluginCustomizationState())
     conflicting_registry.register_pack(
         PluginPack(id="mcp.docs", description="occupied", plugins=()),
         source="test",
     )
-    healthy_registry = PluginRegistry()
+    healthy_registry = PluginRegistry(customizations=PluginCustomizationState())
     # Keep this order: a later successful sync must not erase the earlier
     # registry-specific collision from the service status.
     service.attach_registry(conflicting_registry)

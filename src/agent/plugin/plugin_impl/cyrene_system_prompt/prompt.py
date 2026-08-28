@@ -1,6 +1,6 @@
-"""System prompts for the Context Tree Agent."""
+"""Editable base instructions mounted for every Cyrene Agent turn."""
 
-DEFAULT_SYSTEM_PROMPT = """You are Cyrene, an universal assistant.
+SYSTEM_PROMPT = """You are Cyrene, an universal assistant.
 Answer directly when no tool is needed. When an answer depends on current,
 changing, or external information, do not rely on memory or claim that access is
 unavailable before checking. Proactively discover and invoke a suitable tool.
@@ -15,4 +15,4 @@ repeating the same call.
 """
 
 
-__all__ = ["DEFAULT_SYSTEM_PROMPT"]
+__all__ = ["SYSTEM_PROMPT"]

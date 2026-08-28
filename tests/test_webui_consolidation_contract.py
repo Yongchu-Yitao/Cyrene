@@ -22,10 +22,10 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 333
+OPENAPI_OPERATION_COUNT = 398
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "534330bdabbf36018bc02c3b321747bd6de426007a841a833e6442623806daf2"
+OPENAPI_SHA256 = "32175a68e2ab97507d783dc64a59e1fe6a56d5d4e1bde673af33b3591d455a22"
 TOOL_REGISTRY_SHA256 = "f89051bdebdc54bb76288dbfbaf526765ab64fc7289e2bebd25f03510a6f7c45"
 MAIN_WIRE_SHA256 = "455f99062dd310cf5dbec1c3f02ccb3cb34b4018fcba17d3f2dd517c9b82d12a"
 SUBAGENT_WIRE_SHA256 = "1d28ab5db6096330a6a9c33877b04e1ff5e2f45c79df4b208e7f1a5a1516cd86"
@@ -266,7 +266,9 @@ def test_ui_background_and_pdf_resources_have_explicit_cleanup_paths():
     feedback = (WORKBENCH_ROOT / "shared" / "feedback" / "service.jsx").read_text(encoding="utf-8")
     chat = workbench_chat_source()
     library = (WORKBENCH_ROOT / "workbench-library.jsx").read_text(encoding="utf-8")
-    standalone_pdf = (ROOT / "src" / "route" / "pdf.py").read_text(encoding="utf-8")
+    standalone_pdf = (
+        ROOT / "src" / "agent" / "plugin" / "plugin_impl" / "cyrene_content" / "pdf_routes.py"
+    ).read_text(encoding="utf-8")
 
     assert "window.clearInterval(_pollTimer)" in actions
     assert 'window.addEventListener("beforeunload", dispose' in actions

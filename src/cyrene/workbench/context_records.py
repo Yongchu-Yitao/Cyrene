@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from agent.context import ContextError, ContextStoreRouter, TreeNotFoundError
-from agent.prompt import DEFAULT_SYSTEM_PROMPT
 from agent.workbench.chat_runtime import workbench_agent_data_directory
 
 _DIALOGUE_ROLES = frozenset(
@@ -80,9 +79,7 @@ def append_context_record(
                 tree = router.create_tree(
                     {
                         "role": "system",
-                        "content": DEFAULT_SYSTEM_PROMPT.replace(
-                            "{workspace}", ""
-                        ),
+                        "content": "",
                     },
                     tree_id=target,
                 )

@@ -88,13 +88,13 @@ def test_workbench_follow_up_seed_uses_current_task_state():
         "reflection": {"packet": {"next_step": "检查登录页事件处理"}},
     })
 
-    assert seed["title"] == "修复登录流程 · 后续"
+    assert seed["title"] == "修复登录流程 · Follow-up"
     assert seed["priority"] == "high"
     assert seed["constraints"] == ["不要修改认证协议"]
-    assert "来源任务当前状态：失败" in seed["goal"]
-    assert "尚未解决的步骤：修复浏览器回归" in seed["goal"]
-    assert "尚未满足的验收项：浏览器登录成功" in seed["goal"]
-    assert "反思建议的下一步：检查登录页事件处理" in seed["goal"]
+    assert "Current source-task status: failed" in seed["goal"]
+    assert "Unresolved steps: 修复浏览器回归" in seed["goal"]
+    assert "Unmet acceptance criteria: 浏览器登录成功" in seed["goal"]
+    assert "Next step suggested by reflection: 检查登录页事件处理" in seed["goal"]
     assert seed["unresolvedAcceptance"] == ["浏览器登录成功"]
 
 
@@ -113,9 +113,9 @@ def test_workbench_follow_up_seed_keeps_explicit_request_with_source_context():
     )
 
     assert seed["title"] == "补充英文版本"
-    assert "本次后续要求：另外制作一份英文发布说明" in seed["goal"]
-    assert "来源任务目标：输出版本发布说明" in seed["goal"]
-    assert "来源任务当前状态：已完成" in seed["goal"]
+    assert "Follow-up request: 另外制作一份英文发布说明" in seed["goal"]
+    assert "Source task goal: 输出版本发布说明" in seed["goal"]
+    assert "Current source-task status: completed" in seed["goal"]
 
 
 def test_workbench_plan_revision_preserves_existing_steps_when_feedback_is_supplemental():
@@ -642,7 +642,7 @@ def test_workbench_generation_error_redacts_credentials():
     assert "secret-token" not in error.message
     assert "abcdefghijkl" not in error.message
     assert "private-value" not in error.message
-    assert "<redacted>" in error.message
+    assert error.message == "The model request failed unexpectedly."
 
 
 def test_workbench_promote_file_artifacts_promotes_and_dedups():

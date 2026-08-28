@@ -200,7 +200,7 @@ def test_memory_plugin_mounts_recent_conversation_for_proactive_run(
 
     result = run(service.on_session_start(event))
 
-    assert result["context"].startswith("base memory\n\n## 近期对话")
+    assert result["context"].startswith("base memory\n\n## Recent conversation")
     assert "ship the release" in result["context"]
 
 

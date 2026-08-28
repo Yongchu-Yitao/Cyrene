@@ -134,13 +134,18 @@ def test_agent_managed_binder_injects_no_cyrene_credentials():
 
 @pytest.mark.asyncio
 async def test_gateway_calls_exact_scoped_candidate_with_chat_affinity(monkeypatch):
+    import agent.plugin
     from cyrene.agent_runtime import model_gateway
 
     captured = {}
 
     monkeypatch.setattr(
         "agent.plugin.model_catalog.resolve_exact_model_candidate",
-        lambda identity: _candidate() if identity.get("candidateId") == "configured-primary" else None,
+        lambda identity: (
+            _candidate()
+            if identity.get("candidateId") == "configured-primary"
+            else None
+        ),
     )
 
     async def fake_call_llm(messages, **kwargs):
@@ -148,11 +153,23 @@ async def test_gateway_calls_exact_scoped_candidate_with_chat_affinity(monkeypat
         captured.update(kwargs)
         return {"role": "assistant", "content": "ok", "model": "configured-model"}
 
-    monkeypatch.setattr(model_gateway, "call_llm", fake_call_llm)
+    class FakeModelGateway:
+        complete = staticmethod(fake_call_llm)
+
+    monkeypatch.setattr(
+        agent.plugin,
+        "active_plugin_service",
+        lambda name: FakeModelGateway() if name == "model" else None,
+    )
     result = await model_gateway.call_model_gateway(
         {
             "messages": [{"role": "user", "content": "hello"}],
-            "tools": [{"type": "function", "function": {"name": "read", "parameters": {}}}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "read", "parameters": {}},
+                }
+            ],
             "max_tokens": 321,
         },
         {

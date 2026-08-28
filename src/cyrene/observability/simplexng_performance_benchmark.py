@@ -60,7 +60,7 @@ async def _run_once(workload: SearchBenchmarkWorkload) -> dict[str, Any]:
         "_fetch_url": search._fetch_url,
     }
 
-    async def fake_search(_query: str) -> list[dict]:
+    async def fake_search(_query: str, **_kwargs: Any) -> list[dict]:
         await asyncio.sleep(_SEARCH_DELAY_SECONDS)
         return [dict(item) for item in _RESULTS]
 

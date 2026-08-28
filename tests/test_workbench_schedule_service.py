@@ -9,22 +9,24 @@ from agent.plugin import PluginApplicationHost, PluginRegistry
 from agent.plugin.native_tools import seed_builtin_plugin_directory
 from agent.plugin.plugin_impl.cyrene_entity.service import EntityService
 from agent.plugin.plugin_impl.cyrene_schedule.repository import ScheduleRepository
+from agent.plugin.plugin_impl.cyrene_schedule.routes import (
+    register_workbench_schedule_routes,
+)
 from agent.plugin.plugin_impl.cyrene_schedule.service import ScheduleRuntimeService
-from cyrene.runtime.database import init_db
 from agent.plugin.plugin_impl.cyrene_schedule.workbench_repository import (
     WorkspaceProjectResolver,
 )
 from agent.plugin.plugin_impl.cyrene_schedule.workbench_service import (
     ScheduleApplicationService,
 )
-from agent.plugin.plugin_impl.cyrene_schedule.routes import (
-    register_workbench_schedule_routes,
-)
+from cyrene.runtime.database import init_db
+from cyrene.workbench.store import ensure_schema as ensure_workbench_schema
 
 
 def _client(tmp_path, notifications):
     db_path = str(tmp_path / "schedule.sqlite3")
     asyncio.run(init_db(db_path))
+    ensure_workbench_schema(db_path)
     project = {"id": "project_1", "dataKey": "workspace_1"}
     resolver = WorkspaceProjectResolver(
         find_project_lightweight=(
@@ -36,16 +38,18 @@ def _client(tmp_path, notifications):
     seed_builtin_plugin_directory(plugin_directory)
     registry = PluginRegistry()
     assert registry.load_directory(plugin_directory) == ()
+    runtime_service = ScheduleRuntimeService(
+        db_path,
+        plugin_directory=plugin_directory,
+    )
+    asyncio.run(runtime_service.ensure_ready())
     service = ScheduleApplicationService(
         db_path,
         resolver,
         lambda **payload: notifications.append(payload),
         entities=EntityService(db_path),
         registry=registry,
-        runtime_service=ScheduleRuntimeService(
-            db_path,
-            plugin_directory=plugin_directory,
-        ),
+        runtime_service=runtime_service,
     )
     app = FastAPI()
     router = APIRouter()

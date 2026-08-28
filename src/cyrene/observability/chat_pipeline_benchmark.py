@@ -26,7 +26,6 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 from cyrene.observability.benchmark_cache import (
@@ -140,9 +139,7 @@ class _ProfileMetrics:
 
 @dataclass(frozen=True, slots=True)
 class _ProfileInstrumentation:
-    chat_runs: Any
     inbox_module: Any
-    original_chat_service: Any
     original_inbox_connect: Any
     original_inbox_record_events: Any
     event_store: Any
@@ -150,7 +147,6 @@ class _ProfileInstrumentation:
     original_append_many: Any
 
     def restore(self) -> None:
-        self.chat_runs.chat_service = self.original_chat_service
         self.inbox_module.WorkbenchAgentInbox._connect = self.original_inbox_connect
         self.inbox_module.WorkbenchAgentInbox._record_events = self.original_inbox_record_events
         if self.event_store is not None and self.original_event_store_connect is not None and self.original_append_many is not None:
@@ -172,21 +168,13 @@ def _new_profile_metrics() -> _ProfileMetrics:
 def _install_profile_instrumentation(
     manager: Any,
     metrics: _ProfileMetrics,
-    chat_runs: Any,
     inbox_module: Any,
 ) -> _ProfileInstrumentation:
-    original_chat_service = chat_runs.chat_service
     original_inbox_connect = inbox_module.WorkbenchAgentInbox._connect
     original_inbox_record_events = inbox_module.WorkbenchAgentInbox._record_events
     event_store = manager._event_store
     original_event_store_connect = event_store._connect if event_store is not None else None
     original_append_many = event_store.append_many if event_store is not None else None
-    fake_chat_service = SimpleNamespace(
-        _record_chat_run_outcome=lambda *_args, **_kwargs: None,
-        _settle_chat_running_status=lambda *_args, **_kwargs: None,
-    )
-    chat_runs.chat_service = lambda: fake_chat_service
-
     def tracked_inbox_connect(self: Any) -> sqlite3.Connection:
         with metrics.counter_lock:
             metrics.inbox_connections += 1
@@ -216,9 +204,7 @@ def _install_profile_instrumentation(
         event_store.append_many = tracked_append_many
 
     return _ProfileInstrumentation(
-        chat_runs=chat_runs,
         inbox_module=inbox_module,
-        original_chat_service=original_chat_service,
         original_inbox_connect=original_inbox_connect,
         original_inbox_record_events=original_inbox_record_events,
         event_store=event_store,
@@ -480,7 +466,6 @@ async def _run_profile(profile: BenchmarkProfile, db_path: Path) -> dict[str, An
     instrumentation = _install_profile_instrumentation(
         manager,
         metrics,
-        chat_runs,
         inbox_module,
     )
 

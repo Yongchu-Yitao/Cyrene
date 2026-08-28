@@ -493,6 +493,9 @@ class _TerminalPersistenceWriter:
         self._put_main(3, _WORKER_STOP)
         self._thread.join()
 
+    def _legacy_path(self, terminal_id: str) -> Path:
+        return self._state_dir / "scrollback" / f"{terminal_id}.bin"
+
     def _segment_dir(self, terminal_id: str) -> Path:
         return self._state_dir / "scrollback" / terminal_id
 
@@ -512,6 +515,26 @@ class _TerminalPersistenceWriter:
                 continue
         entries.sort(key=lambda entry: entry[0])
         return entries
+
+    def _migrate_legacy(self, terminal_id: str, output_start_seq: int) -> None:
+        """Move an existing single-file scrollback into segmented storage."""
+        legacy = self._legacy_path(terminal_id)
+        target = self._segment_dir(terminal_id)
+        if target.is_dir() or not legacy.is_file():
+            return
+        temporary = target.with_name(f".{target.name}.{os.getpid()}.migrating")
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        temporary.mkdir(parents=True)
+        cursor = max(0, int(output_start_seq))
+        with legacy.open("rb") as source:
+            while data := source.read(self._segment_size):
+                with (temporary / f"{cursor:020d}.bin").open("wb") as stream:
+                    stream.write(data)
+                self.bytes_written += len(data)
+                cursor += len(data)
+        os.replace(temporary, target)
+        legacy.unlink()
 
     def _oldest_seq(self, terminal_id: str, fallback: int) -> int:
         with self._segment_lock(terminal_id):
@@ -577,6 +600,7 @@ class _TerminalPersistenceWriter:
     def _read_history_locked(
         self, terminal_id: str, start_seq: int, end_seq: int, fallback_start: int,
     ) -> tuple[int, int, bytes]:
+        self._migrate_legacy(terminal_id, fallback_start)
         segments = self._segments(terminal_id)
         oldest = segments[0][0] if segments else max(0, int(fallback_start))
         start = max(oldest, int(start_seq))
@@ -584,7 +608,13 @@ class _TerminalPersistenceWriter:
         if end <= start:
             return oldest, start, b""
         if not segments:
-            return oldest, start, b""
+            legacy = self._legacy_path(terminal_id)
+            try:
+                with legacy.open("rb") as stream:
+                    stream.seek(start - oldest)
+                    return oldest, start, stream.read(end - start)
+            except OSError:
+                return oldest, start, b""
         parts: list[bytes] = []
         for segment_start, path, size in segments:
             segment_end = segment_start + size
@@ -1044,6 +1074,8 @@ class _TerminalPersistenceWriter:
                 self._screen_snapshots.pop(terminal_id, None)
             with self._segment_lock(terminal_id):
                 shutil.rmtree(self._segment_dir(terminal_id), ignore_errors=True)
+                with contextlib.suppress(OSError):
+                    self._legacy_path(terminal_id).unlink()
             for table in (
                 "terminal_text_chunks", "terminal_commands", "terminal_index_state",
             ):

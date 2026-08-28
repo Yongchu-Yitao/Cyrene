@@ -556,7 +556,6 @@ def _context_tree_path(session_id: str) -> tuple[Any, Any, list[Any], list[Any]]
     """Open one conversation tree and return its canonical dialogue branch."""
 
     from agent.context import ContextError, ContextStoreRouter, TreeNotFoundError
-    from agent.prompt import DEFAULT_SYSTEM_PROMPT
     from agent.workbench.chat_runtime import workbench_agent_data_directory
 
     target = str(session_id or "").strip()
@@ -573,7 +572,7 @@ def _context_tree_path(session_id: str) -> tuple[Any, Any, list[Any], list[Any]]
                 tree = router.create_tree(
                     {
                         "role": "system",
-                        "content": DEFAULT_SYSTEM_PROMPT.replace("{workspace}", ""),
+                        "content": "",
                     },
                     tree_id=target,
                 )

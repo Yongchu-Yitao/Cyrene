@@ -132,7 +132,7 @@ async def test_visual_describe_converts_window_capture_to_text(monkeypatch):
     async def fake_rpc(_operation, _arguments, **_kwargs):
         return {
             "status": "success",
-            "session_id": "session-1",
+            "session_id": "visual-description-session",
             "image_base64": "aW1hZ2U=",
             "mime_type": "image/png",
             "width": 800,
@@ -150,7 +150,7 @@ async def test_visual_describe_converts_window_capture_to_text(monkeypatch):
     monkeypatch.setattr(attachments, "run_vision_chat", fake_vision)
     result = await app_use.execute_app_use({
         "operation": "call",
-        "session_id": "session-1",
+        "session_id": "visual-description-session",
         "capability": "visual_describe",
         "parameters": {"prompt": "Explain the chart"},
     })
@@ -959,7 +959,7 @@ async def test_app_use_tool_returns_structured_json(monkeypatch):
     from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
     from agent.plugin.plugin_impl.cyrene_desktop import app_use as tool
 
-    async def fake_execute(arguments):
+    async def fake_execute(arguments, _context=None):
         return {"status": "success", "operation": arguments["operation"], "targets": []}
 
     monkeypatch.setattr(app_use, "execute_app_use", fake_execute)

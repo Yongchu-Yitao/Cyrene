@@ -131,7 +131,7 @@ def test_content_pack_toolbox_search_and_result_read_chain(tmp_path, monkeypatch
         )
     )
     assert unavailable.success is False
-    assert unavailable.error == "插件执行失败。"
+    assert unavailable.error == "Plugin execution failed."
 
     read = run(
         runtime.call(

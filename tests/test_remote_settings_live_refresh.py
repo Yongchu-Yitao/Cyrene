@@ -25,10 +25,9 @@ def test_remote_context_catalog_refreshes_live_without_restart():
         root / "src" / "webui" / "frontend" / "platform" / "events.jsx"
     ).read_text(encoding="utf-8")
 
-    assert 'fetch("/api/remote/context-devices", { cache: "no-store" })' in workbench
+    assert 'workbenchServices.api().json("/api/context/state"' in workbench
     assert 'event.type === "remote_devices_changed"' in workbench
-    assert 'new BroadcastChannel("cyrene-remote-devices")' in workbench
-    assert 'window.addEventListener("focus"' in workbench
-    assert 'document.visibilityState === "visible"' in workbench
+    assert 'window.addEventListener("cyrene:remote-devices-changed"' in workbench
+    assert "invalidateComposerContext" in workbench
     assert 'window.dispatchEvent(new CustomEvent("cyrene:remote-devices-changed"' in settings
     assert '"remote_devices_changed"' in events

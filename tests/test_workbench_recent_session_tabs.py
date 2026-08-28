@@ -13,6 +13,14 @@ ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "src/webui/frontend"
 
 
+class _ComposerContextStub:
+    def default_input_context(self):
+        return {"soulActive": True, "workspaceActive": True}
+
+    def normalize(self, value):
+        return dict(value or {})
+
+
 def _frontend_source(relative_path: str) -> str:
     return (FRONTEND / relative_path).read_text(encoding="utf-8")
 
@@ -563,6 +571,9 @@ def test_overflow_count_uses_the_i18n_parameter_position():
     script = (
         'var WORKBENCH_TRANSLATIONS={zh:{"workbench.sessionOverflow.count":"另有 {count} 个"},en:{}};'
         'var workbenchI18nLang="zh";'
+        'var WORKBENCH_TOOL_NAME_ALIASES={};'
+        'function workbenchUsableTranslation(value){return typeof value === "string" && value.length > 0;}'
+        'function reportWorkbenchMissingTranslation(){}'
         "function workbenchInterpolate"
         + helper
         + 'process.stdout.write(workbenchT("workbench.sessionOverflow.count", {count: 8}, "{count} more"));'
@@ -610,7 +621,8 @@ def test_chat_summary_exposes_live_run_status_without_stale_running_state():
             "projectId": "project-1",
             "status": "running",
             "messages": [],
-        }
+        },
+        composer_context=_ComposerContextStub(),
     )
 
     assert summary["status"] == "running"
@@ -625,27 +637,28 @@ def test_chat_summary_preserves_failed_cancelled_and_awaiting_run_outcomes():
         "status": "idle",
         "messages": [{"role": "user", "content": "hello"}],
     }
+    composer = _ComposerContextStub()
     failed = _public_chat_light({
         **base,
         "id": "topbar-last-failed-chat",
         "lastRun": {"status": "error", "outcome": "error"},
-    })
+    }, composer_context=composer)
     cancelled = _public_chat_light({
         **base,
         "id": "topbar-last-cancelled-chat",
         "lastRun": {"status": "cancelled", "terminationReason": "user_interrupted"},
-    })
+    }, composer_context=composer)
     awaiting = _public_chat_light({
         **base,
         "id": "topbar-last-awaiting-chat",
         "pendingQuestion": {"id": "question-1", "text": "Continue?"},
         "lastRun": {"status": "done", "outcome": "awaiting"},
-    })
+    }, composer_context=composer)
     answered = _public_chat_light({
         **base,
         "id": "topbar-answered-chat",
         "lastRun": {"status": "done", "outcome": "awaiting"},
-    })
+    }, composer_context=composer)
 
     assert failed["runStatus"] == "failed"
     assert cancelled["runStatus"] == "cancelled"

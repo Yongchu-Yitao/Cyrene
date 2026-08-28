@@ -233,7 +233,8 @@ def test_quick_chat_is_opt_in_behind_general_settings_toggles():
     # until background residency is on.
     assert 'settings.runInBackground' in general
     assert 'settings.quickChatAssistant' in general
-    assert "updateDesktopSettings({ language:" in general
+    assert 'setLang("en")' in general
+    assert 'setLang("zh")' in general
     assert "applyDesktop({ runInBackground:" in general
     assert "applyDesktop({ quickChatEnabled:" in general
     assert "desktopBusy || !runInBackground" in general

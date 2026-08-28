@@ -997,6 +997,17 @@ class HookSet:
         *,
         time: datetime | None = None,
     ) -> str:
+        mounts = await self.session_start_mounts(details, time=time)
+        return "\n\n".join(str(mount["context"]) for mount in mounts)
+
+    async def session_start_mounts(
+        self,
+        details: Mapping[str, Any] | None = None,
+        *,
+        time: datetime | None = None,
+    ) -> tuple[dict[str, str], ...]:
+        """Return ordered context contributions with their mount positions."""
+
         event = HookEvent(
             SESSION_START,
             self.tree_id,
@@ -1005,7 +1016,7 @@ class HookSet:
             node_id=self.root_id,
             is_root=True,
         )
-        contexts: list[tuple[int, int, str]] = []
+        contexts: list[tuple[int, int, dict[str, str]]] = []
         for index, result in enumerate(await self.dispatch(event)):
             if isinstance(result, Mapping):
                 value = str(result.get("context") or "").strip()
@@ -1014,8 +1025,17 @@ class HookSet:
                 value = str(result or "").strip()
                 position = ""
             if value:
-                contexts.append((0 if position == "top" else 1, index, value))
-        return "\n\n".join(value for _priority, _index, value in sorted(contexts))
+                priority = (
+                    -1
+                    if position == "system"
+                    else (0 if position == "top" else 1)
+                )
+                contexts.append((
+                    priority,
+                    index,
+                    {"context": value, "position": position},
+                ))
+        return tuple(value for _priority, _index, value in sorted(contexts))
 
     async def session_end(
         self,

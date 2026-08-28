@@ -27,8 +27,8 @@ def test_codex_settings_keep_the_persisted_selection_visible_during_catalog_load
 
     assert "function codexModelSelectOptions(models, selectedModel)" in source
     assert "options.unshift({ model: selected, displayName: selected, persisted: true });" in source
-    assert "codexModelSelectOptions(codexState.models, codexModel)" in source
-    assert "codexModelReasoningEfforts(selectedCodexModel, codexEffort)" in source
+    assert "mergeDiscoveredProfiles(config, selected.id, oauth.models || [])" in source
+    assert 'requestJson("/api/settings/openai-oauth")' in source
 
     result = _run_codex_selection_helpers(
         "codexModelSelectOptions([{model: 'gpt-current'}], 'gpt-saved')"
@@ -53,6 +53,7 @@ def test_codex_settings_keep_saved_effort_and_accept_snake_case_catalogs():
 def test_codex_catalog_refresh_reads_the_latest_persisted_candidate():
     source = workbench_settings_source()
 
-    assert "codexCandidateRef.current = codexCandidate;" in source
-    assert "var saved = codexCandidateRef.current;" in source
+    assert "function refreshOauth()" in source
+    assert "models: payload.models || []" in source
+    assert "updateConfig(mergeDiscoveredProfiles" in source
     assert "model.supportedReasoningEfforts || model.supported_reasoning_efforts" in source

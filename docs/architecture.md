@@ -39,11 +39,13 @@ equivalent object-field ordering.
 Enabled context plugins publish blocks into a traceable context tree. Stable
 blocks keep stable identities for prompt-cache reuse, while the standard
 compactor bounds long conversations without changing their durable history.
-The composer-context plugin owns the chat input selections for workspaces, MCP
-servers, skills, and other context capabilities. The SOUL plugin mounts the
-enabled personality block immediately below the system prompt. Subagents start
-with the same initial tree as the main Agent plus the main Agent's assignment,
-then coordinate through the durable inbox.
+The required system-prompt plugin mounts the editable base Agent instructions
+first; the kernel creates only an empty system root. The composer-context plugin
+owns the chat input selections for workspaces, MCP servers, skills, and other
+context capabilities. The SOUL plugin mounts the enabled personality block
+immediately below the system prompt. Subagents start with the same initial tree
+as the main Agent plus the main Agent's assignment, then coordinate through the
+durable inbox.
 
 ## Runtime Startup and Migration
 

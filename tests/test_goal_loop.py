@@ -58,13 +58,33 @@ class _FakeAgentRuntime:
         return {"objective": "test", "next_step": "continue"}
 
 
+class _SqliteProjectStore:
+    """Path-like test adapter over the plugin-native Workbench SQLite store."""
+
+    def __init__(self, db_path):
+        self.db_path = str(db_path)
+
+    def read_text(self, encoding="utf-8"):
+        del encoding
+        from cyrene.workbench import project_repository
+
+        project_repository._configure_workbench_store(self.db_path)
+        return json.dumps(project_repository._read_workbench_store())
+
+    def write_text(self, text, encoding="utf-8"):
+        del encoding
+        from cyrene.workbench import project_repository
+
+        project_repository._configure_workbench_store(self.db_path)
+        project_repository._write_workbench_store(json.loads(text))
+
+
 def _store(tmp_path, *, status="planning", revision=3):
     data_dir = tmp_path / "data"
     data_dir.mkdir(exist_ok=True)
-    store_path = data_dir / "workbench_projects.json"
-    store_path.write_text(
-        json.dumps(
-            {
+    db_path = tmp_path / "test.db"
+    store_path = _SqliteProjectStore(db_path)
+    store_path.write_text(json.dumps({
                 "projects": [
                     {
                         "id": "project_1",
@@ -109,10 +129,7 @@ def _store(tmp_path, *, status="planning", revision=3):
                 ],
                 "activeProjectId": "project_1",
                 "activeSessionId": "session_1",
-            }
-        ),
-        encoding="utf-8",
-    )
+            }))
     return data_dir, store_path
 
 
@@ -121,8 +138,8 @@ def _app(monkeypatch, tmp_path):
     from cyrene.workbench import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path)
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    db_path = store_path.db_path
+    routes._configure_workbench_store(db_path)
     monkeypatch.setattr(goal_loop, "append_notification", lambda **_kwargs: {})
     monkeypatch.setattr(goal_loop.GoalLoopManager, "wake", lambda self, run_id: None)
     app = FastAPI()
@@ -262,8 +279,8 @@ async def test_goal_loop_startup_recovers_hard_crash_state_and_stale_lease(monke
     from cyrene.workbench import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path, status="running")
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    db_path = store_path.db_path
+    routes._configure_workbench_store(db_path)
     await goal_loop._ensure_schema(db_path)
     payload = routes._read_workbench_store()
     payload["projects"][0]["sessions"][0]["plan"][0].update(
@@ -324,8 +341,8 @@ async def test_goal_loop_graceful_restart_pauses_then_recovers(monkeypatch, tmp_
     from cyrene.workbench import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path, status="running")
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    db_path = store_path.db_path
+    routes._configure_workbench_store(db_path)
     await goal_loop._ensure_schema(db_path)
     now = goal_loop._utc_iso()
     await goal_loop._execute(
@@ -503,8 +520,8 @@ async def test_goal_loop_runner_completes_after_independent_verification(monkeyp
     from cyrene.workbench import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path)
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    db_path = store_path.db_path
+    routes._configure_workbench_store(db_path)
     monkeypatch.setattr(goal_loop, "append_notification", lambda **_kwargs: {})
     async def fake_step_verify(*_args, **_kwargs):
         return {"passed": True, "evidence": "认证模块已更新", "retry_guidance": ""}
@@ -561,8 +578,8 @@ async def test_goal_loop_pauses_when_execution_infrastructure_is_unavailable(
     from cyrene.workbench import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path)
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    db_path = store_path.db_path
+    routes._configure_workbench_store(db_path)
     monkeypatch.setattr(goal_loop, "append_notification", lambda **_kwargs: {})
     async def fake_step_verify(*_args, **_kwargs):
         if failure_kind == "verification":
@@ -626,8 +643,8 @@ async def test_goal_loop_runner_blocks_after_repeated_step_verification_failure(
     from cyrene.workbench import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path)
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    db_path = store_path.db_path
+    routes._configure_workbench_store(db_path)
     monkeypatch.setattr(goal_loop, "append_notification", lambda **_kwargs: {})
     verify_calls = {"n": 0}
 
@@ -684,8 +701,8 @@ async def test_resume_after_answer_does_not_re_execute_the_answered_step(monkeyp
     from cyrene.workbench import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path, status="running")
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    db_path = store_path.db_path
+    routes._configure_workbench_store(db_path)
 
     # The answer endpoint has already marked the step complete and cleared
     # pendingPlanStep before resume_after_answer runs.
@@ -726,8 +743,8 @@ async def test_resume_after_answer_pauses_on_permission_denied(monkeypatch, tmp_
     from cyrene.workbench import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path, status="running")
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    db_path = store_path.db_path
+    routes._configure_workbench_store(db_path)
 
     await goal_loop._ensure_schema(db_path)
     now = goal_loop._utc_iso()
@@ -760,8 +777,8 @@ async def test_begin_async_answer_tags_step_and_resumes_run(monkeypatch, tmp_pat
     from cyrene.workbench import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path, status="waiting_for_user")
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    db_path = store_path.db_path
+    routes._configure_workbench_store(db_path)
 
     # A goal-loop step is waiting on a clarification question.
     payload = json.loads(store_path.read_text(encoding="utf-8"))
@@ -820,8 +837,8 @@ async def test_goal_loop_worker_resumes_via_answer_pending_and_completes(monkeyp
     from cyrene.workbench import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path, status="running")
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    db_path = store_path.db_path
+    routes._configure_workbench_store(db_path)
     monkeypatch.setattr(goal_loop, "append_notification", lambda **_kwargs: {})
     monkeypatch.setattr(
         artifact_runtime, "_workbench_git_status_snapshot", lambda _root: {}

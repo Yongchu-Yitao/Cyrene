@@ -167,9 +167,16 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert "120000" in lifecycle_soak
     assert "await daemonRequest(cleanupConnection, 'shutdown'" in lifecycle_soak
     assert '"terminal-lifecycle-soak.js"' in electron_package
-    client = (ROOT / "src" / "cyrene" / "terminal" / "client.py").read_text(
-        encoding="utf-8"
-    )
+    client = (
+        ROOT
+        / "src"
+        / "agent"
+        / "plugin"
+        / "plugin_impl"
+        / "cyrene_code"
+        / "terminal"
+        / "client.py"
+    ).read_text(encoding="utf-8")
     assert "_CREATE_BREAKAWAY_FROM_JOB" in client
     assert "QueryInformationJobObject" in client
     assert "function Get-PeArchitecture" in smoke

@@ -26,7 +26,7 @@ data/debug_20260617_134417.jsonl
 Each log line is a JSON object:
 
 ```json
-{"type": "llm_call", "caller": "main_agent", "phase": "phase1",
+{"type": "llm_call", "caller": "main_agent", "phase": "agent_run",
  "messages": [...], "response": {...}, "duration_ms": 423.0}
 
 {"type": "tool_call", "caller": "subagent_poet", "tool": "send_agent_message",

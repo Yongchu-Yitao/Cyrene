@@ -133,15 +133,33 @@ def _workbench_parse_json_object(text: str) -> dict[str, Any] | None:
         if isinstance(parsed, dict):
             return parsed
     decoder = json.JSONDecoder()
+    depth = 0
+    in_string = False
+    escaped = False
     for index, char in enumerate(raw):
-        if char != "{":
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
             continue
-        try:
-            parsed, _end = decoder.raw_decode(raw[index:])
-        except (TypeError, ValueError, json.JSONDecodeError):
+        if char == '"':
+            in_string = True
             continue
-        if isinstance(parsed, dict):
-            return parsed
+        if char == "{":
+            if depth == 0:
+                try:
+                    parsed, _end = decoder.raw_decode(raw[index:])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    pass
+                else:
+                    if isinstance(parsed, dict):
+                        return parsed
+            depth += 1
+        elif char == "}":
+            depth = max(0, depth - 1)
     return None
 
 

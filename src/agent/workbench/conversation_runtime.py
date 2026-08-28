@@ -21,7 +21,6 @@ from ..plugin.session_state import (
 )
 from ..plugin.model_gateway import ensure_model_router
 from ..plugin.model_router import MODEL_ROUTER_PLUGIN
-from ..prompt import DEFAULT_SYSTEM_PROMPT
 from .bridge import (
     WorkbenchChatResult,
     WorkbenchPendingQuestion,
@@ -450,7 +449,6 @@ class ConversationRuntime:
             registry=registry,
             model_plugin=MODEL_ROUTER_PLUGIN,
             chat_id=str(config.session_id),
-            system_prompt=DEFAULT_SYSTEM_PROMPT,
             host_context={
                 "bot": config.bot,
                 "chat_id": config.host_chat_id,

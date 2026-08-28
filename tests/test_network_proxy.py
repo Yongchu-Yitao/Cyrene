@@ -78,22 +78,17 @@ def test_custom_proxy_address_overrides_legacy_localhost_port(monkeypatch):
 def test_proxy_address_setting_is_validated_and_canonicalized():
     from cyrene.runtime.settings_service import (
         SettingsValidationError,
-        validate_changes,
+        _normalize,
+        plugin_setting_spec,
     )
 
-    normalized, _specs = validate_changes(
-        "runtime",
-        {"external_agent_proxy_url": "proxy.example.com:8080"},
-        actor="ui",
+    spec = plugin_setting_spec(
+        "external_agent_proxy_url", "string", "", tab="general"
     )
-    assert normalized["external_agent_proxy_url"] == "http://proxy.example.com:8080"
+    assert _normalize(spec, "proxy.example.com:8080") == "http://proxy.example.com:8080"
 
     with pytest.raises(SettingsValidationError):
-        validate_changes(
-            "runtime",
-            {"external_agent_proxy_url": "http://user:secret@proxy.example.com:8080"},
-            actor="ui",
-        )
+        _normalize(spec, "http://user:secret@proxy.example.com:8080")
 
 
 def test_config_projection_exposes_proxy_feature_scopes(monkeypatch):
@@ -107,6 +102,10 @@ def test_config_projection_exposes_proxy_feature_scopes(monkeypatch):
             return {
                 "external_agent_proxy_enabled": True,
                 "external_agent_proxy_port": 7897,
+                "external_agent_proxy_url": "http://proxy.example.com:8080",
+                "proxy_search_enabled": True,
+                "proxy_browser_enabled": False,
+                "proxy_extensions_enabled": True,
             }
 
     values = {

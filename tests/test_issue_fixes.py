@@ -397,7 +397,7 @@ async def test_unknown_channel_is_rejected(monkeypatch):
     _patch_channels(monkeypatch)
     result = await n.notify("t", "b", channel="carrier-pigeon")
     assert result["ok"] is False
-    assert "unknown channel" in result.get("error", "")
+    assert "unknown channel" in result.get("error", "").lower()
 
 
 # ---------------------------------------------------------------------------

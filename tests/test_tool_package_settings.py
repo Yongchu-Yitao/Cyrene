@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -63,6 +65,7 @@ def _client(monkeypatch, tmp_path):
 
     app = FastAPI()
     register_routes(app, bot=None, db_path=str(tmp_path / "cyrene.db"))
+    asyncio.run(app.state.plugin_application_host.startup())
     return TestClient(app), state
 
 

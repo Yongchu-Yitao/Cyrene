@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+from pathlib import Path
 
 
 def _model_registry():
@@ -22,21 +24,28 @@ def _model_registry():
 
 
 def test_default_prompt_requires_plugin_discovery_for_external_information():
-    from agent.prompt import DEFAULT_SYSTEM_PROMPT
+    from agent.plugin.plugin_impl.cyrene_system_prompt.prompt import SYSTEM_PROMPT
 
-    assert "current" in DEFAULT_SYSTEM_PROMPT
-    assert "external information" in DEFAULT_SYSTEM_PROMPT
-    assert "do not rely on memory" in DEFAULT_SYSTEM_PROMPT
-    assert "toolbox.list" in DEFAULT_SYSTEM_PROMPT
-    assert "toolbox.describe" in DEFAULT_SYSTEM_PROMPT
-    assert "toolbox.invoke" in DEFAULT_SYSTEM_PROMPT
+    assert "current" in SYSTEM_PROMPT
+    assert "external information" in SYSTEM_PROMPT
+    assert "do not rely on memory" in SYSTEM_PROMPT
+    assert "toolbox.list" in SYSTEM_PROMPT
+    assert "toolbox.describe" in SYSTEM_PROMPT
+    assert "toolbox.invoke" in SYSTEM_PROMPT
 
 
-def test_reopened_tree_projects_the_current_system_prompt(tmp_path):
+def test_reopened_tree_mounts_system_prompt_from_required_plugin(tmp_path):
+    from agent.plugin.plugin_impl.cyrene_system_prompt.prompt import SYSTEM_PROMPT
     from agent.session import AgentSession
 
     plugin_directory = tmp_path / "plugin_impl"
-    plugin_directory.mkdir()
+    shutil.copytree(
+        Path(__file__).parents[1]
+        / "plugin"
+        / "plugin_impl"
+        / "cyrene_system_prompt",
+        plugin_directory / "cyrene_system_prompt",
+    )
     first = AgentSession(
         tmp_path / "data",
         tmp_path / "workspace",
@@ -44,8 +53,9 @@ def test_reopened_tree_projects_the_current_system_prompt(tmp_path):
         tree_id="chat",
         registry=_model_registry(),
         model_plugin="PromptTestModel",
-        system_prompt="old prompt",
     )
+    assert asyncio.run(first.hooks.session_start()).startswith(SYSTEM_PROMPT.strip())
+    assert first.initial_root_value == {"role": "system", "content": ""}
     first.close()
 
     reopened = AgentSession(
@@ -55,14 +65,13 @@ def test_reopened_tree_projects_the_current_system_prompt(tmp_path):
         tree_id="chat",
         registry=_model_registry(),
         model_plugin="PromptTestModel",
-        system_prompt="current prompt",
     )
     try:
-        messages = reopened._messages(reopened.tree.root_id)
-        assert messages[0] == {"role": "system", "content": "current prompt"}
-        assert reopened.initial_root_value["content"] == "current prompt"
+        context = asyncio.run(reopened.hooks.session_start())
+        assert context.startswith(SYSTEM_PROMPT.strip())
+        assert reopened.initial_root_value == {"role": "system", "content": ""}
         root = reopened.store.get_node(reopened.tree.id, reopened.tree.root_id)
-        assert root.value["content"] == "current prompt"
+        assert root.value == {"role": "system", "content": ""}
     finally:
         reopened.close()
 

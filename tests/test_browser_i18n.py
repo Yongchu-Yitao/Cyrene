@@ -9,9 +9,15 @@ from agent.plugin import PluginContext
 
 def _force_language(monkeypatch: pytest.MonkeyPatch, language: str) -> None:
     from cyrene import localization
+    from route import errors as route_errors
 
     monkeypatch.setattr(
         localization,
+        "app_language",
+        lambda explicit=None: localization.normalize_language(explicit) or language,
+    )
+    monkeypatch.setattr(
+        route_errors,
         "app_language",
         lambda explicit=None: localization.normalize_language(explicit) or language,
     )

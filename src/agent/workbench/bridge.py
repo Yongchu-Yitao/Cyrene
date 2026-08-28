@@ -16,7 +16,6 @@ from typing import Any, TypeAlias
 from uuid import uuid4
 
 from ..plugin import PluginRegistry
-from ..prompt import DEFAULT_SYSTEM_PROMPT
 from ..session import AgentSession, AgentSessionEvent
 
 WorkbenchPublisher: TypeAlias = Callable[[dict[str, Any]], Any | Awaitable[Any]]
@@ -734,7 +733,6 @@ class WorkbenchSessionBridge:
         registry: PluginRegistry,
         model_plugin: str,
         chat_id: str,
-        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
         host_context: Mapping[str, Any] | None = None,
         plugin_context_data: Mapping[str, Any] | None = None,
         plugin_services: Mapping[str, Any] | None = None,
@@ -748,7 +746,6 @@ class WorkbenchSessionBridge:
                 registry=registry,
                 model_plugin=model_plugin,
                 tree_id=str(chat_id),
-                system_prompt=system_prompt,
                 host_context=host_context,
                 plugin_context_data=plugin_context_data,
                 plugin_services=plugin_services,

@@ -435,7 +435,7 @@ plugin = Plugin(
             {"operation": "describe", "name": "RenamedTool"},
         )
         assert unavailable_description.success is False
-        assert unavailable_description.error == "插件执行失败。"
+        assert unavailable_description.error == "Plugin execution failed."
         unavailable_call = await runtime.call(
             "toolbox",
             {
@@ -445,7 +445,7 @@ plugin = Plugin(
             },
         )
         assert unavailable_call.success is False
-        assert unavailable_call.error == "插件执行失败。"
+        assert unavailable_call.error == "Plugin execution failed."
 
         write_plugin(4, "RepairedTool")
         repaired = await runtime.call("toolbox", {"operation": "list"})
@@ -466,11 +466,11 @@ plugin = Plugin(
             },
         )
         assert unavailable.success is False
-        assert unavailable.error == "插件执行失败。"
+        assert unavailable.error == "Plugin execution failed."
 
         old_search = await runtime.call("toolbox", {"operation": "search"})
         assert old_search.success is False
-        assert old_search.error == "插件参数无效。"
+        assert old_search.error.startswith("Invalid arguments:")
 
     run(scenario())
 
@@ -506,11 +506,11 @@ def test_runtime_validates_the_resolved_plugins_current_schema():
         valid = await runtime.call("Live", {"value": "ok"})
 
         assert missing.success is False
-        assert missing.error == "插件参数无效。"
+        assert missing.error.startswith("Invalid arguments:")
         assert wrong_type.success is False
-        assert wrong_type.error == "插件参数无效。"
+        assert wrong_type.error.startswith("Invalid arguments:")
         assert unknown.success is False
-        assert unknown.error == "插件参数无效。"
+        assert unknown.error.startswith("Invalid arguments:")
         assert valid.success is True
         assert valid.value == "ok"
 
@@ -589,7 +589,7 @@ def test_runtime_revalidates_arguments_modified_by_hooks():
         )
 
         assert result.success is False
-        assert result.error == "插件参数无效。"
+        assert result.error.startswith("Invalid arguments:")
         assert executed is False
 
     run(scenario())
@@ -696,7 +696,7 @@ plugin_pack = PluginPack(
             },
         )
         assert unavailable.success is False
-        assert unavailable.error == "插件执行失败。"
+        assert unavailable.error == "Plugin execution failed."
 
     run(scenario())
 
@@ -1038,7 +1038,7 @@ def test_tool_plugin_defines_its_runtime_timeout():
         )[0]
 
         assert result.success is False
-        assert result.error == "插件在 0.01 秒后超时。"
+        assert result.error == "Plugin timed out after 0.01 seconds."
 
     run(scenario())
 
@@ -1161,7 +1161,7 @@ def test_filesystem_plugins_follow_toolbox_list_describe_invoke_chain(tmp_path):
             context,
         )
         assert edited.success is True
-        assert edited.value["result"] == f"已编辑 {target}。替换次数：1"
+        assert edited.value["result"] == f"Edited {target}. Replacements: 1"
         assert "return 'hello plugin'" in target.read_text(encoding="utf-8")
 
     run(scenario())

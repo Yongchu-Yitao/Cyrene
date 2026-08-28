@@ -50,7 +50,6 @@ from .plugin.core_impl import (
     PERMISSION_DECIDE_TOOL_CHOICE,
     PermissionReviewPlugin,
 )
-from .prompt import DEFAULT_SYSTEM_PROMPT
 from cyrene.localization import app_language, localized
 
 
@@ -59,6 +58,7 @@ _DEFAULT_INITIAL_ROOT = object()
 _REQUIRED_PRODUCT_SESSION_PACK_IDS = frozenset({
     "cyrene_composer_context",
     "cyrene_context",
+    "cyrene_system_prompt",
 })
 
 
@@ -157,7 +157,6 @@ class AgentSession:
         max_model_calls: int = 12,
         tree_id: str = "agent-session",
         registry: PluginRegistry | None = None,
-        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
         host_context: Mapping[str, Any] | None = None,
         plugin_context_data: Mapping[str, Any] | None = None,
         plugin_services: Mapping[str, Any] | None = None,
@@ -171,13 +170,6 @@ class AgentSession:
         self.plugin_directory = Path(plugin_directory).expanduser().resolve()
         self.workspace = Path(workspace).expanduser().resolve()
         self.workspace.mkdir(parents=True, exist_ok=True)
-        self._system_prompt = (
-            str(system_prompt or DEFAULT_SYSTEM_PROMPT).replace(
-                "{workspace}", str(self.workspace)
-            )
-            if initial_root_value is _DEFAULT_INITIAL_ROOT
-            else ""
-        )
         self.agent_id = str(agent_id or "main").strip() or "main"
         self.parent_agent_id = str(parent_agent_id or "").strip()
         self._permission_user_request = (
@@ -290,7 +282,7 @@ class AgentSession:
             root_value = (
                 {
                     "role": "system",
-                    "content": self._system_prompt,
+                    "content": "",
                 }
                 if initial_root_value is _DEFAULT_INITIAL_ROOT
                 else deepcopy(initial_root_value)
@@ -317,10 +309,6 @@ class AgentSession:
             )
         root_node = self.store.get_node(self.tree.id, self.tree.root_id)
         self._initial_root_value = deepcopy(root_node.value)
-        if isinstance(self._initial_root_value, dict):
-            if self._system_prompt:
-                self._initial_root_value["role"] = "system"
-                self._initial_root_value["content"] = self._system_prompt
         self.hooks = self.store.hooks_for(self.tree.id)
         existing_hooks = {hook.id for hook in self.hooks.list()}
         if "agent-session-context-mount" in existing_hooks:
@@ -364,20 +352,6 @@ class AgentSession:
                 config=registration.config,
                 enabled=registration.enabled,
             )
-        if self._system_prompt and isinstance(root_node.value, Mapping):
-            current_root = dict(root_node.value)
-            if (
-                current_root.get("role") != "system"
-                or str(current_root.get("content") or "") != self._system_prompt
-            ):
-                current_root["role"] = "system"
-                current_root["content"] = self._system_prompt
-                root_node = self.store.update_node(
-                    self.tree.id,
-                    self.tree.root_id,
-                    current_root,
-                )
-                self._initial_root_value = deepcopy(current_root)
         self._attach_plugin_packs()
         self.hooks.set_before_dispatch(self.reconcile_plugins)
         nodes = self.store.get_subtree(self.tree.id, self.tree.root_id)
@@ -473,9 +447,42 @@ class AgentSession:
     ) -> str:
         """Build Plugin SessionStart context for non-transcript model calls."""
 
+        mounts = await self.build_session_mounts(details)
+        return "\n\n".join(str(mount["content"]) for mount in mounts)
+
+    async def build_session_mounts(
+        self,
+        details: Mapping[str, Any] | None = None,
+    ) -> tuple[dict[str, str], ...]:
+        """Build stable system-prompt and ordinary Plugin context mounts."""
+
         self.reconcile_plugins()
         self._ensure_required_session_packs()
-        return await self.hooks.session_start(dict(details or {}))
+        contributions = await self.hooks.session_start_mounts(dict(details or {}))
+        system = [
+            str(item.get("context") or "").strip()
+            for item in contributions
+            if str(item.get("position") or "") == "system"
+        ]
+        ordinary = [
+            str(item.get("context") or "").strip()
+            for item in contributions
+            if str(item.get("position") or "") != "system"
+        ]
+        mounts = []
+        if system:
+            mounts.append({
+                "kind": "system_prompt",
+                "content": "\n\n".join(filter(None, system)),
+                "source": "cyrene_system_prompt",
+            })
+        if ordinary:
+            mounts.append({
+                "kind": "plugin_session",
+                "content": "\n\n".join(filter(None, ordinary)),
+                "source": "SessionStart",
+            })
+        return tuple(mounts)
 
     def _plugin_data(self, *, run_id: str = "", **details: Any) -> dict[str, Any]:
         data = dict(self._plugin_context_data)
@@ -2037,13 +2044,12 @@ class AgentSession:
             return
         metadata = value.get("metadata")
         metadata = metadata if isinstance(metadata, Mapping) else {}
-        mounts: list[dict[str, Any]] = []
         run_id = self._node_run_id(source)
         with self._state_lock:
             if self._closed or run_id in self._cancelled_run_ids:
                 return
         if value.get("session_start_complete") is not True:
-            session_context = await self.build_session_context(
+            mounts = list(await self.build_session_mounts(
                 {
                     "run_id": run_id,
                     "agent_id": self.agent_id,
@@ -2052,27 +2058,41 @@ class AgentSession:
                     "user_node_id": source.id,
                     "metadata": deepcopy(dict(metadata)),
                 }
-            )
+            ))
         else:
-            session_context = str(value.get("session_start_context") or "").strip()
+            raw_mounts = value.get("session_start_mounts")
+            mounts = [
+                {
+                    "kind": str(item.get("kind") or "plugin_session"),
+                    "content": str(item.get("content") or "").strip(),
+                    "source": str(item.get("source") or "SessionStart"),
+                }
+                for item in raw_mounts
+                if isinstance(item, Mapping)
+                and str(item.get("content") or "").strip()
+            ] if isinstance(raw_mounts, list) else []
+            if not mounts:
+                session_context = str(
+                    value.get("session_start_context") or ""
+                ).strip()
+                if session_context:
+                    mounts = [{
+                        "kind": "plugin_session",
+                        "content": session_context,
+                        "source": "SessionStart",
+                    }]
         with self._linearized_context_commit():
             if self._closed or run_id in self._cancelled_run_ids:
                 return
             source_value = dict(value)
             if value.get("session_start_complete") is not True:
                 source_value["session_start_complete"] = True
-                if session_context:
-                    source_value["session_start_context"] = session_context
+                if mounts:
+                    source_value["session_start_mounts"] = deepcopy(mounts)
+                    source_value["session_start_context"] = "\n\n".join(
+                        str(mount["content"]) for mount in mounts
+                    )
                 self.store.update_node(self.tree.id, source.id, source_value)
-            if session_context:
-                mounts.insert(
-                    0,
-                    {
-                        "kind": "plugin_session",
-                        "content": session_context,
-                        "metadata": {"source": "SessionStart"},
-                    },
-                )
             if not mounts:
                 # A malformed provider payload must not strand the user turn.
                 source_value["trigger_model"] = True
@@ -2096,10 +2116,10 @@ class AgentSession:
                             "role": "context",
                             "content": mount["content"],
                             "context_kind": mount["kind"],
-                            "context_source": "hook",
+                            "context_source": mount["source"],
                             "source_node_id": source.id,
                             "context_index": index,
-                            "metadata": mount["metadata"],
+                            "metadata": {"source": mount["source"]},
                             "run_id": run_id,
                             "trigger_model": index == len(mounts) - 1,
                         },
@@ -3020,10 +3040,7 @@ class AgentSession:
             if path and isinstance(path[0].value, Mapping)
             else {}
         )
-        base_system_content = (
-            self._system_prompt
-            or str(root_value.get("content") or "")
-        )
+        base_system_content = str(root_value.get("content") or "")
         for node in path:
             value = node.value if isinstance(node.value, Mapping) else {}
             role = str(value.get("role") or "")
@@ -3056,8 +3073,6 @@ class AgentSession:
                 continue
             if role in {"system", "user"}:
                 content = str(value.get("content") or "")
-                if role == "system" and node.id == self.tree.root_id and self._system_prompt:
-                    content = self._system_prompt
                 messages.append({"role": role, "content": content})
             elif role == "context":
                 if node.id not in current_context_ids:
@@ -3610,5 +3625,4 @@ __all__ = [
     "AgentEventListener",
     "AgentSession",
     "AgentSessionEvent",
-    "DEFAULT_SYSTEM_PROMPT",
 ]

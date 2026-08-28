@@ -17,7 +17,7 @@ uv run python -m cyrene --verbose
 日志写入 `data/debug_*.jsonl`，每行是一个 JSON Event，例如：
 
 ```json
-{"type": "llm_call", "caller": "main_agent", "phase": "phase1",
+{"type": "llm_call", "caller": "main_agent", "phase": "agent_run",
  "messages": [], "response": {}, "duration_ms": 423.0}
 ```
 

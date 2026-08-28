@@ -711,33 +711,11 @@ def test_assistant_text_ignores_reasoning_when_tool_calls_present():
     assert _assistant_text(spoke_turn) == "scheduled task completed"
 
 
-def test_last_user_time_prefers_archive_over_state_mtime(tmp_path, monkeypatch):
-    """Silence detection must read the real user-turn timestamp from the
-    conversation archive, not state.json's mtime. The agent rewrites state.json
-    on its own (proactive replies, steward, ...), so a fresh mtime would
-    otherwise mask genuine user silence and suppress the >72h reach-out."""
+def test_last_user_time_reads_the_plugin_memory_archive(monkeypatch):
+    """Silence detection reads the durable memory Plugin archive."""
     from datetime import datetime, timezone
 
     from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
-
-    conv_dir = tmp_path / "conversations"
-    conv_dir.mkdir()
-    # The user actually last spoke on 2026-06-02 at 09:00 UTC (recorded once,
-    # per turn, in the archive).
-    (conv_dir / "2026-06-02.md").write_text(
-        "# 2026-06-02\n\n## 09:00:00 UTC\n\n**User**: morning!\n\n**Cyrene**: hi\n",
-        encoding="utf-8",
-    )
-    # state.json was just rewritten by the agent — its last message is a
-    # proactive reply and its mtime is "now". That must NOT count as user activity.
-    state_file = tmp_path / "state.json"
-    state_file.write_text(
-        json.dumps({"messages": [
-            {"role": "user", "content": "morning!"},
-            {"role": "assistant", "content": "checking in", "proactive": True},
-        ]}),
-        encoding="utf-8",
-    )
 
     memory_service = SimpleNamespace(
         latest_archived_user_message_time=lambda: datetime(
@@ -745,52 +723,21 @@ def test_last_user_time_prefers_archive_over_state_mtime(tmp_path, monkeypatch):
         )
     )
     monkeypatch.setattr(scheduler, "_memory_service", lambda: memory_service)
-    monkeypatch.setattr(scheduler, "STATE_FILE", state_file)
-    monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
 
     result = scheduler._last_user_message_time()
 
     assert result == datetime(2026, 6, 2, 9, 0, 0, tzinfo=timezone.utc)
 
 
-def test_last_user_time_mtime_fallback_requires_user_spoke_last(tmp_path, monkeypatch):
-    """Before anything is archived, fall back to state.json mtime only when the
-    most recent message is the user's; otherwise report unknown (None) so we
-    never treat one of the agent's own writes as user activity."""
-    import os
-    from datetime import datetime, timezone
+def test_last_user_time_has_no_retired_session_file_fallback(monkeypatch):
+    """The removed Agent state file is not a source of user activity."""
 
     from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
 
-    state_file = tmp_path / "state.json"
     memory_service = SimpleNamespace(latest_archived_user_message_time=lambda: None)
     monkeypatch.setattr(scheduler, "_memory_service", lambda: memory_service)
-    monkeypatch.setattr(scheduler, "STATE_FILE", state_file)
-    monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
-
-    # (a) User spoke last → mtime is a valid proxy.
-    state_file.write_text(
-        json.dumps({"messages": [
-            {"role": "assistant", "content": "hi"},
-            {"role": "user", "content": "you there?"},
-        ]}),
-        encoding="utf-8",
-    )
-    pinned = datetime(2026, 6, 4, 8, 0, 0, tzinfo=timezone.utc).timestamp()
-    os.utime(state_file, (pinned, pinned))
-    result = scheduler._last_user_message_time()
-    assert result is not None
-    assert abs(result.timestamp() - pinned) < 1.0
-
-    # (b) Agent spoke last (proactive) → mtime is the agent's write, not the
-    #     user's, so it must be ignored.
-    state_file.write_text(
-        json.dumps({"messages": [
-            {"role": "user", "content": "you there?"},
-            {"role": "assistant", "content": "yes!", "proactive": True},
-        ]}),
-        encoding="utf-8",
-    )
+    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
     assert scheduler._last_user_message_time() is None
 
 def test_pending_permission_public_shape_keeps_only_localizable_meta():

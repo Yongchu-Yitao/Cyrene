@@ -19,7 +19,6 @@ PRIVATE_IMPORT_TOTAL_BUDGET = 148
 
 CYRENE_TOP_LEVEL_DIRECTORIES = {
     "agent_runtime",
-    "hooks",
     "model_runtime",
     "observability",
     "runtime",

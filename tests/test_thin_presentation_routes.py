@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -85,6 +86,7 @@ def test_map_route_is_owned_by_the_map_plugin(tmp_path: Path):
     router = APIRouter()
     host.attach(router)
     app.include_router(router)
+    asyncio.run(host.startup())
     host.service("maps").add_pin(
         "chat_1",
         lat=39.9,
@@ -97,6 +99,7 @@ def test_map_route_is_owned_by_the_map_plugin(tmp_path: Path):
     assert response.status_code == 200
     assert response.json()["pins"][0]["name"] == "Beijing"
     assert response.json()["routes"] == []
+    asyncio.run(host.shutdown())
 
 
 def test_backup_repository_owns_download_boundary(tmp_path: Path):

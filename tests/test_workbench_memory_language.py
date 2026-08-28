@@ -521,31 +521,38 @@ async def test_search_project_memory_allows_default_workbench_project(monkeypatc
 
 
 def test_workbench_scope_resolver_distinguishes_default_project(monkeypatch, tmp_path):
-    from cyrene.workbench import context as workbench_context
+    import sqlite3
 
-    projects_path = tmp_path / "workbench_projects.json"
-    chats_path = tmp_path / "workbench_chats.json"
-    projects_path.write_text(
-        json.dumps({
+    from cyrene.workbench import context as workbench_context
+    from cyrene.workbench.store import ensure_schema
+
+    db_path = tmp_path / "workbench.db"
+    ensure_schema(db_path)
+    projects = {
             "projects": [{
                 "id": "project-default",
                 "dataKey": "default",
                 "sessions": [{"id": "task-default"}],
             }]
-        }),
-        encoding="utf-8",
-    )
-    chats_path.write_text(
-        json.dumps({
-            "chats": [{
-                "id": "chat-default",
-                "projectId": "project-default",
-            }]
-        }),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(workbench_context, "_WORKBENCH_STORE", projects_path)
-    monkeypatch.setattr(workbench_context, "_WORKBENCH_CHATS_STORE", chats_path)
+        }
+    chat = {"id": "chat-default", "projectId": "project-default"}
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "INSERT INTO workbench_state(key, payload_json, updated_at) VALUES (?, ?, ?)",
+            ("projects", json.dumps(projects), "2026-08-28T00:00:00+00:00"),
+        )
+        connection.execute(
+            "INSERT INTO workbench_chats(chat_id, ordinal, payload_json, summary_json, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                "chat-default",
+                0,
+                json.dumps(chat),
+                "{}",
+                "2026-08-28T00:00:00+00:00",
+            ),
+        )
+    workbench_context.configure_store(str(db_path))
 
     assert workbench_context.resolve_workbench_project_data_key_for_session("task-default") == "default"
     assert workbench_context.resolve_workbench_project_data_key_for_session("chat-default") == "default"
