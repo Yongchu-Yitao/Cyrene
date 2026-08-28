@@ -21,7 +21,12 @@ from .hook import (
     with_session_start_cache_fingerprint,
 )
 from .plugin import PluginRegistry
-from .registry import HookSet
+from .registry import (
+    HookSet,
+    configure_hook_action_provider,
+    configure_hook_override_provider,
+    refresh_active_hook_overrides,
+)
 
 __all__ = [
     "CONTEXT_CHANGE",
@@ -43,6 +48,9 @@ __all__ = [
     "HookRegistration",
     "SessionStartCacheFingerprint",
     "HookSet",
+    "configure_hook_action_provider",
+    "configure_hook_override_provider",
+    "refresh_active_hook_overrides",
     "PluginRegistry",
     "with_session_start_cache_fingerprint",
 ]

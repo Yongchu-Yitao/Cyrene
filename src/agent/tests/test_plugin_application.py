@@ -719,6 +719,59 @@ def test_failed_application_startup_hides_pack_contributions(tmp_path):
         assert response.json()["detail"] == "migration failed"
 
 
+def test_application_startup_logs_pack_and_handler_timings(tmp_path, caplog):
+    events: list[str] = []
+
+    def application_setup(context) -> None:
+        def prepare_store() -> None:
+            events.append("store")
+
+        async def connect_service() -> None:
+            await asyncio.sleep(0)
+            events.append("service")
+
+        context.on_startup(prepare_store)
+        context.on_startup(connect_service)
+
+    registry = PluginRegistry(include_core=False)
+    registry.register_pack(
+        PluginPack(
+            id="timed_demo",
+            description="timed lifecycle demo",
+            plugins=(),
+            application_setup=application_setup,
+        ),
+        source="test",
+    )
+    host = _host(tmp_path, registry)
+    host.attach(APIRouter())
+
+    caplog.set_level("INFO", logger="agent.plugin.application")
+    asyncio.run(host.startup())
+
+    assert events == ["store", "service"]
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Plugin startup host begin" in message for message in messages)
+    assert any(
+        "Plugin startup pack begin pack=timed_demo handlers=2" in message
+        for message in messages
+    )
+    assert any(
+        "Plugin startup handler complete pack=timed_demo"
+        in message and "elapsed_ms=" in message
+        for message in messages
+    )
+    assert any(
+        "Plugin startup pack complete pack=timed_demo handlers=2" in message
+        for message in messages
+    )
+    assert any(
+        "Plugin startup host complete running_packs=1 startup_failures=0"
+        in message
+        for message in messages
+    )
+
+
 def test_required_session_setup_requires_operational_application_pack(tmp_path):
     setup_calls: list[str] = []
 

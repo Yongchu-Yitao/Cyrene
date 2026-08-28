@@ -24,7 +24,7 @@ def _model_registry():
 
 
 def test_default_prompt_requires_plugin_discovery_for_external_information():
-    from agent.plugin.plugin_impl.cyrene_system_prompt.prompt import SYSTEM_PROMPT
+    from agent.plugin.plugin_impl.cyrene_system_prompt.system_prompt import SYSTEM_PROMPT
 
     assert "current" in SYSTEM_PROMPT
     assert "external information" in SYSTEM_PROMPT
@@ -35,7 +35,7 @@ def test_default_prompt_requires_plugin_discovery_for_external_information():
 
 
 def test_reopened_tree_mounts_system_prompt_from_required_plugin(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_system_prompt.prompt import SYSTEM_PROMPT
+    from agent.plugin.plugin_impl.cyrene_system_prompt.system_prompt import SYSTEM_PROMPT
     from agent.session import AgentSession
 
     plugin_directory = tmp_path / "plugin_impl"

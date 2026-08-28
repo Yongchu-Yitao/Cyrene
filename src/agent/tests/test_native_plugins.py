@@ -316,6 +316,49 @@ def test_hash_manifest_retires_only_unmodified_obsolete_defaults(tmp_path, monke
     assert edited_store.read_bytes() == b"store-v1\n"
 
 
+def test_hash_manifest_preserves_user_edits_across_canonical_file_rename(
+    tmp_path,
+    monkeypatch,
+):
+    plugin_directory = tmp_path / "plugin_impl"
+    current = {
+        "value": MappingProxyType(
+            {
+                "cyrene_system_prompt/__init__.py": b"pack-v1\n",
+                "cyrene_system_prompt/prompt.py": b"prompt-v1\n",
+            }
+        )
+    }
+    monkeypatch.setattr(
+        native_tools,
+        "_collect_canonical_files",
+        lambda: current["value"],
+    )
+    seed_builtin_plugin_directory(plugin_directory)
+
+    old_prompt = plugin_directory / "cyrene_system_prompt" / "prompt.py"
+    new_prompt = plugin_directory / "cyrene_system_prompt" / "system_prompt.py"
+    old_prompt.write_bytes(b"user-prompt\n")
+    current["value"] = MappingProxyType(
+        {
+            "cyrene_system_prompt/__init__.py": b"pack-v2\n",
+            "cyrene_system_prompt/system_prompt.py": b"prompt-v2\n",
+        }
+    )
+
+    seed_builtin_plugin_directory(plugin_directory)
+
+    assert old_prompt.exists() is False
+    assert new_prompt.read_bytes() == b"user-prompt\n"
+    manifest = json.loads(
+        (plugin_directory / ".upstream-hashes.json").read_text(encoding="utf-8")
+    )
+    assert manifest["files"]["cyrene_system_prompt/system_prompt.py"] == _sha(
+        b"prompt-v1\n"
+    )
+    assert "cyrene_system_prompt/prompt.py" not in manifest["files"]
+
+
 def test_unmanaged_pack_and_standalone_collisions_are_never_merged(
     tmp_path,
     monkeypatch,

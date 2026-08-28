@@ -9,7 +9,7 @@ from agent.hook import (
 )
 from agent.plugin import PluginSetupContext
 
-from .prompt import SYSTEM_PROMPT
+from .system_prompt import SYSTEM_PROMPT
 
 _HOOK_ID = "cyrene-system-prompt-session-start"
 _PLUGIN_ID = "cyrene_system_prompt.mount"

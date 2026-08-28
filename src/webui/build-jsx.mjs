@@ -29,6 +29,7 @@ const SETTINGS_ICON_FILES = [
   'device-desktop-up.svg',
   'puzzle.svg',
   'package.svg',
+  'webhook.svg',
   'code.svg',
   'plug-connected.svg',
   'wallet.svg',

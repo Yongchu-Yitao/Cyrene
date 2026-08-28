@@ -19,6 +19,7 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "channels", labelKey: "settings.channels" },
     { id: "remote", labelKey: "settings.remoteTab" },
     { id: "plugin-registry", labelKey: "settings.pluginRegistry" },
+    { id: "hooks", labelKey: "settings.hooks" },
     { id: "integrations", labelKey: "settings.integrations" },
     { id: "budget", labelKey: "settings.budget" },
     { id: "usage", labelKey: "settings.usage" },
@@ -74,6 +75,7 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "setting-voice", tab: "voice", labelKey: "settings.voiceCapability", hintKey: "settings.voiceCapabilityHint", keywords: ["语音", "voice", "tts", "asr", "声音"] },
     // ── Plugin framework ──
     { id: "setting-plugin-registry", tab: "plugin-registry", labelKey: "settings.pluginRegistry", hintKey: "settings.pluginRegistryHint", keywords: ["插件中心", "plugin center", "插件注册表", "plugin registry", "插件包", "standalone plugin", "Skill", "技能", "MCP", "provider", "服务器", "服务", "CLI", "命令行", "模型", "model"] },
+    { id: "setting-hooks", tab: "hooks", labelKey: "settings.hooks", hintKey: "settings.hooksSubtitle", keywords: ["自动触发", "Hook", "Hooks", "钩子", "生命周期", "PreToolUse", "PostToolUse", "TurnStart", "SessionStart"] },
     // ── Data ──
     { id: "setting-storage", tab: "data", labelKey: "settings.storageUsage", keywords: ["存储", "storage", "空间", "占用", "缓存"] },
     { id: "setting-paths", tab: "data", labelKey: "settings.pathInfo", keywords: ["路径", "path", "目录", "目录位置"] },

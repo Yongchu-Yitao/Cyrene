@@ -6655,6 +6655,11 @@ def test_plugin_center_replaces_the_legacy_plugin_activation_page():
     assert "settings.voiceCapability" in capabilities
     assert '{ id: "plugin-registry", labelKey: "settings.pluginRegistry", icon: "package" }' in overlay
     assert '{ id: "plugin-registry", labelKey: "settings.pluginRegistry" }' in settings_index
+    assert '{ id: "hooks", labelKey: "settings.hooks", icon: "webhook" }' in overlay
+    assert '{ id: "hooks", labelKey: "settings.hooks" }' in settings_index
+    assert 'hooks: ["cli"]' not in overlay
+    assert 'tab === "hooks" && React.createElement(HooksPanel' in overlay
+    assert 'tab: "hooks", labelKey: "settings.hooks"' in settings_index
 
     assert 'import "../settings-overlay.jsx"' in app_entry
     assert 'import "../shared/settings-index.jsx"' in app_entry
@@ -6688,6 +6693,7 @@ def test_plugin_center_combines_runtime_status_with_plugin_owned_intake_apis():
     assert "React.createElement(PluginCenterPage" in plugin_settings
     assert 'onClose: function () { setShowCenter(false) }' in plugin_settings
     assert "wb-plugin-center-page-shell" in plugin_settings
+    assert 't("settings.pluginCreateInNewChatHint", "To create a Plugin, start a new chat.")' in plugin_settings
     for kind in ("recommended", "skill", "mcp", "cli", "toolchain", "agent"):
         assert kind in plugin_intake
     assert 'selected === "recommended" ? "/api/plugin-center/overview"' in plugin_intake
@@ -6700,8 +6706,38 @@ def test_plugin_center_combines_runtime_status_with_plugin_owned_intake_apis():
     assert '"/api/plugin-center/mcp/" + encodeURIComponent(editor.name) + "/configuration"' in plugin_mcp
     assert 'modules.indexOf("cli") >= 0' in plugin_intake
     assert 'selected === "cli" ? "cyrene_cli"' in plugin_intake
+    assert '"/api/hooks"' in plugin_cli_hooks
     assert '"/api/plugin-center/cli/hooks"' in plugin_cli_hooks
     assert '"/api/plugin-center/cli/hooks/proposals/"' in plugin_cli_hooks
+    assert 'function HooksPanel(props)' in plugin_cli_hooks
+    assert 'className="wb-hook-filter"' in plugin_cli_hooks
+    assert 'settings.hookCount' in plugin_cli_hooks
+    assert 'settings.hookEnabled' in plugin_cli_hooks
+    assert 'payload.system_hooks' in plugin_cli_hooks
+    assert 'settings.systemHooks' in plugin_cli_hooks
+    assert 'settings.userHooks' in plugin_cli_hooks
+    assert 'onEdit={edit}' in plugin_cli_hooks
+    assert 'function SystemHookEditor(props)' in plugin_cli_hooks
+    assert 'var SYSTEM_EVENTS' in plugin_cli_hooks
+    assert 'SYSTEM_EVENTS.map' in plugin_cli_hooks
+    assert 'settings.systemHookWhen' in plugin_cli_hooks
+    assert 'settings.systemHookThen' in plugin_cli_hooks
+    assert 'action: action' in plugin_cli_hooks
+    assert 'settings.systemHookWarningBody' in plugin_cli_hooks
+    assert '"/api/hooks/system/"' in plugin_cli_hooks
+    assert 'acknowledge_risk: true' in plugin_cli_hooks
+    assert 'function HookRequestEditor(props)' in plugin_cli_hooks
+    assert 'function AgentHookEditor(props)' in plugin_cli_hooks
+    assert '"/api/plugin-center/cli/hooks/generate"' in plugin_cli_hooks
+    assert '"/regenerate"' in plugin_cli_hooks
+    assert 'settings.hookActionInstruction' in plugin_cli_hooks
+    assert 'settings.hookSaveAndRegenerate' in plugin_cli_hooks
+    assert 'settings.hookPriorityRange' in plugin_cli_hooks
+    assert 'window.setInterval' in plugin_cli_hooks
+    assert 'manageable={customAvailable}' in plugin_cli_hooks
+    assert 'aria-expanded={expanded ? "true" : "false"}' in plugin_cli_hooks
+    assert 'className="wb-hook-card-actions"' in plugin_cli_hooks
+    assert plugin_cli_hooks.index('wb-hook-card-edit"') < plugin_cli_hooks.index('className="wb-hook-chevron-button"')
     assert '"/api/plugin-center/cli/" + encodeURIComponent(id) + "/configure-hook"' in plugin_intake
     assert "wb-plugin-center-page" in plugin_intake
     assert "McpToolDetails" in plugin_catalog

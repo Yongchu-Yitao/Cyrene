@@ -1,3 +1,38 @@
+## Automatic triggers settings page — 2026-08-28
+
+**Comparison target**
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-4c9e73f6-3722-4d73-819c-1003ff6a00eb.png`
+- Verified live desktop state: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/com.openai.sky.CUAService/Electron Screenshot 2026-08-28 at 4.57.16 PM.jpeg`
+- System-Hook rule editor state: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/com.openai.sky.CUAService/Electron Screenshot 2026-08-28 at 5.41.23 PM.jpeg`
+- Final accessibility-state recheck: live Cyrene Electron window at 22:51–22:55, Chinese locale, with 28 persisted system triggers and no user data mutation.
+- Viewport: live Cyrene Electron window, light theme, Chinese locale.
+
+**Implementation comparison**
+
+- The new `自动触发` entry sits between `插件中心` and `服务集成`, using the same sidebar spacing, icon treatment, selected background, radius, and typography as the supplied reference.
+- The page reuses Plugin Center's heading, filter, card, badge, and empty-state language instead of introducing a separate visual system.
+- User-defined triggers appear before system triggers. The live data set displayed 28 de-duplicated persisted system triggers, including current and historical registrations.
+- Known trigger names, lifecycle events, section labels, statuses, details, counts, dates, filters, and actions render in Chinese; technical identifiers remain unchanged for diagnostics.
+- Cards expose a full-width disclosure target. The expanded live state showed trigger ID, localized event, source, failure policy, scope, persisted-session count, latest tree, and localized registration time without clipping or overlap.
+- User-trigger cards additionally expose edit, test, enable/disable, and remove actions; editing preserves command/script type, arguments, priority, timeout, failure policy, description, and the existing enabled state.
+- The lightweight create form contains only name, a bounded lifecycle-event selector, a natural-language action, and optional description. Its primary action explicitly delegates generation and validation to the background Agent.
+- Agent-generated triggers can later edit the bounded event and natural-language action through the same generation pipeline. Timeout (`0.1–60` seconds) and priority (`-10000–10000`) remain editable and are preserved while the Agent rebuilds the executable configuration.
+- System-trigger editing is gated by a consequence confirmation and organized around two user-facing questions: `什么时候触发` and `触发时做什么`.
+- Trigger timing is a bounded lifecycle-event selector backed by the eight events supported by the Hook runtime; tool-name matching appears only for pre/post tool events. Actions can retain the registered system handler or replace it with an executable command/script plus arguments and timeout.
+- Saved timing/action overrides refresh current live HookSets and remain applied to future sessions through the override and action providers.
+
+**QA result**
+
+- PASS — sidebar placement and selected state match the reference.
+- PASS — no clipped headings, badges, card copy, or expanded metadata at the live desktop size.
+- PASS — disclosure affordance, keyboard-accessible summary button, localized labels, and current/historical distinction are visible and coherent.
+- PASS — the Chinese risk confirmation and complete system-binding editor were exercised in the live Electron app; QA exited with Cancel and did not save a system override.
+- PASS — the final live accessibility pass confirmed the lightweight create fields, finite event selector, user-first grouping, all 28 existing Hook registrations, and per-system-Hook edit affordances without saving any change.
+- PASS — focused build and backend/frontend regression tests completed successfully.
+
+---
+
 **Comparison Target**
 
 - Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-e8510588-92f5-4e3c-bcff-063b312dfd9d.png`

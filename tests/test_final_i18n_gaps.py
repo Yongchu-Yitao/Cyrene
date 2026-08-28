@@ -83,8 +83,15 @@ async def test_plugin_development_errors_and_guide_are_bilingual(tmp_path) -> No
     en_guide = json.loads(await authoring_guide({}, en_context))["guide"]
 
     assert "plugin_type 必须是" in invalid["error"]
-    assert "Cyrene Plugin 开发约定" in zh_guide
-    assert "Cyrene Plugin authoring contract" in en_guide
+    assert "创建 Cyrene 插件" in zh_guide
+    assert "Create a Cyrene Plugin" in en_guide
+    for plugin_type in (
+        "standalone_tool", "tool_pack", "model_plugin", "context_plugin",
+        "application_plugin", "ui_plugin", "full_pack",
+    ):
+        assert plugin_type in zh_guide
+        assert plugin_type in en_guide
+    assert "工具、模型 Provider、Context Hook、应用后端和 UI" in zh_guide
 
 
 @pytest.mark.asyncio

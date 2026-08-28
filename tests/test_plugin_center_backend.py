@@ -1,4 +1,6 @@
+import asyncio
 import importlib
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -66,7 +68,7 @@ class _FakeExtensionService:
                     "name": "fd",
                     "kind": "cli",
                     "observed_state": "missing",
-                    "enabled": False,
+                    "enabled": True,
                 },
             ],
         }
@@ -487,10 +489,324 @@ def test_cli_hook_mutations_are_not_captured_as_cli_extension_ids(monkeypatch):
         json={"enabled": False},
     ).json()
     assert toggled["hook"]["enabled"] is False
+    updated = client.put(
+        f"/api/plugin-center/cli/hooks/{hook_id}",
+        json={
+            "name": "audit after edit",
+            "event": "PostToolUse",
+            "enabled": False,
+            "priority": 25,
+            "timeout_seconds": 12,
+            "runner": {
+                "type": "command",
+                "executable": "/usr/bin/true",
+                "args": ["--edited"],
+            },
+        },
+    ).json()["hook"]
+    assert updated["name"] == "audit after edit"
+    assert updated["enabled"] is False
+    assert updated["priority"] == 25
+    assert updated["runner"]["args"] == ["--edited"]
     assert client.delete(
         f"/api/plugin-center/cli/hooks/{hook_id}"
     ).json() == {"ok": True}
     assert not any(call[0] in {"install", "bind", "unbind"} for call in extension_service.calls)
+
+
+def test_user_hook_brief_is_configured_by_background_agent(tmp_path, monkeypatch):
+    hooks_module = importlib.import_module(
+        "agent.plugin.plugin_impl.cyrene_cli.hooks"
+    )
+    config_agent = importlib.import_module(
+        "agent.plugin.plugin_impl.cyrene_cli.config_agent"
+    )
+    service_module = importlib.import_module(
+        "agent.plugin.plugin_impl.cyrene_cli.service"
+    )
+    settings = {}
+    monkeypatch.setattr(
+        hooks_module,
+        "get_setting",
+        lambda key, default=None: settings.get(key, default),
+    )
+    monkeypatch.setattr(
+        hooks_module,
+        "set_setting",
+        lambda key, value: settings.__setitem__(key, value),
+    )
+    monkeypatch.setattr(hooks_module, "_audit", lambda _record: None)
+    monkeypatch.setattr(config_agent, "DATA_DIR", tmp_path)
+
+    class Gateway:
+        async def complete(self, *_args, **_kwargs):
+            return {
+                "tool_calls": [{
+                    "function": {
+                        "name": "submit_user_hook_configuration",
+                        "arguments": {
+                            "matcher": "*",
+                            "script": (
+                                "import json, sys\n"
+                                "event = json.load(sys.stdin)\n"
+                                "print(json.dumps({'received_event': event['event']}))"
+                            ),
+                            "timeout_seconds": 7.5,
+                            "priority": -20,
+                            "failure_policy": "open",
+                            "rationale": "Writes the requested structured result.",
+                        },
+                    }
+                }]
+            }
+
+    monkeypatch.setattr(
+        config_agent,
+        "active_plugin_service",
+        lambda name: Gateway() if name == "model" else None,
+    )
+    hooks = hooks_module.CliHookService()
+    service = service_module.CLIPluginService(
+        extensions=SimpleNamespace(),
+        hooks=hooks,
+    )
+    requested = hooks.create_generation_request({
+        "name": "Record failures",
+        "event": "PostToolUse",
+        "action_instruction": "Record the event as structured JSON.",
+        "description": "Optional explanation",
+    })
+    assert requested["configuration_status"] == "configuring"
+    assert requested["enabled"] is False
+    with pytest.raises(ValueError, match="not complete"):
+        service.save_hook({"timeout_seconds": 4}, hook_id=requested["id"])
+
+    configured = asyncio.run(
+        config_agent.configure_user_hook(requested, hooks=hooks)
+    )
+    assert configured["configuration_status"] == "ready"
+    assert configured["enabled"] is True
+    assert configured["timeout_seconds"] == 7.5
+    assert configured["priority"] == -20
+    assert Path(configured["runner"]["path"]).is_file()
+    tested = asyncio.run(hooks.test(configured["id"]))
+    assert tested["output"] == {"received_event": "PostToolUse"}
+
+    tuned = service.save_hook(
+        {"timeout_seconds": 12, "priority": 250},
+        hook_id=configured["id"],
+    )["hook"]
+    assert tuned["timeout_seconds"] == 12
+    assert tuned["priority"] == 250
+    reconfiguration = hooks.update_generation_request(
+        configured["id"],
+        {
+            "event": "Stop",
+            "action_instruction": "Write a final local summary.",
+            "description": "Updated behavior",
+            "timeout_seconds": 12,
+            "priority": 250,
+        },
+    )
+    assert reconfiguration["configuration_status"] == "configuring"
+    assert reconfiguration["enabled"] is False
+    regenerated = asyncio.run(
+        config_agent.configure_user_hook(reconfiguration, hooks=hooks)
+    )
+    assert regenerated["event"] == "Stop"
+    assert regenerated["action_instruction"] == "Write a final local summary."
+    assert regenerated["timeout_seconds"] == 12
+    assert regenerated["priority"] == 250
+    assert regenerated["configuration_status"] == "ready"
+    with pytest.raises(ValueError, match="only allow timeout and priority"):
+        service.save_hook({"event": "TurnStart"}, hook_id=configured["id"])
+    with pytest.raises(ValueError, match="between -10000 and 10000"):
+        service.save_hook({"priority": 10001}, hook_id=configured["id"])
+
+
+def test_cli_hook_listing_includes_existing_runtime_bindings(tmp_path, monkeypatch):
+    from agent import ContextStoreRouter, HookRegistration
+    from agent.hook import (
+        configure_hook_action_provider,
+        configure_hook_override_provider,
+    )
+    from agent.workbench import hook_listing as hook_listing_module
+    from agent.workbench.hook_listing import (
+        runtime_hook_listing,
+        runtime_hook_action,
+        runtime_hook_override,
+        update_runtime_hook,
+    )
+
+    state_root = tmp_path / "state"
+    context_root = state_root / "agent-state" / "context"
+    settings = {}
+    monkeypatch.setattr(
+        hook_listing_module,
+        "get_setting",
+        lambda key, default=None: settings.get(key, default),
+    )
+    monkeypatch.setattr(
+        hook_listing_module,
+        "set_setting",
+        lambda key, value: settings.__setitem__(key, value),
+    )
+    configure_hook_override_provider(runtime_hook_override)
+    configure_hook_action_provider(runtime_hook_action)
+
+    def system_prompt_hook(_event):
+        return None
+
+    def memory_stop_hook(_event):
+        return None
+
+    try:
+        with ContextStoreRouter(context_root) as router:
+            router.create_tree(
+                {"role": "root"},
+                tree_id="older-tree",
+                root_id="older-root",
+                initial_hooks=(
+                    HookRegistration(
+                        event="SessionStart",
+                        plugin_id="cyrene_system_prompt.mount",
+                        hook_id="cyrene-system-prompt-session-start",
+                        plugin=system_prompt_hook,
+                        root_only=True,
+                    ),
+                    HookRegistration(
+                        event="Stop",
+                        plugin_id="cyrene_memory.stop",
+                        hook_id="cyrene-memory-stop",
+                        plugin=memory_stop_hook,
+                    ),
+                ),
+            )
+            router.create_tree(
+                {"role": "root"},
+                tree_id="current-tree",
+                root_id="root",
+                initial_hooks=(
+                    HookRegistration(
+                        event="SessionStart",
+                        plugin_id="cyrene_system_prompt.mount",
+                        hook_id="cyrene-system-prompt-session-start",
+                        plugin=system_prompt_hook,
+                        root_only=True,
+                    ),
+                ),
+            )
+
+            hooks = runtime_hook_listing(str(state_root / "db.sqlite3"))
+
+            by_id = {item["id"]: item for item in hooks}
+            assert set(by_id) == {
+                "cyrene-system-prompt-session-start",
+                "cyrene-memory-stop",
+            }
+            assert by_id["cyrene-system-prompt-session-start"] == {
+                "id": "cyrene-system-prompt-session-start",
+                "event": "SessionStart",
+                "plugin_id": "cyrene_system_prompt.mount",
+                "root_only": True,
+                "matcher": "",
+                "failure_policy": "open",
+                "config": {},
+                "enabled": True,
+                "created_at": by_id["cyrene-system-prompt-session-start"]["created_at"],
+                "readonly": True,
+                "source": "system",
+                "tree_id": "current-tree",
+                "tree_count": 2,
+                "current": True,
+                "action": {"type": "plugin"},
+            }
+            assert by_id["cyrene-memory-stop"]["tree_count"] == 1
+            assert by_id["cyrene-memory-stop"]["current"] is False
+
+            changed = update_runtime_hook(
+                str(state_root / "db.sqlite3"),
+                "cyrene-system-prompt-session-start",
+                {
+                    "event": "SessionStart",
+                    "plugin_id": "cyrene_system_prompt.mount",
+                    "new_hook_id": "custom-system-prompt-trigger",
+                    "new_event": "PreToolUse",
+                    "new_plugin_id": "custom.system_prompt.handler",
+                    "created_at": "2026-08-28T09:30:00+08:00",
+                    "enabled": True,
+                    "root_only": False,
+                    "matcher": "read*",
+                    "failure_policy": "block",
+                    "config": {"source": "user-override"},
+                    "action": {
+                        "type": "command",
+                        "executable": sys.executable,
+                        "args": [
+                            "-c",
+                            "import json; print(json.dumps({'decision': 'modify', 'arguments': {'changed': True}}))",
+                        ],
+                        "env": {},
+                        "timeout_seconds": 5,
+                    },
+                    "acknowledge_risk": True,
+                },
+            )
+            assert changed["updated_bindings"] == 2
+            assert changed["updated_live_bindings"] == 2
+            assert changed["hook"]["id"] == "custom-system-prompt-trigger"
+            assert changed["hook"]["event"] == "PreToolUse"
+            assert changed["hook"]["plugin_id"] == "custom.system_prompt.handler"
+            assert changed["hook"]["matcher"] == "read*"
+            assert changed["hook"]["created_at"] == "2026-08-28T09:30:00+08:00"
+            assert changed["hook"]["enabled"] is True
+            assert changed["hook"]["failure_policy"] == "block"
+            assert changed["hook"]["config"] == {"source": "user-override"}
+            assert changed["hook"]["action"]["type"] == "command"
+            assert changed["hook"]["action"]["executable"] == sys.executable
+            live_hook = next(
+                item for item in router.hooks_for("current-tree").list()
+                if item.id == "custom-system-prompt-trigger"
+            )
+            assert live_hook.event == "PreToolUse"
+            assert live_hook.plugin_id == "custom.system_prompt.handler"
+            assert live_hook.enabled is True
+            assert live_hook.matcher == "read*"
+            assert live_hook.failure_policy == "block"
+            assert live_hook.config == {"source": "user-override"}
+            reviewed = asyncio.run(
+                router.hooks_for("current-tree").pre_tool_use(
+                    "read_file",
+                    {"original": True},
+                )
+            )
+            assert reviewed == {"changed": True}
+            router.create_tree(
+                {"role": "root"},
+                tree_id="future-tree",
+                root_id="future-root",
+                initial_hooks=(
+                    HookRegistration(
+                        event="SessionStart",
+                        plugin_id="cyrene_system_prompt.mount",
+                        hook_id="cyrene-system-prompt-session-start",
+                        plugin=system_prompt_hook,
+                        root_only=True,
+                    ),
+                ),
+            )
+            future_hook = router.hooks_for("future-tree").list()[0]
+            assert future_hook.id == "custom-system-prompt-trigger"
+            assert future_hook.event == "PreToolUse"
+            assert future_hook.plugin_id == "custom.system_prompt.handler"
+            assert future_hook.enabled is True
+            assert future_hook.root_only is False
+            assert future_hook.matcher == "read*"
+            assert future_hook.failure_policy == "block"
+            assert future_hook.config == {"source": "user-override"}
+    finally:
+        configure_hook_action_provider(None)
+        configure_hook_override_provider(None)
 
 
 def test_disabled_extensions_pack_does_not_inject_managed_cli_environment(monkeypatch):

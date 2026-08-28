@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import ast
+import difflib
+import hashlib
 import html
 import json
 import re
+import secrets
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -30,110 +34,73 @@ SCAFFOLD_TYPES = (
 )
 
 
-AUTHORING_GUIDE = """# Cyrene Plugin authoring contract
+AUTHORING_GUIDE = """# Create a Cyrene Plugin
 
-Cyrene has one Plugin framework. A user Plugin is either one Python file exposing
-`plugin`, or one directory exposing `plugin_pack` from `__init__.py`. Packs may
-contain model-visible tools, session setup, application routes/services/lifecycle,
-and sandboxed Workbench views. Do not create plugin.json or use the deleted
-cyrene.view/cyrene.projectTool protocol.
+## Fast path
 
-## Scaffold types
+1. Call `PluginScaffold` with a new workspace path, `pack_id`, display `name`, and one type below.
+2. Use `PluginSourceManager` to read/edit generated text files.
+3. Call `PluginValidate`; fix every reported error.
+4. Call `PluginInstall`. Use `PluginManager` only to list, enable, disable, or delete installed contributions.
 
-- `standalone_tool`: one directly registered tool `.py` file.
-- `tool_pack`: a directory containing one or more ordinary tools.
-- `model_plugin`: a configurable model Provider with discovery and completion.
-- `context_plugin`: a SessionStart Hook that mounts context into the Agent tree.
-- `application_plugin`: process-level routes, services, startup and shutdown.
-- `ui_plugin`: an application contribution plus a sandboxed Workbench split view.
-- `full_pack`: a composable example containing tool, model, application, and UI.
+Do not create `plugin.json`. A standalone file exports `plugin`; a pack directory exports
+`plugin_pack` from `__init__.py`. Keep stable ids ASCII and add English/Chinese `metadata.i18n`.
 
-Every generated component includes English and Chinese metadata. `plugin_type` is
-required by PluginScaffold. A standalone tool path must end in `.py`; every other
-type uses a directory. `plugin_name` optionally controls the stable executable
-identifier, while `name` is the localized display title.
+## Choose exactly one scaffold type
 
-## Workbench view contribution
+- `standalone_tool`: one model-callable `.py` tool.
+- `tool_pack`: a pack with a tool and room for more tools.
+- `model_plugin`: an OpenAI-compatible model Provider with model discovery and completion.
+- `context_plugin`: a `SessionStart` Hook that mounts Agent context.
+- `application_plugin`: routes, services, startup, and shutdown.
+- `ui_plugin`: application backend plus sandboxed Workbench UI and RPC example.
+- `full_pack`: tool + model Provider + context Hook + application backend + UI in one pack.
 
-Declare views and project-tool launchers in `PluginPack.metadata`:
+Generated pack files are intentionally small: `tool.py` exposes `TOOL_PLUGIN`, `model.py`
+exposes `MODEL_PLUGIN`, `context.py` registers the Hook, `application.py` registers backend
+services/RPC, and `ui/index.html` is the sandboxed view. `__init__.py` composes them.
 
-```python
-plugin_pack = PluginPack(
-    id="example_dashboard",
-    description="Example dashboard.",
-    plugins=(),
-    application_setup=setup_application,
-    metadata={
-        "frontend_views": ({
-            "id": "main", "entry": "ui/index.html", "title": "Dashboard",
-            "i18n": {"en": {"title": "Dashboard"}, "zh": {"title": "仪表盘"}},
-        },),
-        "project_tools": ({
-            "id": "dashboard", "view": "main", "title": "Dashboard",
-            "subtitle": "Plugin view", "icon_text": "◇",
-            "i18n": {
-                "en": {"title": "Dashboard", "subtitle": "Plugin view"},
-                "zh": {"title": "仪表盘", "subtitle": "插件视图"},
-            },
-        },),
-    },
-)
-```
+For UI, keep assets inside the pack; declare `frontend_views` and `project_tools` in pack
+metadata, and register backend calls with `provide_frontend_method`. Python/tool/model changes
+reload live; application contribution changes may require restart.
 
-Entries are relative to the pack directory. Cyrene serves only directories that
-contain declared view entries. The iframe is sandboxed and automatically participates
-in split, drag, restore, and detached-window behavior.
-
-## View backend RPC
-
-Register pack-scoped methods from `application_setup`:
-
-```python
-async def load(arguments, request_context):
-    return {"ok": True, "project_id": request_context["project_id"]}
-
-def setup_application(context):
-    context.provide_frontend_method("dashboard.load", load)
-```
-
-The iframe sends `{source:'cyrene-plugin', type:'call', requestId, method, args}`
-with `postMessage` and receives `cyrene-host` init/response messages. Application
-contribution changes require a Cyrene restart; HTML/CSS/JS assets are read live.
-
-Use PluginScaffold, edit with normal file tools, run PluginValidate, then
-PluginInstall. PluginReload refreshes tool/model definitions and reports whether
-application changes require restart.
+For standalone automatic triggers outside a pack, call `HookManager(action="generate")` with
+`hook={name, event, action_instruction}`. System source changes require exact diff review;
+system Hook changes additionally require the matching one-time confirmation token.
 """
 
-AUTHORING_GUIDE_ZH = """# Cyrene Plugin 开发约定
+AUTHORING_GUIDE_ZH = """# 创建 Cyrene 插件
 
-Cyrene 只使用一套 Plugin 框架：单个 Python 文件通过 `plugin` 导出插件，目录则从
-`__init__.py` 通过 `plugin_pack` 导出 PluginPack。PluginPack 可以包含模型可见工具、
-会话初始化、应用路由与服务、生命周期以及沙箱化的 Workbench 视图。不要创建
-`plugin.json`，也不要使用已经移除的 cyrene.view/cyrene.projectTool 协议。
+## 最短流程
 
-## 脚手架类型
+1. 调用 `PluginScaffold`，提供新的工作区路径、`pack_id`、显示名称和下列一种类型。
+2. 用 `PluginSourceManager` 读取或编辑生成的文本源码。
+3. 调用 `PluginValidate`，修复全部错误。
+4. 调用 `PluginInstall`；安装后只用 `PluginManager` 查看、启用、停用或删除。
 
-- `standalone_tool`：一个直接注册的 `.py` 工具文件。
-- `tool_pack`：包含一个或多个普通工具的目录。
-- `model_plugin`：支持发现与补全的可配置模型 Provider。
-- `context_plugin`：在 SessionStart Hook 中向 Agent 树挂载上下文。
-- `application_plugin`：进程级路由、服务、启动与关闭逻辑。
-- `ui_plugin`：应用贡献与沙箱化 Workbench 分栏视图。
-- `full_pack`：组合工具、模型、应用和 UI 的完整示例。
+不要创建 `plugin.json`。独立文件必须导出 `plugin`；插件包目录必须从 `__init__.py`
+导出 `plugin_pack`。稳定 ID 使用 ASCII，并提供中英文 `metadata.i18n`。
 
-生成的组件包含英文和中文元数据。PluginScaffold 必须提供 `plugin_type`；独立工具的
-路径必须以 `.py` 结尾，其他类型使用目录。`plugin_name` 可指定稳定的可执行标识，
-`name` 则是本地化显示名称。
+## 选择一种脚手架
 
-Workbench 视图应在 `PluginPack.metadata` 中声明 `frontend_views` 和
-`project_tools`，并为标题和副标题提供 `i18n.zh`。入口路径必须位于插件包目录内；
-iframe 会在沙箱中运行，并自动参与分栏、拖动、恢复和独立窗口行为。应用初始化可通过
-`provide_frontend_method` 注册包级 RPC 方法。应用贡献变更需要重启 Cyrene，HTML、
-CSS 和 JavaScript 资源则会实时读取。
+- `standalone_tool`：单个可被模型调用的 `.py` 工具。
+- `tool_pack`：包含一个工具、可继续扩展多个工具的插件包。
+- `model_plugin`：支持模型发现与补全的 OpenAI-compatible Provider。
+- `context_plugin`：通过 `SessionStart` Hook 挂载 Agent 上下文。
+- `application_plugin`：路由、服务、启动与关闭逻辑。
+- `ui_plugin`：应用后端、沙箱化 Workbench UI 和 RPC 示例。
+- `full_pack`：在同一个包中包含工具、模型 Provider、Context Hook、应用后端和 UI。
 
-建议流程：先运行 PluginScaffold，使用普通文件工具编辑，再运行 PluginValidate，最后
-运行 PluginInstall。PluginReload 会刷新工具与模型定义，并报告哪些应用变更需要重启。
+生成文件保持精简：`tool.py` 导出 `TOOL_PLUGIN`，`model.py` 导出 `MODEL_PLUGIN`，
+`context.py` 注册 Hook，`application.py` 注册后端服务/RPC，`ui/index.html` 提供沙箱
+视图，最后由 `__init__.py` 组合。
+
+UI 资源必须位于插件包内；在 metadata 声明 `frontend_views` 与 `project_tools`，并用
+`provide_frontend_method` 注册后端调用。工具和模型代码可重载，应用贡献修改可能需要重启。
+
+若要创建包外的自动触发，调用 `HookManager(action="generate")`，并传入
+`hook={name, event, action_instruction}`。系统源码修改必须先审核完整差异；系统 Hook
+修改还必须携带与该修改完全匹配的一次性确认令牌。
 """
 
 
@@ -899,14 +866,13 @@ async def install(arguments: dict[str, Any], context: PluginContext) -> str:
     source_type = str(validation.get("source_type") or "")
     identity = str(validation.get("pack_id") or validation.get("plugin_name") or source.stem)
     target = host.plugin_directory / (identity if source_type == "pack" else source.name)
-    replace = bool(arguments.get("replace"))
-    if target.exists() and not replace:
+    if target.exists():
         return _json({
             "ok": False,
             "error": plugin_localized(
                 context,
-                "Plugin source already exists; set replace=true to replace it.",
-                "Plugin 源码已存在；如需替换，请设置 replace=true。",
+                "Plugin source already exists; edit or delete it instead.",
+                "插件源码已存在；请改用编辑或删除。",
             ),
             "path": str(target),
         })
@@ -977,12 +943,531 @@ async def reload_plugins(_arguments: dict[str, Any], _context: PluginContext) ->
     })
 
 
+async def manage_plugins(arguments: dict[str, Any], context: PluginContext) -> str:
+    """Manage the installed state without introducing update/rollback semantics."""
+
+    from agent.plugin.native_tools import mark_builtin_plugin_deleted
+    from cyrene.runtime import settings_store
+
+    host = active_plugin_application_host()
+    if host is None:
+        return _json({"ok": False, "error": plugin_localized(
+            context, "Plugin application host is unavailable.", "插件应用宿主当前不可用。"
+        )})
+    action = str(arguments.get("action") or "list").strip().lower()
+    kind = str(arguments.get("kind") or "").strip().lower()
+    identity = str(arguments.get("id") or "").strip()
+    registry = host.registry
+    if action == "list":
+        packs = [{
+            "kind": "pack",
+            "id": pack.id,
+            "description": pack.description,
+            "enabled": registry.pack_enabled(pack.id),
+            "locked": registry.pack_locked(pack.id),
+            "source": registry.pack_source(pack.id),
+            "plugins": [plugin.canonical_name for plugin in pack.plugins],
+        } for pack in registry.list_packs()]
+        plugins = [{
+            "kind": "plugin",
+            "id": item.plugin.canonical_name,
+            "name": item.plugin.name,
+            "plugin_kind": item.plugin.kind,
+            "pack_id": item.pack_id or "",
+            "enabled": registry.plugin_enabled(item.plugin.name),
+            "locked": registry.plugin_locked(item.plugin.name),
+            "source": item.source,
+        } for item in registry.list_plugins()]
+        return _json({"ok": True, "packs": packs, "plugins": plugins})
+    if action not in {"enable", "disable", "delete"}:
+        return _json({"ok": False, "error": "action must be list, enable, disable, or delete"})
+    if kind not in {"pack", "plugin"} or not identity:
+        return _json({"ok": False, "error": "kind and id are required"})
+    if action in {"enable", "disable"}:
+        enabled = action == "enable"
+        try:
+            if kind == "pack":
+                registry.set_pack_enabled(identity, enabled)
+            else:
+                match = next(
+                    (
+                        item for item in registry.list_plugins()
+                        if item.plugin.canonical_name == identity or item.plugin.name == identity
+                    ),
+                    None,
+                )
+                if match is None:
+                    raise ValueError("Plugin not found")
+                registry.set_plugin_enabled(match.plugin.name, enabled)
+            snapshot = registry.activation.snapshot()
+            settings_store.save_enabled_plugins(snapshot.plugins)
+            settings_store.save_enabled_plugin_packs(snapshot.packs)
+            await host.reconcile_activation()
+        except Exception as exc:
+            return _json({"ok": False, "error": str(exc)})
+        return _json({"ok": True, "action": action, "kind": kind, "id": identity})
+
+    plugin_root = Path(host.plugin_directory).resolve()
+    if kind == "pack":
+        try:
+            source = registry.pack_source(identity)
+        except Exception as exc:
+            return _json({"ok": False, "error": str(exc)})
+        source_path = Path(source).resolve() if source != "core" else Path()
+        if source == "core" or source_path.parent != plugin_root:
+            return _json({"ok": False, "error": "PluginPack is not a managed installed pack"})
+    else:
+        match = next(
+            (
+                item for item in registry.list_plugins()
+                if item.plugin.canonical_name == identity or item.plugin.name == identity
+            ),
+            None,
+        )
+        if match is None:
+            return _json({"ok": False, "error": "Plugin not found"})
+        if match.pack_id is not None:
+            return _json({
+                "ok": False,
+                "error": "This Plugin belongs to a PluginPack; delete the pack instead.",
+                "pack_id": match.pack_id,
+            })
+        source_path = Path(match.source).resolve() if match.source != "core" else Path()
+        if match.source == "core" or source_path.parent != plugin_root:
+            return _json({"ok": False, "error": "Plugin is not a managed installed Plugin"})
+    try:
+        mark_builtin_plugin_deleted(plugin_root, source_path.name)
+        if source_path.is_dir() and not source_path.is_symlink():
+            shutil.rmtree(source_path)
+        else:
+            source_path.unlink()
+        _seed, failures = await host.reload_user_plugins()
+    except Exception as exc:
+        return _json({"ok": False, "error": str(exc)})
+    return _json({
+        "ok": not failures,
+        "action": "delete",
+        "kind": kind,
+        "id": identity,
+        "restart_required": bool(host.restart_required_packs),
+        "failures": [{"path": str(item.path), "error": item.error} for item in failures],
+    })
+
+
+_EDITABLE_SUFFIXES = frozenset({
+    ".py", ".json", ".html", ".css", ".js", ".jsx", ".mjs", ".md", ".txt", ".svg",
+})
+_SYSTEM_HOOK_CONFIRMATION_TTL_SECONDS = 600
+_PENDING_SYSTEM_HOOK_CONFIRMATIONS: dict[str, tuple[str, float]] = {}
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _stable_digest(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+        default=str,
+    ).encode("utf-8")
+    return _sha256(encoded)
+
+
+def _issue_system_hook_confirmation(value: Any) -> str:
+    now = time.monotonic()
+    for token, (_digest, expires_at) in tuple(
+        _PENDING_SYSTEM_HOOK_CONFIRMATIONS.items()
+    ):
+        if expires_at <= now:
+            _PENDING_SYSTEM_HOOK_CONFIRMATIONS.pop(token, None)
+    token = secrets.token_urlsafe(24)
+    _PENDING_SYSTEM_HOOK_CONFIRMATIONS[token] = (
+        _stable_digest(value),
+        now + _SYSTEM_HOOK_CONFIRMATION_TTL_SECONDS,
+    )
+    return token
+
+
+def _consume_system_hook_confirmation(token: Any, value: Any) -> bool:
+    normalized = str(token or "").strip()
+    pending = _PENDING_SYSTEM_HOOK_CONFIRMATIONS.pop(normalized, None)
+    if pending is None:
+        return False
+    digest, expires_at = pending
+    return expires_at > time.monotonic() and secrets.compare_digest(
+        digest,
+        _stable_digest(value),
+    )
+
+
+def _source_target(raw_path: Any) -> tuple[Path, Path, str, bool]:
+    value = str(raw_path or "").strip().replace("\\", "/")
+    if not value:
+        raise ValueError("path is required")
+    host = active_plugin_application_host()
+    if host is None:
+        raise RuntimeError("Plugin application host is unavailable")
+    is_core = value.startswith("@core/")
+    if is_core:
+        root = (Path(__file__).resolve().parents[2] / "core_impl").resolve()
+        relative = value.removeprefix("@core/")
+        system = True
+    else:
+        root = Path(host.plugin_directory).resolve()
+        relative = value
+        manifest = root / ".upstream-hashes.json"
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            seeded = payload.get("files") if isinstance(payload, dict) else {}
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            seeded = {}
+        parts = Path(relative).parts
+        top = parts[0] if parts else ""
+        system = isinstance(seeded, dict) and any(
+            str(item).replace("\\", "/").split("/", 1)[0] == top
+            for item in seeded
+        )
+    target = (root / relative).resolve()
+    if target == root or root not in target.parents:
+        raise ValueError("path must stay inside the selected Plugin source root")
+    if target.suffix.lower() not in _EDITABLE_SUFFIXES:
+        raise ValueError("file type is not editable through PluginSourceManager")
+    relative_public = target.relative_to(root).as_posix()
+    return root, target, f"@core/{relative_public}" if is_core else relative_public, system
+
+
+def _confirmation_required(
+    context: PluginContext,
+    *,
+    target: str,
+    kind: str,
+    preview: Any = None,
+    confirmation_token: str = "",
+) -> str:
+    return _json({
+        "ok": False,
+        "code": "user_confirmation_required",
+        "requires_user_review": True,
+        "target": target,
+        "target_kind": kind,
+        "preview": preview,
+        "confirmation_token": confirmation_token,
+        "error": plugin_localized(
+            context,
+            "This system-level change requires the user to review the exact diff and confirm it.",
+            "这是系统级修改，必须先由用户审核具体差异并明确确认。",
+        ),
+    })
+
+
+async def manage_plugin_source(arguments: dict[str, Any], context: PluginContext) -> str:
+    """Read or precisely mutate editable Plugin source under central review."""
+
+    action = str(arguments.get("action") or "list").strip().lower()
+    host = active_plugin_application_host()
+    if host is None:
+        return _json({"ok": False, "error": plugin_localized(
+            context, "Plugin application host is unavailable.", "Plugin 应用宿主当前不可用。"
+        )})
+    if action == "list":
+        user_root = Path(host.plugin_directory).resolve()
+        core_root = (Path(__file__).resolve().parents[2] / "core_impl").resolve()
+        items: list[dict[str, Any]] = []
+        for root, prefix in ((user_root, ""), (core_root, "@core/")):
+            if not root.is_dir():
+                continue
+            for candidate in sorted(root.rglob("*")):
+                if len(items) >= 1000:
+                    break
+                if not candidate.is_file() or candidate.suffix.lower() not in _EDITABLE_SUFFIXES or "__pycache__" in candidate.parts:
+                    continue
+                _, _, public_path, system = _source_target(prefix + candidate.relative_to(root).as_posix())
+                items.append({
+                    "path": public_path,
+                    "system": system,
+                    "size": candidate.stat().st_size,
+                    "sha256": _sha256(candidate.read_bytes()),
+                })
+        return _json({"ok": True, "count": len(items), "items": items})
+    try:
+        _root, target, public_path, system = _source_target(arguments.get("path"))
+    except (TypeError, ValueError, RuntimeError) as exc:
+        return _json({"ok": False, "error": str(exc)})
+    if action == "read":
+        if not target.is_file():
+            return _json({"ok": False, "code": "plugin_source_not_found", "path": public_path})
+        data = target.read_bytes()
+        return _json({
+            "ok": True, "path": public_path, "system": system,
+            "sha256": _sha256(data), "content": data.decode("utf-8"),
+        })
+    if action not in {"write", "delete"}:
+        return _json({"ok": False, "error": "action must be list, read, write, or delete"})
+    existing = target.read_bytes() if target.is_file() else None
+    expected = str(arguments.get("expected_sha256") or "").strip()
+    if existing is not None and (not expected or expected != _sha256(existing)):
+        return _json({
+            "ok": False, "code": "source_revision_mismatch", "path": public_path,
+            "current_sha256": _sha256(existing),
+            "error": plugin_localized(
+                context,
+                "Read the current file and submit its exact sha256 before modifying it.",
+                "修改前必须先读取当前文件，并提交完全匹配的 sha256。",
+            ),
+        })
+    if system and arguments.get("user_confirmed") is not True:
+        proposed = "" if action == "delete" else str(arguments.get("content") or "")
+        current_text = existing.decode("utf-8", errors="replace") if existing is not None else ""
+        diff = "".join(difflib.unified_diff(
+            current_text.splitlines(keepends=True),
+            proposed.splitlines(keepends=True),
+            fromfile=f"a/{public_path}",
+            tofile=f"b/{public_path}",
+        ))
+        return _confirmation_required(
+            context,
+            target=public_path,
+            kind="system_plugin_source",
+            preview={
+                "action": action,
+                "current_sha256": _sha256(existing) if existing is not None else "",
+                "proposed_sha256": _sha256(proposed.encode("utf-8")),
+                "diff": diff[:20000],
+                "diff_truncated": len(diff) > 20000,
+            },
+        )
+    if action == "delete":
+        if existing is None:
+            return _json({"ok": False, "code": "plugin_source_not_found", "path": public_path})
+        target.unlink()
+    else:
+        content = arguments.get("content")
+        if not isinstance(content, str):
+            return _json({"ok": False, "error": "content must be a string"})
+        if len(content.encode("utf-8")) > 2 * 1024 * 1024:
+            return _json({"ok": False, "error": "content exceeds 2 MB"})
+        if target.suffix.lower() == ".py":
+            try:
+                ast.parse(content, filename=str(target))
+            except SyntaxError as exc:
+                return _json({"ok": False, "code": "python_syntax_invalid", "error": str(exc)})
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    failures: list[dict[str, str]] = []
+    restart_required = system and public_path.startswith("@core/")
+    if not restart_required:
+        _seed, loaded_failures = await host.reload_user_plugins()
+        failures = [{"path": str(item.path), "error": item.error} for item in loaded_failures]
+    return _json({
+        "ok": not failures,
+        "action": action,
+        "path": public_path,
+        "system": system,
+        "sha256": _sha256(target.read_bytes()) if target.is_file() else "",
+        "restart_required": restart_required,
+        "failures": failures,
+    })
+
+
+async def manage_hooks(arguments: dict[str, Any], context: PluginContext) -> str:
+    """Manage user Hooks and reviewed system-Hook overrides."""
+
+    from agent.plugin.plugin_impl.cyrene_cli.hooks import CliHookService, public_hook
+    from agent.workbench.hook_listing import runtime_hook_listing, update_runtime_hook
+
+    action = str(arguments.get("action") or "list").strip().lower()
+    scope = str(arguments.get("scope") or "user").strip().lower()
+    if scope not in {"user", "system", "all"}:
+        return _json({"ok": False, "error": "scope must be user, system, or all"})
+    host = active_plugin_application_host()
+    if host is None:
+        return _json({"ok": False, "error": "Plugin application host is unavailable"})
+    service = context.services.get("cli")
+    user_hooks = getattr(service, "hooks", None) or CliHookService()
+    if action == "list":
+        result: dict[str, Any] = {"ok": True}
+        if scope in {"user", "all"}:
+            listing = service.hook_listing() if callable(
+                getattr(service, "hook_listing", None)
+            ) else {}
+            result["user_hooks"] = listing.get("hooks") or [
+                public_hook(item) for item in user_hooks.list()
+            ]
+            result["proposals"] = list(listing.get("proposals") or [])
+            result["configuration_results"] = dict(
+                listing.get("configuration_results") or {}
+            )
+        if scope in {"system", "all"}:
+            result["system_hooks"] = runtime_hook_listing(host.db_path)
+        return _json(result)
+    mutation = arguments.get("hook", {})
+    if not isinstance(mutation, dict):
+        return _json({"ok": False, "error": "hook must be an object"})
+    hook_id = str(arguments.get("hook_id") or mutation.get("id") or "").strip()
+    if scope == "system":
+        if action not in {"update", "disable"}:
+            return _json({"ok": False, "error": "system Hooks support update or disable"})
+        current_event = str(arguments.get("event") or "").strip()
+        current_plugin_id = str(arguments.get("plugin_id") or "").strip()
+        matches = [
+            item for item in runtime_hook_listing(host.db_path)
+            if item["id"] == hook_id
+            and (not current_event or item["event"] == current_event)
+            and (not current_plugin_id or item["plugin_id"] == current_plugin_id)
+        ]
+        if len(matches) != 1:
+            return _json({"ok": False, "code": "system_hook_not_found_or_ambiguous"})
+        current = matches[0]
+        payload = {
+            **dict(mutation),
+            "event": current["event"],
+            "plugin_id": current["plugin_id"],
+            "enabled": False if action == "disable" else mutation.get("enabled", current["enabled"]),
+            "acknowledge_risk": True,
+        }
+        proposed = dict(current)
+        for key in (
+            "enabled", "root_only", "matcher", "failure_policy", "config",
+            "created_at", "action",
+        ):
+            if key in payload:
+                proposed[key] = payload[key]
+        proposed["id"] = str(payload.get("new_hook_id", current["id"]))
+        proposed["event"] = str(payload.get("new_event", current["event"]))
+        proposed["plugin_id"] = str(
+            payload.get("new_plugin_id", current["plugin_id"])
+        )
+        confirmation_value = {
+            "target": {
+                "id": current["id"],
+                "event": current["event"],
+                "plugin_id": current["plugin_id"],
+            },
+            "action": action,
+            "current": current,
+            "proposed": proposed,
+            "payload": payload,
+        }
+        if arguments.get("user_confirmed") is not True:
+            current_text = json.dumps(current, ensure_ascii=False, indent=2, sort_keys=True)
+            proposed_text = json.dumps(proposed, ensure_ascii=False, indent=2, sort_keys=True)
+            diff = "".join(difflib.unified_diff(
+                current_text.splitlines(keepends=True),
+                proposed_text.splitlines(keepends=True),
+                fromfile="current-system-hook.json",
+                tofile="proposed-system-hook.json",
+            ))
+            token = _issue_system_hook_confirmation(confirmation_value)
+            return _confirmation_required(
+                context,
+                target=hook_id,
+                kind="system_hook",
+                preview={
+                    "action": action,
+                    "current": current,
+                    "proposed": proposed,
+                    "diff": diff,
+                },
+                confirmation_token=token,
+            )
+        if not _consume_system_hook_confirmation(
+            arguments.get("confirmation_token"),
+            confirmation_value,
+        ):
+            return _json({
+                "ok": False,
+                "code": "system_hook_confirmation_invalid",
+                "error": plugin_localized(
+                    context,
+                    "The confirmation is missing, expired, or does not match this exact change.",
+                    "确认令牌缺失、已过期，或与本次具体修改不一致。",
+                ),
+            })
+        return _json(update_runtime_hook(host.db_path, hook_id, payload))
+    if scope != "user":
+        return _json({"ok": False, "error": "mutations require scope=user or scope=system"})
+    if action in {"approve_proposal", "reject_proposal"}:
+        if not callable(getattr(service, "decide_hook_proposal", None)):
+            return _json({"ok": False, "error": "CLI Hook proposal service is unavailable"})
+        proposal_id = str(arguments.get("proposal_id") or "").strip()
+        if not proposal_id:
+            return _json({"ok": False, "error": "proposal_id is required"})
+        return _json(service.decide_hook_proposal(
+            proposal_id,
+            action == "approve_proposal",
+        ))
+    if action == "generate":
+        if not callable(getattr(service, "request_hook_generation", None)):
+            return _json({"ok": False, "error": "Hook generation service is unavailable"})
+        return _json(service.request_hook_generation(mutation))
+    if action == "regenerate":
+        if not hook_id or not callable(getattr(service, "retry_hook_generation", None)):
+            return _json({"ok": False, "error": "Hook regeneration service is unavailable"})
+        return _json(service.retry_hook_generation(hook_id, mutation))
+    if action == "create":
+        if not mutation:
+            return _json({"ok": False, "error": "hook is required for create"})
+        if callable(getattr(service, "save_hook", None)):
+            return _json(service.save_hook(mutation))
+        return _json({"ok": True, "hook": public_hook(user_hooks.save(mutation, actor="agent"))})
+    if action == "update":
+        if not mutation:
+            return _json({"ok": False, "error": "hook is required for update"})
+        if not hook_id or user_hooks.get(hook_id) is None:
+            return _json({"ok": False, "code": "user_hook_not_found"})
+        existing = user_hooks.get(hook_id) or {}
+        if existing.get("configured_by_agent") is True and (
+            set(mutation) - {"timeout_seconds", "priority"}
+        ):
+            unsupported = set(mutation) - {
+                "name", "event", "action_instruction", "description",
+                "timeout_seconds", "priority",
+            }
+            if unsupported:
+                return _json({
+                    "ok": False,
+                    "error": "Agent-generated Hooks must change behavior through action_instruction",
+                    "unsupported": sorted(unsupported),
+                })
+            if not callable(getattr(service, "retry_hook_generation", None)):
+                return _json({"ok": False, "error": "Hook regeneration service is unavailable"})
+            return _json(service.retry_hook_generation(hook_id, mutation))
+        if callable(getattr(service, "save_hook", None)):
+            return _json(service.save_hook(mutation, hook_id=hook_id))
+        return _json({"ok": True, "hook": public_hook(user_hooks.save({**mutation, "id": hook_id}, actor="agent"))})
+    if action in {"enable", "disable"}:
+        if not hook_id or user_hooks.get(hook_id) is None:
+            return _json({"ok": False, "code": "user_hook_not_found"})
+        enabled = action == "enable"
+        if callable(getattr(service, "set_hook_enabled", None)):
+            return _json(service.set_hook_enabled(hook_id, enabled))
+        return _json({"ok": True, "hook": public_hook(
+            user_hooks.set_enabled(hook_id, enabled, actor="agent")
+        )})
+    if action == "test":
+        if not hook_id or not callable(getattr(service, "test_hook", None)):
+            return _json({"ok": False, "error": "Hook test service is unavailable"})
+        return _json(await service.test_hook(hook_id, mutation))
+    if action == "delete":
+        if callable(getattr(service, "delete_hook", None)):
+            return _json(service.delete_hook(hook_id))
+        return _json({"ok": user_hooks.delete(hook_id, actor="agent")})
+    return _json({"ok": False, "error": "unsupported user Hook action"})
+
+
 __all__ = [
     "AUTHORING_GUIDE",
     "AUTHORING_GUIDE_ZH",
     "SCAFFOLD_TYPES",
     "authoring_guide",
     "install",
+    "manage_hooks",
+    "manage_plugins",
+    "manage_plugin_source",
     "reload_plugins",
     "scaffold",
     "validate",

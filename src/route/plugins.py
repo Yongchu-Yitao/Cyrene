@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from agent.hook import configure_hook_action_provider, configure_hook_override_provider
 from agent.plugin import (
     PluginApplicationHost,
     PluginPack,
@@ -19,6 +20,12 @@ from agent.plugin import (
     RegisteredPlugin,
 )
 from agent.plugin.registry import PluginNotFoundError
+from agent.workbench.hook_listing import (
+    runtime_hook_listing,
+    runtime_hook_action,
+    runtime_hook_override,
+    update_runtime_hook,
+)
 from cyrene.localization import localized
 from route.errors import localized_error_response
 
@@ -310,9 +317,72 @@ def register_plugin_routes(
     router: APIRouter,
     host: PluginApplicationHost,
 ) -> None:
+    configure_hook_override_provider(runtime_hook_override)
+    configure_hook_action_provider(runtime_hook_action)
+
     @router.get("/api/plugins")
     async def api_list_plugins():
         return plugin_registry_status(host)
+
+    @router.get("/api/hooks")
+    async def api_list_hooks():
+        cli_service = host.service("cli")
+        custom_listing = getattr(cli_service, "hook_listing", None)
+        if callable(custom_listing):
+            payload = custom_listing()
+        else:
+            from agent.plugin.plugin_impl.cyrene_cli.hooks import (
+                CliHookService,
+                public_hook,
+                public_proposal,
+            )
+
+            stored_hooks = CliHookService()
+            payload = {
+                "hooks": [public_hook(item) for item in stored_hooks.list()],
+                "proposals": [
+                    public_proposal(item) for item in stored_hooks.proposals()
+                ],
+                "configuration_results": stored_hooks.configuration_results(),
+            }
+        return {
+            **payload,
+            "system_hooks": runtime_hook_listing(host.db_path),
+            "custom_available": callable(custom_listing),
+        }
+
+    @router.put("/api/hooks/system/{hook_id}")
+    async def api_update_system_hook(hook_id: str, request: Request):
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise ValueError("request body must be an object")
+            return update_runtime_hook(host.db_path, hook_id, payload)
+        except LookupError:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "code": "system_hook_not_found",
+                    "error": localized(
+                        "The system automatic trigger was not found.",
+                        "未找到该系统自动触发。",
+                    ),
+                },
+                status_code=404,
+            )
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Invalid system Hook update: %s", exc)
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "code": "system_hook_update_invalid",
+                    "error": localized(
+                        "The system automatic trigger configuration is invalid.",
+                        "系统自动触发配置无效。",
+                    ),
+                },
+                status_code=400,
+            )
 
     @router.get("/api/plugins/failures")
     async def api_plugin_failures():

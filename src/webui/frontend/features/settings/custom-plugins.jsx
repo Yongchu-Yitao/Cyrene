@@ -387,12 +387,16 @@ function PluginDirectorySummary(props) {
   return React.createElement("section", { className: "wb-plugin-registry-directory" },
     React.createElement("strong", null, c.t("settings.pluginDirectory", "Plugin directory")),
     React.createElement("code", { title: directory.path || "" }, directory.path || c.t("settings.pluginDirectoryUnavailable", "Unavailable")),
-    React.createElement("small", null, [
-      c.t("settings.pluginDirectoryStatus." + (directory.status || (directory.exists ? "ready" : "missing")), directory.status || (directory.exists ? "ready" : "missing")),
-      directory.readable === false ? c.t("settings.pluginDirectoryUnreadable", "not readable") : "",
-      directory.writable === false ? c.t("settings.pluginDirectoryReadOnly", "read-only") : "",
-      directory.seeded === true ? c.t("settings.pluginDirectorySeeded", "seeded") : "",
-    ].filter(Boolean).join(" · "))
+    React.createElement("small", { className: "wb-plugin-registry-directory-meta" },
+      React.createElement("span", null, [
+        c.t("settings.pluginDirectoryStatus." + (directory.status || (directory.exists ? "ready" : "missing")), directory.status || (directory.exists ? "ready" : "missing")),
+        directory.readable === false ? c.t("settings.pluginDirectoryUnreadable", "not readable") : "",
+        directory.writable === false ? c.t("settings.pluginDirectoryReadOnly", "read-only") : "",
+        directory.seeded === true ? c.t("settings.pluginDirectorySeeded", "seeded") : "",
+      ].filter(Boolean).join(" · ")),
+      React.createElement("span", { className: "wb-plugin-registry-directory-hint" },
+        c.t("settings.pluginCreateInNewChatHint", "To create a Plugin, start a new chat."))
+    )
   )
 }
 

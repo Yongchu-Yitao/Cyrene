@@ -8,9 +8,10 @@ import inspect
 import logging
 import queue
 import threading
+import weakref
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, InvalidStateError
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -35,6 +36,85 @@ from .plugin import PluginRegistry
 from .storage import HookPersistence, validate_hook_config
 
 logger = logging.getLogger(__name__)
+
+HookOverrideProvider = Callable[[str, str], Mapping[str, Any] | None]
+HookActionProvider = Callable[[Hook], HookPlugin | None]
+_hook_override_provider: HookOverrideProvider | None = None
+_hook_action_provider: HookActionProvider | None = None
+_active_hook_sets: weakref.WeakSet[HookSet] = weakref.WeakSet()
+_active_hook_sets_lock = threading.RLock()
+
+
+def _hook_with_configured_override(hook: Hook) -> Hook:
+    provider = _hook_override_provider
+    if provider is None:
+        return hook
+    try:
+        raw = provider(hook.id, hook.plugin_id)
+        if not isinstance(raw, Mapping):
+            return hook
+        hook_id = str(raw.get("id", hook.id)).strip()
+        event = str(raw.get("event", hook.event)).strip()
+        plugin_id = str(raw.get("plugin_id", hook.plugin_id)).strip()
+        if not hook_id or not plugin_id or event not in HOOK_EVENTS:
+            return hook
+        failure_policy = str(raw.get("failure_policy", hook.failure_policy))
+        if failure_policy not in {"open", "block", "closed"}:
+            return hook
+        if failure_policy == "block" and event != PRE_TOOL_USE:
+            return hook
+        matcher = raw.get("matcher", hook.matcher)
+        if matcher is not None and not isinstance(matcher, str):
+            return hook
+        config = raw.get("config", hook.config)
+        if not isinstance(config, Mapping):
+            return hook
+        created_at = hook.created_at
+        raw_created_at = raw.get("created_at")
+        if raw_created_at is not None:
+            created_at = datetime.fromisoformat(str(raw_created_at))
+        return replace(
+            hook,
+            id=hook_id,
+            event=event,
+            plugin_id=plugin_id,
+            root_only=bool(raw.get("root_only", hook.root_only)),
+            matcher=matcher,
+            failure_policy=failure_policy,  # type: ignore[arg-type]
+            config=validate_hook_config(config),
+            enabled=bool(raw.get("enabled", hook.enabled)),
+            created_at=created_at,
+        )
+    except Exception:
+        logger.warning(
+            "Ignoring invalid configured Hook override for %s",
+            hook.id,
+            exc_info=True,
+        )
+        return hook
+
+
+def configure_hook_override_provider(provider: HookOverrideProvider | None) -> None:
+    """Install the product-level provider used by current and future HookSets."""
+
+    global _hook_override_provider
+    _hook_override_provider = provider
+    refresh_active_hook_overrides()
+
+
+def configure_hook_action_provider(provider: HookActionProvider | None) -> None:
+    """Install the product-level resolver for user-defined Hook actions."""
+
+    global _hook_action_provider
+    _hook_action_provider = provider
+
+
+def refresh_active_hook_overrides(hook_id: str = "", plugin_id: str = "") -> int:
+    """Refresh matching in-memory bindings after a persisted override changes."""
+
+    with _active_hook_sets_lock:
+        hook_sets = tuple(_active_hook_sets)
+    return sum(hooks.refresh_overrides(hook_id=hook_id, plugin_id=plugin_id) for hooks in hook_sets)
 
 
 def _settle_future(
@@ -124,6 +204,8 @@ class HookSet:
         self._wake_enqueued = False
         self._closed = False
         self._before_dispatch: Callable[[], Any] | None = None
+        with _active_hook_sets_lock:
+            _active_hook_sets.add(self)
         log_operation(
             logger,
             "hook.set",
@@ -213,7 +295,7 @@ class HookSet:
             raise ValueError("hook_id cannot be empty")
         if not normalized_plugin_id:
             raise ValueError("plugin_id cannot be empty")
-        hook = Hook(
+        hook = _hook_with_configured_override(Hook(
             id=normalized_id,
             event=event,
             plugin_id=normalized_plugin_id,
@@ -223,15 +305,15 @@ class HookSet:
             config=validate_hook_config(config or {}),
             enabled=bool(enabled),
             created_at=_utc_now(),
-        )
+        ))
         with self._lock:
             self._ensure_open()
-            if normalized_id in self._hooks:
-                raise HookError(f"Hook id already exists in tree {self.tree_id}: {normalized_id}")
+            if hook.id in self._hooks:
+                raise HookError(f"Hook id already exists in tree {self.tree_id}: {hook.id}")
             self._plugins.register(normalized_plugin_id, plugin)
             self._persistence.save_hook(hook)
-            self._hooks[normalized_id] = hook
-            requeued = self._persistence.requeue_blocked(normalized_plugin_id)
+            self._hooks[hook.id] = hook
+            requeued = self._persistence.requeue_blocked(hook.plugin_id)
         if requeued:
             self.wake()
         log_operation(
@@ -252,7 +334,7 @@ class HookSet:
         )
 
         def unsubscribe() -> None:
-            self.unregister(normalized_id)
+            self.unregister(hook.id)
 
         return unsubscribe
 
@@ -354,6 +436,31 @@ class HookSet:
         )
         return result
 
+    def refresh_overrides(self, *, hook_id: str = "", plugin_id: str = "") -> int:
+        """Apply product-level overrides to live bindings without restarting sessions."""
+
+        changed = 0
+        with self._lock:
+            for key, hook in tuple(self._hooks.items()):
+                if hook_id and hook.id != str(hook_id):
+                    continue
+                if plugin_id and hook.plugin_id != str(plugin_id):
+                    continue
+                updated = _hook_with_configured_override(hook)
+                if updated != hook:
+                    if updated.id != key and updated.id in self._hooks:
+                        logger.warning(
+                            "Ignoring Hook override id collision in tree %s: %s",
+                            self.tree_id,
+                            updated.id,
+                        )
+                        continue
+                    if updated.id != key:
+                        self._hooks.pop(key, None)
+                    self._hooks[updated.id] = updated
+                    changed += 1
+        return changed
+
     @staticmethod
     def _tool_name(event: HookEvent) -> str:
         payload = event.payload if isinstance(event.payload, Mapping) else {}
@@ -399,7 +506,19 @@ class HookSet:
             payload=event.payload,
             failure_policy=hook.failure_policy,
         ) as op:
-            plugin = self._plugins.resolve(hook.plugin_id)
+            plugin = None
+            action_provider = _hook_action_provider
+            if action_provider is not None:
+                try:
+                    plugin = action_provider(hook)
+                except Exception:
+                    logger.warning(
+                        "Ignoring invalid configured action for Hook %s",
+                        hook.id,
+                        exc_info=True,
+                    )
+            if plugin is None:
+                plugin = self._plugins.resolve(hook.plugin_id)
             if plugin is None:
                 raise HookError(f"Plugin is not registered: {hook.plugin_id}")
             value = plugin(event)
@@ -1204,6 +1323,8 @@ class HookSet:
                 self._work.put("stop")
         if thread is not None and wait and thread is not threading.current_thread():
             thread.join()
+        with _active_hook_sets_lock:
+            _active_hook_sets.discard(self)
         log_operation(
             logger,
             "hook.set",

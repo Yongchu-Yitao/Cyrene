@@ -7,7 +7,14 @@ from pathlib import Path
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from agent.plugin import Plugin, PluginApplicationHost, PluginContext, PluginPack, PluginRegistry
+from agent.plugin import (
+    Plugin,
+    PluginApplicationHost,
+    PluginContext,
+    PluginPack,
+    PluginRegistry,
+    PluginSetupContext,
+)
 from agent.plugin.plugin_impl.cyrene_plugin_development.tools import (
     SCAFFOLD_TYPES,
     scaffold,
@@ -143,6 +150,39 @@ def test_plugin_scaffold_creates_every_unified_plugin_type(tmp_path) -> None:
     assert {pack.id for pack in registry.list_packs()} == {
         path.name for path in created if path.is_dir()
     }
+    full_pack = next(
+        pack for pack in registry.list_packs() if pack.id == "sample_full_pack"
+    )
+    assert {plugin.kind for plugin in full_pack.plugins} == {"tool", "model"}
+    assert callable(full_pack.setup)
+    assert callable(full_pack.application_setup)
+    assert full_pack.metadata["frontend_views"][0]["entry"] == "ui/index.html"
+    assert full_pack.metadata["project_tools"][0]["view"] == "main"
+    assert (tmp_path / "sample_full_pack" / "context.py").is_file()
+
+    class Hooks:
+        registered = []
+
+        def list(self):
+            return []
+
+        def register(self, event, handler, **metadata):
+            self.registered.append((event, handler, metadata))
+
+    hooks = Hooks()
+    full_pack.setup(PluginSetupContext(
+        data_directory=tmp_path / "data",
+        plugin_directory=tmp_path,
+        workspace=tmp_path,
+        tree=None,
+        tree_id="tree-1",
+        root_id="root-1",
+        hooks=hooks,
+        data={},
+        services={},
+    ))
+    assert hooks.registered[0][0] == "SessionStart"
+    assert hooks.registered[0][2]["hook_id"] == "sample_full_pack-session-start"
 
 
 def test_plugin_center_marks_unmanaged_user_sources_for_top_section(tmp_path) -> None:

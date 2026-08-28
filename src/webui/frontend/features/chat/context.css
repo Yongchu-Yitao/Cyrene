@@ -1997,10 +1997,6 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
   border-top: 0;
 }
 
-.wbc-context-detail .wbc-ctx-layer-detail:last-child {
-  padding-bottom: 0;
-}
-
 .wbc-context-detail .wbc-ctx-layer-row {
   min-height: 38px;
   padding: 8px 0;

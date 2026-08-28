@@ -24,6 +24,7 @@ from agent.hook import (
     TURN_START,
     HookEvent,
 )
+from agent.hook.storage import encode_event_payload
 from cyrene.config import DATA_DIR
 from agent.plugin.plugin_impl.cyrene_extensions.extension_service import agent_process_environment
 from cyrene.runtime.secret_redaction import redact_text
@@ -148,6 +149,12 @@ def _normalize_hook(
         raise ValueError("timeout_seconds must be numeric") from exc
     if not 0.1 <= timeout <= 60:
         raise ValueError("timeout_seconds must be between 0.1 and 60")
+    try:
+        priority = int(raw.get("priority", previous.get("priority", 100)))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("priority must be an integer") from exc
+    if not -10000 <= priority <= 10000:
+        raise ValueError("priority must be between -10000 and 10000")
     failure_policy = str(raw.get("failure_policy", previous.get("failure_policy", "open"))).strip().lower()
     if failure_policy not in {"open", "block"}:
         raise ValueError("failure_policy must be open or block")
@@ -157,6 +164,11 @@ def _normalize_hook(
     if event not in {PRE_TOOL_USE, POST_TOOL_USE}:
         matcher = "*"
     extension = raw.get("extension", previous.get("extension", {}))
+    configuration_status = str(
+        raw.get("configuration_status", previous.get("configuration_status", "ready"))
+    )
+    if configuration_status not in {"configuring", "ready", "failed"}:
+        raise ValueError("configuration_status is invalid")
     return {
         "id": hook_id,
         "name": name,
@@ -164,7 +176,7 @@ def _normalize_hook(
         "event": event,
         "matcher": matcher,
         "enabled": bool(raw.get("enabled", previous.get("enabled", False))),
-        "priority": max(-10000, min(10000, int(raw.get("priority", previous.get("priority", 100))))),
+        "priority": priority,
         "failure_policy": failure_policy,
         "timeout_seconds": timeout,
         "runner": {
@@ -174,6 +186,22 @@ def _normalize_hook(
             "env": dict(environment),
         },
         "extension": _copy(extension) if isinstance(extension, Mapping) else {},
+        "action_instruction": str(
+            raw.get("action_instruction", previous.get("action_instruction", ""))
+        ).strip()[:4000],
+        "configured_by_agent": bool(
+            raw.get("configured_by_agent", previous.get("configured_by_agent", False))
+        ),
+        "configuration_status": configuration_status,
+        "configuration_error": str(
+            raw.get("configuration_error", previous.get("configuration_error", ""))
+        ).strip()[:1000],
+        "generation_preserve_tuning": bool(
+            raw.get(
+                "generation_preserve_tuning",
+                previous.get("generation_preserve_tuning", False),
+            )
+        ),
         "created_at": str(previous.get("created_at") or raw.get("created_at") or _now()),
         "updated_at": _now(),
     }
@@ -181,6 +209,7 @@ def _normalize_hook(
 
 def public_hook(hook: Mapping[str, Any]) -> dict[str, Any]:
     value = _copy(hook)
+    value.pop("generation_preserve_tuning", None)
     runner = value.get("runner") if isinstance(value.get("runner"), dict) else {}
     environment = runner.pop("env", {})
     runner["environment_keys"] = sorted(str(key) for key in environment) if isinstance(environment, dict) else []
@@ -241,7 +270,7 @@ async def _communicate(process: asyncio.subprocess.Process, payload: bytes) -> t
 
 
 def _event_payload(event: HookEvent, *, test: bool = False) -> dict[str, Any]:
-    payload = _copy(event.payload)
+    payload = json.loads(encode_event_payload(event))
     result = {
         "protocol_version": 2,
         "event": event.name,
@@ -287,6 +316,166 @@ class CliHookService:
         _audit({"kind": "configuration", "action": action, "actor": actor, "hook_id": normalized["id"], "event": normalized["event"], "enabled": normalized["enabled"]})
         return _copy(normalized)
 
+    def create_generation_request(self, raw: Mapping[str, Any]) -> dict[str, Any]:
+        """Persist the small user-authored brief before an Agent configures it."""
+
+        event = str(raw.get("event") or "").strip()
+        if event not in CLI_HOOK_EVENTS:
+            raise ValueError("unsupported CLI Hook event")
+        name = str(raw.get("name") or "").strip()[:120]
+        if not name:
+            raise ValueError("Hook name is required")
+        instruction = str(raw.get("action_instruction") or "").strip()[:4000]
+        if not instruction:
+            raise ValueError("Hook action instruction is required")
+        hook_id = _safe_id(f"user-{name}-{uuid.uuid4().hex[:8]}")
+        now = _now()
+        hook = {
+            "id": hook_id,
+            "name": name,
+            "description": str(raw.get("description") or "").strip()[:500],
+            "event": event,
+            "matcher": "*",
+            "enabled": False,
+            "priority": 100,
+            "failure_policy": "open",
+            "timeout_seconds": _DEFAULT_TIMEOUT_SECONDS,
+            "runner": {"type": "script", "path": "", "args": [], "env": {}},
+            "extension": {},
+            "action_instruction": instruction,
+            "configured_by_agent": True,
+            "configuration_status": "configuring",
+            "configuration_error": "",
+            "generation_preserve_tuning": False,
+            "created_at": now,
+            "updated_at": now,
+        }
+        hooks = self.list()
+        hooks.append(hook)
+        set_setting(_HOOKS_KEY, hooks)
+        _audit({
+            "kind": "configuration",
+            "action": "request_agent_configuration",
+            "actor": "user",
+            "hook_id": hook_id,
+            "event": event,
+        })
+        return _copy(hook)
+
+    def update_generation_request(
+        self,
+        hook_id: str,
+        raw: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Update an Agent brief and return it to the configuring state."""
+
+        hooks = self.list()
+        current = next(
+            (item for item in hooks if str(item.get("id")) == str(hook_id)),
+            None,
+        )
+        if current is None or current.get("configured_by_agent") is not True:
+            raise ValueError("Agent-configured Hook not found")
+        event = str(raw.get("event", current.get("event", ""))).strip()
+        if event not in CLI_HOOK_EVENTS:
+            raise ValueError("unsupported CLI Hook event")
+        instruction = str(
+            raw.get("action_instruction", current.get("action_instruction", ""))
+        ).strip()[:4000]
+        if not instruction:
+            raise ValueError("Hook action instruction is required")
+        try:
+            timeout = float(
+                raw.get("timeout_seconds", current.get("timeout_seconds", 10))
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("timeout_seconds must be numeric") from exc
+        if not 0.1 <= timeout <= 60:
+            raise ValueError("timeout_seconds must be between 0.1 and 60")
+        try:
+            priority = int(raw.get("priority", current.get("priority", 100)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("priority must be an integer") from exc
+        if not -10000 <= priority <= 10000:
+            raise ValueError("priority must be between -10000 and 10000")
+        current.update({
+            "name": str(raw.get("name", current.get("name", hook_id))).strip()[:120],
+            "description": str(
+                raw.get("description", current.get("description", ""))
+            ).strip()[:500],
+            "event": event,
+            "matcher": "*",
+            "enabled": False,
+            "timeout_seconds": timeout,
+            "priority": priority,
+            "action_instruction": instruction,
+            "configuration_status": "configuring",
+            "configuration_error": "",
+            "generation_preserve_tuning": True,
+            "updated_at": _now(),
+        })
+        if not current["name"]:
+            raise ValueError("Hook name is required")
+        set_setting(
+            _HOOKS_KEY,
+            [current if str(item.get("id")) == str(hook_id) else item for item in hooks],
+        )
+        _audit({
+            "kind": "configuration",
+            "action": "request_agent_reconfiguration",
+            "actor": "user",
+            "hook_id": hook_id,
+            "event": event,
+        })
+        return _copy(current)
+
+    def set_generation_state(
+        self,
+        hook_id: str,
+        *,
+        status: str,
+        error: str = "",
+    ) -> dict[str, Any]:
+        if status not in {"configuring", "failed"}:
+            raise ValueError("invalid Hook generation status")
+        hooks = self.list()
+        current = next(
+            (item for item in hooks if str(item.get("id")) == str(hook_id)),
+            None,
+        )
+        if current is None or current.get("configured_by_agent") is not True:
+            raise ValueError("Agent-configured Hook not found")
+        current["configuration_status"] = status
+        current["configuration_error"] = str(error or "").strip()[:1000]
+        current["enabled"] = False
+        current["updated_at"] = _now()
+        set_setting(
+            _HOOKS_KEY,
+            [current if str(item.get("id")) == str(hook_id) else item for item in hooks],
+        )
+        return _copy(current)
+
+    def complete_generation(
+        self,
+        hook_id: str,
+        generated: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        current = self.get(hook_id)
+        if current is None or current.get("configured_by_agent") is not True:
+            raise ValueError("Agent-configured Hook not found")
+        return self.save(
+            {
+                **dict(current),
+                **dict(generated),
+                "id": hook_id,
+                "configured_by_agent": True,
+                "configuration_status": "ready",
+                "configuration_error": "",
+                "enabled": True,
+            },
+            actor="agent",
+        )
+
     def delete(self, hook_id: str, *, actor: str = "user") -> bool:
         hooks = self.list()
         remaining = [item for item in hooks if str(item.get("id")) != str(hook_id)]
@@ -300,6 +489,11 @@ class CliHookService:
         existing = self.get(hook_id)
         if existing is None:
             raise ValueError("CLI Hook not found")
+        if (
+            existing.get("configured_by_agent") is True
+            and existing.get("configuration_status") != "ready"
+        ):
+            raise ValueError("Agent configuration is not complete")
         existing["enabled"] = bool(enabled)
         return self.save(existing, actor=actor)
 
@@ -507,6 +701,11 @@ class CliHookService:
         hook = self.get(hook_id)
         if hook is None:
             raise ValueError("CLI Hook not found")
+        if (
+            hook.get("configured_by_agent") is True
+            and hook.get("configuration_status") != "ready"
+        ):
+            raise ValueError("Agent configuration is not complete")
         event = str(hook.get("event") or SESSION_START)
         event_payload = dict(payload or {})
         if event in {PRE_TOOL_USE, POST_TOOL_USE} and not isinstance(event_payload.get("tool"), Mapping):

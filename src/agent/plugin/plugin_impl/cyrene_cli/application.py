@@ -65,6 +65,22 @@ def register_cli_hook_routes(
         except Exception as exc:
             return _error(exc)
 
+    @context.router.post(f"{prefix}/generate")
+    async def api_generate_cli_hook(request: Request):
+        try:
+            return service.request_hook_generation(await _payload(request))
+        except Exception as exc:
+            return _error(exc)
+
+    @context.router.post(f"{prefix}/{{hook_id}}/regenerate")
+    async def api_regenerate_cli_hook(hook_id: str, request: Request):
+        try:
+            return service.retry_hook_generation(hook_id, await _payload(request))
+        except ValueError as exc:
+            return _error(exc, 404 if "not found" in str(exc).lower() else 400)
+        except Exception as exc:
+            return _error(exc)
+
     @context.router.put(f"{prefix}/{{hook_id}}")
     async def api_update_cli_hook(hook_id: str, request: Request):
         try:

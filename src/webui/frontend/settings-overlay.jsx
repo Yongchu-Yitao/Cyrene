@@ -7,7 +7,7 @@ import {
 import {
   RemotePanel, GeneralPanel, SearchPanel, ChannelsPanel, AgentsPanel,
   AppearancePanel, CapabilitiesPanel, DataPanel, requestDataPanelStorage, AboutPanel,
-  PluginRegistryPanel, ShortcutsPanel, BudgetPanel, MediaPanel,
+  PluginRegistryPanel, HooksPanel, ShortcutsPanel, BudgetPanel, MediaPanel,
 } from "./features/settings/index.jsx"
 
 // ── Tab definitions ──
@@ -25,6 +25,7 @@ var TABS = [
   { id: "channels", labelKey: "settings.channels", icon: "messages" },
   { id: "remote", labelKey: "settings.remoteTab", icon: "device-desktop-up" },
   { id: "plugin-registry", labelKey: "settings.pluginRegistry", icon: "package" },
+  { id: "hooks", labelKey: "settings.hooks", icon: "webhook" },
   { id: "integrations", labelKey: "settings.integrations", icon: "plug-connected" },
   // Keep the budget surface available for direct routing while its sidebar
   // entry is temporarily withheld from the settings navigation.
@@ -38,7 +39,7 @@ var SETTINGS_TAB_GROUPS = [
   { labelKey: "settings.group.general", ids: ["profile", "general", "search", "appearance", "shortcuts"] },
   { labelKey: "settings.group.intelligence", ids: ["model-usage", "models", "media", "agents", "voice"] },
   { labelKey: "settings.group.connections", ids: ["channels", "remote"] },
-  { labelKey: "settings.group.extensionsSystem", ids: ["plugin-registry", "integrations"] },
+  { labelKey: "settings.group.extensionsSystem", ids: ["plugin-registry", "hooks", "integrations"] },
   { labelKey: "settings.group.data", ids: ["budget", "usage", "data"] },
   { labelKey: "settings.group.other", ids: ["about"] },
 ];
@@ -827,6 +828,7 @@ function SettingsPage({
             saveVoiceBooleanSetting, saveVoiceMode, saveVoicePreset, saveVoiceTtsModel, saveVoiceProfile, deleteVoiceProfile,
           }),
           tab === "plugin-registry" && React.createElement(PluginRegistryPanel, { t: t, pluginModules: pluginModules }),
+          tab === "hooks" && React.createElement(HooksPanel, { t: t }),
           tab === "integrations" && React.createElement(GeneralPanel, { integrationsOnly: true, t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project, pluginModules }),
           tab === "shortcuts" && React.createElement(ShortcutsPanel, { t }),
           tab === "data" && React.createElement(DataPanel, { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),

@@ -6,6 +6,7 @@ import hashlib
 import inspect
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,18 @@ from .runtime import PluginRuntime
 
 logger = logging.getLogger(__name__)
 _REQUIRED_PRODUCT_APPLICATION_PACK_IDS = frozenset({"cyrene_composer_context"})
+
+
+def _lifecycle_handler_name(handler: PluginLifecycleHandler) -> str:
+    """Return a stable, log-friendly identity for a lifecycle contribution."""
+
+    module = str(getattr(handler, "__module__", "") or "").strip()
+    name = str(
+        getattr(handler, "__qualname__", "")
+        or getattr(handler, "__name__", "")
+        or type(handler).__qualname__
+    ).strip()
+    return f"{module}.{name}" if module else name
 
 
 class PluginApplicationHost:
@@ -509,14 +522,46 @@ class PluginApplicationHost:
         if pack_id in self._running_packs:
             return
         self._startup_failures.pop(pack_id, None)
+        handlers = tuple(self._startup_handlers.get(pack_id, ()))
+        pack_started = time.perf_counter()
+        current_stage = "prepare"
+        stage_started = pack_started
+        logger.info(
+            "Plugin startup pack begin pack=%s handlers=%d",
+            pack_id,
+            len(handlers),
+        )
         try:
-            for handler in self._startup_handlers.get(pack_id, ()):
+            for index, handler in enumerate(handlers, start=1):
+                handler_name = _lifecycle_handler_name(handler)
+                current_stage = f"handler[{index}/{len(handlers)}] {handler_name}"
+                stage_started = time.perf_counter()
+                logger.info(
+                    "Plugin startup handler begin pack=%s handler=%s index=%d/%d",
+                    pack_id,
+                    handler_name,
+                    index,
+                    len(handlers),
+                )
                 await self._call_lifecycle(handler)
+                logger.info(
+                    "Plugin startup handler complete pack=%s handler=%s "
+                    "index=%d/%d elapsed_ms=%.1f",
+                    pack_id,
+                    handler_name,
+                    index,
+                    len(handlers),
+                    (time.perf_counter() - stage_started) * 1000,
+                )
         except Exception as exc:
             self._startup_failures[pack_id] = str(exc)
             logger.exception(
-                "Plugin application startup failed for pack %s",
+                "Plugin startup pack failed pack=%s stage=%s "
+                "stage_elapsed_ms=%.1f total_elapsed_ms=%.1f",
                 pack_id,
+                current_stage,
+                (time.perf_counter() - stage_started) * 1000,
+                (time.perf_counter() - pack_started) * 1000,
             )
             for handler in reversed(self._shutdown_handlers.get(pack_id, ())):
                 try:
@@ -528,6 +573,12 @@ class PluginApplicationHost:
                     )
             return
         self._running_packs.add(pack_id)
+        logger.info(
+            "Plugin startup pack complete pack=%s handlers=%d elapsed_ms=%.1f",
+            pack_id,
+            len(handlers),
+            (time.perf_counter() - pack_started) * 1000,
+        )
 
     async def _stop_pack(self, pack_id: str) -> None:
         if pack_id not in self._running_packs:
@@ -581,8 +632,31 @@ class PluginApplicationHost:
     async def startup(self) -> None:
         if self._started:
             return
+        started = time.perf_counter()
+        logger.info(
+            "Plugin startup host begin attached_packs=%d enabled_packs=%d",
+            len(self._attached_packs),
+            sum(1 for pack_id in self._attached_packs if self._pack_enabled(pack_id)),
+        )
         self._started = True
-        await self.reconcile_activation()
+        try:
+            await self.reconcile_activation()
+        except BaseException:
+            logger.exception(
+                "Plugin startup host failed running_packs=%d "
+                "startup_failures=%d elapsed_ms=%.1f",
+                len(self._running_packs),
+                len(self._startup_failures),
+                (time.perf_counter() - started) * 1000,
+            )
+            raise
+        logger.info(
+            "Plugin startup host complete running_packs=%d "
+            "startup_failures=%d elapsed_ms=%.1f",
+            len(self._running_packs),
+            len(self._startup_failures),
+            (time.perf_counter() - started) * 1000,
+        )
 
     async def shutdown(self) -> None:
         if not self._started:

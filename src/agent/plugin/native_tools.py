@@ -27,6 +27,11 @@ _FROZEN_CANONICAL_RELATIVE = (
 )
 _UPSTREAM_MANIFEST_RELATIVE = Path(".upstream-hashes.json")
 _UPSTREAM_MANIFEST_VERSION = 1
+_CANONICAL_FILE_RENAMES = MappingProxyType(
+    {
+        "cyrene_system_prompt/prompt.py": "cyrene_system_prompt/system_prompt.py",
+    }
+)
 _SEED_LOCK = threading.RLock()
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +146,37 @@ def _load_deleted_contributions(manifest: Path) -> set[str]:
     }
 
 
+def _migrate_canonical_file_renames(
+    root: Path,
+    canonical_files: Mapping[str, bytes],
+    previous_hashes: dict[str, str],
+) -> None:
+    """Move user-owned files when a canonical Plugin file is renamed.
+
+    Moving the existing bytes before synchronization preserves local edits. The
+    old upstream hash follows the file, so an unmodified file remains eligible
+    for normal upgrades while a customized file remains protected.
+    """
+
+    for old_relative, new_relative in _CANONICAL_FILE_RENAMES.items():
+        if (
+            old_relative not in previous_hashes
+            or old_relative in canonical_files
+            or new_relative not in canonical_files
+        ):
+            continue
+        old_target = root / old_relative
+        new_target = root / new_relative
+        if _path_present(old_target) and not _path_present(new_target):
+            if old_target.is_file() and not old_target.is_symlink():
+                new_target.parent.mkdir(parents=True, exist_ok=True)
+                old_target.replace(new_target)
+            else:
+                continue
+        if not _path_present(old_target):
+            previous_hashes[new_relative] = previous_hashes.pop(old_relative)
+
+
 def _atomic_write(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, raw_temporary = tempfile.mkstemp(
@@ -217,6 +253,7 @@ def _seed_canonical_directory(root: Path) -> BuiltinPluginSeedResult:
     canonical_files = _collect_canonical_files()
     manifest = root / _UPSTREAM_MANIFEST_RELATIVE
     previous_hashes = _load_upstream_hashes(manifest)
+    _migrate_canonical_file_renames(root, canonical_files, previous_hashes)
     deleted_contributions = _load_deleted_contributions(manifest)
     modified_owned_packs: set[str] = set()
     for relative, baseline_hash in previous_hashes.items():

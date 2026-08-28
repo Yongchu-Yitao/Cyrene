@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from typing import Any
 
@@ -104,11 +105,32 @@ class CLIPluginService:
         return self.extensions.unbind_system_executable(extension_id)
 
     def hook_listing(self) -> dict[str, Any]:
+        self.resume_pending_hook_generations()
         return {
             "hooks": [public_hook(item) for item in self.hooks.list()],
             "proposals": [public_proposal(item) for item in self.hooks.proposals()],
             "configuration_results": self.hooks.configuration_results(),
         }
+
+    def resume_pending_hook_generations(self) -> int:
+        """Resume persisted Agent jobs after an application restart."""
+
+        from .config_agent import schedule_user_hook_configuration
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return 0
+        resumed = 0
+        for hook in self.hooks.list():
+            if (
+                hook.get("configured_by_agent") is True
+                and hook.get("configuration_status") == "configuring"
+            ):
+                resumed += int(
+                    schedule_user_hook_configuration(hook, hooks=self.hooks)
+                )
+        return resumed
 
     def save_hook(
         self,
@@ -118,8 +140,46 @@ class CLIPluginService:
     ) -> dict[str, Any]:
         mutation = dict(payload)
         if hook_id:
+            existing = self.hooks.get(hook_id)
+            if existing is None:
+                raise ValueError("CLI Hook not found")
+            if existing.get("configured_by_agent") is True:
+                if existing.get("configuration_status") != "ready":
+                    raise ValueError("Agent configuration is not complete")
+                unexpected = set(mutation) - {"timeout_seconds", "priority"}
+                if unexpected:
+                    raise ValueError(
+                        "Agent-configured Hooks only allow timeout and priority tuning"
+                    )
             mutation["id"] = hook_id
         return {"ok": True, "hook": public_hook(self.hooks.save(mutation))}
+
+    def request_hook_generation(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        from .config_agent import schedule_user_hook_configuration
+
+        hook = self.hooks.create_generation_request(payload)
+        schedule_user_hook_configuration(hook, hooks=self.hooks)
+        return {"ok": True, "status": "configuring", "hook": public_hook(hook)}
+
+    def retry_hook_generation(
+        self,
+        hook_id: str,
+        payload: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        from .config_agent import schedule_user_hook_configuration
+
+        hook = self.hooks.get(hook_id)
+        if hook is None or hook.get("configured_by_agent") is not True:
+            raise ValueError("Agent-configured Hook not found")
+        mutation = dict(payload or {})
+        if mutation:
+            hook = self.hooks.update_generation_request(hook_id, mutation)
+        else:
+            if hook.get("configuration_status") == "ready":
+                raise ValueError("Agent configuration is already complete")
+            hook = self.hooks.set_generation_state(hook_id, status="configuring")
+        schedule_user_hook_configuration(hook, hooks=self.hooks)
+        return {"ok": True, "status": "configuring", "hook": public_hook(hook)}
 
     def delete_hook(self, hook_id: str) -> dict[str, Any]:
         if not self.hooks.delete(hook_id):
