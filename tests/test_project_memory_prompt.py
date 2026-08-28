@@ -453,9 +453,9 @@ def test_tree_context_snapshot_starts_from_exact_context_tree_node(tmp_path):
         "user",
         "assistant",
     ]
-        assert snapshot["messages"][0]["content"] == (
-            "base system\n\nProject memory:\nPrior decision."
-        )
+    assert snapshot["messages"][0]["content"] == (
+        "base system\n\nProject memory:\nPrior decision."
+    )
     assert "expired turn context" not in snapshot["messages"][0]["content"]
     assert "Expired memory context" not in snapshot["messages"][0]["content"]
     assert memory_prompt.get_tree_context_snapshot("chat-tree") == snapshot
