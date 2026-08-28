@@ -13,6 +13,7 @@ from .definitions import get_native_tool_def
 
 TOOL_NAME = 'send_message'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
+TOOL_METADATA = {"agent_exposure": "direct"}
 
 
 async def _tool_send_user_message(args: dict[str, Any], context: PluginContext) -> str:
@@ -79,4 +80,4 @@ async def _tool_send_user_message(args: dict[str, Any], context: PluginContext) 
 
 handler = _tool_send_user_message
 
-__all__ = ["TOOL_NAME", "TOOL_DEF", "handler", "_tool_send_user_message"]
+__all__ = ["TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler", "_tool_send_user_message"]

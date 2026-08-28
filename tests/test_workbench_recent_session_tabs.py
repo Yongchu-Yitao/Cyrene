@@ -639,6 +639,15 @@ def test_chat_summary_separates_latest_request_usage_from_lifetime_usage():
             "messages": [
                 {
                     "role": "assistant",
+                    "usage": {"prompt_tokens": 900},
+                    "latestRequestUsage": {
+                        "prompt_tokens": 900,
+                        "prompt_cache_hit_tokens": 800,
+                        "prompt_cache_miss_tokens": 100,
+                    },
+                },
+                {
+                    "role": "assistant",
                     "usage": {
                         "prompt_tokens": 1000,
                         "completion_tokens": 10,
@@ -656,6 +665,13 @@ def test_chat_summary_separates_latest_request_usage_from_lifetime_usage():
                         "prompt_cache_hit_tokens": 1000,
                         "prompt_cache_miss_tokens": 10,
                     },
+                    "latestRequestUsage": {
+                        "prompt_tokens": 1010,
+                        "completion_tokens": 10,
+                        "total_tokens": 1020,
+                        "prompt_cache_hit_tokens": 900,
+                        "prompt_cache_miss_tokens": 110,
+                    },
                 },
             ],
         },
@@ -664,8 +680,35 @@ def test_chat_summary_separates_latest_request_usage_from_lifetime_usage():
 
     assert summary["usage"]["prompt_cache_hit_tokens"] == 1000
     assert summary["usage"]["prompt_cache_miss_tokens"] == 1010
-    assert summary["latestUsage"]["prompt_cache_hit_tokens"] == 1000
-    assert summary["latestUsage"]["prompt_cache_miss_tokens"] == 10
+    assert summary["latestUsage"]["prompt_cache_hit_tokens"] == 900
+    assert summary["latestUsage"]["prompt_cache_miss_tokens"] == 110
+
+
+def test_chat_summary_does_not_treat_legacy_turn_totals_as_latest_request():
+    from cyrene.workbench.chat_application import public_chat_light as _public_chat_light
+
+    summary = _public_chat_light(
+        {
+            "id": "legacy-cache-rate-chat",
+            "projectId": "project-1",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "usage": {
+                        "prompt_tokens": 1000,
+                        "completion_tokens": 10,
+                        "total_tokens": 1010,
+                        "prompt_cache_hit_tokens": 500,
+                        "prompt_cache_miss_tokens": 500,
+                    },
+                },
+            ],
+        },
+        composer_context=_ComposerContextStub(),
+    )
+
+    assert summary["latestUsage"]["prompt_cache_hit_tokens"] == 0
+    assert summary["latestUsage"]["prompt_cache_miss_tokens"] == 0
 
 
 def test_chat_summary_preserves_failed_cancelled_and_awaiting_run_outcomes():

@@ -1153,6 +1153,36 @@
         "description": "加载统一的 Cyrene PluginPack 编写、Workbench 视图与 RPC 契约。"
       }
     },
+    "HookManager": {
+      "en": {
+        "name": "Manage automatic triggers",
+        "description": "List, create, update, delete, or disable automatic triggers. User Hooks use reviewed command/script actions. System Hook mutations require the user to review the exact change before user_confirmed may be true."
+      },
+      "zh": {
+        "name": "管理自动触发",
+        "description": "创建、查看、测试、启停、编辑或删除自动触发。"
+      }
+    },
+    "PluginManager": {
+      "en": {
+        "name": "Manage plugins",
+        "description": "List, enable, disable, or delete installed standalone Plugins and PluginPacks. Version update and rollback are intentionally outside this tool; use PluginSourceManager for source edits and PluginInstall for installation."
+      },
+      "zh": {
+        "name": "管理插件",
+        "description": "查看、启用、停用或删除已安装的插件与插件包。"
+      }
+    },
+    "PluginSourceManager": {
+      "en": {
+        "name": "Manage plugin source",
+        "description": "List, read, write, or delete editable Plugin source files. Every mutation passes through the central reviewer. Built-in, seeded, and core source changes require an exact user-reviewed diff before user_confirmed may be true."
+      },
+      "zh": {
+        "name": "管理插件源码",
+        "description": "在完成所需审核后读取或精确修改可编辑插件源码。"
+      }
+    },
     "PluginCall": {
       "en": {
         "name": "Call plugin method",

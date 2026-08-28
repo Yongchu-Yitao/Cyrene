@@ -1,3 +1,5 @@
+"""Tests for the Agent package, kept outside the shipped source tree."""
+
 from __future__ import annotations
 
 import asyncio
@@ -32,6 +34,25 @@ def test_default_prompt_requires_plugin_discovery_for_external_information():
     assert "toolbox.list" in SYSTEM_PROMPT
     assert "toolbox.describe" in SYSTEM_PROMPT
     assert "toolbox.invoke" in SYSTEM_PROMPT
+    assert "WebSearch proactively" in SYSTEM_PROMPT
+    assert "use it at the beginning" in SYSTEM_PROMPT
+    assert "Prefer frequent useful updates" in SYSTEM_PROMPT
+
+
+def test_web_search_and_mid_run_message_are_direct_tools():
+    from agent.plugin import PluginRegistry
+    from agent.plugin.plugin_impl.cyrene_content import plugin_pack as content_pack
+    from agent.plugin.plugin_impl.cyrene_delivery import plugin_pack as delivery_pack
+
+    registry = PluginRegistry(include_core=False)
+    registry.register_pack(content_pack, source="test-content")
+    registry.register_pack(delivery_pack, source="test-delivery")
+
+    direct_names = {
+        definition["function"]["name"]
+        for definition in registry.direct_tool_definitions()
+    }
+    assert {"WebSearch", "send_message"} <= direct_names
 
 
 def test_reopened_tree_mounts_system_prompt_from_required_plugin(tmp_path):
@@ -41,6 +62,8 @@ def test_reopened_tree_mounts_system_prompt_from_required_plugin(tmp_path):
     plugin_directory = tmp_path / "plugin_impl"
     shutil.copytree(
         Path(__file__).parents[1]
+        / "src"
+        / "agent"
         / "plugin"
         / "plugin_impl"
         / "cyrene_system_prompt",

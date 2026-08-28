@@ -22,10 +22,10 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 398
+OPENAPI_OPERATION_COUNT = 402
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "32175a68e2ab97507d783dc64a59e1fe6a56d5d4e1bde673af33b3591d455a22"
+OPENAPI_SHA256 = "e93dea7833b84db7ae5df0c8b5e9a99b66004f032bad13bf6026ece5b0bf0e98"
 TOOL_REGISTRY_SHA256 = "f89051bdebdc54bb76288dbfbaf526765ab64fc7289e2bebd25f03510a6f7c45"
 MAIN_WIRE_SHA256 = "455f99062dd310cf5dbec1c3f02ccb3cb34b4018fcba17d3f2dd517c9b82d12a"
 SUBAGENT_WIRE_SHA256 = "1d28ab5db6096330a6a9c33877b04e1ff5e2f45c79df4b208e7f1a5a1516cd86"
@@ -193,16 +193,16 @@ def test_workbench_uses_one_module_entry_after_ordered_vendor_scripts():
         "highlight.min.js",
         "echarts.min.js",
         "leaflet.js",
-        "pdfjs/pdf.min.js?v=0.9.0-beta2",
-        "pdfjs/pdf_viewer.js?v=0.9.0-beta2",
-        "compiled/app.js?v=0.9.0-beta2",
+        "pdfjs/pdf.min.js?v=0.9.0-beta3",
+        "pdfjs/pdf_viewer.js?v=0.9.0-beta3",
+        "compiled/app.js?v=0.9.0-beta3",
     ]
 
     positions = [scripts.index(script) for script in required_in_order]
     assert positions == sorted(positions)
     compiled_scripts = [script for script in scripts if script.startswith("compiled/")]
-    assert compiled_scripts == ["compiled/app.js?v=0.9.0-beta2"]
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta2"></script>' in index
+    assert compiled_scripts == ["compiled/app.js?v=0.9.0-beta3"]
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta3"></script>' in index
 
 
 def test_single_webui_source_build_and_entrypoint_shape():

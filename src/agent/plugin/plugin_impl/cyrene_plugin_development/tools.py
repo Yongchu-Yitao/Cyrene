@@ -65,7 +65,8 @@ metadata, and register backend calls with `provide_frontend_method`. Python/tool
 reload live; application contribution changes may require restart.
 
 For standalone automatic triggers outside a pack, call `HookManager(action="generate")` with
-`hook={name, event, action_instruction}`. System source changes require exact diff review;
+`hook={name, event, action_instruction, matcher?}`. For `PreToolUse`/`PostToolUse`, set
+`matcher` to an exact runtime tool name; omit it or use `*` to match every tool. System source changes require exact diff review;
 system Hook changes additionally require the matching one-time confirmation token.
 """
 
@@ -99,7 +100,8 @@ UI 资源必须位于插件包内；在 metadata 声明 `frontend_views` 与 `pr
 `provide_frontend_method` 注册后端调用。工具和模型代码可重载，应用贡献修改可能需要重启。
 
 若要创建包外的自动触发，调用 `HookManager(action="generate")`，并传入
-`hook={name, event, action_instruction}`。系统源码修改必须先审核完整差异；系统 Hook
+`hook={name, event, action_instruction, matcher?}`。对于 `PreToolUse`/`PostToolUse`，
+`matcher` 填运行时工具名称；省略或填 `*` 表示所有工具。系统源码修改必须先审核完整差异；系统 Hook
 修改还必须携带与该修改完全匹配的一次性确认令牌。
 """
 

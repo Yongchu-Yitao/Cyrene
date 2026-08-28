@@ -1,3 +1,5 @@
+"""Tests for the Agent package, kept outside the shipped source tree."""
+
 from __future__ import annotations
 
 import asyncio
@@ -27,7 +29,9 @@ from agent.plugin import (
 from agent.plugin.core_impl import PermissionReviewPlugin
 
 
-CANONICAL_PLUGIN_DIRECTORY = Path(__file__).parents[1] / "plugin" / "plugin_impl"
+CANONICAL_PLUGIN_DIRECTORY = (
+    Path(__file__).parents[1] / "src" / "agent" / "plugin" / "plugin_impl"
+)
 
 
 def _model_plugin_pack() -> Path:
@@ -304,6 +308,67 @@ plugin = Plugin(
         session_registry.resolve("SharedTool")
     assert session_registry.refresh_directory(root) == ()
     assert session_registry.resolve("SharedTool").handler({}, None) == "new"
+
+
+def test_refresh_reuses_unchanged_modules_and_retains_changed_service_modules(
+    tmp_path,
+):
+    root = tmp_path / "plugin_impl"
+    package = root / "live_pack"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        '''\
+from agent.plugin import Plugin, PluginPack
+from .service import Service
+
+service = Service()
+
+def handle(_arguments, _context):
+    return service.read()
+
+plugin_pack = PluginPack(
+    id="live_pack",
+    description="live service",
+    plugins=(Plugin(
+        name="LiveService",
+        description="live service",
+        input_schema={"type": "object", "properties": {}},
+        handler=handle,
+    ),),
+)
+''',
+        encoding="utf-8",
+    )
+    (package / "service.py").write_text(
+        '''\
+class Service:
+    def read(self):
+        from .value import VALUE
+        return VALUE
+''',
+        encoding="utf-8",
+    )
+    value_file = package / "value.py"
+    value_file.write_text('VALUE = "old"\n', encoding="utf-8")
+
+    registry = PluginRegistry(include_core=False)
+    assert registry.load_directory(root) == ()
+    old_handler = registry.resolve("LiveService").handler
+    old_service = old_handler.__globals__["service"]
+    old_module_name = old_handler.__module__
+    assert old_service.read() == "old"
+
+    assert registry.refresh_directory(root) == ()
+    assert registry.resolve("LiveService").handler.__module__ == old_module_name
+
+    value_file.write_text('VALUE = "new value"\n', encoding="utf-8")
+    assert registry.refresh_directory(root) == ()
+
+    new_handler = registry.resolve("LiveService").handler
+    assert new_handler.__module__ != old_module_name
+    assert new_handler({}, None) == "new value"
+    assert old_module_name in sys.modules
+    assert old_service.read() == "old"
 
 
 def test_registry_ignores_bytecode_only_retired_pack_directory(tmp_path):

@@ -1,3 +1,5 @@
+"""Tests for the Agent package, kept outside the shipped source tree."""
+
 from __future__ import annotations
 
 import json
@@ -15,7 +17,12 @@ from agent.plugin.native_tools import seed_builtin_plugin_directory
 
 _HAN_CHARACTER = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _CATALOG_PATH = (
-    Path(__file__).parents[1] / "plugin" / "plugin_impl" / "i18n.json"
+    Path(__file__).parents[1]
+    / "src"
+    / "agent"
+    / "plugin"
+    / "plugin_impl"
+    / "i18n.json"
 )
 
 

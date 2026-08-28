@@ -369,6 +369,8 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     styles = (frontend / "workbench.css").read_text(encoding="utf-8")
     terminal_styles = (frontend / "terminal/terminal.css").read_text(encoding="utf-8")
 
+    assert 'background: "#17181C"' in source
+    assert "--wbc-terminal-background: #17181c;" in terminal_styles
     assert 'cursorBlink: true' in source
     assert 'cursorStyle: "bar"' in source
     assert 'cursorWidth: 2' in source
@@ -382,6 +384,8 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert 'terminal.element.classList.contains("focus")' in source
     assert 'core.coreService.isCursorHidden' in source
     assert 'cursorMove = terminal.onCursorMove(scheduleInputCursorUpdate)' in source
+    assert 'installTerminalCursorVisibilitySync' in source
+    assert 'cursorVisibilitySync.dispose()' in source
     assert source.count("terminalRef.current.focus();") == 1
     assert 'if (interactive) terminal.focus();' not in source
     assert 'terminal.write("\\u001b[?25h");\n              terminal.focus();' not in source

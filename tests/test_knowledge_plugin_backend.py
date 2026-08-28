@@ -1,3 +1,5 @@
+"""Tests for the Agent package, kept outside the shipped source tree."""
+
 from __future__ import annotations
 
 import asyncio
@@ -382,7 +384,14 @@ def test_completed_workbench_artifacts_archive_into_plugin_storage(
 
 
 def test_plugin_backend_has_no_legacy_knowledge_imports() -> None:
-    plugin_root = Path(__file__).parents[1] / "plugin" / "plugin_impl" / "cyrene_knowledge"
+    plugin_root = (
+        Path(__file__).parents[1]
+        / "src"
+        / "agent"
+        / "plugin"
+        / "plugin_impl"
+        / "cyrene_knowledge"
+    )
     source = "\n".join(path.read_text(encoding="utf-8") for path in plugin_root.glob("*.py"))
     assert "cyrene.knowledge" not in source
     assert "route.workbench.library" not in source

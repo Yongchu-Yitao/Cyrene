@@ -1,3 +1,5 @@
+"""Tests for the Agent package, kept outside the shipped source tree."""
+
 from __future__ import annotations
 
 import asyncio
@@ -101,27 +103,22 @@ def test_content_pack_toolbox_search_and_result_read_chain(tmp_path, monkeypatch
     assert {item["name"] for item in described.value["plugins"]} == {
         "AnalyzeAttachment",
         "WebFetch",
-        "WebSearch",
         "read_tool_result",
     }
 
     searched = run(
         runtime.call(
-            "toolbox",
+            "WebSearch",
             {
-                "operation": "invoke",
-                "name": "WebSearch",
-                "arguments": {
-                    "query": "plugin protocol",
-                    "detail": "preview",
-                    "max_results": 3,
-                },
+                "query": "plugin protocol",
+                "detail": "preview",
+                "max_results": 3,
             },
             context,
         )
     )
     assert searched.success is True
-    assert searched.value["result"] == "search evidence"
+    assert searched.value == "search evidence"
 
     unavailable = run(
         runtime.call(
@@ -131,7 +128,7 @@ def test_content_pack_toolbox_search_and_result_read_chain(tmp_path, monkeypatch
         )
     )
     assert unavailable.success is False
-    assert unavailable.error == "Plugin execution failed."
+    assert unavailable.error in {"Plugin execution failed.", "插件执行失败。"}
 
     read = run(
         runtime.call(
@@ -170,6 +167,7 @@ def test_content_pack_toolbox_search_and_result_read_chain(tmp_path, monkeypatch
             wrong_session,
         )
     )
-    assert rejected.value["result"] == (
-        "Tool failed: the result reference or paging arguments are invalid."
-    )
+    assert rejected.value["result"] in {
+        "Tool failed: the result reference or paging arguments are invalid.",
+        "工具失败：结果引用或分页参数无效。",
+    }

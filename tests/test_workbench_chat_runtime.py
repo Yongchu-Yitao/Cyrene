@@ -1,3 +1,5 @@
+"""Tests for the Agent package, kept outside the shipped source tree."""
+
 from __future__ import annotations
 
 import asyncio
@@ -540,3 +542,34 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     assert config.memory_trigger_enabled is True
     assert config.memory_archive_enabled is True
     assert config.completed_turn_count == 3
+
+
+def test_builtin_runtime_message_fields_preserve_latest_request_usage():
+    from route.workbench.chat_routes.run_send_routes import _SendOperation
+
+    operation = object.__new__(_SendOperation)
+    fields = operation._runtime_message_fields(
+        SimpleNamespace(
+            usage={
+                "prompt_tokens": 98058,
+                "completion_tokens": 331,
+                "total_tokens": 98389,
+                "prompt_cache_hit_tokens": 41300,
+                "prompt_cache_miss_tokens": 56758,
+            },
+            latest_request_usage={
+                "prompt_tokens": 56417,
+                "completion_tokens": 183,
+                "total_tokens": 56600,
+                "prompt_cache_hit_tokens": 41044,
+                "prompt_cache_miss_tokens": 15373,
+            },
+            model_identity={},
+            generation_duration_ms=None,
+            output_tokens_per_second=None,
+        )
+    )
+
+    assert fields["usage"]["prompt_cache_hit_tokens"] == 41300
+    assert fields["latestRequestUsage"]["prompt_cache_hit_tokens"] == 41044
+    assert fields["latestRequestUsage"]["prompt_cache_miss_tokens"] == 15373

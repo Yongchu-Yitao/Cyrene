@@ -30,7 +30,11 @@ function emptyDraft() {
 }
 
 function emptyRequestDraft() {
-  return { name: "", event: "PostToolUse", actionInstruction: "", description: "" }
+  return { name: "", event: "PostToolUse", matcher: "", actionInstruction: "", description: "" }
+}
+
+function isToolEvent(event) {
+  return event === "PreToolUse" || event === "PostToolUse"
 }
 
 function draftFromHook(item) {
@@ -107,6 +111,30 @@ function hookFailureLabel(policy, t) {
   if (policy === "block") return t("settings.hookFailureBlock")
   if (policy === "closed") return t("settings.hookFailureClosed")
   return t("settings.hookFailureOpen")
+}
+
+function toolOptionLabel(item, t) {
+  var language = "en"
+  try { language = workbenchServices.i18n().getLang() || "en" } catch (error) {}
+  var translations = item && item.i18n && typeof item.i18n === "object" ? item.i18n : {}
+  var localized = translations[language] || translations[String(language).split("-")[0]] || {}
+  var runtimeName = String(item && item.name || item && item.id || "")
+  var label = String(localized && localized.name || t("toolName." + String(item && item.id || runtimeName), runtimeName) || runtimeName)
+  return label && label !== runtimeName ? label + " · " + runtimeName : runtimeName
+}
+
+function ToolMatcherSelect(props) {
+  var tools = Array.isArray(props.tools) ? props.tools : []
+  var value = String(props.value || "").trim()
+  if (value === "*") value = ""
+  var known = !value || tools.some(function (item) { return String(item && item.name || "") === value })
+  return <label><span>{props.t("settings.hookTool")} · {props.t("settings.optional")}</span>
+    <select className="wb-select" value={value} disabled={props.busy} onChange={function (event) { props.onChange(event.target.value) }}>
+      <option value="">{props.t("settings.hookToolAll")}</option>
+      {!known && <option value={value}>{props.t("settings.hookToolCurrent", { name: value })}</option>}
+      {tools.map(function (item) { var name = String(item && item.name || ""); return <option key={String(item && item.id || name)} value={name}>{toolOptionLabel(item, props.t)}{item && item.enabled === false ? " · " + props.t("settings.hookToolDisabled") : ""}</option> })}
+    </select><small>{props.t("settings.hookToolHint")}</small>
+  </label>
 }
 
 function hookDateLabel(value) {
@@ -189,7 +217,7 @@ function CliHookItem(props) {
       <button type="button" className="wb-btn danger" disabled={props.busy} onClick={function () { props.onDelete(item) }}>{props.t("settings.pluginCenterRemove", "Remove")}</button>
       </div>}
       {!system && props.manageable === false && <div className="wb-hook-inline-warning">{props.t("settings.hookCliUnavailable")}</div>}
-      {props.editing && (system ? <SystemHookEditor item={item} t={props.t} draft={props.draft} setDraft={props.setDraft} busy={props.busy} onSave={props.onSaveSystem} onCancel={props.onCancelEdit} /> : item.configured_by_agent === true ? <AgentHookEditor t={props.t} draft={props.draft} setDraft={props.setDraft} busy={props.busy} onSave={props.onSaveTuning} onCancel={props.onCancelEdit} /> : <CliHookEditor t={props.t} draft={props.draft} setDraft={props.setDraft} busy={props.busy} onSave={props.onSave} onCancel={props.onCancelEdit} editing={true} />)}
+      {props.editing && (system ? <SystemHookEditor item={item} t={props.t} tools={props.tools} draft={props.draft} setDraft={props.setDraft} busy={props.busy} onSave={props.onSaveSystem} onCancel={props.onCancelEdit} /> : item.configured_by_agent === true ? <AgentHookEditor t={props.t} tools={props.tools} draft={props.draft} setDraft={props.setDraft} busy={props.busy} onSave={props.onSaveTuning} onCancel={props.onCancelEdit} /> : <CliHookEditor t={props.t} tools={props.tools} draft={props.draft} setDraft={props.setDraft} busy={props.busy} onSave={props.onSave} onCancel={props.onCancelEdit} editing={true} />)}
     </div>}
   </article>
 }
@@ -202,6 +230,7 @@ function HookRequestEditor(props) {
     <div className="wb-cli-hook-editor-grid">
       <label><span>{props.t("settings.name")} *</span><input className="wb-input" required maxLength="120" value={draft.name} disabled={props.busy} onChange={function (event) { update("name", event.target.value) }} /></label>
       <label><span>{props.t("settings.hookEvent")} *</span><select className="wb-select" value={draft.event} disabled={props.busy} onChange={function (event) { update("event", event.target.value) }}>{EVENTS.map(function (event) { return <option key={event} value={event}>{hookEventLabel(event, props.t)}</option> })}</select></label>
+      {isToolEvent(draft.event) && <ToolMatcherSelect t={props.t} tools={props.tools} value={draft.matcher} busy={props.busy} onChange={function (value) { update("matcher", value) }} />}
       <label className="wide"><span>{props.t("settings.hookActionInstruction")} *</span><textarea className="wb-input" required rows="5" maxLength="4000" value={draft.actionInstruction} disabled={props.busy} placeholder={props.t("settings.hookActionInstructionPlaceholder")} onChange={function (event) { update("actionInstruction", event.target.value) }} /><small>{props.t("settings.hookActionInstructionHint")}</small></label>
       <label className="wide"><span>{props.t("settings.description")} · {props.t("settings.optional")}</span><textarea className="wb-input" rows="2" maxLength="500" value={draft.description} disabled={props.busy} onChange={function (event) { update("description", event.target.value) }} /></label>
     </div>
@@ -218,6 +247,7 @@ function AgentHookEditor(props) {
     <h4>{props.t("settings.systemHookWhen")}</h4>
     <div className="wb-cli-hook-editor-grid">
       <label><span>{props.t("settings.hookEvent")}</span><select className="wb-select" value={draft.event} disabled={props.busy} onChange={function (event) { update("event", event.target.value) }}>{EVENTS.map(function (event) { return <option key={event} value={event}>{hookEventLabel(event, props.t)}</option> })}</select></label>
+      {isToolEvent(draft.event) && <ToolMatcherSelect t={props.t} tools={props.tools} value={draft.matcher} busy={props.busy} onChange={function (value) { update("matcher", value) }} />}
     </div>
     </section>
     <section className="wb-system-hook-rule-section">
@@ -245,7 +275,7 @@ function SystemHookEditor(props) {
       <label><span>{props.t("settings.hookEvent")}</span><select className="wb-select" value={draft.event} disabled={props.busy} onChange={function (event) { var nextEvent = event.target.value; props.setDraft(Object.assign({}, draft, { event: nextEvent, failure: draft.failure === "block" && nextEvent !== "PreToolUse" ? "open" : draft.failure })) }}>{SYSTEM_EVENTS.map(function (event) { return <option key={event} value={event}>{hookEventLabel(event, props.t)}</option> })}</select></label>
       <label><span>{props.t("settings.hookStatus")}</span><select className="wb-select" value={draft.enabled ? "enabled" : "disabled"} disabled={props.busy} onChange={function (event) { update("enabled", event.target.value === "enabled") }}><option value="enabled">{props.t("settings.hookEnabled")}</option><option value="disabled">{props.t("settings.hookDisabled")}</option></select></label>
       <label><span>{props.t("settings.hookScope")}</span><select className="wb-select" value={draft.rootOnly ? "root" : "all"} disabled={props.busy} onChange={function (event) { update("rootOnly", event.target.value === "root") }}><option value="all">{props.t("settings.hookEveryAgent")}</option><option value="root">{props.t("settings.hookRootOnly")}</option></select></label>
-      {(draft.event === "PreToolUse" || draft.event === "PostToolUse") && <label><span>{props.t("settings.hookMatcher")}</span><input className="wb-input mono" value={draft.matcher} disabled={props.busy} placeholder="*" onChange={function (event) { update("matcher", event.target.value) }} /></label>}
+      {isToolEvent(draft.event) && <ToolMatcherSelect t={props.t} tools={props.tools} value={draft.matcher} busy={props.busy} onChange={function (value) { update("matcher", value) }} />}
     </div>
     </section>
     <section className="wb-system-hook-rule-section">
@@ -271,7 +301,7 @@ function CliHookEditor(props) {
     <div className="wb-cli-hook-editor-grid">
       <label><span>{props.t("settings.name", "Name")}</span><input className="wb-input" required value={draft.name} disabled={props.busy} onChange={function (event) { update("name", event.target.value) }} /></label>
       <label><span>{props.t("settings.hookEvent", "Event")}</span><select className="wb-select" value={draft.event} disabled={props.busy} onChange={function (event) { update("event", event.target.value) }}>{EVENTS.map(function (event) { return <option key={event} value={event}>{hookEventLabel(event, props.t)}</option> })}</select></label>
-      {(draft.event === "PreToolUse" || draft.event === "PostToolUse") && <label><span>{props.t("settings.hookMatcher", "Tool name or glob")}</span><input className="wb-input mono" value={draft.matcher} disabled={props.busy} onChange={function (event) { update("matcher", event.target.value) }} /></label>}
+      {isToolEvent(draft.event) && <ToolMatcherSelect t={props.t} tools={props.tools} value={draft.matcher} busy={props.busy} onChange={function (value) { update("matcher", value) }} />}
       <label><span>{props.t("settings.hookRunnerType", "Runner type")}</span><select className="wb-select" value={draft.runnerType} disabled={props.busy} onChange={function (event) { update("runnerType", event.target.value) }}><option value="command">{props.t("settings.hookRunnerCommand")}</option><option value="script">{props.t("settings.hookRunnerScript")}</option></select></label>
       {draft.runnerType === "script" ? <label><span>{props.t("settings.hookScriptPath", "Executable script path")}</span><input className="wb-input mono" required value={draft.scriptPath} disabled={props.busy} onChange={function (event) { update("scriptPath", event.target.value) }} /></label> : <label><span>{props.t("settings.hookExecutable", "Executable")}</span><input className="wb-input mono" required value={draft.executable} disabled={props.busy} onChange={function (event) { update("executable", event.target.value) }} /></label>}
       <label><span>{props.t("settings.hookTimeout", "Timeout (seconds)")}</span><input className="wb-input" type="number" min="0.1" max="60" step="0.1" value={draft.timeout} disabled={props.busy} onChange={function (event) { update("timeout", event.target.value) }} /></label>
@@ -287,6 +317,7 @@ function CliHookEditor(props) {
 function CliHooksPanel(props) {
   var t = props.t
   var [hooks, setHooks] = useStateSt([]), [systemHooks, setSystemHooks] = useStateSt([]), [proposals, setProposals] = useStateSt([])
+  var [tools, setTools] = useStateSt([])
   var [results, setResults] = useStateSt({}), [audit, setAudit] = useStateSt([])
   var [loading, setLoading] = useStateSt(true), [busy, setBusy] = useStateSt("")
   var [customAvailable, setCustomAvailable] = useStateSt(false)
@@ -302,6 +333,7 @@ function CliHooksPanel(props) {
       setCustomAvailable(available)
       setHooks(Array.isArray(payload.hooks) ? payload.hooks : [])
       setSystemHooks(Array.isArray(payload.system_hooks) ? payload.system_hooks : [])
+      setTools(Array.isArray(payload.tools) ? payload.tools : [])
       setProposals(Array.isArray(payload.proposals) ? payload.proposals.filter(function (item) { return item.status === "pending" }) : [])
       setResults(payload.configuration_results && typeof payload.configuration_results === "object" ? payload.configuration_results : {})
       if (!available) { setAudit([]); return null }
@@ -382,6 +414,7 @@ function CliHooksPanel(props) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: draft.name.trim(), event: draft.event,
+        matcher: isToolEvent(draft.event) ? draft.matcher.trim() || "*" : "*",
         action_instruction: draft.actionInstruction.trim(), description: draft.description.trim(),
       }),
     }).then(function () {
@@ -395,6 +428,7 @@ function CliHooksPanel(props) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         event: draft.event, action_instruction: draft.actionInstruction.trim(),
+        matcher: isToolEvent(draft.event) ? draft.matcher.trim() || "*" : "*",
         description: draft.description.trim(), timeout_seconds: Number(draft.timeout),
         priority: Number(draft.priority),
       }),
@@ -440,11 +474,11 @@ function CliHooksPanel(props) {
   var totalVisible = visibleSystemHooks.length + visibleHooks.length
   return <section className={'wb-cli-hooks-panel' + (standalone ? ' wb-cli-hooks-page' : '')}>
     <header><div>{standalone ? <h2>{t("settings.hooks", "Automatic triggers")}</h2> : <h4>{t("settings.agentHooks", "CLI Hooks")}</h4>}<p>{standalone ? t("settings.hooksSubtitle", "Review every system and user-defined lifecycle trigger in one place.") : t("settings.agentHooksSubtitle", "Run approved CLI commands through tree-local Hooks.")}</p></div>{customAvailable && <button type="button" className={'wb-btn' + (standalone ? ' primary' : '')} disabled={!!busy} onClick={function () { setEditing(editing === "new" ? "" : "new"); setDraft(emptyRequestDraft()) }}>{editing === "new" ? t("common.cancel", "Cancel") : t("settings.addHook", "Add trigger")}</button>}</header>
-    {editing === "new" && <HookRequestEditor t={t} draft={draft} setDraft={setDraft} busy={busy === "generate"} onSave={submitGeneration} onCancel={function () { setEditing("") }} />}
+    {editing === "new" && <HookRequestEditor t={t} tools={tools} draft={draft} setDraft={setDraft} busy={busy === "generate"} onSave={submitGeneration} onCancel={function () { setEditing("") }} />}
     {standalone && <div className="wb-hook-filter"><input className="wb-input" value={query} disabled={loading} onChange={function (event) { setQuery(event.target.value) }} placeholder={t("settings.hookFilter", "Filter Hooks")} aria-label={t("settings.hookFilter", "Filter Hooks")} /><span>{t("settings.hookCount", { n: totalVisible }, String(totalVisible) + " Hooks")}</span></div>}
-    <div className="wb-cli-hook-group"><h5>{t("settings.userHooks", "User triggers")}</h5>{loading && <div className="wb-extensions-empty">{t("settings.loading", "Loading…")}</div>}{!loading && !visibleHooks.length && <div className="wb-extensions-empty">{normalizedQuery ? t("settings.extensionEmpty", "No matching extensions.") : t(customAvailable ? "settings.hookEmpty" : "settings.hookCustomUnavailable")}</div>}{visibleHooks.map(function (item) { var key = hookItemKey(item); return <CliHookItem key={key} item={item} t={t} busy={!!busy} manageable={customAvailable} expanded={expanded[key] === true} editing={editing === item.id} draft={draft} setDraft={setDraft} onExpand={toggleExpanded} onEdit={edit} onSave={save} onSaveTuning={function (event) { saveTuning(event, item) }} onCancelEdit={function () { setEditing("") }} onToggle={toggle} onTest={test} onDelete={remove} onRetry={retry} /> })}</div>
+    <div className="wb-cli-hook-group"><h5>{t("settings.userHooks", "User triggers")}</h5>{loading && <div className="wb-extensions-empty">{t("settings.loading", "Loading…")}</div>}{!loading && !visibleHooks.length && <div className="wb-extensions-empty">{normalizedQuery ? t("settings.extensionEmpty", "No matching extensions.") : t(customAvailable ? "settings.hookEmpty" : "settings.hookCustomUnavailable")}</div>}{visibleHooks.map(function (item) { var key = hookItemKey(item); return <CliHookItem key={key} item={item} t={t} tools={tools} busy={!!busy} manageable={customAvailable} expanded={expanded[key] === true} editing={editing === item.id} draft={draft} setDraft={setDraft} onExpand={toggleExpanded} onEdit={edit} onSave={save} onSaveTuning={function (event) { saveTuning(event, item) }} onCancelEdit={function () { setEditing("") }} onToggle={toggle} onTest={test} onDelete={remove} onRetry={retry} /> })}</div>
     {proposals.length > 0 && <div className="wb-cli-hook-group"><h5>{t("settings.hookPendingApprovals", "Pending approvals")}</h5>{proposals.map(function (item) { return <CliHookProposal key={item.id} item={item} t={t} busy={!!busy} onDecide={decide} /> })}</div>}
-    {standalone && <div className="wb-cli-hook-group"><h5>{t("settings.systemHooks", "System triggers")}</h5>{loading && <div className="wb-extensions-empty">{t("settings.loading", "Loading…")}</div>}{!loading && !visibleSystemHooks.length && <div className="wb-extensions-empty">{normalizedQuery ? t("settings.extensionEmpty", "No matching extensions.") : t("settings.hookSystemEmpty", "No persisted system triggers found.")}</div>}{visibleSystemHooks.map(function (item) { var key = hookItemKey(item); return <CliHookItem key={key} item={item} t={t} busy={!!busy} expanded={expanded[key] === true} editing={editing === "system:" + key} draft={draft} setDraft={setDraft} onExpand={toggleExpanded} onEdit={editSystem} onSaveSystem={function (event) { saveSystem(event, item) }} onCancelEdit={function () { setEditing("") }} /> })}</div>}
+    {standalone && <div className="wb-cli-hook-group"><h5>{t("settings.systemHooks", "System triggers")}</h5>{loading && <div className="wb-extensions-empty">{t("settings.loading", "Loading…")}</div>}{!loading && !visibleSystemHooks.length && <div className="wb-extensions-empty">{normalizedQuery ? t("settings.extensionEmpty", "No matching extensions.") : t("settings.hookSystemEmpty", "No persisted system triggers found.")}</div>}{visibleSystemHooks.map(function (item) { var key = hookItemKey(item); return <CliHookItem key={key} item={item} t={t} tools={tools} busy={!!busy} expanded={expanded[key] === true} editing={editing === "system:" + key} draft={draft} setDraft={setDraft} onExpand={toggleExpanded} onEdit={editSystem} onSaveSystem={function (event) { saveSystem(event, item) }} onCancelEdit={function () { setEditing("") }} /> })}</div>}
     {recentResults.length > 0 && <div className="wb-cli-hook-group"><h5>{t("settings.extensionHookTitle", "Automatic integration")}</h5>{recentResults.map(function (item) { return <div key={item.key} className="wb-cli-hook-result"><code>{item.key}</code><span>{String(item.value && (item.value.reason || item.value.status) || "")}</span></div> })}</div>}
     {audit.length > 0 && <details className="wb-cli-hook-audit"><summary>{t("settings.hookExecutionLog", "Execution and audit log")}</summary>{audit.slice(0, 10).map(function (item, index) { return <div key={String(item.timestamp || index)}><code>{item.event ? hookEventLabel(item.event, t) : item.action || item.kind}</code><span>{item.status || item.result || item.hook_id}</span></div> })}</details>}
   </section>

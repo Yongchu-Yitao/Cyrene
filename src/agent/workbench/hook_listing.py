@@ -81,7 +81,7 @@ def runtime_hook_action(hook: Hook):
     async def execute(event: HookEvent):
         from agent.plugin.plugin_impl.cyrene_cli.hooks import (
             CliHookService,
-            _event_payload,
+            event_payload,
         )
 
         action_type = str(action["type"])
@@ -101,7 +101,7 @@ def runtime_hook_action(hook: Hook):
         }
         return await CliHookService().execute(
             executable_hook,
-            _event_payload(event),
+            event_payload(event),
         )
 
     return execute
@@ -325,7 +325,7 @@ def update_runtime_hook(
                         normalized_id, event, plugin_id,
                     ),
                 )
-                cursor = tree.execute(
+                tree.execute(
                     "UPDATE hook_queue SET hook_id = ?, event = ? WHERE hook_id = ?",
                     (new_hook_id, new_event, normalized_id),
                 )

@@ -950,6 +950,9 @@ class _SendOperation:
         usage = dict(getattr(result, "usage", {}) or {})
         if any(usage.values()):
             fields["usage"] = usage
+        latest_usage = dict(getattr(result, "latest_request_usage", {}) or {})
+        if any(latest_usage.values()):
+            fields["latestRequestUsage"] = latest_usage
         identity = dict(getattr(result, "model_identity", {}) or {})
         if identity:
             fields["modelIdentity"] = identity

@@ -340,32 +340,20 @@ function wbcCacheRateLabel(hit, miss) {
 
 function WbcOverviewUsage({ usage, latestUsage }) {
   usage = usage || {};
-  var hit = Number(usage.prompt_cache_hit_tokens || 0);
-  var miss = Number(usage.prompt_cache_miss_tokens || 0);
   var prompt = Number(usage.prompt_tokens || 0);
   var completion = Number(usage.completion_tokens || 0);
   var total = Number(usage.total_tokens || 0) || (prompt + completion);
-  var cacheTotal = hit + miss;
   latestUsage = latestUsage || {};
   var latestHit = Number(latestUsage.prompt_cache_hit_tokens || 0);
   var latestMiss = Number(latestUsage.prompt_cache_miss_tokens || 0);
   var latestCacheTotal = latestHit + latestMiss;
-  var shownHit = latestCacheTotal > 0 ? latestHit : hit;
-  var shownMiss = latestCacheTotal > 0 ? latestMiss : miss;
-  var shownTotal = shownHit + shownMiss;
-  var cacheRate = shownTotal > 0 ? shownHit / shownTotal * 100 : 0;
-  var latestRateLabel = wbcCacheRateLabel(shownHit, shownMiss);
-  var totalRateLabel = wbcCacheRateLabel(hit, miss);
-  var cacheRateLabel = latestCacheTotal > 0
-    ? latestRateLabel + " / " + (totalRateLabel || "—")
-    : totalRateLabel;
+  var cacheRate = latestCacheTotal > 0 ? latestHit / latestCacheTotal * 100 : 0;
+  var cacheRateLabel = wbcCacheRateLabel(latestHit, latestMiss);
   return (
     <section className="workbench-side-section wbc-overview-usage" aria-label={wbcT("chat.runSummary", "Run summary")}>
-      {cacheTotal > 0 && (
+      {latestCacheTotal > 0 && (
         <div className="wbc-overview-cache-row">
-          <span>{latestCacheTotal > 0
-            ? wbcT("workbenchChat.cacheHitRateLatestTotal", "Cache hit rate (latest / total)")
-            : wbcT("workbenchChat.cacheHitRate", "Cache hit rate")}</span>
+          <span>{wbcT("workbenchChat.cacheHitRate", "Cache hit rate")}</span>
           <b>{cacheRateLabel}</b>
           <div className="wbc-overview-cache-track" role="progressbar"
             aria-label={wbcT("workbenchChat.cacheHitRate", "Cache hit rate")}

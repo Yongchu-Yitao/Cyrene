@@ -1,3 +1,5 @@
+"""Tests for the Agent package, kept outside the shipped source tree."""
+
 from __future__ import annotations
 
 import asyncio
@@ -12,7 +14,9 @@ from agent.workbench import WorkbenchSessionBridge
 from cyrene.runtime import inbox
 
 
-CANONICAL_PLUGIN_DIRECTORY = Path(__file__).parents[1] / "plugin" / "plugin_impl"
+CANONICAL_PLUGIN_DIRECTORY = (
+    Path(__file__).parents[1] / "src" / "agent" / "plugin" / "plugin_impl"
+)
 
 
 def run(coroutine):

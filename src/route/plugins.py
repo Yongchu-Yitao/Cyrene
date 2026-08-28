@@ -301,6 +301,24 @@ def plugin_registry_status(host: PluginApplicationHost) -> dict[str, Any]:
     }
 
 
+def _hook_tool_options(host: PluginApplicationHost) -> list[dict[str, Any]]:
+    """Return runtime tool identities suitable for exact Hook matching."""
+
+    options = []
+    for registered in host.registry.list_plugins():
+        plugin = registered.plugin
+        if plugin.kind != "tool" or plugin.name == "toolbox":
+            continue
+        options.append({
+            "id": plugin.canonical_name,
+            "name": plugin.name,
+            "description": plugin.description,
+            "enabled": host.registry.plugin_enabled(plugin.name),
+            "i18n": dict(plugin.metadata.get("i18n", {})),
+        })
+    return sorted(options, key=lambda item: (item["name"].casefold(), item["id"]))
+
+
 def _seed_value(seed: Any) -> dict[str, Any]:
     return {
         "directory": str(seed.directory),
@@ -348,6 +366,7 @@ def register_plugin_routes(
         return {
             **payload,
             "system_hooks": runtime_hook_listing(host.db_path),
+            "tools": _hook_tool_options(host),
             "custom_available": callable(custom_listing),
         }
 

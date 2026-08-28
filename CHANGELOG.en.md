@@ -2,6 +2,43 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta3] - 2026-08-29
+
+This update adds a complete automatic-trigger experience, expands the Agent's plugin-management abilities, and improves plugin refresh reliability, run statistics, and interface details.
+
+### Automatic triggers and Hook management
+
+- Settings now includes an Automatic Triggers page where system Hooks, user Hooks, and pending proposals appear together with search, status filters, expandable details, and execution history.
+- Each trigger shows its event, source, target, scope, matcher, priority, timeout, failure behavior, session usage, and creation time. Names, states, descriptions, and actions are available in English and Chinese.
+- User triggers can be created directly: describe the desired behavior and choose an event, and a background Agent generates and validates the configuration. The trigger stays disabled while configuring and can be retried after a failure.
+- User Hooks can be edited, tested, enabled, disabled, and deleted. Changing behavior regenerates the action, while timeout and priority can also be tuned independently.
+- `PreToolUse` and `PostToolUse` events now provide a tool selector for every tool or one exact tool. Editing and regeneration preserve the selected matcher.
+- System Hooks can be overridden after explicit warning and confirmation, including event, scope, matcher, failure policy, and plugin-handler, command, or script configuration.
+- Pending Hook proposals can be inspected, approved, or rejected. Execution history records results, duration, and errors to make missed or failed triggers easier to diagnose.
+
+### Plugin creation, management, and review
+
+- The Agent can now manage plugins, plugin source, and automatic triggers: list, enable, disable, or remove plugins and packs, and read or precisely edit editable plugin source.
+- Changes to built-in or system plugin source and overrides to system Hooks show the complete diff and require one-time confirmation. A changed proposal must be reviewed again.
+- Plugin Center more clearly reports whether the user plugin directory exists, is readable and writable, and has its built-ins prepared. Creating a plugin guides the user to describe it in a new chat.
+- Plugin authoring guidance now covers standalone triggers, tool matching, source review, and the unified installation flow. Agent-created plugins include complete English and Chinese names and descriptions.
+- Web Search and the in-run messaging tool are directly available to the Agent, helping it verify changing external information and report long-running work, important milestones, or blockers promptly.
+
+### Run information and interface improvements
+
+- Conversation Overview now shows cache hit rate for the latest model request only, avoiding a confusing mixture of per-request and cumulative values. Historical chats retain and restore the actual latest-request statistics.
+- The Agent gives a short update before beginning tool work and reports important milestones, long-running steps, and blockers that need user attention.
+- The Automatic Triggers page, plugin-management tools, tool-matcher menu, and new states and errors have complete English and Chinese translations.
+- Terminal background color is better aligned with the Workbench dark theme, reducing the visible seam between terminal and surrounding panels.
+
+### Reliability and fixes
+
+- Plugin refresh reuses plugins whose source has not changed, reducing unnecessary reloads, while translation-catalog changes still update names and descriptions immediately.
+- After a plugin update, already-running services, Hooks, and pages retain the code they need instead of failing when a relative import is cleaned up.
+- Backend startup logs now report time spent preparing, scanning, loading, attaching, and starting plugins, making slow installed-build startup and timeout reports easier to locate.
+- Fixed user Hook regeneration losing its tool matcher, non-tool events retaining an invalid matcher, and new plugin-management tools missing from localized tool lists.
+- Fixed names and descriptions not refreshing when only `i18n.json` changed, and expanded contract coverage for the new Hook endpoints.
+
 ## [0.9.0-beta2] - 2026-08-28
 
 `0.9.0-beta2` contains only user-visible changes since `0.9.0-beta1`. It focuses on multi-turn context, streaming replies, memory reliability, Plugin Center, and Knowledge workflows in the plugin-native Agent.

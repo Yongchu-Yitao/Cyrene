@@ -71,7 +71,10 @@ _HOOK = {
         "new_event": {"type": "string", "enum": ["PreToolUse", "PostToolUse", "SessionStart", "TurnStart", "SessionEnd", "Stop", "ContextChange", "ContextUsed"], "description": "New trigger event for a system Hook."},
         "new_plugin_id": {"type": "string", "description": "New handler Plugin id for a system Hook."},
         "action_instruction": {"type": "string", "description": "Natural-language action used by Agent generation."},
-        "matcher": {"type": ["string", "null"]},
+        "matcher": {
+            "type": ["string", "null"],
+            "description": "Exact runtime tool name or glob for PreToolUse/PostToolUse. Null, empty, or '*' matches every tool.",
+        },
         "enabled": {"type": "boolean"},
         "root_only": {"type": "boolean"},
         "priority": {"type": "integer", "minimum": -10000, "maximum": 10000},

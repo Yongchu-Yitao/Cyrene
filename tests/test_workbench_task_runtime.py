@@ -1,3 +1,5 @@
+"""Tests for the Agent package, kept outside the shipped source tree."""
+
 from __future__ import annotations
 
 import asyncio
@@ -147,7 +149,7 @@ def test_task_turn_persists_exact_host_context_on_user_node(monkeypatch, tmp_pat
 
 
 def test_task_and_goal_loop_sources_do_not_depend_on_removed_runtimes():
-    src = Path(__file__).parents[2]
+    src = Path(__file__).parents[1] / "src"
     paths = (
         src / "agent/workbench/task_runtime.py",
         src / "cyrene/workbench/task_execution_service.py",

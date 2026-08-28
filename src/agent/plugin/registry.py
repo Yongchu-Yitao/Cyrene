@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import logging
@@ -70,6 +71,7 @@ class _LoadedContribution:
     module_name: str
     kind: Literal["pack", "plugin"]
     identity: str
+    source_signature: str
 
 
 def _set_user_source_available(source: str, available: bool) -> int | None:
@@ -138,6 +140,41 @@ def _contains_python_source(directory: Path) -> bool:
         return True
 
 
+def _python_source_signature(entry: Path) -> str:
+    """Return a stable digest for the Python source owned by one contribution."""
+
+    files = (
+        tuple(
+            candidate
+            for candidate in sorted(entry.rglob("*.py"))
+            if "__pycache__" not in candidate.parts
+        )
+        if entry.is_dir()
+        else (entry,)
+    )
+    digest = hashlib.sha256()
+    for candidate in files:
+        relative = (
+            candidate.relative_to(entry)
+            if entry.is_dir()
+            else Path(candidate.name)
+        )
+        digest.update(relative.as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(candidate.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _contribution_signature(entry: Path, catalog: Path) -> str:
+    """Include shared catalog changes in each contribution's reload key."""
+
+    digest = hashlib.sha256(_python_source_signature(entry).encode("ascii"))
+    if catalog.is_file():
+        digest.update(catalog.read_bytes())
+    return digest.hexdigest()
+
+
 def _humanize_identity(identity: str) -> str:
     """Turn a stable Plugin identifier into a readable fallback label."""
 
@@ -182,6 +219,13 @@ class PluginRegistry:
         self._plugins: dict[str, RegisteredPlugin] = {}
         self._pack_sources: dict[str, str] = {}
         self._user_contributions: dict[Path, _LoadedContribution] = {}
+        # Application services, Hooks, routes, and background jobs can retain
+        # functions or instances from an older contribution after a Registry
+        # refresh.  Their deferred relative imports still require the old
+        # package name to remain in sys.modules.  Pin replaced generations for
+        # this process instead of invalidating those live objects underneath
+        # their owners.
+        self._retained_module_names: set[str] = set()
         self._user_source_revisions: dict[str, int] = {}
         self._user_directories: set[Path] = set()
         self._i18n_catalogs: dict[Path, dict[str, Any]] = {}
@@ -750,7 +794,7 @@ class PluginRegistry:
                 self._remove_loaded_locked(contribution, source)
         if contribution is None:
             return None
-        self._unload_module_tree(contribution.module_name)
+        self._retain_module_tree(contribution.module_name)
         _set_user_source_available(source, False)
         log_operation(
             logger,
@@ -763,6 +807,21 @@ class PluginRegistry:
             reason=reason,
         )
         return contribution
+
+    def _retain_module_tree(self, module_name: str) -> None:
+        """Pin a replaced module tree while external lifecycle objects may use it."""
+
+        if not module_name:
+            return
+        with self._lock:
+            self._retained_module_names.add(module_name)
+        log_operation(
+            logger,
+            "plugin.registry",
+            "retain_module_tree",
+            phase="completed",
+            module=module_name,
+        )
 
     def _install_loaded_contribution(
         self,
@@ -1376,6 +1435,7 @@ class PluginRegistry:
             )
             return tuple(failures)
         loaded: list[dict[str, str]] = []
+        reused: list[dict[str, str]] = []
         try:
             entries = sorted(root.iterdir(), key=lambda item: item.name)
         except OSError as exc:
@@ -1397,7 +1457,32 @@ class PluginRegistry:
             module_name = ""
             contribution_kind: Literal["pack", "plugin"]
             contribution_identity = ""
+            source_signature = ""
             try:
+                source_signature = _contribution_signature(
+                    entry,
+                    root / _I18N_FILE_NAME,
+                )
+                with self._lock:
+                    existing = self._user_contributions.get(entry)
+                if (
+                    replace
+                    and existing is not None
+                    and existing.source_signature == source_signature
+                    and existing.module_name in sys.modules
+                ):
+                    revision = _set_user_source_available(str(entry), True)
+                    if revision is not None:
+                        with self._lock:
+                            self._user_source_revisions[str(entry)] = revision
+                    reused.append(
+                        {
+                            "path": str(entry),
+                            "kind": existing.kind,
+                            "id": existing.identity,
+                        }
+                    )
+                    continue
                 module, module_name = self._load_module(entry)
                 if entry.is_dir():
                     pack = getattr(module, "plugin_pack", None)
@@ -1458,9 +1543,10 @@ class PluginRegistry:
                         module_name,
                         contribution_kind,
                         contribution_identity,
+                        source_signature,
                     )
                 if previous and previous.module_name != module_name:
-                    self._unload_module_tree(previous.module_name)
+                    self._retain_module_tree(previous.module_name)
                 loaded.append(
                     {"path": str(entry), "kind": contribution_kind, "id": contribution_identity}
                 )
@@ -1482,6 +1568,7 @@ class PluginRegistry:
             directory=root,
             replace=replace,
             loaded=loaded,
+            reused=reused,
             failures=[{"path": item.path, "error": item.error} for item in failures],
             duration_ms=round((time.perf_counter() - started) * 1_000, 3),
         )

@@ -5,6 +5,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { installTerminalShellIntegration } from "./shell-integration.mjs";
+import { installTerminalCursorVisibilitySync } from "./cursor-visibility.mjs";
 import "@xterm/xterm/css/xterm.css";
 
 var RESIZE_SETTLE_MS = 160;
@@ -18,7 +19,7 @@ function terminalT(key, fallback, params) {
   return workbenchServices.i18n().t(key, params || null, fallback);
 }
 var DARK_TERMINAL_THEME = {
-  background: "#171819",
+  background: "#17181C",
   foreground: "#F1F1F4",
   cursor: "#F1F1F4",
   cursorAccent: "#171819",
@@ -407,6 +408,14 @@ function TerminalPane({ terminalId, onState }) {
     function scheduleInputCursorUpdate() {
       window.requestAnimationFrame(updateInputCursor);
     }
+
+    // xterm updates isCursorHidden for DECTCEM without necessarily emitting a
+    // render or cursor-move event. Observe the mode sequence and synchronize
+    // the custom cursor on the next frame, after xterm's built-in handler runs.
+    var cursorVisibilitySync = installTerminalCursorVisibilitySync(
+      terminal,
+      scheduleInputCursorUpdate,
+    );
 
     function handleBufferChange(buffer) {
       window.cancelAnimationFrame(bufferRestoreFrame);
@@ -893,6 +902,7 @@ function TerminalPane({ terminalId, onState }) {
       cursorRender.dispose();
       cursorScroll.dispose();
       cursorResize.dispose();
+      cursorVisibilitySync.dispose();
       bufferChange.dispose();
       shellIntegration.dispose();
       if (socketRef.current) socketRef.current.close();

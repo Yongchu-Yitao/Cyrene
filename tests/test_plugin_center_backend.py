@@ -573,11 +573,13 @@ def test_user_hook_brief_is_configured_by_background_agent(tmp_path, monkeypatch
     requested = hooks.create_generation_request({
         "name": "Record failures",
         "event": "PostToolUse",
+        "matcher": "Read",
         "action_instruction": "Record the event as structured JSON.",
         "description": "Optional explanation",
     })
     assert requested["configuration_status"] == "configuring"
     assert requested["enabled"] is False
+    assert requested["matcher"] == "Read"
     with pytest.raises(ValueError, match="not complete"):
         service.save_hook({"timeout_seconds": 4}, hook_id=requested["id"])
 
@@ -588,6 +590,7 @@ def test_user_hook_brief_is_configured_by_background_agent(tmp_path, monkeypatch
     assert configured["enabled"] is True
     assert configured["timeout_seconds"] == 7.5
     assert configured["priority"] == -20
+    assert configured["matcher"] == "Read"
     assert Path(configured["runner"]["path"]).is_file()
     tested = asyncio.run(hooks.test(configured["id"]))
     assert tested["output"] == {"received_event": "PostToolUse"}
@@ -601,8 +604,9 @@ def test_user_hook_brief_is_configured_by_background_agent(tmp_path, monkeypatch
     reconfiguration = hooks.update_generation_request(
         configured["id"],
         {
-            "event": "Stop",
-            "action_instruction": "Write a final local summary.",
+            "event": "PostToolUse",
+            "matcher": "Write",
+            "action_instruction": "Write a local summary after Write runs.",
             "description": "Updated behavior",
             "timeout_seconds": 12,
             "priority": 250,
@@ -613,8 +617,9 @@ def test_user_hook_brief_is_configured_by_background_agent(tmp_path, monkeypatch
     regenerated = asyncio.run(
         config_agent.configure_user_hook(reconfiguration, hooks=hooks)
     )
-    assert regenerated["event"] == "Stop"
-    assert regenerated["action_instruction"] == "Write a final local summary."
+    assert regenerated["event"] == "PostToolUse"
+    assert regenerated["matcher"] == "Write"
+    assert regenerated["action_instruction"] == "Write a local summary after Write runs."
     assert regenerated["timeout_seconds"] == 12
     assert regenerated["priority"] == 250
     assert regenerated["configuration_status"] == "ready"
@@ -622,6 +627,53 @@ def test_user_hook_brief_is_configured_by_background_agent(tmp_path, monkeypatch
         service.save_hook({"event": "TurnStart"}, hook_id=configured["id"])
     with pytest.raises(ValueError, match="between -10000 and 10000"):
         service.save_hook({"priority": 10001}, hook_id=configured["id"])
+    lifecycle_only = hooks.update_generation_request(
+        configured["id"],
+        {
+            "event": "Stop",
+            "matcher": "Read",
+            "action_instruction": "Write the final summary.",
+        },
+    )
+    assert lifecycle_only["matcher"] == "*"
+
+
+def test_hook_tool_options_list_runtime_tool_names_only():
+    from route.plugins import _hook_tool_options
+
+    registered = [
+        SimpleNamespace(plugin=SimpleNamespace(
+            kind="tool", name="Write", canonical_name="Write",
+            description="Write files", metadata={"i18n": {"zh": {"name": "写入"}}},
+        )),
+        SimpleNamespace(plugin=SimpleNamespace(
+            kind="model", name="Provider", canonical_name="Provider",
+            description="Model", metadata={},
+        )),
+        SimpleNamespace(plugin=SimpleNamespace(
+            kind="tool", name="toolbox", canonical_name="toolbox",
+            description="Gateway", metadata={},
+        )),
+        SimpleNamespace(plugin=SimpleNamespace(
+            kind="tool", name="Read", canonical_name="Read",
+            description="Read files", metadata={},
+        )),
+    ]
+    registry = SimpleNamespace(
+        list_plugins=lambda: tuple(registered),
+        plugin_enabled=lambda name: name != "Write",
+    )
+
+    assert _hook_tool_options(SimpleNamespace(registry=registry)) == [
+        {
+            "id": "Read", "name": "Read", "description": "Read files",
+            "enabled": True, "i18n": {},
+        },
+        {
+            "id": "Write", "name": "Write", "description": "Write files",
+            "enabled": False, "i18n": {"zh": {"name": "写入"}},
+        },
+    ]
 
 
 def test_cli_hook_listing_includes_existing_runtime_bindings(tmp_path, monkeypatch):

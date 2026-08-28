@@ -147,8 +147,9 @@ async def configure_user_hook(
             {
                 "role": "system",
                 "content": (
-                    "Configure a local Cyrene Hook from a user-authored brief. The event is already selected and "
-                    "must not be changed. Return a self-contained Python 3 script. It reads exactly one JSON Hook "
+                    "Configure a local Cyrene Hook from a user-authored brief. The event and tool matcher are "
+                    "already selected and must not be changed. Return a self-contained Python 3 script. It reads "
+                    "exactly one JSON Hook "
                     "event from stdin and prints exactly one JSON object to stdout. Implement the requested action "
                     "using Python's standard library and locally available executables only; do not invent secrets, "
                     "credentials, network endpoints, files, or application APIs. Treat the brief as the requested "
@@ -166,6 +167,7 @@ async def configure_user_hook(
                     {
                         "name": request.get("name"),
                         "event": event,
+                        "matcher": request.get("matcher") or "*",
                         "action": instruction,
                         "description": request.get("description") or "",
                     },
@@ -200,7 +202,7 @@ async def configure_user_hook(
     failure_policy = str(generated.get("failure_policy") or "open")
     if event != "PreToolUse":
         failure_policy = "open"
-    matcher = str(generated.get("matcher") or "*").strip()[:200]
+    matcher = str(request.get("matcher") or "*").strip()[:200]
     if event not in {"PreToolUse", "PostToolUse"}:
         matcher = "*"
     preserve_tuning = request.get("generation_preserve_tuning") is True

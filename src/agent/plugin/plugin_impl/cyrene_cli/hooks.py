@@ -269,7 +269,7 @@ async def _communicate(process: asyncio.subprocess.Process, payload: bytes) -> t
         raise
 
 
-def _event_payload(event: HookEvent, *, test: bool = False) -> dict[str, Any]:
+def event_payload(event: HookEvent, *, test: bool = False) -> dict[str, Any]:
     payload = json.loads(encode_event_payload(event))
     result = {
         "protocol_version": 2,
@@ -328,6 +328,9 @@ class CliHookService:
         instruction = str(raw.get("action_instruction") or "").strip()[:4000]
         if not instruction:
             raise ValueError("Hook action instruction is required")
+        matcher = str(raw.get("matcher") or "*").strip()[:200] or "*"
+        if event not in {PRE_TOOL_USE, POST_TOOL_USE}:
+            matcher = "*"
         hook_id = _safe_id(f"user-{name}-{uuid.uuid4().hex[:8]}")
         now = _now()
         hook = {
@@ -335,7 +338,7 @@ class CliHookService:
             "name": name,
             "description": str(raw.get("description") or "").strip()[:500],
             "event": event,
-            "matcher": "*",
+            "matcher": matcher,
             "enabled": False,
             "priority": 100,
             "failure_policy": "open",
@@ -359,6 +362,7 @@ class CliHookService:
             "actor": "user",
             "hook_id": hook_id,
             "event": event,
+            "matcher": matcher,
         })
         return _copy(hook)
 
@@ -384,6 +388,11 @@ class CliHookService:
         ).strip()[:4000]
         if not instruction:
             raise ValueError("Hook action instruction is required")
+        matcher = str(
+            raw.get("matcher", current.get("matcher", "*")) or "*"
+        ).strip()[:200] or "*"
+        if event not in {PRE_TOOL_USE, POST_TOOL_USE}:
+            matcher = "*"
         try:
             timeout = float(
                 raw.get("timeout_seconds", current.get("timeout_seconds", 10))
@@ -404,7 +413,7 @@ class CliHookService:
                 raw.get("description", current.get("description", ""))
             ).strip()[:500],
             "event": event,
-            "matcher": "*",
+            "matcher": matcher,
             "enabled": False,
             "timeout_seconds": timeout,
             "priority": priority,
@@ -426,6 +435,7 @@ class CliHookService:
             "actor": "user",
             "hook_id": hook_id,
             "event": event,
+            "matcher": matcher,
         })
         return _copy(current)
 
@@ -665,7 +675,7 @@ class CliHookService:
                     is_root=event.is_root,
                 )
             try:
-                output = await self.execute(hook, _event_payload(effective_event))
+                output = await self.execute(hook, event_payload(effective_event))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -707,14 +717,14 @@ class CliHookService:
         ):
             raise ValueError("Agent configuration is not complete")
         event = str(hook.get("event") or SESSION_START)
-        event_payload = dict(payload or {})
-        if event in {PRE_TOOL_USE, POST_TOOL_USE} and not isinstance(event_payload.get("tool"), Mapping):
+        payload_data = dict(payload or {})
+        if event in {PRE_TOOL_USE, POST_TOOL_USE} and not isinstance(payload_data.get("tool"), Mapping):
             matcher = str(hook.get("matcher") or "*")
-            event_payload["tool"] = {"name": matcher if not any(char in matcher for char in "*?[") else "HookTestTool", "arguments": {}}
-        if event == POST_TOOL_USE and not isinstance(event_payload.get("result"), Mapping):
-            event_payload["result"] = {"success": True, "value": "Hook test", "error": ""}
-        hook_event = HookEvent(event, "cli-hook-test", datetime.now(timezone.utc), payload=event_payload, node_id="root", is_root=True)
-        output = await self.execute(hook, _event_payload(hook_event, test=True), test=True)
+            payload_data["tool"] = {"name": matcher if not any(char in matcher for char in "*?[") else "HookTestTool", "arguments": {}}
+        if event == POST_TOOL_USE and not isinstance(payload_data.get("result"), Mapping):
+            payload_data["result"] = {"success": True, "value": "Hook test", "error": ""}
+        hook_event = HookEvent(event, "cli-hook-test", datetime.now(timezone.utc), payload=payload_data, node_id="root", is_root=True)
+        output = await self.execute(hook, event_payload(hook_event, test=True), test=True)
         return {"ok": True, "output": output}
 
 

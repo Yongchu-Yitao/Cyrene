@@ -1,3 +1,5 @@
+"""Tests for the Agent package, kept outside the shipped source tree."""
+
 from __future__ import annotations
 
 import asyncio
@@ -749,13 +751,15 @@ def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch
 
     run(host.shutdown())
     frontend = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[1]
+        / "src"
         / "webui"
         / "frontend"
         / "workbench-memory.jsx"
     ).read_text(encoding="utf-8")
     project_frontend = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[1]
+        / "src"
         / "webui"
         / "frontend"
         / "features"
@@ -763,7 +767,8 @@ def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch
         / "support.jsx"
     ).read_text(encoding="utf-8")
     chat_frontend = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[1]
+        / "src"
         / "webui"
         / "frontend"
         / "features"
@@ -771,13 +776,15 @@ def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch
         / "model-api.jsx"
     ).read_text(encoding="utf-8")
     settings_frontend = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[1]
+        / "src"
         / "webui"
         / "frontend"
         / "settings-overlay.jsx"
     ).read_text(encoding="utf-8")
     search_frontend = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[1]
+        / "src"
         / "webui"
         / "frontend"
         / "shared"
@@ -785,7 +792,8 @@ def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch
         / "overlay.jsx"
     ).read_text(encoding="utf-8")
     compiled_frontend = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[1]
+        / "src"
         / "webui"
         / "static"
         / "app"

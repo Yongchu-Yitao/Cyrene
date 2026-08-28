@@ -1,3 +1,5 @@
+"""Tests for the Agent package, kept outside the shipped source tree."""
+
 from __future__ import annotations
 
 import asyncio
@@ -193,4 +195,3 @@ def test_agent_session_logs_state_transitions_and_output_events(tmp_path, caplog
         and item["run_id"] == "agent-audit-run"
         for item in agent_operations
     )
-

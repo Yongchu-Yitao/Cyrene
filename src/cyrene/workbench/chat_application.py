@@ -490,8 +490,8 @@ def latest_request_usage(messages: list[Any]) -> dict[str, int]:
             continue
         usage = message.get("latestRequestUsage")
         if not isinstance(usage, Mapping):
-            usage = message.get("usage")
-        if not isinstance(usage, Mapping):
+            if isinstance(message.get("usage"), Mapping):
+                return {key: 0 for key in _USAGE_KEYS}
             continue
         latest = {key: 0 for key in _USAGE_KEYS}
         for key in _USAGE_KEYS:

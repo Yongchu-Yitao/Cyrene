@@ -263,6 +263,7 @@ async def test_hook_manager_reuses_background_generation_service(
             "hook": {
                 "name": "Record failures",
                 "event": "PostToolUse",
+                "matcher": "Read",
                 "action_instruction": "Write failures to a local log.",
             },
         },
@@ -274,6 +275,7 @@ async def test_hook_manager_reuses_background_generation_service(
 
     assert result["ok"] is True
     assert result["status"] == "configuring"
+    assert result["hook"]["matcher"] == "Read"
     assert result["hook"]["action_instruction"] == "Write failures to a local log."
 
 

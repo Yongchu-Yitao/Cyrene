@@ -130,7 +130,7 @@ def test_profile_is_a_settings_item_without_a_collapsed_settings_icon_stack():
     assert 'tab === "plugins"' not in settings
     assert 'mode === "plugins"' not in settings
     icon_names = re.findall(r'\{ id: "[^"]+", labelKey: "[^"]+", icon: "([^"]+)"[^}]*\}', settings)
-    assert len(icon_names) == 18
+    assert len(icon_names) == 19
     assert len(set(icon_names)) == len(icon_names)
     assert 'className: "settings-overlay-tab-glyph"' in settings
     build_source = (root / "src/webui/build-jsx.mjs").read_text(encoding="utf-8")
