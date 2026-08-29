@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from agent.workbench.task_runtime import (
+from cyrene.workbench.core_adapter.task_runtime import (
     TaskAgentRuntime,
     _pending_question,
     _project_tool_events,
@@ -148,17 +148,17 @@ def test_task_turn_persists_exact_host_context_on_user_node(monkeypatch, tmp_pat
     assert captured["closed"] is True
 
 
-def test_task_and_goal_loop_sources_do_not_depend_on_removed_runtimes():
+def test_task_and_goal_loop_respect_runtime_dependency_boundaries():
     src = Path(__file__).parents[1] / "src"
     paths = (
-        src / "agent/workbench/task_runtime.py",
-        src / "cyrene/workbench/task_execution_service.py",
-        src / "cyrene/workbench/task_session_workflow_service.py",
-        src / "cyrene/workbench/goal_loop.py",
-        src / "cyrene/workbench/goal_loop_service.py",
-        src / "route/workbench/task_sessions.py",
-        src / "route/workbench/goal_loop.py",
-        *(src / "route/workbench/task_session_routes").glob("*.py"),
+        src / "cyrene/workbench/core_adapter/task_runtime.py",
+            src / "cyrene/workbench/tasks/task_execution_service.py",
+            src / "cyrene/workbench/tasks/task_session_workflow_service.py",
+            src / "cyrene/workbench/goals/goal_loop.py",
+            src / "cyrene/workbench/goals/goal_loop_service.py",
+        src / "cyrene/workbench/http/workbench/task_sessions.py",
+        src / "cyrene/workbench/http/workbench/goal_loop.py",
+        *(src / "cyrene/workbench/http/workbench/task_session_routes").glob("*.py"),
     )
     source = "\n".join(path.read_text(encoding="utf-8") for path in paths)
     forbidden = (

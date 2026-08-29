@@ -13,8 +13,8 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parent.parent
-FRONTEND = ROOT / "src" / "webui" / "frontend"
-ESBUILD = ROOT / "src" / "webui" / "node_modules" / ".bin" / "esbuild"
+FRONTEND = ROOT / "src" / "cyrene" / "workbench" / "webui" / "frontend"
+ESBUILD = ROOT / "src" / "cyrene" / "workbench" / "webui" / "node_modules" / ".bin" / "esbuild"
 
 
 def _source(path: Path) -> str:
@@ -71,7 +71,7 @@ def test_schedule_frontend_persists_local_iana_timezone():
 
 
 def test_scheduled_task_timezone_round_trips_through_plugin_repository(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_schedule.service import ScheduleRuntimeService
+    from cyrene.plugins.builtin.cyrene_schedule.service import ScheduleRuntimeService
 
     db_path = str(tmp_path / "cyrene.sqlite3")
 
@@ -96,7 +96,7 @@ def test_scheduled_task_timezone_round_trips_through_plugin_repository(tmp_path)
 
 
 def test_calendar_expansion_uses_the_editable_plugin_timezone_rule_across_dst():
-    from agent.plugin.plugin_impl.cyrene_schedule.schedule_spec import expand_task
+    from cyrene.plugins.builtin.cyrene_schedule.schedule_spec import expand_task
 
     task = {
         "schedule_type": "cron",

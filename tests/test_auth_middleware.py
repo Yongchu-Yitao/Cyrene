@@ -1,4 +1,4 @@
-"""Tests for the desktop-local auth boundary (webui.auth.LocalAuthMiddleware).
+"""Tests for the desktop-local auth boundary (cyrene.workbench.webui.auth.LocalAuthMiddleware).
 
 Covers the token enforcement and Host/Origin (DNS-rebinding) checks wired into
 ``create_app`` via ``app.add_middleware``.
@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
 def _make_app() -> FastAPI:
-    from webui.auth import LocalAuthMiddleware
+    from cyrene.workbench.webui.auth import LocalAuthMiddleware
 
     app = FastAPI()
     app.add_middleware(LocalAuthMiddleware)

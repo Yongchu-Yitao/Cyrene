@@ -1,7 +1,7 @@
 """Canonical project-id tests for Plugin-owned workspace memory."""
 
 
-from agent.plugin.plugin_impl.cyrene_memory import structured as memory
+from cyrene.plugins.builtin.cyrene_memory import structured as memory
 
 
 def test_default_workspace_keeps_its_canonical_key():
@@ -21,7 +21,7 @@ def test_resolve_unknown_workspace_keeps_safe_id():
 
 
 def test_project_memory_visible_via_canonical_id(tmp_path):
-    from cyrene.workbench.store import ensure_schema
+    from cyrene.workbench.persistence.store import ensure_schema
 
     database = tmp_path / "memory.db"
     ensure_schema(database)

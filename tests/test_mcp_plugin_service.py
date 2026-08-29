@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from agent.plugin import PluginContext, PluginPack, PluginRegistry, PluginRuntime
-from agent.plugin.customization import PluginCustomizationState
-from agent.plugin.plugin_impl.cyrene_mcp import service as native_mcp
+from cyrene.core.plugin import PluginContext, PluginPack, PluginRegistry, PluginRuntime
+from cyrene.core.plugin.customization import PluginCustomizationState
+from cyrene.plugins.builtin.cyrene_mcp import service as native_mcp
 
 
 class _FakeConnection:
@@ -103,7 +103,7 @@ async def test_mcp_server_is_a_dynamic_pack_through_toolbox(
     assert invoked.success is True
     assert invoked.value["result"] == "found:Cyrene"
     assert registry.registered(plugin_name).source == "mcp:docs"
-    from route.settings.plugin_service import get_plugin_settings
+    from cyrene.workbench.http.settings.plugin_service import get_plugin_settings
 
     pack_setting = next(
         item

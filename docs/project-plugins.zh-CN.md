@@ -9,7 +9,8 @@ Cyrene 只有一套插件框架。自定义工具、应用服务、上下文 Hoo
 用户插件位于应用数据目录的 `plugin_impl/`。一个工具可以是直接暴露 `plugin` 的 Python 文件；包含应用界面时使用目录包，并从 `__init__.py` 暴露 `plugin_pack`。
 
 ```python
-from agent.plugin import PluginPack
+from cyrene.core.plugin import PluginPack
+from cyrene.plugins import PluginApplicationContext
 from .application import setup_application
 
 plugin_pack = PluginPack(
@@ -47,8 +48,8 @@ plugin_pack = PluginPack(
 一个最小 Context 插件只需在 `SessionStart` 返回一个 Block：
 
 ```python
-from agent.hook import SESSION_START, HookEvent
-from agent.plugin import PluginPack, PluginSetupContext
+from cyrene.core.hook import SESSION_START, HookEvent
+from cyrene.core.plugin import PluginPack, PluginSetupContext
 
 
 def setup(context: PluginSetupContext) -> None:
@@ -108,6 +109,24 @@ Composer 菜单负责本对话选中什么；工具菜单负责“Agent 直接�
 List；其他工具仍由 `toolbox.list → describe → invoke` 发现。两种方式都会使用当前
 插件的 `input_schema`、Runtime 校验、`PreToolUse` 与 `PostToolUse` Hook。
 
+## Contribution Scope
+
+`PluginPack` 的贡献有三种明确生命周期：
+
+| Scope | API | 归属 |
+|---|---|---|
+| Application | `application_setup` / `APPLICATION_SETUP` | Cyrene Plugin Application Host；Route、进程 Service、Search、Frontend RPC、Startup/Shutdown |
+| Session | `setup` / `SESSION_SETUP` | `cyrene.core.AgentSession`；ContextTree Hook 与对话级 Service |
+| Run | `PluginContext.services` 与 `RUN_SERVICE` | 单次调用/Run；Request Data 与临时 Service Binding |
+
+两个 Callback Field 只是统一 Typed Extension 系统的便利写法，Host 最终消费
+归一化的 `ExtensionContribution`。Core 不得依赖 Workbench 或 FastAPI Type。
+Application Callback 使用 `cyrene.plugins.PluginApplicationContext`，Session 和
+Run 则使用 `cyrene.core.plugin` 中与 Host 无关的 Context。
+
+原 `agent.*`、`route.*`、`webui.*` Python 包已删除，也不提供兼容 Alias。
+插件必须使用本文的 `cyrene.core`、`cyrene.plugins` 与 `cyrene.workbench` API。
+
 `project_tools[].view` 必须指向同一包的 `frontend_views[].id`。View 的 `entry` 必须位于插件包内部。启用插件包后，入口显示在 Workbench 左侧栏，打开后成为普通 Pane，支持上下/左右分屏、拖动、恢复和独立窗口。
 
 ## 后端 RPC
@@ -116,7 +135,7 @@ List；其他工具仍由 `toolbox.list → describe → invoke` 发现。两种
 async def load(arguments, request_context):
     return {"ok": True, "project_id": request_context["project_id"]}
 
-def setup_application(context):
+def setup_application(context: PluginApplicationContext) -> None:
     context.provide_frontend_method("dashboard.load", load)
 ```
 

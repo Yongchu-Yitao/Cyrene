@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ def _write_chats(path, chats):
 
 
 def test_latest_workbench_user_activity_uses_user_timestamp(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
+    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
 
     chats_path = tmp_path / "workbench_chats.json"
     _write_chats(chats_path, [
@@ -59,7 +60,7 @@ def test_latest_workbench_user_activity_uses_user_timestamp(monkeypatch, tmp_pat
 
 
 def test_silence_detection_includes_workbench_user_activity(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
+    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
 
     _write_chats(tmp_path / "workbench_chats.json", [
         {
@@ -90,7 +91,7 @@ def test_silence_detection_includes_workbench_user_activity(monkeypatch, tmp_pat
 async def test_proactive_skips_when_latest_workbench_chat_is_running(
     monkeypatch, tmp_path
 ):
-    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
+    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
 
     _write_chats(tmp_path / "workbench_chats.json", [
         {
@@ -134,12 +135,12 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
     monkeypatch, tmp_path
 ):
     from cyrene.observability import debug
-    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
+    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
 
     db_path = str(tmp_path / "runtime.sqlite3")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    from cyrene.workbench.chat_repository import ChatRepository
+    from cyrene.workbench.chat.chat_repository import ChatRepository
 
     repository = ChatRepository(db_path)
     repository.write({"chats": [
@@ -177,7 +178,7 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
         settings_store, "get",
         lambda key, default=None: "zh" if key == "app_language" else default,
     )
-    import cyrene.workbench.chat_application as chat_application
+    import cyrene.workbench.chat.chat_application as chat_application
     monkeypatch.setattr(
         chat_application,
         "_composer_context_service",
@@ -245,10 +246,49 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
     assert captured["workspace_dir"] == str(workspace)
 
 
+def test_lottery_win_is_consumed_only_after_delivery(monkeypatch):
+    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
+
+    scheduler._LOTTERY_STATE.update(
+        probability=0.6,
+        delta=0.15,
+        max_probability=0.85,
+    )
+    monkeypatch.setattr(scheduler.random, "random", lambda: 0.1)
+
+    assert scheduler._lottery_draw() is True
+    assert scheduler._LOTTERY_STATE["probability"] == 0.6
+
+
+async def test_generation_timeout_preserves_accumulated_probability(monkeypatch):
+    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
+
+    async def timeout_run(*_args, **_kwargs):
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
+    monkeypatch.setattr(scheduler, "_save_lottery_state", lambda: None)
+    monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
+    monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
+    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
+    monkeypatch.setattr(scheduler, "_run_plugin_proactive_turn", timeout_run)
+    scheduler._LOTTERY_STATE.update(
+        probability=0.75,
+        consecutive_unanswered=0,
+        cooldown_until=0.0,
+        last_proactive_time=0.0,
+    )
+
+    outcome = await scheduler._heartbeat_proactive_check(None, "db.sqlite3")
+
+    assert outcome == {"status": "generation_timeout"}
+    assert scheduler._LOTTERY_STATE["probability"] == 0.75
+
+
 def test_workbench_frontend_handles_proactive_sse():
     source = (
         Path(__file__).resolve().parents[1]
-        / "src/webui/frontend/features/chat/live-event-controller.jsx"
+        / "src/cyrene/workbench/webui/frontend/features/chat/live-event-controller.jsx"
     ).read_text(encoding="utf-8")
 
     assert 'event.type === "workbench_proactive_message"' in source

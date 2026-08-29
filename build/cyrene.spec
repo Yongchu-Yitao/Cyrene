@@ -29,7 +29,7 @@ _datas = []
 _binaries = []
 
 # webui static
-_static_dir = _SRC / "webui" / "static"
+_static_dir = _SRC / "cyrene" / "workbench" / "webui" / "static"
 if _static_dir.is_dir():
     for f in _static_dir.rglob("*"):
         if f.is_file() and "__pycache__" not in f.parts:
@@ -49,9 +49,9 @@ if _office_static_dir.is_dir():
 # Keep the canonical editable Plugin tree as real source in frozen bundles.
 # Modules in PyInstaller's PYZ archive are importable but do not provide a
 # reliable filesystem tree for seeding into the user's plugin_impl directory.
-_plugin_source_dir = _SRC / "agent" / "plugin" / "plugin_impl"
+_plugin_source_dir = _SRC / "cyrene" / "plugins" / "builtin"
 _plugin_source_dest = (
-    Path("builtin_plugin_sources") / "agent" / "plugin" / "plugin_impl"
+    Path("builtin_plugin_sources") / "cyrene" / "plugins" / "builtin"
 )
 if not _plugin_source_dir.is_dir():
     raise SystemExit(
@@ -74,7 +74,7 @@ if _pyproject.exists():
     _datas.append((str(_pyproject), "."))
 
 # ---- 本地包模块自动枚举 ----
-# agent/cyrene/webui/route 使用 importlib.import_module() 动态加载 Plugin 子包等，
+# cyrene core/plugins/workbench adapters 使用 importlib.import_module() 动态加载 Plugin 子包等，
 # PyInstaller 静态分析无法追踪。直接扫描 src/ 下所有 .py 文件生成
 # 完整列表，避免手动维护漏项。
 def _enumerate_local_package(src: Path, pkg: str) -> list:
@@ -93,12 +93,7 @@ def _enumerate_local_package(src: Path, pkg: str) -> list:
     return names
 
 # ---- 隐藏导入 ----
-_hidden = (
-    _enumerate_local_package(_SRC, "agent")
-    + _enumerate_local_package(_SRC, "cyrene")
-    + _enumerate_local_package(_SRC, "webui")
-    + _enumerate_local_package(_SRC, "route")
-)
+_hidden = _enumerate_local_package(_SRC, "cyrene")
 _hidden += [
     "jinja2", "jinja2.ext",
     "uvicorn.loops.auto", "uvicorn.protocols.http.auto", "uvicorn.logging",

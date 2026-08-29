@@ -30,7 +30,7 @@ SPEC_FILE = BUILD_DIR / "cyrene.spec"
 OCR_SIDECAR_SPEC = BUILD_DIR / "cyrene_ocr_sidecar.spec"
 SIMPLEXNG_SIDECAR_SPEC = BUILD_DIR / "cyrene_simplexng_sidecar.spec"
 PLAYWRIGHT_BROWSERS_DIR = BUILD_DIR / ".playwright-browsers"
-WEB_LOGO_PATH = PROJECT_ROOT / "src" / "webui" / "static" / "app" / "logo-mark.png"
+WEB_LOGO_PATH = PROJECT_ROOT / "src" / "cyrene" / "workbench" / "webui" / "static" / "app" / "logo-mark.png"
 
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
@@ -165,7 +165,7 @@ def build_webui_js() -> None:
     compiled/ 在 .gitignore 中不入库，必须在打包前先编译，否则
     Python frozen binary 里 static/app/compiled/ 为空，前端全 404。
     """
-    webui_dir = PROJECT_ROOT / "src" / "webui"
+    webui_dir = PROJECT_ROOT / "src" / "cyrene" / "workbench" / "webui"
     build_script = webui_dir / "build-jsx.mjs"
     if not build_script.exists():
         print("  [warn] build-jsx.mjs not found, skipping JSX build")
@@ -176,7 +176,7 @@ def build_webui_js() -> None:
     if not (webui_dir / "node_modules").exists():
         result = subprocess.run(["npm", "install"], cwd=str(webui_dir))
         if result.returncode != 0:
-            print("  [error] npm install failed in src/webui")
+            print("  [error] npm install failed in src/cyrene/workbench/webui")
             sys.exit(1)
 
     result = subprocess.run(["node", "build-jsx.mjs"], cwd=str(webui_dir))

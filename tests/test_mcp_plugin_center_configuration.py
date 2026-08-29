@@ -5,9 +5,9 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from agent.plugin.plugin_impl.cyrene_mcp import application
-from agent.plugin.plugin_impl.cyrene_mcp import service as service_module
-from agent.plugin.plugin_impl.cyrene_mcp.service import (
+from cyrene.plugins.builtin.cyrene_mcp import application
+from cyrene.plugins.builtin.cyrene_mcp import service as service_module
+from cyrene.plugins.builtin.cyrene_mcp.service import (
     MCPPluginService,
     MCPServerNotFoundError,
 )

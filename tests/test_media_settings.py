@@ -23,7 +23,7 @@ def isolated_config_store(tmp_path, monkeypatch):
 def test_media_settings_redact_preserve_clear_secrets_and_enforce_cas(
     isolated_config_store,
 ):
-    from agent.plugin.plugin_impl.cyrene_media.settings import (
+    from cyrene.plugins.builtin.cyrene_media.settings import (
         get_media_settings,
         merge_media_settings_update,
         public_media_settings,
@@ -82,7 +82,7 @@ def test_media_settings_redact_preserve_clear_secrets_and_enforce_cas(
 def test_media_settings_use_current_safe_defaults_and_closed_provider_schema(
     isolated_config_store,
 ):
-    from agent.plugin.plugin_impl.cyrene_media.settings import get_media_settings, merge_media_settings_update
+    from cyrene.plugins.builtin.cyrene_media.settings import get_media_settings, merge_media_settings_update
 
     defaults = get_media_settings()
     assert defaults["max_download_mb"] == 256
@@ -111,7 +111,7 @@ def test_media_settings_use_current_safe_defaults_and_closed_provider_schema(
 def test_media_settings_accept_google_reference_upload_timeout(
     isolated_config_store,
 ):
-    from agent.plugin.plugin_impl.cyrene_media.settings import get_media_settings, merge_media_settings_update
+    from cyrene.plugins.builtin.cyrene_media.settings import get_media_settings, merge_media_settings_update
 
     merge_media_settings_update(
         {
@@ -140,7 +140,7 @@ def test_media_settings_reject_unsafe_or_ambiguous_base_urls(
     base_url,
     message,
 ):
-    from agent.plugin.plugin_impl.cyrene_media.settings import merge_media_settings_update
+    from cyrene.plugins.builtin.cyrene_media.settings import merge_media_settings_update
 
     with pytest.raises(ValueError, match=message):
         merge_media_settings_update(
@@ -154,7 +154,7 @@ def test_media_settings_reject_unsafe_or_ambiguous_base_urls(
 def test_media_settings_recursive_redaction_and_legacy_field_filtering(
     isolated_config_store,
 ):
-    from agent.plugin.plugin_impl.cyrene_media.settings import (
+    from cyrene.plugins.builtin.cyrene_media.settings import (
         get_media_settings,
         public_media_settings,
         redact_media_secrets,
@@ -205,7 +205,7 @@ def test_media_settings_recursive_redaction_and_legacy_field_filtering(
 
 
 def test_media_status_projection_is_an_explicit_public_shape_without_paths_or_errors():
-    from agent.plugin.plugin_impl.cyrene_media.routes import _public_batch, _public_daemon_status, _public_job
+    from cyrene.plugins.builtin.cyrene_media.routes import _public_batch, _public_daemon_status, _public_job
 
     raw_job = {
         "job_id": "job-1",
@@ -312,7 +312,7 @@ def test_media_status_projection_is_an_explicit_public_shape_without_paths_or_er
 
 @pytest.mark.asyncio
 async def test_media_settings_get_route_offloads_synchronous_store_io(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_media import settings_routes as media_routes
+    from cyrene.plugins.builtin.cyrene_media import settings_routes as media_routes
 
     event_loop_thread = threading.get_ident()
     called_from: list[int] = []

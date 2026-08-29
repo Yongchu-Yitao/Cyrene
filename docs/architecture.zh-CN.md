@@ -176,7 +176,8 @@ Electron 与 Web 后端仅作为客户端连接，因此关闭视图不会结束
 
 ### Code Tool
 
-`cyrene/tool_impl/code/` 通过 `code_tools` 渐进提供：
+可编辑的 `cyrene.plugins.builtin.cyrene_code` 插件包通过 `code_tools`
+渐进提供：
 
 - Symbol/Reference/Import/File Hash SQLite Index；
 - Symbol、Caller、Reference、File Summary 分析；
@@ -237,8 +238,8 @@ Agent 可提供精确用户引用；若省略，则由同一个 Permission Revie
 Cyrene 只提供 Workbench 前端。主要区域是 Task、Chat、Knowledge/Library、
 Schedule 和 Memory；Search、Browser/PDF/Diff、Settings、Onboarding、Help、
 Profile 和 Quick Chat 是 Overlay、Panel 或 Secondary Surface，不是旧 UI
-页面。唯一源码根是 `src/webui/frontend`，唯一生成输出根是
-`src/webui/static/app`。
+页面。唯一源码根是 `src/cyrene/workbench/webui/frontend`，唯一生成输出根是
+`src/cyrene/workbench/webui/static/app`。
 
 `WorkbenchTopbar` 明确维护两个独立集合：最多 3 个 Task/Chat Session 的本地
 MRU/置顶列表，以及持久化的 Pinned Resource Shelf。资源拖动使用内部 MIME
@@ -303,37 +304,44 @@ Logical Config Snapshot，其中可能存在 Credential。
 ```text
 src/
 ├── cyrene/
-│   ├── agent/               Agent Loop 与内部公共 API
-│   ├── workbench/           Workbench 业务服务
-│   ├── model_runtime/       Provider/Model Runtime
-│   ├── learning/            行为与 Skill 学习
-│   ├── runtime/             Bootstrap、Lifecycle、Scheduler、Persistence
-│   ├── observability/       Trace、Debug、Telemetry
-│   ├── knowledge/           Ingestion、Embedding、Storage
-│   ├── channels/            Telegram、WeChat
-│   ├── tooling/             Tool Control Plane 与 Backend
-│   ├── tool_impl/           按领域划分的 Tool 实现
-│   ├── config.py
-│   ├── call_llm.py
-│   ├── browser.py
-│   ├── subagent.py
-│   ├── memory.py
-│   ├── cli.py
-│   ├── tools.py
-│   ├── __init__.py
-│   ├── __main__.py
-│   └── local_cli.py         旧版直接文件启动兼容垫片
-├── route/                   FastAPI Adapter 与 Registry
-├── webui/                   App Lifecycle、Auth、唯一 Workbench 前端与 SPA Hosting
-│   ├── frontend/            唯一 React/JSX 源码根
-│   └── static/app/          唯一生成/打包输出根
+│   ├── core/                与 Host 无关的 Agent Runtime
+│   │   ├── context/         持久 Context Tree
+│   │   ├── hook/            Tree-local Lifecycle Hook
+│   │   └── plugin/          Plugin 对象、Scope、Registry 与执行
+│   ├── plugins/             Cyrene 产品插件层
+│   │   ├── application.py  Application Scope Plugin Host
+│   │   ├── context.py      Workbench Application Contribution SDK
+│   │   ├── model_*.py      Model Provider 组装
+│   │   └── builtin/        标准可编辑功能插件
+│   ├── workbench/           Cyrene Host 适配层
+│   │   ├── application/    应用编排、事件与通知
+│   │   ├── chat/           Chat Service、Repository 与 Run
+│   │   ├── tasks/          Task 执行与 Workflow Service
+│   │   ├── projects/       Project 生命周期、文件与组装
+│   │   ├── goals/          可持久恢复的 Goal Loop
+│   │   ├── planning/       Planning Contract 与 Helper
+│   │   ├── artifacts/      Artifact、Presentation 与 Export
+│   │   ├── sessions/       Session Context 与 Presentation
+│   │   ├── control/        外部 Control Port 与 Projection
+│   │   ├── workspaces/     Workspace Change 与 Diff Service
+│   │   ├── ui/             UI Surface 抽象
+│   │   ├── core_adapter/   Session/Chat/Task 与 Core 的桥接
+│   │   ├── http/           FastAPI/HTTP 组装
+│   │   ├── persistence/    Workbench 持久化
+│   │   └── webui/         App Lifecycle 与唯一 SPA 源码/输出
+│   ├── agent_runtime/       外部 ACP Agent 集成
+│   ├── model_runtime/       Provider Transport/Runtime 支持
+│   ├── runtime/             进程 Bootstrap 与 Lifecycle
+│   └── observability/       Trace、Debug、Telemetry
 tests/
 data/
 workspace/
 store/
 ```
 
-`cyrene.db`、`cyrene.scheduler`、`cyrene.workbench_runtime` 等历史 Import 由
-`cyrene/runtime/module_compat.py` 惰性解析到完全相同的正式模块对象，不需要
-重复顶层实现文件。`local_cli.py` 仅保留为旧版直接文件启动兼容垫片；当前源码
-启动和 Electron 开发模式统一使用 `cyrene` 项目入口。
+`cyrene.core` 不得导入 `cyrene.plugins` 或 `cyrene.workbench`。产品层通过
+Plugin Scope 提供 Model 和 Application Service，Workbench 在打开 Core Session
+时显式传入该 Application Scope。原顶层 `agent`、`route`、`webui` 包已删除，
+不发布兼容外壳或重复实现。
+Workbench 业务模块按领域组织；包根目录不放业务 Service 实现，也不保留旧路径
+转发模块。

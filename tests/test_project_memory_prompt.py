@@ -7,10 +7,10 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from cyrene.workbench import chat_application
-from agent.plugin.plugin_impl.cyrene_memory import structured as structured_memory
-from agent.plugin.plugin_impl.cyrene_memory import project_memory as memory_prompt
-from agent.plugin.plugin_impl.cyrene_memory import routes_project as project_memory_routes
+from cyrene.workbench.chat import chat_application
+from cyrene.plugins.builtin.cyrene_memory import structured as structured_memory
+from cyrene.plugins.builtin.cyrene_memory import project_memory as memory_prompt
+from cyrene.plugins.builtin.cyrene_memory import routes_project as project_memory_routes
 
 
 class _MemoryGateway:
@@ -24,7 +24,7 @@ class _MemoryGateway:
 @pytest.fixture(autouse=True)
 def isolated_project_memory_store(tmp_path, monkeypatch):
     original_db_path = memory_prompt._STORE_DB_PATH
-    from cyrene.workbench.store import ensure_schema
+    from cyrene.workbench.persistence.store import ensure_schema
 
     database = tmp_path / "memory.db"
     ensure_schema(database)
@@ -45,7 +45,7 @@ def isolated_project_memory_store(tmp_path, monkeypatch):
 
 def test_auto_learning_uses_context_thresholds_and_stops_at_seventy(monkeypatch):
     monkeypatch.setattr(
-        "agent.context.compaction.message_token_estimate",
+        "cyrene.core.context.compaction.message_token_estimate",
         lambda message: int(message.get("tokens") or 0),
     )
     messages = [{"role": "user", "tokens": 199}]
@@ -132,7 +132,7 @@ def test_auto_learning_accepts_observed_model_context_usage():
 
 def test_structured_memory_claims_five_percent_thresholds_once(monkeypatch):
     monkeypatch.setattr(
-        "agent.context.compaction.message_token_estimate",
+        "cyrene.core.context.compaction.message_token_estimate",
         lambda message: int(message.get("tokens") or 0),
     )
     messages = [{"role": "user", "tokens": 99}]
@@ -209,7 +209,7 @@ def test_completed_turn_counter_excludes_retry_command_and_side_agent():
 
 
 def test_main_agent_memory_trigger_is_a_narrow_project_capability():
-    from agent.plugin.plugin_impl.cyrene_memory.definitions import get_native_tool_def
+    from cyrene.plugins.builtin.cyrene_memory.definitions import get_native_tool_def
 
     schema = get_native_tool_def("trigger_project_memory_learning")["function"]["parameters"]
     assert set(schema["properties"]) == {"reason"}
@@ -417,8 +417,8 @@ def test_legacy_chat_memory_snapshot_is_pinned_once(monkeypatch):
     from copy import deepcopy
     from types import SimpleNamespace
 
-    from agent import plugin as agent_plugin
-    from cyrene.workbench.chat_service import ChatService
+    from cyrene.core import plugin as agent_plugin
+    from cyrene.workbench.chat.chat_service import ChatService
 
     chat = {
         "id": "chat-legacy",
@@ -443,7 +443,7 @@ def test_legacy_chat_memory_snapshot_is_pinned_once(monkeypatch):
 
     monkeypatch.setattr(
         agent_plugin,
-        "active_plugin_service",
+        "application_plugin_service",
         lambda service_id: (
             SimpleNamespace(freeze_snapshot=freeze_snapshot)
             if service_id == "memory"
@@ -498,8 +498,8 @@ def test_tree_context_snapshot_requires_a_concrete_node():
 
 
 def test_tree_context_snapshot_starts_from_exact_context_tree_node(tmp_path):
-    from agent.context import ContextStoreRouter
-    from agent.plugin.plugin_impl.cyrene_memory.service import MemoryService
+    from cyrene.core.context import ContextStoreRouter
+    from cyrene.plugins.builtin.cyrene_memory.service import MemoryService
 
     context_directory = tmp_path / "agent-state" / "context"
     identity = {
@@ -612,8 +612,8 @@ def test_tree_context_snapshot_starts_from_exact_context_tree_node(tmp_path):
 def test_live_learning_anchors_current_tree_node_without_its_open_tool_call(
     tmp_path,
 ):
-    from agent.context import ContextStoreRouter
-    from agent.plugin.plugin_impl.cyrene_memory.service import MemoryService
+    from cyrene.core.context import ContextStoreRouter
+    from cyrene.plugins.builtin.cyrene_memory.service import MemoryService
 
     context_directory = tmp_path / "agent-state" / "context"
     with ContextStoreRouter(context_directory) as store:
@@ -849,7 +849,7 @@ async def test_memory_agent_reuses_exact_candidate_and_submits_with_one_user_mes
 
 @pytest.mark.asyncio
 async def test_memory_agent_reports_removed_exact_model_without_fallback():
-    from agent.plugin.model_router import EXACT_MODEL_UNAVAILABLE
+    from cyrene.plugins.model_router import EXACT_MODEL_UNAVAILABLE
 
     async def unavailable(_messages, **_kwargs):
         raise RuntimeError(EXACT_MODEL_UNAVAILABLE)
@@ -872,9 +872,9 @@ async def test_memory_agent_reports_removed_exact_model_without_fallback():
 
 @pytest.mark.asyncio
 async def test_memory_agent_runs_end_to_end_through_plugin_model_gateway(monkeypatch):
-    from agent.plugin import Plugin, PluginRegistry
-    from agent.plugin import model_router
-    from agent.plugin.model_gateway import PluginModelGateway
+    from cyrene.core.plugin import Plugin, PluginRegistry
+    from cyrene.plugins import model_router
+    from cyrene.plugins.model_gateway import PluginModelGateway
 
     identity = {
         "candidateId": "memory-candidate",
@@ -892,7 +892,7 @@ async def test_memory_agent_runs_end_to_end_through_plugin_model_gateway(monkeyp
     observed = {}
 
     monkeypatch.setattr(
-        "agent.plugin.model_catalog.resolve_exact_model_candidate",
+        "cyrene.plugins.model_catalog.resolve_exact_model_candidate",
         lambda requested: candidate if requested == identity else None,
     )
     monkeypatch.setattr(

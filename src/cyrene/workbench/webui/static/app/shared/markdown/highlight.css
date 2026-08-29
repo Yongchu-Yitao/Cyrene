@@ -1,0 +1,120 @@
+/* Shared Workbench Markdown code block syntax highlighting. */
+
+/* Line numbers */
+.wbc-msg-body.markdown pre code .hljs-ln-n {
+  user-select: none;
+  -webkit-user-select: none;
+  text-align: right;
+  color: var(--text-4);
+  padding-right: 14px;
+  min-width: 36px;
+  display: inline-block;
+  border-right: 1px solid var(--line);
+  margin-right: 12px;
+}
+
+/* Language tag on code blocks */
+.wbc-msg-body.markdown pre[data-language]::before {
+  content: none;
+}
+
+/* ── Code block action bar ── */
+
+.wbc-msg-body.markdown pre:has(> .code-block-actions),
+.wbc-side-body pre:has(> .code-block-actions) {
+  box-sizing: border-box;
+  padding-top: 52px;
+}
+
+.code-block-actions {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 36px;
+  padding: 5px 10px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  border-radius: var(--r-s) var(--r-s) 0 0;
+  opacity: 0.88;
+  transition: opacity 0.15s;
+  z-index: 2;
+}
+
+.wbc-msg-body.markdown pre:hover .code-block-actions,
+.wbc-side-body pre:hover .code-block-actions,
+.code-block-actions:hover {
+  opacity: 1;
+}
+
+.code-lang-label {
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text-4);
+  text-transform: lowercase;
+}
+
+.code-action-btn {
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text-2);
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-s);
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.code-action-btn:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.code-action-btn[data-state="success"] {
+  color: #fff;
+  background: #1f9d57;
+  border-color: #1f9d57;
+}
+
+.code-action-btn[data-state="error"] {
+  color: #fff;
+  background: #c2413b;
+  border-color: #c2413b;
+}
+
+/* ── Highlight.js theme overrides for Cyrene ── */
+
+/* Light theme */
+[data-theme="light"] .wbc-msg-body.markdown pre code.hljs {
+  color: var(--text-2);
+  background: transparent;
+}
+
+/* Dark theme — use a soft dark background matching the shell bg */
+[data-theme="dark"] .wbc-msg-body.markdown pre code.hljs {
+  color: var(--text-2);
+  background: transparent;
+}
+
+.markdown .katex {
+  font-size: 1.06em;
+}
+
+.markdown .katex-display {
+  max-width: 100%;
+  margin: 0.9em 0;
+  padding: 0.15em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.markdown .katex-error {
+  color: var(--danger, var(--err, #c53b3b));
+  font-family: var(--mono);
+  font-size: 0.92em;
+}

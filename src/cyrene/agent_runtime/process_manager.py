@@ -70,9 +70,9 @@ def _managed_runtime_bin_dir() -> str | None:
     if _MANAGED_BIN_CHECKED:
         return _MANAGED_BIN_RESULT
     try:
-        from agent.plugin import active_plugin_service
+        from cyrene.core.plugin import application_plugin_service
 
-        service = active_plugin_service("extensions")
+        service = application_plugin_service("extensions")
         provider = getattr(service, "managed_runtime_bin_directory", None)
         managed_bin = str(provider() or "") if callable(provider) else ""
     except Exception:

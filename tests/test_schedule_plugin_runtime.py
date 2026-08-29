@@ -1,10 +1,10 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from agent.plugin import PluginContext, PluginRegistry, PluginRuntime
-from agent.plugin.native_tools import seed_builtin_plugin_directory
+from cyrene.core.plugin import PluginContext, PluginRegistry, PluginRuntime
+from cyrene.plugins.native_tools import seed_builtin_plugin_directory
 from cyrene.runtime.database import init_db
-from agent.plugin.plugin_impl.cyrene_schedule.service import ScheduleRuntimeService
+from cyrene.plugins.builtin.cyrene_schedule.service import ScheduleRuntimeService
 
 
 def _runtime(tmp_path):

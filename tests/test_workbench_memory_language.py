@@ -2,10 +2,10 @@ import json
 
 import pytest
 
-from agent.plugin import PluginContext
-from agent.plugin.plugin_impl.cyrene_memory.definitions import get_native_tool_def
+from cyrene.core.plugin import PluginContext
+from cyrene.plugins.builtin.cyrene_memory.definitions import get_native_tool_def
 from cyrene.runtime import settings_store
-from agent.plugin.plugin_impl.cyrene_memory import structured as memory
+from cyrene.plugins.builtin.cyrene_memory import structured as memory
 
 
 class _MemoryGateway:
@@ -463,7 +463,7 @@ def test_workbench_memory_payload_hides_internal_task_reports(monkeypatch, tmp_p
 
 @pytest.mark.asyncio
 async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_memory import search_project_memory as tool
+    from cyrene.plugins.builtin.cyrene_memory import search_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-test.json").write_text(
@@ -500,8 +500,8 @@ async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_
 async def test_list_memories_combines_short_term_and_current_project(
     monkeypatch, tmp_path
 ):
-    from agent.plugin.plugin_impl.cyrene_memory import short_term
-    from agent.plugin.plugin_impl.cyrene_memory import list_memories as tool
+    from cyrene.plugins.builtin.cyrene_memory import short_term
+    from cyrene.plugins.builtin.cyrene_memory import list_memories as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     short_term.init_short_term(tmp_path)
@@ -541,7 +541,7 @@ async def test_list_memories_combines_short_term_and_current_project(
 
 @pytest.mark.asyncio
 async def test_search_project_memory_allows_default_workbench_project(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_memory import search_project_memory as tool
+    from cyrene.plugins.builtin.cyrene_memory import search_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-default.json").write_text(json.dumps([{
@@ -567,8 +567,8 @@ async def test_search_project_memory_allows_default_workbench_project(monkeypatc
 def test_workbench_scope_resolver_distinguishes_default_project(monkeypatch, tmp_path):
     import sqlite3
 
-    from cyrene.workbench import context as workbench_context
-    from cyrene.workbench.store import ensure_schema
+    from cyrene.workbench.sessions import context as workbench_context
+    from cyrene.workbench.persistence.store import ensure_schema
 
     db_path = tmp_path / "workbench.db"
     ensure_schema(db_path)
@@ -607,7 +607,7 @@ def test_workbench_scope_resolver_distinguishes_default_project(monkeypatch, tmp
 
 
 def test_memory_tools_are_registered_with_distinct_contracts():
-    from agent.plugin.plugin_impl.cyrene_memory import plugin_pack
+    from cyrene.plugins.builtin.cyrene_memory import plugin_pack
 
     plugins = {plugin.name: plugin for plugin in plugin_pack.plugins}
 
@@ -642,7 +642,7 @@ def test_memory_tools_are_registered_with_distinct_contracts():
 async def test_retire_project_memory_tool_marks_exact_memory_stale(
     monkeypatch, tmp_path
 ):
-    from agent.plugin.plugin_impl.cyrene_memory import retire_project_memory as tool
+    from cyrene.plugins.builtin.cyrene_memory import retire_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-test.json").write_text(
@@ -686,7 +686,7 @@ async def test_retire_project_memory_tool_marks_exact_memory_stale(
 
 @pytest.mark.asyncio
 async def test_retire_project_memory_tool_is_idempotent(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_memory import retire_project_memory as tool
+    from cyrene.plugins.builtin.cyrene_memory import retire_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-test.json").write_text(
@@ -718,7 +718,7 @@ async def test_retire_project_memory_tool_is_idempotent(monkeypatch, tmp_path):
 async def test_retire_project_memory_tool_supports_default_workbench_project(
     monkeypatch, tmp_path
 ):
-    from agent.plugin.plugin_impl.cyrene_memory import retire_project_memory as tool
+    from cyrene.plugins.builtin.cyrene_memory import retire_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     path = tmp_path / "wb_memory_project-default.json"

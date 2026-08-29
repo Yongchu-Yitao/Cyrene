@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import asyncio
 
-from agent import AgentSession
-from agent.context.compaction import (
+from cyrene.core import AgentSession
+from cyrene.core.context.compaction import (
     COMPACT_BLOCK_PREFIX,
     compact_messages,
     messages_token_estimate,
 )
-from agent.plugin import Plugin, PluginPack, PluginRegistry
-from agent.workbench import WorkbenchSessionBridge
+from cyrene.core.plugin import Plugin, PluginPack, PluginRegistry
+from cyrene.workbench.core_adapter import WorkbenchSessionBridge
 
 
 def run(coroutine):

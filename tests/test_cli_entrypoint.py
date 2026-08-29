@@ -37,6 +37,12 @@ def test_uv_console_script_and_electron_use_runtime_entrypoint():
     assert "'run'" in development_args
     assert "'cyrene'" in development_args
     assert "'local_cli.py'" not in development_args
+    assert "const DEVELOPMENT_APP_NAME = 'Cyrene-dev';" in source
+    assert "app.setPath('userData', getCyreneUserDataDir())" in source
+    assert "process.env.ELECTRON_DEV === '1' ? DEVELOPMENT_APP_NAME : APP_NAME" in source
+    assert source.count(
+        "process.env.CYRENE_USER_DATA_DIR || getCyreneUserDataDir()"
+    ) == 1
 
 
 @pytest.mark.skipif(
@@ -64,7 +70,7 @@ def test_checkout_console_command_loads_runtime_and_new_agent_package(tmp_path):
             str(CHECKOUT_VENV_PYTHON),
             "-I",
             "-c",
-            "import agent, agent.plugin; print(agent.__file__)",
+            "import cyrene.core, cyrene.core.plugin; print(cyrene.core.__file__)",
         ],
         cwd=tmp_path,
         capture_output=True,
@@ -75,8 +81,8 @@ def test_checkout_console_command_loads_runtime_and_new_agent_package(tmp_path):
     )
 
     assert import_result.returncode == 0, import_result.stderr
-    expected_agent = PROJECT_DIR / "src" / "agent" / "__init__.py"
-    assert Path(import_result.stdout.strip()).resolve() == expected_agent.resolve()
+    expected_core = PROJECT_DIR / "src" / "cyrene" / "core" / "__init__.py"
+    assert Path(import_result.stdout.strip()).resolve() == expected_core.resolve()
 
 
 def test_direct_local_cli_file_bootstraps_source_imports(tmp_path):
@@ -121,7 +127,7 @@ def test_direct_local_cli_prefers_checkout_virtualenv(tmp_path):
     env.pop("PYTHONPATH", None)
     env.pop("CYRENE_LOCAL_CLI_BOOTSTRAPPED", None)
     result = subprocess.run(
-        [sys.executable, str(entrypoint), "--help"],
+        [sys.executable, str(entrypoint), "--lang", "en", "--help"],
         cwd=tmp_path,
         capture_output=True,
         text=True,

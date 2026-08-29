@@ -8,8 +8,8 @@ import threading
 
 import pytest
 
-from agent.context import ContextStoreRouter
-from agent.hook import (
+from cyrene.core.context import ContextStoreRouter
+from cyrene.core.hook import (
     CONTEXT_CHANGE,
     CONTEXT_USED,
     POST_TOOL_USE,

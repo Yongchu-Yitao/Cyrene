@@ -11,10 +11,10 @@ async def test_reclaimed_worker_resumes_remote_job_with_original_model_and_deliv
     tmp_path,
     monkeypatch,
 ):
-    from agent.plugin.plugin_impl.cyrene_media.manager import MediaJobManager
-    from agent.plugin.plugin_impl.cyrene_media.models import MediaArtifact, MediaProviderResult
-    from agent.plugin.plugin_impl.cyrene_media import providers
-    from agent.plugin.plugin_impl.cyrene_media import worker as worker_module
+    from cyrene.plugins.builtin.cyrene_media.manager import MediaJobManager
+    from cyrene.plugins.builtin.cyrene_media.models import MediaArtifact, MediaProviderResult
+    from cyrene.plugins.builtin.cyrene_media import providers
+    from cyrene.plugins.builtin.cyrene_media import worker as worker_module
 
     manager = MediaJobManager(tmp_path / "media.sqlite3")
     batch = manager.create_batch(

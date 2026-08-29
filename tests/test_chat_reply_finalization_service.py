@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import threading
 
-from cyrene.workbench.chat_external_turn_service import ExternalTurnProjection
-from cyrene.workbench.chat_reply_finalization_service import (
+from cyrene.workbench.chat.chat_external_turn_service import ExternalTurnProjection
+from cyrene.workbench.chat.chat_reply_finalization_service import (
     ChatReplyFinalizationApplicationService,
     ChatReplyFinalizationDependencies,
     ChatReplyFinalizationRequest,

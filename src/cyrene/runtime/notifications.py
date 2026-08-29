@@ -287,9 +287,9 @@ def _notify_linux(title: str, body: str) -> dict[str, Any]:
 
 async def _notify_telegram(title: str, body: str) -> dict[str, Any]:
     """Send a Telegram message to the configured owner."""
-    from agent.plugin import active_plugin_service
+    from cyrene.core.plugin import application_plugin_service
 
-    service = active_plugin_service("channels")
+    service = application_plugin_service("channels")
     if service is None:
         return {"ok": False, "error": localized(
             "The messaging channels Plugin is not available.",
@@ -305,9 +305,9 @@ async def _notify_telegram(title: str, body: str) -> dict[str, Any]:
 
 async def _notify_wechat(title: str, body: str) -> dict[str, Any]:
     """Send a WeChat message to the configured owner."""
-    from agent.plugin import active_plugin_service
+    from cyrene.core.plugin import application_plugin_service
 
-    service = active_plugin_service("channels")
+    service = application_plugin_service("channels")
     if service is None:
         return {"ok": False, "error": localized(
             "The messaging channels Plugin is not available.",

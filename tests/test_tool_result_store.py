@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from agent.plugin.plugin_impl.cyrene_content import tool_result_store as result_store
+from cyrene.plugins.builtin.cyrene_content import tool_result_store as result_store
 
 
 @pytest.fixture

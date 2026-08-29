@@ -125,7 +125,7 @@ async def test_backup_collects_plugin_owned_files_and_replace_roots(
     backup_sandbox,
     monkeypatch,
 ):
-    import agent.plugin as plugin_runtime
+    import cyrene.core.plugin as plugin_runtime
 
     env = backup_sandbox
     backup = env["backup"]
@@ -166,7 +166,7 @@ async def test_backup_collects_plugin_owned_files_and_replace_roots(
     )
     monkeypatch.setattr(
         plugin_runtime,
-        "active_plugin_application_host",
+        "application_plugin_scope",
         lambda: host,
     )
 

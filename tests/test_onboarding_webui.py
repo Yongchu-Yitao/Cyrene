@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 def _patch_paths(monkeypatch, tmp_path, soul_content, default_content):
     from cyrene.runtime import onboarding
-    from agent.plugin.plugin_impl.cyrene_memory import archive as conversations
+    from cyrene.plugins.builtin.cyrene_memory import archive as conversations
 
     soul_path = tmp_path / "workspace" / "SOUL.md"
     soul_path.parent.mkdir(parents=True, exist_ok=True)
@@ -127,7 +127,7 @@ def test_get_onboarding_status_skips_personality_when_soul_is_unavailable(
 def test_core_onboarding_router_does_not_own_personality_endpoint():
     from fastapi import APIRouter
 
-    from route.settings.onboarding_context import register_onboarding_routes
+    from cyrene.workbench.http.settings.onboarding_context import register_onboarding_routes
 
     router = APIRouter()
     register_onboarding_routes(router)
@@ -163,15 +163,15 @@ async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path
         "save_model_configuration": lambda self, value: saved.setdefault("graph", value),
     })()
     memory_service = type("MemoryService", (), {"has_existing_data": lambda self: False})()
-    import agent.plugin as plugin_api
+    import cyrene.core.plugin as plugin_api
     monkeypatch.setattr(
         plugin_api,
-        "active_plugin_service",
+        "application_plugin_service",
         lambda name: model_service if name == "model_configuration" else memory_service if name == "memory" else None,
     )
     monkeypatch.setattr(
         onboarding,
-        "active_plugin_service",
+        "application_plugin_service",
         lambda name: model_service if name in {"model_configuration", "model_probe"} else memory_service if name == "memory" else None,
     )
     monkeypatch.setattr(onboarding, "_primary_model", lambda: {
@@ -237,15 +237,15 @@ async def test_save_codex_oauth_setup_persists_model_and_effort(monkeypatch, tmp
         "oauth_base_url": lambda self: "codex://oauth",
     })()
     memory_service = type("MemoryService", (), {"has_existing_data": lambda self: False})()
-    import agent.plugin as plugin_api
+    import cyrene.core.plugin as plugin_api
     monkeypatch.setattr(
         plugin_api,
-        "active_plugin_service",
+        "application_plugin_service",
         lambda name: model_service if name == "model_configuration" else memory_service if name == "memory" else None,
     )
     monkeypatch.setattr(
         onboarding,
-        "active_plugin_service",
+        "application_plugin_service",
         lambda name: model_service if name == "model_configuration" else memory_service if name == "memory" else None,
     )
     monkeypatch.setattr(onboarding, "_primary_model", lambda: {
@@ -276,7 +276,7 @@ async def test_save_codex_oauth_setup_persists_model_and_effort(monkeypatch, tmp
 
 async def test_vision_capability_probe_sends_an_image(monkeypatch):
     from cyrene.runtime import onboarding
-    from agent.plugin.plugin_impl.cyrene_model import probe as model_probe_service
+    from cyrene.plugins.builtin.cyrene_model import probe as model_probe_service
 
     calls = []
 
@@ -288,7 +288,7 @@ async def test_vision_capability_probe_sends_an_image(monkeypatch):
     probe_service = model_probe_service.ModelProbeService()
     monkeypatch.setattr(
         onboarding,
-        "active_plugin_service",
+        "application_plugin_service",
         lambda name: probe_service if name == "model_probe" else None,
     )
 
@@ -313,7 +313,7 @@ async def test_text_connection_probe_normalizes_official_provider_endpoint(
     expected,
 ):
     from cyrene.runtime import onboarding
-    from agent.plugin.plugin_impl.cyrene_model import probe as model_probe_service
+    from cyrene.plugins.builtin.cyrene_model import probe as model_probe_service
 
     calls = []
 
@@ -325,7 +325,7 @@ async def test_text_connection_probe_normalizes_official_provider_endpoint(
     probe_service = model_probe_service.ModelProbeService()
     monkeypatch.setattr(
         onboarding,
-        "active_plugin_service",
+        "application_plugin_service",
         lambda name: probe_service if name == "model_probe" else None,
     )
 
@@ -344,7 +344,7 @@ async def test_text_connection_probe_normalizes_official_provider_endpoint(
 def test_completed_onboarding_creates_and_opens_the_first_chat():
     root = Path(__file__).resolve().parent.parent
     welcome_source = (
-        root / "src" / "webui" / "frontend" / "workbench-welcome.jsx"
+        root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-welcome.jsx"
     ).read_text(encoding="utf-8")
     workbench_source = workbench_shell_source()
 

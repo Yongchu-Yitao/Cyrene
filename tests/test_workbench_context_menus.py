@@ -75,7 +75,7 @@ def test_native_browser_tab_picker_has_motion_and_reduced_motion_support():
 
 def test_native_browser_tab_picker_has_flat_chrome_without_visible_scrollbars():
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
-    build = (ROOT / "src" / "webui" / "build-jsx.mjs").read_text(encoding="utf-8")
+    build = (ROOT / "src" / "cyrene" / "workbench" / "webui" / "build-jsx.mjs").read_text(encoding="utf-8")
     embedded_picker = main.split("const BROWSER_TAB_PICKER_HTML", 1)[1].split(
         "function normalizeBrowserSessionId", 1
     )[0]
@@ -162,11 +162,11 @@ def test_composer_tools_menu_closes_on_outside_pointerdown():
 def test_existing_item_action_menus_are_available_from_right_click():
     shell = workbench_shell_source()
     chat = workbench_chat_source()
-    library = (ROOT / "src/webui/frontend/workbench-library.jsx").read_text(
+    library = (ROOT / "src/cyrene/workbench/webui/frontend/workbench-library.jsx").read_text(
         encoding="utf-8"
     )
     library_columns = (
-        ROOT / "src/webui/frontend/features/knowledge/library-columns.jsx"
+        ROOT / "src/cyrene/workbench/webui/frontend/features/knowledge/library-columns.jsx"
     ).read_text(encoding="utf-8")
 
     # Project cards were consolidated into the top-bar switcher. Its current
@@ -322,7 +322,7 @@ def test_all_chat_action_menu_items_have_icons():
 
 def test_floating_menus_and_modals_share_the_conversation_surface_tokens():
     styles = workbench_style_source()
-    library_styles = (ROOT / "src/webui/frontend/workbench-library.css").read_text(
+    library_styles = (ROOT / "src/cyrene/workbench/webui/frontend/workbench-library.css").read_text(
         encoding="utf-8"
     )
 
@@ -426,13 +426,13 @@ def test_composer_popmenus_hide_scrollbar_chrome_without_disabling_scrolling():
 
 
 def test_memory_and_library_flyouts_expose_accessible_state():
-    memory = (ROOT / "src/webui/frontend/workbench-memory.jsx").read_text(
+    memory = (ROOT / "src/cyrene/workbench/webui/frontend/workbench-memory.jsx").read_text(
         encoding="utf-8"
     )
-    library = (ROOT / "src/webui/frontend/workbench-library.jsx").read_text(
+    library = (ROOT / "src/cyrene/workbench/webui/frontend/workbench-library.jsx").read_text(
         encoding="utf-8"
     )
-    quick_chat = (ROOT / "src/webui/frontend/workbench-quick-chat.jsx").read_text(
+    quick_chat = (ROOT / "src/cyrene/workbench/webui/frontend/workbench-quick-chat.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -474,7 +474,7 @@ def test_project_memory_editor_and_manual_chat_trigger_are_wired_end_to_end():
     context_panel = frontend_module_source("features/chat/context-panel.jsx")
     error_mapping = frontend_module_source("features/chat/errors.jsx")
     messages = frontend_module_source("features/chat/messages.jsx")
-    memory_page = (ROOT / "src/webui/frontend/workbench-memory.jsx").read_text(encoding="utf-8")
+    memory_page = (ROOT / "src/cyrene/workbench/webui/frontend/workbench-memory.jsx").read_text(encoding="utf-8")
     memory_css = frontend_module_source("features/memory/memory.css")
     css = workbench_style_source()
     i18n = workbench_i18n_source()
@@ -538,7 +538,7 @@ def test_project_memory_editor_and_manual_chat_trigger_are_wired_end_to_end():
     assert 'no_completed_context: "workbenchChat.error.memoryContextUnavailable"' in error_mapping
     assert 'wbcNotifyBrowserWindowInteraction(false, "context-menu"' in chat_page
 
-    from agent.plugin.plugin_impl.cyrene_memory.routes_project import (
+    from cyrene.plugins.builtin.cyrene_memory.routes_project import (
         register_project_memory_routes,
     )
 
@@ -607,7 +607,7 @@ process.stdout.write(JSON.stringify(result));
 
 
 def test_knowledge_context_menu_can_show_a_local_file_in_its_folder():
-    library = (ROOT / "src/webui/frontend/workbench-library.jsx").read_text(
+    library = (ROOT / "src/cyrene/workbench/webui/frontend/workbench-library.jsx").read_text(
         encoding="utf-8"
     )
     preload = (ROOT / "electron/preload.js").read_text(encoding="utf-8")
@@ -624,10 +624,10 @@ def test_knowledge_context_menu_can_show_a_local_file_in_its_folder():
 
 
 def test_library_card_star_precedes_aligned_selection_control():
-    library = (ROOT / "src/webui/frontend/workbench-library.jsx").read_text(
+    library = (ROOT / "src/cyrene/workbench/webui/frontend/workbench-library.jsx").read_text(
         encoding="utf-8"
     )
-    css = (ROOT / "src/webui/frontend/workbench-library.css").read_text(
+    css = (ROOT / "src/cyrene/workbench/webui/frontend/workbench-library.css").read_text(
         encoding="utf-8"
     )
     title_row = library.split(
@@ -646,13 +646,13 @@ def test_library_card_star_precedes_aligned_selection_control():
 
 
 def test_library_table_title_header_is_localized_and_aligned_to_filenames():
-    css = (ROOT / "src/webui/frontend/workbench-library.css").read_text(
+    css = (ROOT / "src/cyrene/workbench/webui/frontend/workbench-library.css").read_text(
         encoding="utf-8"
     )
     i18n = workbench_i18n_source()
 
     library_columns = (
-        ROOT / "src/webui/frontend/features/knowledge/library-columns.jsx"
+        ROOT / "src/cyrene/workbench/webui/frontend/features/knowledge/library-columns.jsx"
     ).read_text(encoding="utf-8")
     assert 'className: "wb-lib-title-head"' in library_columns
     title_rule = css.split(".wb-lib-title-head {", 1)[1].split("}", 1)[0]
@@ -670,7 +670,7 @@ def test_library_table_title_header_is_localized_and_aligned_to_filenames():
 
 
 def test_memory_items_expose_existing_actions_from_right_click():
-    memory = (ROOT / "src/webui/frontend/workbench-memory.jsx").read_text(
+    memory = (ROOT / "src/cyrene/workbench/webui/frontend/workbench-memory.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -686,7 +686,7 @@ def test_memory_items_expose_existing_actions_from_right_click():
 
 
 def test_schedule_events_have_context_actions_in_every_calendar_view():
-    schedule = (ROOT / "src/webui/frontend/workbench-schedule.jsx").read_text(
+    schedule = (ROOT / "src/cyrene/workbench/webui/frontend/workbench-schedule.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -704,7 +704,7 @@ def test_schedule_events_have_context_actions_in_every_calendar_view():
 
 def test_native_browser_tabs_support_reload_mute_and_close_from_right_click():
     browser = (
-        ROOT / "src/webui/frontend/shared/browser/viewport.jsx"
+        ROOT / "src/cyrene/workbench/webui/frontend/shared/browser/viewport.jsx"
     ).read_text(encoding="utf-8")
     i18n = workbench_i18n_source()
 
@@ -727,7 +727,7 @@ def test_native_browser_tabs_support_reload_mute_and_close_from_right_click():
 
 def test_browser_tab_menu_uses_a_snapshot_before_hiding_native_content():
     browser = (
-        ROOT / "src/webui/frontend/shared/browser/viewport.jsx"
+        ROOT / "src/cyrene/workbench/webui/frontend/shared/browser/viewport.jsx"
     ).read_text(encoding="utf-8")
 
     opener = browser.split("function openTabContextMenu(tab, event)", 1)[1].split(

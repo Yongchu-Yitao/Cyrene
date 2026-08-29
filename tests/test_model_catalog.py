@@ -4,20 +4,19 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from agent.plugin import (
+from cyrene.core.plugin import (
     Plugin,
-    PluginApplicationHost,
     PluginPack,
     PluginRegistry,
-    set_active_plugin_application_host,
 )
-from agent.plugin import model_catalog
+from cyrene.plugins import model_catalog
+from cyrene.plugins import PluginApplicationHost, set_application_plugin_scope
 
 
 def test_configured_candidates_honor_session_selection_and_endpoint_affinity(
     monkeypatch,
 ):
-    from agent.plugin.plugin_impl.cyrene_model import configuration as model_configuration
+    from cyrene.plugins.builtin.cyrene_model import configuration as model_configuration
     from cyrene.runtime import settings_store
 
     primary = {
@@ -124,7 +123,7 @@ def test_model_catalog_uses_active_registry_and_honors_provider_activation(tmp_p
         data_directory=tmp_path / "data",
         plugin_directory=tmp_path / "plugins",
     )
-    set_active_plugin_application_host(host)
+    set_application_plugin_scope(host)
     try:
         assert [item["id"] for item in model_catalog.model_plugin_catalog()] == [
             "provider_one"
@@ -135,7 +134,7 @@ def test_model_catalog_uses_active_registry_and_honors_provider_activation(tmp_p
         registry.set_pack_enabled("model_pack", False)
         assert model_catalog.model_plugin_catalog() == []
     finally:
-        set_active_plugin_application_host(None)
+        set_application_plugin_scope(None)
 
 
 def test_offline_model_registry_loads_persisted_activation_and_customization(
@@ -149,7 +148,7 @@ def test_offline_model_registry_loads_persisted_activation_and_customization(
     pack.mkdir(parents=True)
     (pack / "__init__.py").write_text(
         """
-from agent.plugin import Plugin, PluginPack
+from cyrene.core.plugin import Plugin, PluginPack
 
 plugin = Plugin(
     name="OfflineProvider",

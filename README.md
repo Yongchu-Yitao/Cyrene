@@ -90,6 +90,12 @@ their user-edited names and Agent-facing descriptions.
 See [Architecture](docs/architecture.md) for the full lifecycle and
 [Custom plugins](docs/project-plugins.md) for the contribution formats.
 
+The source follows the same boundary: `cyrene.core` is host-neutral,
+`cyrene.plugins` owns Cyrene's product contributions and built-in feature
+packs, and `cyrene.workbench` adapts them to HTTP, persistence, Electron, and
+the SPA. The former top-level `agent`, `route`, and `webui` packages are removed
+without compatibility shells.
+
 ## Quick start
 
 ### Desktop app
@@ -104,10 +110,10 @@ Requires Python 3.12+, `uv`, and Node.js 22.12+.
 ```bash
 uv sync
 
-cd src/webui
+cd src/cyrene/workbench/webui
 npm install
 npm run build
-cd ../..
+cd ../../../..
 
 uv run cyrene
 ```

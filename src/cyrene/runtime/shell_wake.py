@@ -65,9 +65,9 @@ class TerminalWakeBridge:
     async def _daemon_poll_loop(self) -> None:
         # The Terminal Daemon client is owned by the code Plugin pack.  Keep
         # this core bridge importable when that optional pack is disabled.
-        from agent.plugin import active_plugin_service
+        from cyrene.core.plugin import application_plugin_service
 
-        client = active_plugin_service("terminal_client")
+        client = application_plugin_service("terminal_client")
         if client is None:
             return
         while True:
@@ -117,9 +117,9 @@ _SERVICE = TerminalWakeBridge()
 def get_shell_wake_service() -> TerminalWakeBridge:
     """Return the code pack's bridge, with an inert core fallback."""
     try:
-        from agent.plugin import active_plugin_service
+        from cyrene.core.plugin import application_plugin_service
 
-        service = active_plugin_service("terminal_wake")
+        service = application_plugin_service("terminal_wake")
         if service is not None and callable(getattr(service, "configure", None)):
             return service
     except Exception:

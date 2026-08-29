@@ -8,8 +8,8 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from agent.plugin import PluginContext
-from agent.plugin.plugin_impl.cyrene_extensions.extension_plugin_center import (
+from cyrene.core.plugin import PluginContext
+from cyrene.plugins.builtin.cyrene_extensions.extension_plugin_center import (
     register_plugin_center_extension_routes,
     register_plugin_center_routes,
 )
@@ -436,10 +436,10 @@ def test_extensions_pack_owns_sources_health_audit_and_global_tasks():
 
 def test_cli_hook_mutations_are_not_captured_as_cli_extension_ids(monkeypatch):
     application = importlib.import_module(
-        "agent.plugin.plugin_impl.cyrene_cli.application"
+        "cyrene.plugins.builtin.cyrene_cli.application"
     )
     hooks_module = importlib.import_module(
-        "agent.plugin.plugin_impl.cyrene_cli.hooks"
+        "cyrene.plugins.builtin.cyrene_cli.hooks"
     )
     extension_service = _FakeExtensionService()
     settings = {}
@@ -516,13 +516,13 @@ def test_cli_hook_mutations_are_not_captured_as_cli_extension_ids(monkeypatch):
 
 def test_user_hook_brief_is_configured_by_background_agent(tmp_path, monkeypatch):
     hooks_module = importlib.import_module(
-        "agent.plugin.plugin_impl.cyrene_cli.hooks"
+        "cyrene.plugins.builtin.cyrene_cli.hooks"
     )
     config_agent = importlib.import_module(
-        "agent.plugin.plugin_impl.cyrene_cli.config_agent"
+        "cyrene.plugins.builtin.cyrene_cli.config_agent"
     )
     service_module = importlib.import_module(
-        "agent.plugin.plugin_impl.cyrene_cli.service"
+        "cyrene.plugins.builtin.cyrene_cli.service"
     )
     settings = {}
     monkeypatch.setattr(
@@ -562,7 +562,7 @@ def test_user_hook_brief_is_configured_by_background_agent(tmp_path, monkeypatch
 
     monkeypatch.setattr(
         config_agent,
-        "active_plugin_service",
+        "application_plugin_service",
         lambda name: Gateway() if name == "model" else None,
     )
     hooks = hooks_module.CliHookService()
@@ -639,7 +639,7 @@ def test_user_hook_brief_is_configured_by_background_agent(tmp_path, monkeypatch
 
 
 def test_hook_tool_options_list_runtime_tool_names_only():
-    from route.plugins import _hook_tool_options
+    from cyrene.workbench.http.plugins import _hook_tool_options
 
     registered = [
         SimpleNamespace(plugin=SimpleNamespace(
@@ -677,13 +677,13 @@ def test_hook_tool_options_list_runtime_tool_names_only():
 
 
 def test_cli_hook_listing_includes_existing_runtime_bindings(tmp_path, monkeypatch):
-    from agent import ContextStoreRouter, HookRegistration
-    from agent.hook import (
+    from cyrene.core import ContextStoreRouter, HookRegistration
+    from cyrene.core.hook import (
         configure_hook_action_provider,
         configure_hook_override_provider,
     )
-    from agent.workbench import hook_listing as hook_listing_module
-    from agent.workbench.hook_listing import (
+    from cyrene.workbench.core_adapter import hook_listing as hook_listing_module
+    from cyrene.workbench.core_adapter.hook_listing import (
         runtime_hook_listing,
         runtime_hook_action,
         runtime_hook_override,
@@ -862,8 +862,8 @@ def test_cli_hook_listing_includes_existing_runtime_bindings(tmp_path, monkeypat
 
 
 def test_disabled_extensions_pack_does_not_inject_managed_cli_environment(monkeypatch):
-    plugin_application = importlib.import_module("agent.plugin.application")
-    extension_service = importlib.import_module("agent.plugin.plugin_impl.cyrene_extensions.extension_service")
+    plugin_application = importlib.import_module("cyrene.plugins.application")
+    extension_service = importlib.import_module("cyrene.plugins.builtin.cyrene_extensions.extension_service")
     checked = []
 
     host = SimpleNamespace(
@@ -871,7 +871,7 @@ def test_disabled_extensions_pack_does_not_inject_managed_cli_environment(monkey
     )
     monkeypatch.setattr(
         plugin_application,
-        "active_plugin_application_host",
+        "application_plugin_scope",
         lambda: host,
     )
     monkeypatch.setattr(
@@ -907,7 +907,7 @@ def test_disabled_extensions_pack_does_not_inject_managed_cli_environment(monkey
     ),
 )
 def test_mcp_package_versions_must_be_exact(registry_type, version, expected):
-    extension_module = importlib.import_module("agent.plugin.plugin_impl.cyrene_extensions.extension_service")
+    extension_module = importlib.import_module("cyrene.plugins.builtin.cyrene_extensions.extension_service")
 
     assert (
         extension_module._is_fixed_registry_package_version(
@@ -930,7 +930,7 @@ def test_remote_skill_request_rejects_urls_that_can_persist_credentials(
     url,
     monkeypatch,
 ):
-    extension_module = importlib.import_module("agent.plugin.plugin_impl.cyrene_extensions.extension_service")
+    extension_module = importlib.import_module("cyrene.plugins.builtin.cyrene_extensions.extension_service")
 
     class Tasks:
         def create(self, **_kwargs):
@@ -961,7 +961,7 @@ def test_remote_skill_request_rejects_urls_that_can_persist_credentials(
     ),
 )
 def test_mcp_install_rejects_url_secrets_before_task_persistence(url):
-    extension_module = importlib.import_module("agent.plugin.plugin_impl.cyrene_extensions.extension_service")
+    extension_module = importlib.import_module("cyrene.plugins.builtin.cyrene_extensions.extension_service")
 
     class Tasks:
         def create(self, **_kwargs):
@@ -990,7 +990,7 @@ async def test_skill_clone_timeout_terminates_and_reaps_the_git_process(
     tmp_path,
     monkeypatch,
 ):
-    extension_module = importlib.import_module("agent.plugin.plugin_impl.cyrene_extensions.extension_service")
+    extension_module = importlib.import_module("cyrene.plugins.builtin.cyrene_extensions.extension_service")
     process = SimpleNamespace(returncode=None, terminated=False, waited=False)
 
     async def communicate():
@@ -1047,7 +1047,7 @@ async def test_remote_skill_install_rejects_a_commit_changed_since_inspection(
     tmp_path,
     monkeypatch,
 ):
-    extension_module = importlib.import_module("agent.plugin.plugin_impl.cyrene_extensions.extension_service")
+    extension_module = importlib.import_module("cyrene.plugins.builtin.cyrene_extensions.extension_service")
     installed = []
 
     class Skills:
@@ -1096,7 +1096,7 @@ async def test_remote_skill_install_rejects_a_commit_changed_since_inspection(
 
 @pytest.mark.asyncio
 async def test_mcp_registry_latest_package_is_not_offered_as_installable(monkeypatch):
-    extension_module = importlib.import_module("agent.plugin.plugin_impl.cyrene_extensions.extension_service")
+    extension_module = importlib.import_module("cyrene.plugins.builtin.cyrene_extensions.extension_service")
 
     class Response:
         def raise_for_status(self):
@@ -1155,7 +1155,7 @@ async def test_mcp_registry_latest_package_is_not_offered_as_installable(monkeyp
 async def test_mcp_install_rolls_back_when_dynamic_plugin_pack_registration_fails(
     monkeypatch,
 ):
-    extension_module = importlib.import_module("agent.plugin.plugin_impl.cyrene_extensions.extension_service")
+    extension_module = importlib.import_module("cyrene.plugins.builtin.cyrene_extensions.extension_service")
     previous = [
         {
             "name": "existing",
@@ -1217,7 +1217,7 @@ async def test_mcp_npm_activation_is_unused_when_plugin_registration_fails(
     tmp_path,
     monkeypatch,
 ):
-    extension_module = importlib.import_module("agent.plugin.plugin_impl.cyrene_extensions.extension_service")
+    extension_module = importlib.import_module("cyrene.plugins.builtin.cyrene_extensions.extension_service")
     install_root = tmp_path / "npm-mcp"
     install_root.mkdir()
     install_root.joinpath("package.json").write_text(
@@ -1299,7 +1299,7 @@ async def test_mcp_npm_activation_is_unused_when_plugin_registration_fails(
 
 
 def test_plugin_center_skill_upload_preserves_the_reviewed_filename(tmp_path, monkeypatch):
-    plugin_center = importlib.import_module("agent.plugin.plugin_impl.cyrene_extensions.extension_plugin_center")
+    plugin_center = importlib.import_module("cyrene.plugins.builtin.cyrene_extensions.extension_plugin_center")
     monkeypatch.setattr(plugin_center, "TEMP_DIR", tmp_path)
     service = _FakeExtensionService()
     router = APIRouter()
@@ -1334,7 +1334,7 @@ def test_plugin_center_skill_upload_preserves_the_reviewed_filename(tmp_path, mo
 
 @pytest.mark.asyncio
 async def test_bash_uses_credentials_free_agent_process_environment(tmp_path, monkeypatch):
-    bash_module = importlib.import_module("agent.plugin.core_impl.bash")
+    bash_module = importlib.import_module("cyrene.core.plugin.core_impl.bash")
     expected_env = {"PATH": "/system:/cyrene-managed", "MISE_DATA_DIR": "/managed"}
     captured = {}
 
@@ -1367,8 +1367,8 @@ async def test_bash_uses_credentials_free_agent_process_environment(tmp_path, mo
 
 
 def test_terminal_environment_uses_agent_process_environment(monkeypatch):
-    manager = importlib.import_module("agent.plugin.plugin_impl.cyrene_code.terminal.manager")
-    extension_service = importlib.import_module("agent.plugin.plugin_impl.cyrene_extensions.extension_service")
+    manager = importlib.import_module("cyrene.plugins.builtin.cyrene_code.terminal.manager")
+    extension_service = importlib.import_module("cyrene.plugins.builtin.cyrene_extensions.extension_service")
     captured = {}
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 

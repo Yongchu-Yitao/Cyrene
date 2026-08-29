@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from cyrene.observability import debug
-from cyrene.workbench.chat_events import publish_chat_changed
+from cyrene.workbench.chat.chat_events import publish_chat_changed
 
 
 @pytest.fixture(autouse=True)

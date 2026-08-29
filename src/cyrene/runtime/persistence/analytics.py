@@ -751,9 +751,9 @@ async def _backfill_runtime_logs(db_path: str) -> None:
 
 
 async def _backfill_conversation_archives(db_path: str) -> None:
-    from agent.plugin import active_plugin_service
+    from cyrene.core.plugin import application_plugin_service
 
-    memory_service = active_plugin_service("memory")
+    memory_service = application_plugin_service("memory")
     if memory_service is None:
         return
     async with aiosqlite.connect(db_path) as db:

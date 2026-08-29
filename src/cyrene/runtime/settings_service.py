@@ -211,9 +211,9 @@ def _active_plugin_setting_contributions(
     """Collect descriptors only from currently active application packs."""
 
     try:
-        from agent.plugin import active_plugin_application_host
+        from cyrene.core.plugin import application_plugin_scope
 
-        host = active_plugin_application_host()
+        host = application_plugin_scope()
         services = host.active_services.values() if host is not None else ()
     except Exception:
         return ()
@@ -509,10 +509,10 @@ def validate_changes(
         pack_changes = normalized.get("enabled_plugin_packs")
         plugin_changes = normalized.get("enabled_plugins")
         if isinstance(pack_changes, dict) or isinstance(plugin_changes, dict):
-            from agent.plugin import active_plugin_application_host
-            from agent.plugin.execution import current_plugin_execution
+            from cyrene.core.plugin import application_plugin_scope
+            from cyrene.core.plugin.execution import current_plugin_execution
 
-            host = active_plugin_application_host()
+            host = application_plugin_scope()
             if host is None:
                 raise SettingsForbiddenError("Plugin activation is unavailable")
             registered_packs = {pack.id for pack in host.registry.list_packs()}

@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WEBUI = ROOT / "src" / "webui"
+WEBUI = ROOT / "src" / "cyrene" / "workbench" / "webui"
 FRONTEND = WEBUI / "frontend"
 STATIC_APP = WEBUI / "static" / "app"
 

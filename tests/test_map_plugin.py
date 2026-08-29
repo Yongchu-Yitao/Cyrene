@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from agent.plugin import (
+from cyrene.core.plugin import (
     PluginContext,
     PluginRegistry,
     PluginRuntime,
 )
-from agent.plugin.plugin_impl.cyrene_map import plugin_pack
-from agent.plugin.plugin_impl.cyrene_map.service import MapService, map_database
+from cyrene.plugins.builtin.cyrene_map import plugin_pack
+from cyrene.plugins.builtin.cyrene_map.service import MapService, map_database
 
 
 def run(coroutine):

@@ -91,7 +91,7 @@ class _CliRun:
 async def _run_cli_agent(user_input: str) -> str:
     """Execute one CLI turn through the same AgentSession used by Workbench."""
 
-    from agent.workbench.chat_runtime import run_workbench_chat
+    from cyrene.workbench.core_adapter.chat_runtime import run_workbench_chat
 
     result = await run_workbench_chat(
         run=_CliRun(),
@@ -110,8 +110,8 @@ async def _run_cli_agent(user_input: str) -> str:
 async def _clear_cli_context() -> None:
     """Delete only the durable ContextTree owned by the terminal UI."""
 
-    from agent.context import ContextStoreRouter, TreeNotFoundError
-    from agent.workbench.chat_runtime import workbench_agent_data_directory
+    from cyrene.core.context import ContextStoreRouter, TreeNotFoundError
+    from cyrene.workbench.core_adapter.chat_runtime import workbench_agent_data_directory
 
     router = ContextStoreRouter(
         workbench_agent_data_directory(str(DB_PATH)) / "context"
@@ -201,10 +201,10 @@ async def _prepare_application(
     # the model, memory, content, MCP, and schedule services without serving an
     # HTTP app, and keeps their lifecycle owned by this ApplicationLifecycle.
     from fastapi import APIRouter, FastAPI
-    from agent.plugin import (
+    from cyrene.plugins import (
         PluginApplicationHost,
-        active_plugin_application_host,
-        set_active_plugin_application_host,
+        application_plugin_scope,
+        set_application_plugin_scope,
     )
 
     plugin_host = PluginApplicationHost.load_user_plugins(
@@ -214,13 +214,13 @@ async def _prepare_application(
         data_directory=application.context.paths.data,
     )
     plugin_host.attach(APIRouter())
-    set_active_plugin_application_host(plugin_host)
+    set_application_plugin_scope(plugin_host)
     await plugin_host.startup()
 
     async def close_plugin_host() -> None:
         await plugin_host.shutdown()
-        if active_plugin_application_host() is plugin_host:
-            set_active_plugin_application_host(None)
+        if application_plugin_scope() is plugin_host:
+            set_application_plugin_scope(None)
 
     application.register_manager(
         "plugin_application",
@@ -241,9 +241,9 @@ async def _prepare_cli() -> None:
 
 
 def _cli_mcp_service():
-    from agent.plugin import active_plugin_service
+    from cyrene.core.plugin import application_plugin_service
 
-    service = active_plugin_service("mcp")
+    service = application_plugin_service("mcp")
     if service is None:
         raise RuntimeError(localized(
             "The MCP Plugin is disabled or unavailable.",
@@ -520,16 +520,16 @@ async def _handle_menu():
             return
 
         elif choice == "3":
-            from agent.plugin import active_plugin_service
+            from cyrene.core.plugin import application_plugin_service
 
-            soul_service = active_plugin_service("soul")
+            soul_service = application_plugin_service("soul")
             if soul_service is None:
                 print(localized(
                     "❌ The SOUL Plugin is currently unavailable.",
                     "❌ SOUL 插件当前不可用。",
                 ))
                 return
-            memory_service = active_plugin_service("memory")
+            memory_service = application_plugin_service("memory")
             soul_service.reset()
             if memory_service is not None:
                 memory_service.save_short_term_entries([])
@@ -545,13 +545,13 @@ async def _handle_menu():
             return
 
         elif choice == "4":
-            from agent.plugin import active_plugin_service
+            from cyrene.core.plugin import application_plugin_service
 
-            model_service = active_plugin_service("model_configuration")
+            model_service = application_plugin_service("model_configuration")
             primary = model_service.candidates_for_route("primary") if model_service is not None else []
             candidate = primary[0] if primary else {}
-            memory_service = active_plugin_service("memory")
-            soul_service = active_plugin_service("soul")
+            memory_service = application_plugin_service("memory")
+            soul_service = application_plugin_service("soul")
             not_configured = localized("Not configured", "未配置")
             print(localized("\n--- System status ---", "\n--- 系统状态 ---"))
             print(localized(
@@ -593,8 +593,8 @@ async def _handle_menu():
                 "  短期记忆：{count} 条",
                 count=len(st_entries),
             ))
-            from agent.workbench.chat_runtime import workbench_agent_data_directory
-            from cyrene.workbench.conversation_context_service import AgentContextRepository
+            from cyrene.workbench.core_adapter.chat_runtime import workbench_agent_data_directory
+            from cyrene.workbench.chat.conversation_context_service import AgentContextRepository
 
             cli_state = AgentContextRepository(
                 workbench_agent_data_directory(str(DB_PATH)) / "context"
@@ -606,7 +606,7 @@ async def _handle_menu():
                 count=len(cli_messages or []),
             ))
             # Optional Plugin sections never make the generic status view fail.
-            mcp_service = active_plugin_service("mcp")
+            mcp_service = application_plugin_service("mcp")
             if mcp_service is None:
                 print(localized(
                     "  MCP: Plugin not enabled",
@@ -762,7 +762,7 @@ def _run_electron_mode() -> None:
         _sp.Popen.__init__ = _patched_popen_init
 
     import asyncio
-    from webui.server import create_app, WebBot
+    from cyrene.workbench.webui.server import create_app, WebBot
 
     selected_port = _pick_web_port(WEB_PORT)
     instance_id = uuid.uuid4().hex
@@ -838,7 +838,7 @@ def _run_web_mode(ui_mode: str = "workbench") -> None:
     selected_port = _pick_web_port(preferred_port)
 
     import asyncio
-    from webui.server import run_web, WebBot
+    from cyrene.workbench.webui.server import run_web, WebBot
 
     async def _start():
         application = ApplicationLifecycle(
@@ -948,7 +948,7 @@ def _run_web_gui() -> None:
     import threading
     import time
     from pathlib import Path
-    from webui.server import create_app, WebBot
+    from cyrene.workbench.webui.server import create_app, WebBot
 
     selected_port = _pick_web_port(WEB_PORT)
     instance_id = uuid.uuid4().hex

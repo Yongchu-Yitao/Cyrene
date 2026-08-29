@@ -60,7 +60,7 @@ def _native_response():
 
 
 def test_candidate_requires_exact_official_endpoint_and_supported_v4_model():
-    from agent.plugin.plugin_impl.cyrene_content import deepseek_web_search as dws
+    from cyrene.plugins.builtin.cyrene_content import deepseek_web_search as dws
 
     rejected = [
         _official_model(base_url="http://api.deepseek.com/v1"),
@@ -85,7 +85,7 @@ def test_candidate_requires_exact_official_endpoint_and_supported_v4_model():
 
 
 def test_candidate_accepts_model_graph_openai_adapter_projection():
-    from agent.plugin.plugin_impl.cyrene_content import deepseek_web_search as dws
+    from cyrene.plugins.builtin.cyrene_content import deepseek_web_search as dws
 
     selected = dws.find_official_deepseek_search_candidate([
         _official_model(provider="openai", adapter="openai")
@@ -97,7 +97,7 @@ def test_candidate_accepts_model_graph_openai_adapter_projection():
 
 
 def test_candidate_does_not_borrow_a_key_from_another_profile():
-    from agent.plugin.plugin_impl.cyrene_content import deepseek_web_search as dws
+    from cyrene.plugins.builtin.cyrene_content import deepseek_web_search as dws
 
     selected = dws.find_official_deepseek_search_candidate(
         [
@@ -121,8 +121,8 @@ def test_candidate_does_not_borrow_a_key_from_another_profile():
 def test_candidate_reads_the_canonical_model_graph(monkeypatch):
     from types import SimpleNamespace
 
-    import agent.plugin
-    from agent.plugin.plugin_impl.cyrene_content import deepseek_web_search as dws
+    import cyrene.core.plugin
+    from cyrene.plugins.builtin.cyrene_content import deepseek_web_search as dws
 
     monkeypatch.setattr(dws, "model_plugin_catalog", lambda: [{"id": "deepseek"}])
     configuration = {"profiles": [{"id": "profile-deepseek"}]}
@@ -131,8 +131,8 @@ def test_candidate_reads_the_canonical_model_graph(monkeypatch):
         candidate_for_profile=lambda _profile_id, _configuration: _official_model(),
     )
     monkeypatch.setattr(
-        agent.plugin,
-        "active_plugin_service",
+        cyrene.core.plugin,
+        "application_plugin_service",
         lambda name: service if name == "model_configuration" else None,
     )
 
@@ -142,7 +142,7 @@ def test_candidate_reads_the_canonical_model_graph(monkeypatch):
 
 
 async def test_native_search_sends_forced_web_search_and_parses_sources(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import deepseek_web_search as dws
+    from cyrene.plugins.builtin.cyrene_content import deepseek_web_search as dws
 
     requests = []
 
@@ -194,7 +194,7 @@ async def test_native_search_sends_forced_web_search_and_parses_sources(monkeypa
 
 
 async def test_native_search_errors_are_safe_and_do_not_include_api_key(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import deepseek_web_search as dws
+    from cyrene.plugins.builtin.cyrene_content import deepseek_web_search as dws
 
     class FakeResponse:
         status_code = 401
@@ -226,8 +226,8 @@ async def test_native_search_errors_are_safe_and_do_not_include_api_key(monkeypa
 
 
 async def test_deep_search_rejects_disabled_search(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
-    from agent.plugin.plugin_impl.cyrene_content.search_settings import SearchRuntimeSettings
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content.search_settings import SearchRuntimeSettings
 
     monkeypatch.setattr(search, "runtime_settings", lambda: SearchRuntimeSettings(False, ()))
 
@@ -240,8 +240,8 @@ async def test_deep_search_rejects_disabled_search(monkeypatch):
 
 
 async def test_deep_search_uses_first_enabled_provider(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
-    from agent.plugin.plugin_impl.cyrene_content.search_settings import SearchRuntimeSettings
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content.search_settings import SearchRuntimeSettings
 
     calls = []
 
@@ -263,8 +263,8 @@ async def test_deep_search_uses_first_enabled_provider(monkeypatch):
 
 
 async def test_deep_search_falls_back_after_empty_or_unusable_provider(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
-    from agent.plugin.plugin_impl.cyrene_content.search_settings import SearchRuntimeSettings
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content.search_settings import SearchRuntimeSettings
 
     calls = []
 
@@ -288,8 +288,8 @@ async def test_deep_search_falls_back_after_empty_or_unusable_provider(monkeypat
 
 
 async def test_deep_search_reports_all_provider_failures(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
-    from agent.plugin.plugin_impl.cyrene_content.search_settings import SearchRuntimeSettings
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content.search_settings import SearchRuntimeSettings
 
     async def run(provider, _topic, **_kwargs):
         raise search.SearchBackendUnavailable(f"{provider} unavailable")
@@ -311,7 +311,7 @@ async def test_deep_search_reports_all_provider_failures(monkeypatch):
 
 
 async def test_provider_boundary_converts_unexpected_failure_for_fallback(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
 
     async def broken_simplexng(_topic, **_kwargs):
         raise ValueError("bad provider response")
@@ -328,8 +328,8 @@ async def test_provider_boundary_converts_unexpected_failure_for_fallback(monkey
 
 
 async def test_tool_passes_run_context_to_search():
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl.cyrene_content import web_search
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_content import web_search
 
     captured = []
 

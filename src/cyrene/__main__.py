@@ -64,8 +64,8 @@ async def _prepare_runtime() -> None:
 def _run_plugin_launcher(name: str) -> None:
     """Run a named launcher contributed by one enabled editable Plugin pack."""
 
-    from agent.plugin import PluginRegistry, default_plugin_impl_directory
-    from agent.plugin.native_tools import seed_builtin_plugin_directory
+    from cyrene.core.plugin import PluginRegistry, default_plugin_impl_directory
+    from cyrene.plugins.native_tools import seed_builtin_plugin_directory
     from cyrene.runtime import settings_store
 
     plugin_directory = default_plugin_impl_directory()

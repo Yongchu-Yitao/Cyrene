@@ -1,10 +1,16 @@
 # Cyrene 开发记录
 
-> 更新日期：2026-08-28
+> 更新日期：2026-08-29
 >
 > 本文件记录当前正式架构、已经完成的迁移和继续维护时必须守住的产品合同。
 > 历史实施方案不再作为运行架构说明；正式用户与开发者文档位于
 > [`docs/`](../docs/)。
+
+## 资料索引
+
+- [设计回归记录](audits/design-regression.md)
+- [无障碍审计：Agent 自我设置、能力与权限](audits/cyrene-accessibility-2026-08-19/REPORT.md)
+- [Agent 自我界面控制能力审计](audits/cyrene-self-control-2026-08-19/REPORT.md)
 
 ## 当前目标
 
@@ -16,6 +22,21 @@
 - 安装版与源码版使用同一能力和界面，并在升级时自动迁移用户数据和可编辑插件。
 - 对话、任务、工具、终端、知识、记忆、日程、媒体、Office、远程控制和渠道等已有
   产品能力保持完整。
+
+## Core 与插件化重构验收
+
+- Host-neutral Runtime 位于 `src/cyrene/core/`，只包含 Agent Session、
+  ContextTree、Hook、Plugin Protocol/Scope/Registry 和执行机制。
+- Cyrene 产品组装位于 `src/cyrene/plugins/`，标准可编辑功能位于
+  `src/cyrene/plugins/builtin/`；Application/Model/Workbench Contribution 不在 Core。
+- `src/cyrene/workbench/` 是 Cyrene Host 适配层；业务模块按 Application、Chat、
+  Task、Project、Goal、Planning、Artifact、Session、Control、Workspace 与 UI
+  领域分包，另含 Core Adapter、持久化、HTTP 组装与唯一 WebUI。根目录不放业务
+  Service，也不保留旧路径兼容转发。
+- 旧顶层 `src/agent`、`src/route`、`src/webui` 已删除，不存在兼容外壳。
+- 验收结果：2,209 项 Python 测试通过（未处理 Thread Warning 视为错误），
+  WebUI 27/27、Electron 84/84 通过，Production WebUI Build 和 Wheel Build
+  成功，Wheel 中不包含 `agent`/`route`/`webui` 顶层包。
 
 ## Agent Runtime
 
@@ -46,7 +67,7 @@
 ## Plugin Runtime
 
 - `Bash`、`Read`、`Write` 和 `toolbox` 是 Agent Kernel 必须直接持有的核心工具。
-- 其余内置能力位于 `src/agent/plugin/plugin_impl/` 的插件包中；安装版会把可编辑实现
+- 其余内置能力位于 `src/cyrene/plugins/builtin/` 的插件包中；安装版会把可编辑实现
   安装到用户数据目录 `plugin_impl/`，核心工具除外。
 - 插件可以贡献工具包、独立工具、Context Hook、后台 Job、Application 生命周期、
   HTTP Route、全局搜索、Workbench 模块、设置页面、Channel 和模型能力。

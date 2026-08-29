@@ -45,6 +45,7 @@ const { runTerminalLifecycleSoak } = require('./terminal-lifecycle-soak');
 const { RotatingFileLog } = require('./rotating-log');
 
 const APP_NAME = 'Cyrene';
+const DEVELOPMENT_APP_NAME = 'Cyrene-dev';
 const TEMP_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
 const BROWSER_UPLOAD_TARGET_TTL_MS = 15 * 60 * 1000;
 const BROWSER_UPLOAD_MAX_FILES = 10;
@@ -54,18 +55,20 @@ let _errorLog = null;
 
 function getCyreneUserDataDir() {
   if (process.env.CYRENE_USER_DATA_DIR) return process.env.CYRENE_USER_DATA_DIR;
-  if (isMac) return path.join(os.homedir(), 'Library', 'Application Support', APP_NAME);
-  if (isWindows) return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), APP_NAME);
-  return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), APP_NAME);
+  const storageName = process.env.ELECTRON_DEV === '1' ? DEVELOPMENT_APP_NAME : APP_NAME;
+  if (isMac) return path.join(os.homedir(), 'Library', 'Application Support', storageName);
+  if (isWindows) return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), storageName);
+  return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), storageName);
 }
 
 function getCyreneCacheDir() {
   if (process.env.CYRENE_CACHE_DIR) return process.env.CYRENE_CACHE_DIR;
-  if (isMac) return path.join(os.homedir(), 'Library', 'Caches', APP_NAME);
+  const storageName = process.env.ELECTRON_DEV === '1' ? DEVELOPMENT_APP_NAME : APP_NAME;
+  if (isMac) return path.join(os.homedir(), 'Library', 'Caches', storageName);
   if (isWindows) {
-    return path.join(process.env.LOCALAPPDATA || process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Local'), APP_NAME, 'Cache');
+    return path.join(process.env.LOCALAPPDATA || process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Local'), storageName, 'Cache');
   }
-  return path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), APP_NAME);
+  return path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), storageName);
 }
 
 function getCyreneTempDir() {
@@ -211,6 +214,10 @@ const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
 const isLinux = process.platform === 'linux';
 const supportsLoginItem = process.platform === 'darwin' || process.platform === 'win32';
+
+if (isDev) {
+  app.setPath('userData', getCyreneUserDataDir());
+}
 
 // Spoken replies are generated asynchronously, after Chromium's transient
 // click activation has expired.  Cyrene owns this local audio surface and the
@@ -5469,13 +5476,12 @@ function spawnPython() {
     }
     childEnv.PATH = [process.env.PATH, ...userBins, ...nvmBins].filter(Boolean).join(path.delimiter);
   }
+  // Keep source development and installed applications on separate roots by
+  // default. Explicit overrides still win for diagnostics and smoke tests.
+  childEnv.CYRENE_USER_DATA_DIR = process.env.CYRENE_USER_DATA_DIR || getCyreneUserDataDir();
+  childEnv.CYRENE_CACHE_DIR = process.env.CYRENE_CACHE_DIR || getCyreneCacheDir();
+  childEnv.CYRENE_TEMP_DIR = process.env.CYRENE_TEMP_DIR || getCyreneTempDir();
   if (!isDev) {
-    // Respect explicit path overrides for portable installs, diagnostics and
-    // isolated packaged-app smoke tests. Normal launches have no overrides and
-    // continue to use Electron's platform-specific application directories.
-    childEnv.CYRENE_USER_DATA_DIR = process.env.CYRENE_USER_DATA_DIR || getCyreneUserDataDir();
-    childEnv.CYRENE_CACHE_DIR = process.env.CYRENE_CACHE_DIR || getCyreneCacheDir();
-    childEnv.CYRENE_TEMP_DIR = process.env.CYRENE_TEMP_DIR || getCyreneTempDir();
     childEnv.CYRENE_INSTALL_RESOURCES_DIR = process.resourcesPath;
   }
 

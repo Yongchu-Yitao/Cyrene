@@ -12,7 +12,7 @@ from typing import Any
 
 from PIL import Image
 
-from agent.plugin.model_catalog import candidate_provider_id
+from cyrene.plugins.model_catalog import candidate_provider_id
 from cyrene.config import DATA_DIR
 
 _MAX_IMAGE_BYTES = 30 * 1024 * 1024
@@ -36,9 +36,9 @@ class GeneratedImage:
 
 
 def _primary_candidate() -> dict[str, Any]:
-    from agent.plugin import active_plugin_service
+    from cyrene.core.plugin import application_plugin_service
 
-    service = active_plugin_service("model_configuration")
+    service = application_plugin_service("model_configuration")
     models = service.candidates_for_route("primary") if service is not None else []
     if not models:
         raise ImageGenerationError(

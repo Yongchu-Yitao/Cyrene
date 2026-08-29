@@ -89,13 +89,13 @@ uv sync --all-extras
 uv run pytest -q -W error::pytest.PytestUnhandledThreadExceptionWarning
 
 # Run a specific test file
-python -m pytest tests/test_context_trace.py -v
+uv run pytest tests/test_context_trace.py -v
 
 # Topbar tabs, pinned resources, Library drag, export compatibility, and layout
 uv run pytest -q \
   tests/test_workbench_recent_session_tabs.py \
   tests/test_workbench_pinned_resources.py \
-  tests/test_workbench_library.py \
+  tests/test_library_tools.py \
   tests/test_chat_attachment_flow.py \
   tests/test_electron_titlebar_alignment.py
 ```
@@ -103,8 +103,10 @@ uv run pytest -q \
 The normal suite uses fakes/local fixtures and must not require a live LLM
 credential. Live provider/channel checks are separate manual integration tests.
 
-The latest stable working-tree run uses Python `3.12.11`, FastAPI `0.136.1`,
-and Pydantic `2.13.4` from the locked environment and passes all 1,402 tests.
+The post-core-refactor working-tree run uses Python `3.12.11`, FastAPI
+`0.136.1`, and Pydantic `2.13.4` from the locked environment and passes all
+2,209 Python tests. The WebUI suite passes 27/27 tests, the Electron suite
+passes 84/84 tests, and the production WebUI and wheel builds complete.
 
 During the documentation audit, the OpenAPI test initially failed because its
 hash had been captured with an ambient Python 3.13.12 environment using FastAPI
@@ -124,7 +126,9 @@ Additional release-relevant checks:
 
 ```bash
 node --test electron/app-use.test.js
-python -m compileall -q src
+uv run python -m compileall -q src
+npm --prefix src/cyrene/workbench/webui test
+npm --prefix src/cyrene/workbench/webui run build
 git diff --check
 ```
 
@@ -146,24 +150,39 @@ Each module has a single responsibility. Cross-module communication uses:
 - Runtime inbox (`cyrene.runtime.inbox`) for inter-agent messaging
 - SQLite for structured persistence
 
-Canonical implementation packages are `agent`, `workbench`, `model_runtime`,
-`learning`, `runtime`, `observability`, `knowledge`, `channels`, `tooling`, and
-`tool_impl`. Historical imports are maintained in
-`cyrene.runtime.module_compat`; do not add duplicate top-level shim files.
+The canonical layers are:
 
-FastAPI adapters belong under `src/route/`. Domain code must not import route or
-Web UI modules.
+- `cyrene.core`: host-neutral Agent session, ContextTree, Hooks, plugin values,
+  scopes, registry, and execution;
+- `cyrene.plugins`: Cyrene's application host, model composition, Workbench
+  contribution SDK, and canonical editable feature plugins under `builtin/`;
+- `cyrene.workbench`: the Cyrene host adapter, with business modules grouped
+  under `application`, `chat`, `tasks`, `projects`, `goals`, `planning`,
+  `artifacts`, `sessions`, `control`, `workspaces`, and `ui`; persistence,
+  FastAPI composition, and WebUI remain dedicated adapter packages;
+- `cyrene.agent_runtime`: external ACP agent integration;
+- `cyrene.model_runtime`, `cyrene.runtime`, and `cyrene.observability`: provider
+  support, process lifecycle, and diagnostics.
+
+`cyrene.core` must not import product or adapter layers. FastAPI adapters belong
+under `src/cyrene/workbench/http/`, and the sole frontend lives under
+`src/cyrene/workbench/webui/`. The removed `agent`, `route`, and `webui`
+top-level packages must not be recreated as compatibility shims.
+Do not add business modules directly to the `cyrene.workbench` package root;
+place each module in its owning domain package.
 
 ### Adding New Tools
 
-1. Create the module in the matching domain under `cyrene/tool_impl/`
-   (for example `cyrene/tool_impl/knowledge/my_tool.py`)
-2. Export `TOOL_DEF` (dict) and `handler` (async callable)
-3. Add its module path to `cyrene/tool_impl/__init__.py::NATIVE_TOOL_MODULES`
-4. If it is deferred, assign one stable capability ID in
-   `cyrene/tooling/packs.py::CAPABILITY_BINDINGS`; direct tools must be an
-   intentional addition to the fixed wire contract
-5. Add policy metadata/tests and optionally a UI/settings entry
+1. Add the implementation to the owning pack under
+   `src/cyrene/plugins/builtin/<pack>/`, or create a user `PluginPack` in the
+   application data directory's `plugin_impl/` folder.
+2. Define a `Plugin` with its input schema and async handler, then include it in
+   the pack's `plugins` tuple.
+3. Use `setup` for Session services/Hooks and `application_setup` for routes,
+   process services, lifecycle, search, or Workbench contributions.
+4. Keep only `Bash`, `Read`, `Write`, and `toolbox` in the fixed kernel; every
+   feature tool belongs to a plugin and may be direct or toolbox-discoverable.
+5. Add schema, policy, actor, localization, and host-contribution tests.
 
 For Cyrene self-management, add public capabilities only to the main-only
 `cyrene_tools` pack. UI actions must be registered on `uiSurface` with a stable
@@ -179,7 +198,7 @@ control-plane checks are:
 ```bash
 node --test electron/ui-surface.test.js electron/host-control.test.js
 uv run pytest -q tests/test_app_control.py \
-  tests/test_progressive_tool_packages.py \
+  tests/test_plugins.py \
   tests/test_tool_package_settings.py \
   tests/test_webui_consolidation_contract.py
 ```
@@ -193,7 +212,7 @@ The repository has two GitHub Actions workflows:
 - `.github/workflows/ci.yml` runs for pull requests, pushes to `main`, and
   manual dispatch. Its Linux jobs sync every locked extra, compile `src`, run
   the full pytest suite with unhandled thread warnings promoted to errors,
-  build the WebUI, verify `src/webui/static/app` is current, and run Electron
+  build the WebUI, verify `src/cyrene/workbench/webui/static/app` is current, and run Electron
   App Use tests.
 - `.github/workflows/release.yml` runs for version tags (`v*`) or manual
   dispatch. It builds the Workbench application as PyInstaller + Electron
@@ -217,3 +236,9 @@ npm run dev
 
 Electron executes `uv run cyrene --workbench --electron-mode`, so development
 and manual source launches share the same project entry point and environment.
+
+Source runs use separate `Cyrene-dev` application-data and cache directories by
+default, while packaged applications continue to use `Cyrene`. Development
+configuration, databases, workspaces, and `plugin_impl/` therefore cannot
+overwrite an installed application's state. Set `CYRENE_USER_DATA_DIR`,
+`CYRENE_CACHE_DIR`, or `CYRENE_BASE_DIR` to choose another isolated root.

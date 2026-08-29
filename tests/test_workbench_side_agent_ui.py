@@ -46,7 +46,7 @@ def test_selected_text_opens_independent_persistent_side_agent_tabs():
 
 def test_selection_menu_uses_text_fragments_and_sits_below_their_center():
     source = (
-        ROOT / "src/webui/frontend/features/chat/conversation.jsx"
+        ROOT / "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx"
     ).read_text(encoding="utf-8")
     styles = workbench_style_source()
     helper = "function wbcSelectionTextRect(" + source.split(

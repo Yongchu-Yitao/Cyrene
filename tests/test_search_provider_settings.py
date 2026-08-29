@@ -4,9 +4,9 @@ import pytest
 
 
 def test_search_settings_persist_order_switches_and_encrypted_keys(monkeypatch):
-    from agent.plugin import PluginRegistry
-    from agent.plugin.plugin_impl.cyrene_content import plugin_pack
-    from agent.plugin.plugin_impl.cyrene_content import search_settings
+    from cyrene.core.plugin import PluginRegistry
+    from cyrene.plugins.builtin.cyrene_content import plugin_pack
+    from cyrene.plugins.builtin.cyrene_content import search_settings
 
     registry = PluginRegistry()
     registry.register_pack(plugin_pack, source="test-content")
@@ -89,9 +89,9 @@ def test_search_settings_persist_order_switches_and_encrypted_keys(monkeypatch):
 
 
 def test_search_settings_require_one_provider_when_search_is_enabled(monkeypatch):
-    from agent.plugin import PluginRegistry
-    from agent.plugin.plugin_impl.cyrene_content import plugin_pack
-    from agent.plugin.plugin_impl.cyrene_content import search_settings
+    from cyrene.core.plugin import PluginRegistry
+    from cyrene.plugins.builtin.cyrene_content import plugin_pack
+    from cyrene.plugins.builtin.cyrene_content import search_settings
 
     registry = PluginRegistry()
     registry.register_pack(plugin_pack, source="test-content")
@@ -106,9 +106,9 @@ def test_search_settings_require_one_provider_when_search_is_enabled(monkeypatch
 
 
 async def test_search_settings_publish_realtime_change_after_save(monkeypatch):
-    from agent.plugin import PluginRegistry
-    from agent.plugin.plugin_impl.cyrene_content import plugin_pack
-    from agent.plugin.plugin_impl.cyrene_content import search_settings
+    from cyrene.core.plugin import PluginRegistry
+    from cyrene.plugins.builtin.cyrene_content import plugin_pack
+    from cyrene.plugins.builtin.cyrene_content import search_settings
 
     registry = PluginRegistry()
     registry.register_pack(plugin_pack, source="test-content")

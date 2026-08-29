@@ -5,11 +5,11 @@ import re
 
 import pytest
 
-from agent.plugin import PluginContext
+from cyrene.core.plugin import PluginContext
 
 
 def _service(tmp_path):
-    from cyrene.workbench import pinned_resources
+    from cyrene.workbench.chat import pinned_resources
 
     service = importlib.reload(pinned_resources)
     service.configure(str(tmp_path / "workbench.sqlite3"))
@@ -144,9 +144,9 @@ def test_selected_text_is_materialized_as_pinned_markdown_file(tmp_path, monkeyp
 async def test_pinned_browser_screenshot_uses_owner_session_read_only(
     monkeypatch, tmp_path, real_pillow_modules
 ):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
-    from agent.plugin.plugin_impl.cyrene_browser.browser_screenshot import _tool_browser_screenshot
-    from cyrene.workbench import pinned_resources
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser.browser_screenshot import _tool_browser_screenshot
+    from cyrene.workbench.chat import pinned_resources
     from PIL import Image
 
     calls = []

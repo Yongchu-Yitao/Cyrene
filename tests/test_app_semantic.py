@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent.plugin.plugin_impl.cyrene_desktop import _app_semantic_backend as app_semantic
+from cyrene.plugins.builtin.cyrene_desktop import _app_semantic_backend as app_semantic
 
 
 @pytest.fixture(autouse=True)
@@ -151,7 +151,7 @@ async def test_public_semantic_nodes_expose_expandability(monkeypatch):
 
 
 def test_app_ui_snapshot_schema_exposes_find():
-    from agent.plugin.plugin_impl.cyrene_desktop.app_ui_snapshot import TOOL_DEF
+    from cyrene.plugins.builtin.cyrene_desktop.app_ui_snapshot import TOOL_DEF
 
     properties = TOOL_DEF["function"]["parameters"]["properties"]
     assert properties["operation"]["enum"] == [
@@ -230,7 +230,7 @@ async def test_semantic_connect_filters_unreachable_manifest_capabilities(monkey
 
 
 def test_all_seven_external_semantic_tools_are_registered():
-    from agent.plugin.plugin_impl.cyrene_desktop import plugin_pack
+    from cyrene.plugins.builtin.cyrene_desktop import plugin_pack
 
     concrete = {plugin.name for plugin in plugin_pack.plugins}
     assert {

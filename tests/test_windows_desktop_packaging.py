@@ -104,7 +104,7 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
         ROOT / "build" / "windows-release-smoke.ps1"
     ).read_text(encoding="utf-8")
     webui_build = (
-        ROOT / "src" / "webui" / "build-jsx.mjs"
+        ROOT / "src" / "cyrene" / "workbench" / "webui" / "build-jsx.mjs"
     ).read_text(encoding="utf-8")
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
     lifecycle_soak = (
@@ -170,10 +170,7 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert '"terminal-lifecycle-soak.js"' in electron_package
     client = (
         ROOT
-        / "src"
-        / "agent"
-        / "plugin"
-        / "plugin_impl"
+        / "src" / "cyrene" / "plugins" / "builtin"
         / "cyrene_code"
         / "terminal"
         / "client.py"
@@ -249,10 +246,7 @@ def test_woa_core_excludes_x64_only_features_and_packages_sidecars():
     package = (ROOT / "electron" / "package.json").read_text(encoding="utf-8")
     manager = (
         ROOT
-        / "src"
-        / "agent"
-        / "plugin"
-        / "plugin_impl"
+        / "src" / "cyrene" / "plugins" / "builtin"
         / "cyrene_content"
         / "search_service.py"
     ).read_text(encoding="utf-8")

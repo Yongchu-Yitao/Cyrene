@@ -8,15 +8,15 @@ from unittest.mock import AsyncMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from agent.plugin import PluginContext
+from cyrene.core.plugin import PluginContext
 
 
 def test_core_soul_projection_is_empty_when_plugin_is_unavailable(monkeypatch):
-    from cyrene.workbench import presentation_runtime
+    from cyrene.workbench.artifacts import presentation_runtime
 
     monkeypatch.setattr(
         presentation_runtime,
-        "active_plugin_service",
+        "application_plugin_service",
         lambda _name: None,
     )
 
@@ -30,9 +30,9 @@ def test_core_soul_projection_is_empty_when_plugin_is_unavailable(monkeypatch):
 
 
 def _patch_memory_archive(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_memory import archive
-    from agent.plugin.plugin_impl.cyrene_memory.application import MemoryApplication
-    from cyrene.workbench import presentation_runtime
+    from cyrene.plugins.builtin.cyrene_memory import archive
+    from cyrene.plugins.builtin.cyrene_memory.application import MemoryApplication
+    from cyrene.workbench.artifacts import presentation_runtime
 
     conversations = tmp_path / "conversations"
     conversations.mkdir(parents=True, exist_ok=True)
@@ -47,19 +47,19 @@ def _patch_memory_archive(monkeypatch, tmp_path):
 
 
 def _patch_active_memory_service(monkeypatch, service, *module_aliases):
-    from agent import plugin as plugin_runtime
+    from cyrene.core import plugin as plugin_runtime
 
     def resolve(name):
         return service if name == "memory" else None
 
-    monkeypatch.setattr(plugin_runtime, "active_plugin_service", resolve)
+    monkeypatch.setattr(plugin_runtime, "application_plugin_service", resolve)
     for module in module_aliases:
-        monkeypatch.setattr(module, "active_plugin_service", resolve)
+        monkeypatch.setattr(module, "application_plugin_service", resolve)
 
 
 def test_get_memory_context_includes_short_term_by_default(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_memory import application as memory_application
-    from agent.plugin.plugin_impl.cyrene_memory import short_term
+    from cyrene.plugins.builtin.cyrene_memory import application as memory_application
+    from cyrene.plugins.builtin.cyrene_memory import short_term
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -88,8 +88,8 @@ def test_get_memory_context_includes_short_term_by_default(tmp_path, monkeypatch
 
 
 def test_get_memory_context_can_skip_short_term(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_memory import application as memory_application
-    from agent.plugin.plugin_impl.cyrene_memory import short_term
+    from cyrene.plugins.builtin.cyrene_memory import application as memory_application
+    from cyrene.plugins.builtin.cyrene_memory import short_term
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -117,58 +117,15 @@ def test_get_memory_context_can_skip_short_term(tmp_path, monkeypatch):
     assert "user likes jasmine tea" not in context
 
 
-def test_legacy_memory_modules_are_not_source_backends():
-    import importlib.util
-    from pathlib import Path
-
-    source_root = Path(__file__).resolve().parents[1] / "src"
-    deleted = (
-        "cyrene/memory.py",
-        "cyrene/runtime/memory/__init__.py",
-        "cyrene/runtime/memory/archive_format.py",
-        "cyrene/runtime/memory/conversations.py",
-        "cyrene/runtime/memory/short_term.py",
-        "cyrene/runtime/memory/soul.py",
-        "cyrene/workbench/memory.py",
-        "cyrene/workbench/project_memory_prompt.py",
-        "cyrene/tool_impl/memory/__init__.py",
-        "route/memory.py",
-        "route/workbench/memory.py",
-        "route/workbench/project_memory.py",
-    )
-    for relative in deleted:
-        assert not (source_root / relative).exists(), relative
-    for relative in (
-        "cyrene/runtime/memory",
-        "cyrene/tool_impl/memory",
-    ):
-        assert not (source_root / relative).exists(), relative
-    for module_name in (
-        "cyrene.memory",
-        "cyrene.runtime.memory",
-        "cyrene.workbench.memory",
-        "cyrene.workbench.project_memory_prompt",
-        "cyrene.tool_impl.memory",
-        "route.memory",
-        "route.workbench.memory",
-        "route.workbench.project_memory",
-    ):
-        try:
-            spec = importlib.util.find_spec(module_name)
-        except ModuleNotFoundError:
-            spec = None
-        assert spec is None, module_name
-
-
 def test_filesystem_tools_offload_blocking_io_and_bound_scans():
     from pathlib import Path
 
-    source_root = Path(__file__).resolve().parent.parent / "src" / "agent" / "plugin"
-    read_source = (source_root / "core_impl" / "read.py").read_text(encoding="utf-8")
-    write_source = (source_root / "core_impl" / "write.py").read_text(encoding="utf-8")
-    edit_source = (source_root / "plugin_impl" / "edit.py").read_text(encoding="utf-8")
-    glob_source = (source_root / "plugin_impl" / "glob.py").read_text(encoding="utf-8")
-    grep_source = (source_root / "plugin_impl" / "grep.py").read_text(encoding="utf-8")
+    source_root = Path(__file__).resolve().parent.parent / "src" / "cyrene"
+    read_source = (source_root / "core" / "plugin" / "core_impl" / "read.py").read_text(encoding="utf-8")
+    write_source = (source_root / "core" / "plugin" / "core_impl" / "write.py").read_text(encoding="utf-8")
+    edit_source = (source_root / "plugins" / "builtin" / "edit.py").read_text(encoding="utf-8")
+    glob_source = (source_root / "plugins" / "builtin" / "glob.py").read_text(encoding="utf-8")
+    grep_source = (source_root / "plugins" / "builtin" / "grep.py").read_text(encoding="utf-8")
 
     assert "await asyncio.to_thread(path.read_text" in read_source
     assert "await asyncio.to_thread(write_file)" in write_source
@@ -181,8 +138,8 @@ def test_filesystem_tools_offload_blocking_io_and_bound_scans():
 
 
 async def test_recall_memory_tool_returns_recent_short_term_entries(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_memory import short_term
-    from agent.plugin.plugin_impl.cyrene_memory import recall_memory as tools
+    from cyrene.plugins.builtin.cyrene_memory import short_term
+    from cyrene.plugins.builtin.cyrene_memory import recall_memory as tools
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -230,8 +187,8 @@ async def test_recall_memory_tool_returns_recent_short_term_entries(tmp_path):
 async def test_list_memories_reports_total_and_supports_filters_and_pagination(
     tmp_path,
 ):
-    from agent.plugin.plugin_impl.cyrene_memory import short_term
-    from agent.plugin.plugin_impl.cyrene_memory import list_memories as tools
+    from cyrene.plugins.builtin.cyrene_memory import short_term
+    from cyrene.plugins.builtin.cyrene_memory import list_memories as tools
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -275,8 +232,8 @@ async def test_list_memories_reports_total_and_supports_filters_and_pagination(
 
 
 async def test_list_memories_defaults_to_all_active_memories(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_memory import short_term
-    from agent.plugin.plugin_impl.cyrene_memory import list_memories as tools
+    from cyrene.plugins.builtin.cyrene_memory import short_term
+    from cyrene.plugins.builtin.cyrene_memory import list_memories as tools
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -309,9 +266,9 @@ async def test_list_memories_defaults_to_all_active_memories(tmp_path):
 
 
 async def test_retire_short_term_memory_tool_marks_entry_stale(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_memory import short_term
-    from agent.plugin.plugin_impl.cyrene_memory import recall_memory
-    from agent.plugin.plugin_impl.cyrene_memory import retire_short_term_memory as tools
+    from cyrene.plugins.builtin.cyrene_memory import short_term
+    from cyrene.plugins.builtin.cyrene_memory import recall_memory
+    from cyrene.plugins.builtin.cyrene_memory import retire_short_term_memory as tools
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -357,8 +314,8 @@ async def test_retire_short_term_memory_tool_marks_entry_stale(tmp_path):
 
 
 async def test_recall_memory_tool_uses_or_for_multiple_terms(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_memory import short_term
-    from agent.plugin.plugin_impl.cyrene_memory import recall_memory as tools
+    from cyrene.plugins.builtin.cyrene_memory import short_term
+    from cyrene.plugins.builtin.cyrene_memory import recall_memory as tools
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -383,8 +340,8 @@ async def test_recall_memory_tool_uses_or_for_multiple_terms(tmp_path):
 
 
 async def test_recall_memory_tool_bounds_large_results(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_memory import short_term
-    from agent.plugin.plugin_impl.cyrene_memory import recall_memory as tools
+    from cyrene.plugins.builtin.cyrene_memory import short_term
+    from cyrene.plugins.builtin.cyrene_memory import recall_memory as tools
 
     short_term.init_short_term(tmp_path)
     short_term.save_entries([
@@ -412,8 +369,8 @@ async def test_recall_memory_tool_bounds_large_results(tmp_path):
 
 
 async def test_recall_conversation_tool_returns_archived_matches(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_memory import archive as conversations
-    from agent.plugin.plugin_impl.cyrene_memory import recall_conversation as tools
+    from cyrene.plugins.builtin.cyrene_memory import archive as conversations
+    from cyrene.plugins.builtin.cyrene_memory import recall_conversation as tools
 
     conversations_dir = tmp_path / "conversations"
     conversations_dir.mkdir(parents=True, exist_ok=True)
@@ -454,8 +411,8 @@ async def test_recall_conversation_tool_returns_archived_matches(tmp_path, monke
 
 
 async def test_recall_conversation_tool_searches_active_workbench_workspace(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_memory import archive as conversations
-    from agent.plugin.plugin_impl.cyrene_memory import recall_conversation as tools
+    from cyrene.plugins.builtin.cyrene_memory import archive as conversations
+    from cyrene.plugins.builtin.cyrene_memory import recall_conversation as tools
 
     workspace = tmp_path / "project"
     other_workspace = tmp_path / "other"
@@ -501,7 +458,7 @@ async def test_recall_conversation_tool_searches_active_workbench_workspace(tmp_
 
 
 async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
+    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
 
     seen = {}
 
@@ -533,7 +490,11 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
         "_run_plugin_proactive_turn",
         fake_run_plugin_proactive_turn,
     )
-    monkeypatch.setattr(scheduler, "_deliver_proactive_message", AsyncMock())
+    monkeypatch.setattr(
+        scheduler,
+        "_deliver_proactive_message",
+        AsyncMock(return_value={"project_id": "default", "chat_id": "chat", "title": "Chat"}),
+    )
 
     await scheduler._heartbeat_proactive_check(bot=None, db_path="db.sqlite3")
 
@@ -552,7 +513,7 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
 
 
 async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
+    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
 
     seen = {"notified": False}
 
@@ -598,7 +559,7 @@ async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(
     accumulate into the cooldown threshold."""
     import time
 
-    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
+    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
 
     monkeypatch.setattr(scheduler, "OWNER_ID", 7)
     monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
@@ -627,7 +588,11 @@ async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(
         "_run_plugin_proactive_turn",
         fake_run_plugin_proactive_turn,
     )
-    monkeypatch.setattr(scheduler, "_deliver_proactive_message", AsyncMock())
+    monkeypatch.setattr(
+        scheduler,
+        "_deliver_proactive_message",
+        AsyncMock(return_value={"project_id": "default", "chat_id": "chat", "title": "Chat"}),
+    )
 
     # The user never replies (reset_lottery is never called) across many ticks.
     for _ in range(6):
@@ -644,7 +609,7 @@ async def test_proactive_cooldown_arms_when_streak_reaches_threshold(monkeypatch
     the next check arms the cooldown instead of sending again."""
     import time
 
-    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
+    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
 
     sent = {"count": 0}
 
@@ -715,7 +680,7 @@ def test_last_user_time_reads_the_plugin_memory_archive(monkeypatch):
     """Silence detection reads the durable memory Plugin archive."""
     from datetime import datetime, timezone
 
-    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
+    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
 
     memory_service = SimpleNamespace(
         latest_archived_user_message_time=lambda: datetime(
@@ -733,7 +698,7 @@ def test_last_user_time_reads_the_plugin_memory_archive(monkeypatch):
 def test_last_user_time_has_no_retired_session_file_fallback(monkeypatch):
     """The removed Agent state file is not a source of user activity."""
 
-    from agent.plugin.plugin_impl.cyrene_proactive import service as scheduler
+    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
 
     memory_service = SimpleNamespace(latest_archived_user_message_time=lambda: None)
     monkeypatch.setattr(scheduler, "_memory_service", lambda: memory_service)
@@ -741,7 +706,7 @@ def test_last_user_time_has_no_retired_session_file_fallback(monkeypatch):
     assert scheduler._last_user_message_time() is None
 
 def test_pending_permission_public_shape_keeps_only_localizable_meta():
-    from cyrene.workbench.session_view import build_pending_question
+    from cyrene.workbench.sessions.session_view import build_pending_question
 
     result = build_pending_question({
         "id": "question_ui",
@@ -796,7 +761,7 @@ def test_inbox_send_message_is_serialized():
 def test_recent_main_agent_activity_ignores_completed_accounting_events_and_terminal_phases():
     from datetime import datetime, timedelta, timezone
 
-    from cyrene.workbench.session_view import has_recent_main_agent_activity
+    from cyrene.workbench.sessions.session_view import has_recent_main_agent_activity
 
     now = datetime.now(timezone.utc)
 

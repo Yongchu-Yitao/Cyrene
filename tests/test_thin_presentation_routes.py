@@ -7,13 +7,14 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from agent.plugin import PluginApplicationHost, PluginRegistry
-from agent.plugin.plugin_impl.cyrene_map import plugin_pack as map_plugin_pack
+from cyrene.core.plugin import PluginRegistry
+from cyrene.plugins import PluginApplicationHost
+from cyrene.plugins.builtin.cyrene_map import plugin_pack as map_plugin_pack
 from cyrene.runtime.backup import BackupDownloadError, BackupRepository
-from route.backup import register_backup_routes
-from agent.plugin.plugin_impl.cyrene_memory.routes_overview import register_memory_routes
-from agent.plugin.plugin_impl.cyrene_content.routes import register_search_routes
-from route.system.shell import register_shell_routes
+from cyrene.workbench.http.backup import register_backup_routes
+from cyrene.plugins.builtin.cyrene_memory.routes_overview import register_memory_routes
+from cyrene.plugins.builtin.cyrene_content.routes import register_search_routes
+from cyrene.workbench.http.system.shell import register_shell_routes
 
 
 class FakePresentationQueries:

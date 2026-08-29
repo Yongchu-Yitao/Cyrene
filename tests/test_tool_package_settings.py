@@ -3,7 +3,7 @@ import asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from route.registry import register_routes
+from cyrene.workbench.http.registry import register_routes
 
 
 def _client(monkeypatch, tmp_path):

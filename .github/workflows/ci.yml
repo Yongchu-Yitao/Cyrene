@@ -44,10 +44,10 @@ jobs:
         with:
           node-version: "22.12"
           cache: npm
-          cache-dependency-path: src/webui/package-lock.json
+          cache-dependency-path: src/cyrene/workbench/webui/package-lock.json
 
       - name: Build WebUI fixtures used by the Python contract suite
-        working-directory: src/webui
+        working-directory: src/cyrene/workbench/webui
         run: |
           npm ci
           npm run build
@@ -79,26 +79,26 @@ jobs:
           cache: npm
           cache-dependency-path: |
             electron/package-lock.json
-            src/webui/package-lock.json
+            src/cyrene/workbench/webui/package-lock.json
 
       - name: Install Electron dependencies
         working-directory: electron
         run: npm ci
 
       - name: Install WebUI dependencies
-        working-directory: src/webui
+        working-directory: src/cyrene/workbench/webui
         run: npm ci
 
       - name: Build WebUI
-        working-directory: src/webui
+        working-directory: src/cyrene/workbench/webui
         run: npm run build
 
       - name: Run WebUI tests
-        working-directory: src/webui
+        working-directory: src/cyrene/workbench/webui
         run: npm test
 
       - name: Verify generated WebUI is current
-        run: git diff --exit-code -- src/webui/static/app
+        run: git diff --exit-code -- src/cyrene/workbench/webui/static/app
 
       - name: Run Electron tests
         run: node --test electron/*.test.js

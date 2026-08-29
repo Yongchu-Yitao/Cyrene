@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from agent.plugin.plugin_impl.cyrene_soul import store as soul_module
-from agent.plugin.plugin_impl.cyrene_soul.store import SoulApplication, ensure_soul
+from cyrene.plugins.builtin.cyrene_soul import store as soul_module
+from cyrene.plugins.builtin.cyrene_soul.store import SoulApplication, ensure_soul
 
 _LEGACY_SOUL = "# Old Soul\n\n## SELF:IDENTITY\n- I am the user's persona\n"
 
@@ -83,8 +83,8 @@ def test_soul_onboarding_status_is_owned_by_soul_pack(
     monkeypatch,
     tmp_path,
 ):
-    from agent.plugin.plugin_impl.cyrene_soul import onboarding as soul_onboarding
-    from agent.plugin.plugin_impl.cyrene_soul.onboarding import (
+    from cyrene.plugins.builtin.cyrene_soul import onboarding as soul_onboarding
+    from cyrene.plugins.builtin.cyrene_soul.onboarding import (
         SoulOnboardingApplication,
     )
 
@@ -101,8 +101,8 @@ def test_soul_settings_api_edits_without_memory_service(soul_env, tmp_path):
     from fastapi import APIRouter, FastAPI
     from fastapi.testclient import TestClient
 
-    from agent.plugin import PluginApplicationContext
-    from agent.plugin.plugin_impl.cyrene_soul import application_setup
+    from cyrene.plugins import PluginApplicationContext
+    from cyrene.plugins.builtin.cyrene_soul import application_setup
 
     app = FastAPI()
     router = APIRouter()

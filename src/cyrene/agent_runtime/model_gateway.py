@@ -122,7 +122,7 @@ def issue_model_gateway_binding(_model_access: Any, context: dict[str, Any]) -> 
     expires after an idle window.
     """
     from cyrene.agent_runtime.errors import AgentRuntimeError
-    from agent.plugin.model_catalog import (
+    from cyrene.plugins.model_catalog import (
         resolve_model_profile_candidate,
         resolve_session_model_candidate,
     )
@@ -357,7 +357,7 @@ async def call_model_gateway(body: dict[str, Any], scope: dict[str, Any]) -> dic
     except (TypeError, ValueError):
         max_tokens = None
     from cyrene.agent_runtime.errors import AgentRuntimeError
-    from agent.plugin.model_catalog import resolve_exact_model_candidate
+    from cyrene.plugins.model_catalog import resolve_exact_model_candidate
 
     identity = scope.get("modelIdentity") if isinstance(scope.get("modelIdentity"), dict) else {}
     candidate = resolve_exact_model_candidate(identity)
@@ -369,9 +369,9 @@ async def call_model_gateway(body: dict[str, Any], scope: dict[str, Any]) -> dic
                 "为此智能体选择的 Cyrene 模型已不可用",
             ),
         )
-    from agent.plugin import active_plugin_service
+    from cyrene.core.plugin import application_plugin_service
 
-    gateway = active_plugin_service("model")
+    gateway = application_plugin_service("model")
     if gateway is None:
         raise AgentRuntimeError(
             "model_gateway_unavailable",

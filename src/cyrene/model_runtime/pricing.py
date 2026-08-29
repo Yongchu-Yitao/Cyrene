@@ -145,9 +145,9 @@ def configured_user_price(model: str) -> Pricing | None:
     if not model_key:
         return None
     try:
-        from agent.plugin import active_plugin_service
+        from cyrene.core.plugin import application_plugin_service
 
-        service = active_plugin_service("model_configuration")
+        service = application_plugin_service("model_configuration")
         configured = (
             service.get_model_configuration().get("profiles") or []
             if service is not None

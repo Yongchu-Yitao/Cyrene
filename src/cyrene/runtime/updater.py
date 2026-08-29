@@ -844,7 +844,7 @@ def _push_update_notification(
     _notified_update_keys.add(key)
 
     try:
-        from cyrene.workbench.notifications import append_notification
+        from cyrene.workbench.application.notifications import append_notification
 
         append_notification(
             title=title,

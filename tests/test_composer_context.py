@@ -2,16 +2,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent.plugin import PluginContext
-from agent.plugin.plugin_impl.cyrene_composer_context import plugin_pack
-from agent.plugin.plugin_impl.cyrene_composer_context.application import (
+from cyrene.core.plugin import PluginContext
+from cyrene.plugins.builtin.cyrene_composer_context import plugin_pack
+from cyrene.plugins.builtin.cyrene_composer_context.application import (
     ComposerContextService,
 )
-from agent.plugin.plugin_impl.cyrene_composer_context.context_mount import (
+from cyrene.plugins.builtin.cyrene_composer_context.context_mount import (
     setup_composer_context,
 )
-from agent.plugin.plugin_impl.cyrene_context.service import setup_runtime_context
-from cyrene.workbench import slash_commands
+from cyrene.plugins.builtin.cyrene_context.service import setup_runtime_context
+from cyrene.workbench.chat import slash_commands
 
 
 def _catalog(*, enabled: bool = True):
@@ -63,7 +63,7 @@ def _composer_service(monkeypatch, *, enabled: bool = True):
         },
     )
     monkeypatch.setattr(
-        "agent.plugin.active_plugin_service",
+        "cyrene.core.plugin.application_plugin_service",
         lambda name: service if name == "composer_context" else None,
     )
     return service
@@ -216,7 +216,7 @@ async def test_runtime_and_composer_context_are_independent_hooks() -> None:
 
 @pytest.mark.asyncio
 async def test_command_only_send_request_is_accepted() -> None:
-    from route.workbench.chat_routes.run_send_routes import _SendOperation
+    from cyrene.workbench.http.workbench.chat_routes.run_send_routes import _SendOperation
 
     class Runtime:
         @staticmethod
@@ -251,7 +251,7 @@ async def test_command_only_send_request_is_accepted() -> None:
 
 @pytest.mark.asyncio
 async def test_dynamic_skill_slash_command_activates_context(monkeypatch) -> None:
-    from route.workbench.chat_routes.run_send_routes import _SendOperation
+    from cyrene.workbench.http.workbench.chat_routes.run_send_routes import _SendOperation
 
     _composer_service(monkeypatch)
     chat = {
@@ -319,7 +319,7 @@ async def test_dynamic_slash_catalog_exposes_context_commands(monkeypatch) -> No
 
 @pytest.mark.asyncio
 async def test_directory_picker_error_uses_the_app_language(monkeypatch) -> None:
-    from agent.plugin.plugin_impl.cyrene_composer_context import application
+    from cyrene.plugins.builtin.cyrene_composer_context import application
 
     monkeypatch.setattr(
         application,

@@ -10,7 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-APP_NAME = "Cyrene"
+from cyrene.path_policy import (
+    APP_NAME as APP_NAME,
+    bundle_contents_dir,
+    is_bundled,
+    user_cache_dir,
+    user_data_dir,
+)
+
 TEMP_ARTIFACT_TTL_SECONDS = 24 * 60 * 60
 CYRENE_DIR_NAME = ".cyrene"
 
@@ -37,19 +44,6 @@ def _strip_path_value(value: object) -> str:
 def _env_path(env: Mapping[str, str], key: str) -> Path | None:
     raw = _strip_path_value(env.get(key))
     return Path(raw).expanduser() if raw else None
-
-
-def bundle_contents_dir(executable: str | Path | None = None) -> Path | None:
-    exe = Path(executable or sys.executable).resolve()
-    parts = exe.parts
-    for idx, part in enumerate(parts):
-        if part.endswith(".app") and idx + 2 < len(parts) and parts[idx + 1] == "Contents":
-            return Path(*parts[: idx + 2])
-    return None
-
-
-def is_bundled(executable: str | Path | None = None) -> bool:
-    return getattr(sys, "frozen", False) or bundle_contents_dir(executable) is not None
 
 
 def source_root() -> Path:
@@ -83,59 +77,23 @@ def install_resources_dir(
     return source_root()
 
 
-def user_data_dir(
-    *,
-    platform: str | None = None,
-    home: str | Path | None = None,
-    env: Mapping[str, str] | None = None,
-) -> Path:
-    env = os.environ if env is None else env
-    override = _env_path(env, "CYRENE_USER_DATA_DIR")
-    if override is not None:
-        return override
-    platform = platform or sys.platform
-    home_path = Path(home) if home is not None else Path.home()
-    if platform == "darwin":
-        return home_path / "Library" / "Application Support" / APP_NAME
-    if platform == "win32":
-        base = _env_path(env, "APPDATA") or home_path / "AppData" / "Roaming"
-        return base / APP_NAME
-    base = _env_path(env, "XDG_DATA_HOME") or home_path / ".local" / "share"
-    return base / APP_NAME
-
-
-def user_cache_dir(
-    *,
-    platform: str | None = None,
-    home: str | Path | None = None,
-    env: Mapping[str, str] | None = None,
-) -> Path:
-    env = os.environ if env is None else env
-    override = _env_path(env, "CYRENE_CACHE_DIR")
-    if override is not None:
-        return override
-    platform = platform or sys.platform
-    home_path = Path(home) if home is not None else Path.home()
-    if platform == "darwin":
-        return home_path / "Library" / "Caches" / APP_NAME
-    if platform == "win32":
-        base = _env_path(env, "LOCALAPPDATA") or _env_path(env, "APPDATA") or home_path / "AppData" / "Local"
-        return base / APP_NAME / "Cache"
-    base = _env_path(env, "XDG_CACHE_HOME") or home_path / ".cache"
-    return base / APP_NAME
-
-
 def app_temp_dir(
     *,
     platform: str | None = None,
     home: str | Path | None = None,
     env: Mapping[str, str] | None = None,
+    bundled: bool | None = None,
 ) -> Path:
     env = os.environ if env is None else env
     override = _env_path(env, "CYRENE_TEMP_DIR")
     if override is not None:
         return override
-    return user_cache_dir(platform=platform, home=home, env=env) / "tmp"
+    return user_cache_dir(
+        platform=platform,
+        home=home,
+        env=env,
+        bundled=bundled,
+    ) / "tmp"
 
 
 def resolve_app_paths(
@@ -147,12 +105,27 @@ def resolve_app_paths(
     install_resources: str | Path | None = None,
 ) -> AppPaths:
     env = os.environ if env is None else env
-    resources = Path(install_resources) if install_resources is not None else install_resources_dir(env=env, bundled=bundled)
-    data_root = user_data_dir(platform=platform, home=home, env=env)
-    cache_root = user_cache_dir(platform=platform, home=home, env=env)
-    temp_root = app_temp_dir(platform=platform, home=home, env=env)
     bundled_value = is_bundled() if bundled is None else bundled
-    runtime_base = _env_path(env, "CYRENE_BASE_DIR") or (data_root if bundled_value else resources)
+    resources = Path(install_resources) if install_resources is not None else install_resources_dir(env=env, bundled=bundled_value)
+    data_root = user_data_dir(
+        platform=platform,
+        home=home,
+        env=env,
+        bundled=bundled_value,
+    )
+    cache_root = user_cache_dir(
+        platform=platform,
+        home=home,
+        env=env,
+        bundled=bundled_value,
+    )
+    temp_root = app_temp_dir(
+        platform=platform,
+        home=home,
+        env=env,
+        bundled=bundled_value,
+    )
+    runtime_base = _env_path(env, "CYRENE_BASE_DIR") or data_root
     return AppPaths(
         install_resources=resources,
         user_data=data_root,

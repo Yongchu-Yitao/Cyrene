@@ -7,21 +7,21 @@ from pathlib import Path
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from agent.plugin import (
+from cyrene.core.plugin import (
     Plugin,
-    PluginApplicationHost,
     PluginContext,
     PluginPack,
     PluginRegistry,
     PluginSetupContext,
 )
-from agent.plugin.plugin_impl.cyrene_plugin_development.tools import (
+from cyrene.plugins import PluginApplicationHost
+from cyrene.plugins.builtin.cyrene_plugin_development.tools import (
     SCAFFOLD_TYPES,
     scaffold,
     validate_pack_directory,
     validate_plugin_source,
 )
-from route.plugins import plugin_registry_status, register_plugin_routes
+from cyrene.workbench.http.plugins import plugin_registry_status, register_plugin_routes
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -109,7 +109,7 @@ def test_plugin_authoring_example_uses_unified_pack_protocol() -> None:
     assert validation["project_tool_count"] == 1
     assert not (example / "plugin.json").exists()
 
-    frontend = (ROOT / "src" / "webui" / "frontend")
+    frontend = (ROOT / "src" / "cyrene" / "workbench" / "webui" / "frontend")
     plugin_service = (frontend / "platform" / "plugins.jsx").read_text(encoding="utf-8")
     page = (frontend / "features" / "chat" / "page.jsx").read_text(encoding="utf-8")
     rail = (frontend / "features" / "chat" / "rail.jsx").read_text(encoding="utf-8")
@@ -229,6 +229,6 @@ def test_plugin_center_marks_unmanaged_user_sources_for_top_section(tmp_path) ->
     assert standalone["BuiltinTool"]["user_created"] is False
     assert standalone["MyTool"]["user_created"] is True
 
-    frontend = (ROOT / "src/webui/frontend/features/settings/custom-plugins.jsx").read_text(encoding="utf-8")
+    frontend = (ROOT / "src/cyrene/workbench/webui/frontend/features/settings/custom-plugins.jsx").read_text(encoding="utf-8")
     assert frontend.index("UserCreatedPluginsSection") < frontend.index("PluginPacksSection, { controller: c }")
     assert "item.user_created === true" in frontend

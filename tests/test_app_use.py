@@ -12,7 +12,7 @@ import pytest
 import PIL as _REAL_PIL
 from PIL import Image, ImageDraw as _REAL_IMAGE_DRAW
 
-from agent.plugin import PluginContext
+from cyrene.core.plugin import PluginContext
 
 _REAL_PIL_IMAGE = sys.modules["PIL.Image"]
 _REAL_PIL_IMAGE_DRAW = _REAL_IMAGE_DRAW
@@ -26,7 +26,7 @@ def _png_base64(width: int, height: int, color: tuple[int, int, int] = (240, 240
 
 @pytest.fixture(autouse=True)
 def clear_app_use_runtime_session_state(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     monkeypatch.setitem(sys.modules, "PIL", _REAL_PIL)
     monkeypatch.setitem(sys.modules, "PIL.Image", _REAL_PIL_IMAGE)
@@ -47,7 +47,7 @@ def clear_app_use_runtime_session_state(monkeypatch):
 
 
 def test_app_use_is_one_stable_main_only_tool():
-    from agent.plugin.plugin_impl.cyrene_desktop import plugin_pack
+    from cyrene.plugins.builtin.cyrene_desktop import plugin_pack
 
     plugins = [plugin for plugin in plugin_pack.plugins if plugin.name == "app_use"]
     assert len(plugins) == 1
@@ -55,7 +55,7 @@ def test_app_use_is_one_stable_main_only_tool():
 
 
 def test_app_use_schema_keeps_runtime_capabilities_out_of_function_enum():
-    from agent.plugin.plugin_impl.cyrene_desktop.app_use import TOOL_DEF
+    from cyrene.plugins.builtin.cyrene_desktop.app_use import TOOL_DEF
 
     function = TOOL_DEF["function"]
     description = function["description"]
@@ -75,7 +75,7 @@ def test_app_use_schema_keeps_runtime_capabilities_out_of_function_enum():
 
 @pytest.mark.asyncio
 async def test_execute_app_use_validates_gateway_arguments(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     calls = []
 
@@ -103,7 +103,7 @@ async def test_execute_app_use_validates_gateway_arguments(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_app_use_forces_visual_mode_and_rejects_cross_scheme_connect(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     calls = []
 
@@ -126,7 +126,7 @@ async def test_app_use_forces_visual_mode_and_rejects_cross_scheme_connect(monke
 
 @pytest.mark.asyncio
 async def test_visual_describe_converts_window_capture_to_text(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
     from cyrene.runtime import attachments
 
     async def fake_rpc(_operation, _arguments, **_kwargs):
@@ -163,7 +163,7 @@ async def test_visual_describe_converts_window_capture_to_text(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_visual_describe_default_prompt_requires_a_concise_coordinate_summary(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     async def fake_rpc(_operation, _arguments, **_kwargs):
         return {
@@ -198,7 +198,7 @@ async def test_visual_describe_default_prompt_requires_a_concise_coordinate_summ
 
 @pytest.mark.asyncio
 async def test_visual_describe_reports_capture_success_separately_from_vision_timeout(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     async def fake_rpc(_operation, _arguments, **_kwargs):
         return {
@@ -229,7 +229,7 @@ async def test_visual_describe_reports_capture_success_separately_from_vision_ti
 
 @pytest.mark.asyncio
 async def test_connect_discloses_python_visual_click_workflow(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     async def fake_rpc(_operation, _arguments, **_kwargs):
         return {
@@ -273,7 +273,7 @@ async def test_connect_discloses_python_visual_click_workflow(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_connect_does_not_disclose_mac_only_or_focus_dependent_python_capabilities(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     responses = iter([
         {
@@ -327,8 +327,8 @@ async def test_connect_does_not_disclose_mac_only_or_focus_dependent_python_capa
 
 
 def test_app_use_timeout_covers_two_vision_passes():
-    from agent.plugin.plugin_impl.cyrene_desktop._app_use_backend import VISION_ANALYSIS_TIMEOUT_SECONDS
-    from agent.plugin.plugin_impl.cyrene_desktop import plugin_pack
+    from cyrene.plugins.builtin.cyrene_desktop._app_use_backend import VISION_ANALYSIS_TIMEOUT_SECONDS
+    from cyrene.plugins.builtin.cyrene_desktop import plugin_pack
 
     plugin = next(plugin for plugin in plugin_pack.plugins if plugin.name == "app_use")
     assert plugin.timeout_seconds >= (2 * VISION_ANALYSIS_TIMEOUT_SECONDS) + 30
@@ -336,7 +336,7 @@ def test_app_use_timeout_covers_two_vision_passes():
 
 @pytest.mark.asyncio
 async def test_connect_filters_every_semantic_or_ax_fallback_from_visual_scheme(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     async def fake_rpc(_operation, _arguments, **_kwargs):
         return {
@@ -363,7 +363,7 @@ async def test_connect_filters_every_semantic_or_ax_fallback_from_visual_scheme(
 
 @pytest.mark.asyncio
 async def test_only_coordinate_actions_require_visual_inspection_then_measurement(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     calls = []
 
@@ -437,7 +437,7 @@ async def test_only_coordinate_actions_require_visual_inspection_then_measuremen
 
 @pytest.mark.asyncio
 async def test_measure_coordinates_requires_prior_visual_inspection_for_connected_session(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     app_use._SESSION_MEASUREMENTS["session-needs-visual"] = None
     blocked = await app_use.execute_app_use({
@@ -451,7 +451,7 @@ async def test_measure_coordinates_requires_prior_visual_inspection_for_connecte
 
 @pytest.mark.asyncio
 async def test_measure_coordinates_rejects_empty_target_binding():
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     result = await app_use.execute_app_use({
         "operation": "call", "session_id": "session-legacy", "capability": "measure_coordinates",
@@ -464,7 +464,7 @@ async def test_measure_coordinates_rejects_empty_target_binding():
 
 @pytest.mark.asyncio
 async def test_visual_session_rejects_accessibility_backed_virtual_click(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     calls = []
 
@@ -486,7 +486,7 @@ async def test_visual_session_rejects_accessibility_backed_virtual_click(monkeyp
 
 @pytest.mark.asyncio
 async def test_swipe_must_reuse_latest_measured_start_point(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     calls = []
 
@@ -524,7 +524,7 @@ async def test_swipe_must_reuse_latest_measured_start_point(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_real_coordinate_click_requires_focus_and_reuses_measured_point(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     calls = []
 
@@ -570,7 +570,7 @@ async def test_real_coordinate_click_requires_focus_and_reuses_measured_point(mo
 
 @pytest.mark.asyncio
 async def test_visual_activation_requires_measurement_for_the_same_target(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     calls = []
 
@@ -595,7 +595,7 @@ async def test_visual_activation_requires_measurement_for_the_same_target(monkey
 
 @pytest.mark.asyncio
 async def test_visual_activation_requires_measurement_with_a_bound_target(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     calls = []
 
@@ -619,7 +619,7 @@ async def test_visual_activation_requires_measurement_with_a_bound_target(monkey
 
 @pytest.mark.asyncio
 async def test_measure_coordinates_crops_marks_and_returns_all_coordinate_spaces(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
     from cyrene.runtime import attachments
 
     calls = []
@@ -674,7 +674,7 @@ async def test_measure_coordinates_crops_marks_and_returns_all_coordinate_spaces
 
 @pytest.mark.asyncio
 async def test_visual_click_failure_hands_off_without_calling_semantic_actions(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     calls = []
 
@@ -705,7 +705,7 @@ async def test_visual_click_failure_hands_off_without_calling_semantic_actions(m
 
 @pytest.mark.asyncio
 async def test_visual_type_owns_coordinate_mapping_and_requires_exact_text_verification(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     calls = []
     analyses = iter([
@@ -753,7 +753,7 @@ async def test_visual_type_owns_coordinate_mapping_and_requires_exact_text_verif
 
 @pytest.mark.asyncio
 async def test_visual_type_rejected_input_requires_isolated_desktop_not_foreground(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     analyses = iter([
         ('{"found":true,"confidence":0.9,"x":600,"y":900}', "vision-locate"),
@@ -792,7 +792,7 @@ async def test_visual_type_rejected_input_requires_isolated_desktop_not_foregrou
 
 @pytest.mark.asyncio
 async def test_visual_click_scales_capture_coordinates_and_uses_foreground_quartz_click(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
     from cyrene.runtime import attachments
 
     calls = []
@@ -858,7 +858,7 @@ async def test_visual_click_scales_capture_coordinates_and_uses_foreground_quart
 
 @pytest.mark.asyncio
 async def test_visual_click_never_calls_semantic_find_or_press(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
     from cyrene.runtime import attachments
 
     calls = []
@@ -897,7 +897,7 @@ async def test_visual_click_never_calls_semantic_find_or_press(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_visual_click_rejects_removed_cross_scheme_fallback_arguments():
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     result = await app_use.execute_app_use({
         "operation": "call",
@@ -917,7 +917,7 @@ async def test_visual_click_rejects_removed_cross_scheme_fallback_arguments():
 
 @pytest.mark.asyncio
 async def test_visual_click_attributes_only_the_visual_pointer_action(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
     from cyrene.runtime import attachments
 
     async def fake_rpc(_operation, arguments, **_kwargs):
@@ -957,8 +957,8 @@ async def test_visual_click_attributes_only_the_visual_pointer_action(monkeypatc
 
 @pytest.mark.asyncio
 async def test_app_use_tool_returns_structured_json(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
-    from agent.plugin.plugin_impl.cyrene_desktop import app_use as tool
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import app_use as tool
 
     async def fake_execute(arguments, _context=None):
         return {"status": "success", "operation": arguments["operation"], "targets": []}
@@ -970,7 +970,7 @@ async def test_app_use_tool_returns_structured_json(monkeypatch):
 
 
 def test_app_use_result_limiter_prunes_nodes():
-    from agent.plugin.plugin_impl.cyrene_desktop._app_use_backend import format_app_use_result
+    from cyrene.plugins.builtin.cyrene_desktop._app_use_backend import format_app_use_result
 
     result = {
         "status": "success",
@@ -985,7 +985,7 @@ def test_app_use_result_limiter_prunes_nodes():
 
 
 def test_app_use_result_limiter_prunes_nested_verification():
-    from agent.plugin.plugin_impl.cyrene_desktop._app_use_backend import format_app_use_result
+    from cyrene.plugins.builtin.cyrene_desktop._app_use_backend import format_app_use_result
 
     result = {
         "status": "success",
@@ -1006,7 +1006,7 @@ def test_app_use_result_limiter_prunes_nested_verification():
 
 @pytest.mark.asyncio
 async def test_electron_app_rpc_uses_app_endpoint(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_desktop import _app_use_backend as app_use
+    from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
 
     captured = {}
 
@@ -1076,7 +1076,7 @@ def test_platform_provider_scripts_exist():
 
 
 def test_app_use_localizes_public_errors_and_hides_bridge_diagnostics():
-    from agent.plugin.plugin_impl.cyrene_desktop._app_use_backend import (
+    from cyrene.plugins.builtin.cyrene_desktop._app_use_backend import (
         format_app_use_result,
     )
 

@@ -41,8 +41,8 @@ def _inline_manifest(**overrides):
 @pytest.fixture
 def saved_settings(monkeypatch):
     saved = {}
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     monkeypatch.setattr(agent_runtime, "get_setting", lambda key, default=None: saved.get(key, default))
     monkeypatch.setattr(agent_runtime, "set_setting", lambda key, value: saved.__setitem__(key, value))
@@ -74,7 +74,7 @@ class FakeTasks:
 
 
 def _service(tasks=None):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service_module
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service_module
 
     extension_service = object.__new__(service_module.ExtensionService)
     extension_service.tasks = tasks or FakeTasks()
@@ -82,7 +82,7 @@ def _service(tasks=None):
 
 
 def test_recommended_agent_catalog_has_pinned_registry_distributions():
-    from agent.plugin.plugin_impl.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS, RECOMMENDED_AGENT_ORDER
+    from cyrene.plugins.builtin.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS, RECOMMENDED_AGENT_ORDER
 
     assert RECOMMENDED_AGENT_ORDER == ("opencode", "codex-acp", "pi-acp")
     for agent_id in RECOMMENDED_AGENT_ORDER:
@@ -100,7 +100,7 @@ def test_recommended_agent_catalog_has_pinned_registry_distributions():
 
 @pytest.mark.asyncio
 async def test_agent_search_returns_no_results():
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service_module
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service_module
 
     extension_service = object.__new__(service_module.ExtensionService)
     result = await extension_service.search("agent", "anything", advanced=True)
@@ -109,7 +109,7 @@ async def test_agent_search_returns_no_results():
 
 @pytest.mark.asyncio
 async def test_inline_proposal_creates_pending_validation_and_is_idempotent(saved_settings):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
 
     service = _service()
     first = await service.create_agent_install_proposal({"type": "inline", "manifest": _inline_manifest()})
@@ -153,7 +153,7 @@ async def test_inline_proposal_rejects_invalid_manifests_and_sources(saved_setti
         await service.create_agent_install_proposal({"type": "inline"})
 
     # Unsupported model access modes fall back to the safe Cyrene-managed default.
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
 
     fallback = await service.create_agent_install_proposal(
         {"type": "inline", "manifest": _inline_manifest(modelAccess={"mode": "everything"})}
@@ -215,7 +215,7 @@ class _FakeClient:
 
 @pytest.mark.asyncio
 async def test_manifest_url_proposal_fetches_and_validates(saved_settings, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
 
     monkeypatch.setattr(agent_runtime.httpx, "AsyncClient", _FakeClient)
     service = _service()
@@ -227,7 +227,7 @@ async def test_manifest_url_proposal_fetches_and_validates(saved_settings, monke
 
 @pytest.mark.asyncio
 async def test_manifest_url_fetch_streams_and_enforces_size_cap(saved_settings, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
 
     monkeypatch.setattr(
         agent_runtime.httpx,
@@ -241,7 +241,7 @@ async def test_manifest_url_fetch_streams_and_enforces_size_cap(saved_settings, 
 
 @pytest.mark.asyncio
 async def test_manifest_url_redirect_targets_are_ssrf_validated(saved_settings, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
 
     monkeypatch.setattr(
         agent_runtime.httpx,
@@ -255,7 +255,7 @@ async def test_manifest_url_redirect_targets_are_ssrf_validated(saved_settings, 
 
 @pytest.mark.asyncio
 async def test_manifest_url_redirect_is_followed_and_fetched(saved_settings, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
 
     monkeypatch.setattr(
         agent_runtime.httpx,
@@ -273,7 +273,7 @@ async def test_manifest_url_redirect_is_followed_and_fetched(saved_settings, mon
 
 @pytest.mark.asyncio
 async def test_manifest_auth_sanitized_by_declarative_allowlist(saved_settings):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
 
     service = _service()
     result = await service.create_agent_install_proposal({"type": "inline", "manifest": _inline_manifest(auth={
@@ -300,7 +300,7 @@ async def test_manifest_auth_sanitized_by_declarative_allowlist(saved_settings):
 
 @pytest.mark.asyncio
 async def test_direct_manifest_install_without_proposal_is_rejected(saved_settings):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
 
     service = _service()
     with pytest.raises(ValueError, match="agent_install_invalid"):
@@ -310,7 +310,7 @@ async def test_direct_manifest_install_without_proposal_is_rejected(saved_settin
 
 @pytest.mark.asyncio
 async def test_failed_proposal_install_is_retryable(saved_settings, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
 
     service = _service()
     proposal = await service.create_agent_install_proposal({"type": "inline", "manifest": _inline_manifest()})
@@ -344,7 +344,7 @@ async def test_failed_proposal_install_is_retryable(saved_settings, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_run_manager_timeout_terminates_then_kills_child(saved_settings, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service_module
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service_module
 
     service = _service()
 
@@ -384,7 +384,7 @@ async def test_run_manager_timeout_terminates_then_kills_child(saved_settings, m
 
 @pytest.mark.asyncio
 async def test_download_enforces_pinned_sha256_even_when_verification_disabled(saved_settings, monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service_module
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service_module
 
     saved_settings["extension_sources"] = {"verify_signatures": False}
     service = _service()
@@ -438,8 +438,8 @@ async def test_download_enforces_pinned_sha256_even_when_verification_disabled(s
 
 @pytest.mark.asyncio
 async def test_recommended_npm_agent_same_version_install_is_idempotent(saved_settings, monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service_module
-    from agent.plugin.plugin_impl.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service_module
+    from cyrene.plugins.builtin.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
 
     monkeypatch.setattr(service_module, "_STAGING_DIR", tmp_path / "staging")
     monkeypatch.setattr(service_module, "_AGENT_DIR", tmp_path / "agents")
@@ -470,8 +470,8 @@ async def test_recommended_npm_agent_same_version_install_is_idempotent(saved_se
 
 @pytest.mark.asyncio
 async def test_recommended_npm_agent_install_does_not_claim_self_checksum(saved_settings, monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service_module
-    from agent.plugin.plugin_impl.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service_module
+    from cyrene.plugins.builtin.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
 
     monkeypatch.setattr(service_module, "_STAGING_DIR", tmp_path / "staging")
     monkeypatch.setattr(service_module, "_AGENT_DIR", tmp_path / "agents")
@@ -498,8 +498,8 @@ async def test_recommended_npm_agent_install_does_not_claim_self_checksum(saved_
 
 @pytest.mark.asyncio
 async def test_confirm_proposal_runs_async_pipeline_without_shell(saved_settings, monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service_module
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service_module
 
     monkeypatch.setattr(service_module.asyncio, "create_subprocess_exec", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("agent install must not execute a shell")))
     monkeypatch.setattr(service_module, "_STAGING_DIR", tmp_path / "staging")
@@ -532,8 +532,8 @@ async def test_confirm_proposal_runs_async_pipeline_without_shell(saved_settings
 
 @pytest.mark.asyncio
 async def test_recommended_agent_install_records_managed_verified_artifact(saved_settings, monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service_module
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service_module
 
     monkeypatch.setattr(service_module, "_STAGING_DIR", tmp_path / "staging")
     service = _service()
@@ -553,7 +553,7 @@ async def test_recommended_agent_install_records_managed_verified_artifact(saved
 
 
 def test_legacy_pending_transport_installation_migrates_to_on_demand(saved_settings):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
 
     saved_settings[agent_runtime.INSTALLATIONS_KEY] = [{
         "installation_id": "agent_legacy_default",
@@ -567,7 +567,7 @@ def test_legacy_pending_transport_installation_migrates_to_on_demand(saved_setti
 
 @pytest.mark.asyncio
 async def test_successful_probe_refreshes_capabilities_and_card(saved_settings, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
 
     record = agent_runtime.register_agent_installation(
         agent_id="probe-agent",
@@ -624,7 +624,7 @@ async def test_successful_probe_refreshes_capabilities_and_card(saved_settings, 
 
 @pytest.mark.asyncio
 async def test_agent_enable_disable_and_uninstall(saved_settings):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
 
     service = _service()
     agent_runtime.register_agent_installation(
@@ -646,8 +646,8 @@ async def test_agent_enable_disable_and_uninstall(saved_settings):
 
 
 def test_agents_route_endpoints_with_runtime_states(saved_settings):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_agent_runtime as agent_runtime
-    from agent.plugin.plugin_impl.cyrene_extensions.agent_routes import register_agent_routes
+    from cyrene.plugins.builtin.cyrene_extensions import extension_agent_runtime as agent_runtime
+    from cyrene.plugins.builtin.cyrene_extensions.agent_routes import register_agent_routes
 
     agent_runtime.register_agent_installation(
         agent_id="external-tool",

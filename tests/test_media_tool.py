@@ -7,8 +7,8 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_media_tool_requires_operational_application_service():
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl.cyrene_media.start_media_generation import (
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_media.start_media_generation import (
         _tool_start_media_generation,
     )
 
@@ -23,7 +23,7 @@ def test_media_tool_keeps_reference_sources_and_roles_in_provider_order(
     tmp_path,
     monkeypatch,
 ):
-    from agent.plugin.plugin_impl.cyrene_media import start_media_generation as media_tool
+    from cyrene.plugins.builtin.cyrene_media import start_media_generation as media_tool
 
     local = tmp_path / "local.png"
     attached = tmp_path / "attached.mp4"
@@ -94,7 +94,7 @@ def test_media_tool_rejects_unsafe_or_ambiguous_inputs(
     updates,
     message,
 ):
-    from agent.plugin.plugin_impl.cyrene_media import start_media_generation as media_tool
+    from cyrene.plugins.builtin.cyrene_media import start_media_generation as media_tool
 
     mask = tmp_path / "mask.png"
     mask.write_bytes(b"mask")
@@ -119,7 +119,7 @@ def test_media_tool_rejects_unsafe_or_ambiguous_inputs(
 
 
 def test_media_tool_rejects_attachments_outside_the_current_chat(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_media import start_media_generation as media_tool
+    from cyrene.plugins.builtin.cyrene_media import start_media_generation as media_tool
 
     with pytest.raises(ValueError, match="current conversation"):
         media_tool._resolve_attachment_reference(
@@ -129,8 +129,8 @@ def test_media_tool_rejects_attachments_outside_the_current_chat(monkeypatch):
 
 
 def test_media_validation_uses_the_invocation_language():
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl.cyrene_media import start_media_generation as media_tool
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_media import start_media_generation as media_tool
 
     with pytest.raises(ValueError, match="必须是 image、video 或 music"):
         media_tool._normalize_request(

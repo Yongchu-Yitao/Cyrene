@@ -64,13 +64,13 @@ uv run pytest -q \
   -W error::pytest.PytestUnhandledThreadExceptionWarning
 
 # 单个文件
-python -m pytest tests/test_context_trace.py -v
+uv run pytest tests/test_context_trace.py -v
 
 # 顶栏 Tab、固定资源、Library 拖动、导出兼容和标题栏布局
 uv run pytest -q \
   tests/test_workbench_recent_session_tabs.py \
   tests/test_workbench_pinned_resources.py \
-  tests/test_workbench_library.py \
+  tests/test_library_tools.py \
   tests/test_chat_attachment_flow.py \
   tests/test_electron_titlebar_alignment.py
 ```
@@ -79,14 +79,18 @@ Release 相关检查：
 
 ```bash
 node --test electron/app-use.test.js
-python -m compileall -q src
+uv run python -m compileall -q src
+npm --prefix src/cyrene/workbench/webui test
+npm --prefix src/cyrene/workbench/webui run build
 git diff --check
 ```
 
 真实 LLM、Telegram、WeChat、远程 MCP 等属于带凭据的手工集成测试。
 
-最新稳定 Worktree 使用 Locked Environment 中的 Python `3.12.11`、
-FastAPI `0.136.1`、Pydantic `2.13.4`，完整 1,402 项测试全部通过。
+本次 Core 重构后的 Worktree 使用 Locked Environment 中的 Python
+`3.12.11`、FastAPI `0.136.1`、Pydantic `2.13.4`，完整 2,209 项 Python
+测试全部通过；WebUI 27/27、Electron 84/84 通过，Production WebUI 和
+Wheel 构建成功。
 
 文档复核期间 OpenAPI Test 最初失败，是因为其 Hash 由 Ambient Python
 3.13.12、FastAPI 0.115.8、Pydantic 2.12.5 采集，而不是使用 `uv.lock` 中
@@ -111,21 +115,24 @@ Baseline 与 Hash。
 
 ### 模块与依赖
 
-正式实现包：
+正式分层：
 
-- `agent`
-- `workbench`
-- `model_runtime`
-- `learning`
-- `runtime`
-- `observability`
-- `knowledge`
-- `channels`
-- `tooling`
-- `tool_impl`
+- `cyrene.core`：与 Host 无关的 Agent Session、ContextTree、Hook、Plugin
+  对象、Scope、Registry 与执行；
+- `cyrene.plugins`：Cyrene Application Host、Model 组装、Workbench Contribution
+  SDK 和 `builtin/` 内的标准可编辑功能插件；
+- `cyrene.workbench`：Cyrene Host 适配；业务模块按 `application`、`chat`、
+  `tasks`、`projects`、`goals`、`planning`、`artifacts`、`sessions`、
+  `control`、`workspaces`、`ui` 领域组织，持久化、FastAPI 与 WebUI 各自使用
+  独立适配包；
+- `cyrene.agent_runtime`：外部 ACP Agent 集成；
+- `cyrene.model_runtime`、`cyrene.runtime`、`cyrene.observability`：Provider
+  支持、进程生命周期和诊断。
 
-历史 Import 由 `cyrene.runtime.module_compat` 维护，不要创建重复顶层 Shim。
-FastAPI Adapter 位于 `src/route/`；领域代码不得依赖 Route 或 Web UI。
+`cyrene.core` 不得依赖产品层或适配层。FastAPI Adapter 位于
+`src/cyrene/workbench/http/`，唯一前端位于 `src/cyrene/workbench/webui/`。
+已删除的顶层 `agent`、`route`、`webui` 包不得以兼容 Shim 形式恢复。
+不要直接在 `cyrene.workbench` 包根目录新增业务模块，应放入所属领域子包。
 
 跨模块通信使用：
 
@@ -136,12 +143,15 @@ FastAPI Adapter 位于 `src/route/`；领域代码不得依赖 Route 或 Web UI�
 
 ### 新增 Tool
 
-1. 在匹配领域的 `cyrene/tool_impl/` 创建模块；
-2. 导出 `TOOL_DEF` 和 Async `handler`；
-3. 加入 Native Tool Module Registry；
-4. Deferred Tool 分配稳定 Capability ID；Direct Tool 变更固定 Wire Contract
-   必须有明确理由；
-5. 增加 Policy、Schema、Actor 和 UI/Setting 测试。
+1. 在对应的 `src/cyrene/plugins/builtin/<pack>/` 中增加实现，或在应用
+   数据目录的 `plugin_impl/` 中创建用户 `PluginPack`；
+2. 定义带 Input Schema 和 Async Handler 的 `Plugin`，并加入包的
+   `plugins` Tuple；
+3. Session Service/Hook 使用 `setup`，Route、进程 Service、Lifecycle、Search
+   或 Workbench Contribution 使用 `application_setup`；
+4. 固定 Kernel 只保留 `Bash`、`Read`、`Write`、`toolbox`；所有功能 Tool
+   属于插件，并可选 Direct 或 Toolbox Discovery；
+5. 增加 Schema、Policy、Actor、Localization 和 Host Contribution 测试。
 
 Cyrene 自管理的公开能力只能加入 Main-only `cyrene_tools`。UI Action 必须在
 `uiSurface` 注册稳定 Node/Action ID、受限语义 Handler、Risk 和 Outcome；禁止
@@ -154,7 +164,7 @@ Session-message 后台 handler 必须保留在 `INTERNAL_ONLY_CONCRETE_TOOL_NAME
 ```bash
 node --test electron/ui-surface.test.js electron/host-control.test.js
 uv run pytest -q tests/test_app_control.py \
-  tests/test_progressive_tool_packages.py \
+  tests/test_plugins.py \
   tests/test_tool_package_settings.py \
   tests/test_webui_consolidation_contract.py
 ```
@@ -173,6 +183,11 @@ npm run dev
 Electron 执行 `uv run cyrene --workbench --electron-mode`，因此开发模式与
 手动源码启动共享同一个项目入口和环境。
 
+源码运行默认使用独立的 `Cyrene-dev` 应用数据与缓存目录；安装版继续使用
+`Cyrene`。因此开发版的配置、数据库、工作区和 `plugin_impl/` 不会覆盖安装版。
+需要指定其他隔离目录时，可显式设置 `CYRENE_USER_DATA_DIR`、
+`CYRENE_CACHE_DIR` 或 `CYRENE_BASE_DIR`。
+
 ## CI / Release
 
 Repository 有两个 GitHub Actions Workflow：
@@ -180,7 +195,7 @@ Repository 有两个 GitHub Actions Workflow：
 - `.github/workflows/ci.yml` 在 Pull Request、推送到 `main` 或手工 Dispatch
   时执行。Linux Job 会同步 Lockfile 中全部 Extra、编译 `src`、执行完整
   pytest（把未处理 Thread Warning 提升为 Error）、构建 WebUI、确认
-  `src/webui/static/app` 已同步提交，并执行 Electron App Use Test。
+  `src/cyrene/workbench/webui/static/app` 已同步提交，并执行 Electron App Use Test。
 - `.github/workflows/release.yml` 在 Version Tag (`v*`) 或手工 Dispatch 时
   执行。它会为唯一的 Workbench 应用构建 macOS、Windows x64/ARM64 和 Linux
   的 PyInstaller + Electron 产物，并验证打包后端、桌面渲染、安装包、便携版、

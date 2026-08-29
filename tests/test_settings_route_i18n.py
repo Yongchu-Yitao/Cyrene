@@ -24,7 +24,7 @@ def _payload(response) -> dict:
 
 
 def test_media_settings_validation_is_localized_without_exception_text(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_media import settings_routes as media
+    from cyrene.plugins.builtin.cyrene_media import settings_routes as media
 
     _language(monkeypatch, "zh")
     secret = "private-media-validation-detail"
@@ -47,7 +47,7 @@ def test_media_settings_validation_is_localized_without_exception_text(monkeypat
 
 
 def test_onboarding_upstream_failure_is_localized_without_detail(monkeypatch):
-    from route.settings import onboarding_context
+    from cyrene.workbench.http.settings import onboarding_context
 
     _language(monkeypatch, "zh")
     secret = "private-upstream-response"
@@ -78,7 +78,7 @@ def test_onboarding_upstream_failure_is_localized_without_detail(monkeypatch):
 
 def test_oauth_snapshot_failure_is_localized_without_exception_text(monkeypatch):
     from cyrene.model_runtime import codex_provider
-    from agent.plugin.plugin_impl.cyrene_model.oauth import register_oauth_routes
+    from cyrene.plugins.builtin.cyrene_model.oauth import register_oauth_routes
 
     _language(monkeypatch, "zh")
     secret = "private-oauth-process-detail"
@@ -100,7 +100,7 @@ def test_oauth_snapshot_failure_is_localized_without_exception_text(monkeypatch)
 
 
 def test_oauth_snapshot_sanitizes_nested_provider_errors(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_model.oauth import _public_oauth_snapshot
+    from cyrene.plugins.builtin.cyrene_model.oauth import _public_oauth_snapshot
 
     _language(monkeypatch, "zh")
     secret = "private-codex-process-output"
@@ -121,7 +121,7 @@ def test_oauth_snapshot_sanitizes_nested_provider_errors(monkeypatch):
 
 def test_profile_service_error_keeps_safe_revision_only(monkeypatch):
     from cyrene.runtime.profile_data_service import ProfileDataError
-    from route.settings import profile_data
+    from cyrene.workbench.http.settings import profile_data
 
     _language(monkeypatch, "zh")
     secret = "private-profile-error"
@@ -146,7 +146,7 @@ def test_profile_service_error_keeps_safe_revision_only(monkeypatch):
 
 def test_config_service_error_drops_raw_payload_detail(monkeypatch):
     from cyrene.runtime.config_integration_service import ConfigIntegrationError
-    from route.settings.config_integrations import _error_response
+    from cyrene.workbench.http.settings.config_integrations import _error_response
 
     _language(monkeypatch, "zh")
     secret = "private-host-bridge-detail"
@@ -170,7 +170,7 @@ def test_config_service_error_drops_raw_payload_detail(monkeypatch):
 
 
 def test_local_model_status_sanitizes_background_download_errors(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_knowledge.settings_routes import (
+    from cyrene.plugins.builtin.cyrene_knowledge.settings_routes import (
         _public_local_model_status,
     )
 
@@ -189,7 +189,7 @@ def test_local_model_status_sanitizes_background_download_errors(monkeypatch):
 
 
 def test_plugin_activation_validation_localizes_technical_names(monkeypatch):
-    from route.settings.plugin_service import _activation_update_error
+    from cyrene.workbench.http.settings.plugin_service import _activation_update_error
 
     _language(monkeypatch, "zh")
     response = _activation_update_error(
@@ -206,7 +206,7 @@ def test_plugin_activation_validation_localizes_technical_names(monkeypatch):
 
 
 def test_model_validation_hides_unknown_exception_text(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_model.routes import _validation_error
+    from cyrene.plugins.builtin.cyrene_model.routes import _validation_error
 
     _language(monkeypatch, "zh")
     secret = "provider failed at /private/path"
@@ -225,8 +225,8 @@ def test_model_validation_hides_unknown_exception_text(monkeypatch):
 
 
 def test_office_error_translates_allowlisted_message_and_hides_unknowns(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_office.installation import OfficeInstallationError
-    from agent.plugin.plugin_impl.cyrene_office.settings_routes import _installation_error
+    from cyrene.plugins.builtin.cyrene_office.installation import OfficeInstallationError
+    from cyrene.plugins.builtin.cyrene_office.settings_routes import _installation_error
 
     _language(monkeypatch, "zh")
     known = _installation_error(
@@ -248,7 +248,7 @@ def test_office_error_translates_allowlisted_message_and_hides_unknowns(monkeypa
 
 
 def test_gateway_error_preserves_openai_shape_and_localizes(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions.agent_model_gateway_routes import _gateway_error
+    from cyrene.plugins.builtin.cyrene_extensions.agent_model_gateway_routes import _gateway_error
 
     _language(monkeypatch, "zh")
     response = _gateway_error(

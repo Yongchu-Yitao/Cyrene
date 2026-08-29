@@ -80,6 +80,11 @@ Center 则统一控制插件包是否存在、每个工具是直接可见还是�
 完整生命周期见[架构说明](docs/architecture.zh-CN.md)，插件贡献格式见
 [自定义插件](docs/project-plugins.zh-CN.md)。
 
+源码也遵循同一边界：`cyrene.core` 与 Host 无关，`cyrene.plugins` 拥有
+Cyrene 产品贡献与内置功能插件，`cyrene.workbench` 将它们适配到 HTTP、
+持久化、Electron 和 SPA。原顶层 `agent`、`route`、`webui` 包已删除，
+不保留兼容外壳。
+
 ## 快速开始
 
 ### Desktop App
@@ -94,10 +99,10 @@ Center 则统一控制插件包是否存在、每个工具是直接可见还是�
 ```bash
 uv sync
 
-cd src/webui
+cd src/cyrene/workbench/webui
 npm install
 npm run build
-cd ../..
+cd ../../../..
 
 uv run cyrene
 ```

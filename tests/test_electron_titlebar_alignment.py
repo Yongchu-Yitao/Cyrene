@@ -5,7 +5,7 @@ from pathlib import Path
 def test_macos_traffic_lights_are_centered_in_workbench_topbar():
     root = Path(__file__).resolve().parent.parent
     main_source = (root / "electron" / "main.js").read_text(encoding="utf-8")
-    css_source = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+    css_source = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
 

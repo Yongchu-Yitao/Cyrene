@@ -1,3 +1,0 @@
-# SearXNG is now built-in via SimpleXNG (pip install simplexng).
-# No Docker required — Cyrene auto-starts SearXNG on launch.
-# See README for details.

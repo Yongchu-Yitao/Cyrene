@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cyrene.workbench import notifications as notifications
+from cyrene.workbench.application import notifications as notifications
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,7 +13,7 @@ def _css_rule(styles: str, selector: str) -> str:
 
 
 def test_notification_panel_wraps_long_content_without_horizontal_scroll() -> None:
-    styles = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+    styles = (ROOT / "src/cyrene/workbench/webui/frontend/workbench.css").read_text(encoding="utf-8")
     notification_styles = styles.split(".workbench-notif-popover {", 1)[1].split(
         "/* ── Help & Support center", 1
     )[0]
@@ -51,7 +51,7 @@ def test_visible_session_notification_is_not_returned_or_counted(tmp_path, monke
     assert [item["title"] for item in payload["items"]] == ["另一个任务回复完成"]
     assert payload["unreadCount"] == 1
     assert payload["unreadByTab"]["comment"] == 1
-    from cyrene.workbench.store import read_document
+    from cyrene.workbench.persistence.store import read_document
     persisted = read_document(store, "notifications", lambda: {"items": []})
     assert [item["title"] for item in persisted["items"]] == ["另一个任务回复完成"]
 
@@ -80,7 +80,7 @@ def test_visible_chat_only_removes_unread_notification(tmp_path, monkeypatch) ->
 
 def test_notification_routes_keep_sqlite_work_off_the_event_loop() -> None:
     source = (
-        ROOT / "src/route/workbench/project_routes/notifications.py"
+        ROOT / "src/cyrene/workbench/http/workbench/project_routes/notifications.py"
     ).read_text(encoding="utf-8")
 
     assert "return await asyncio.to_thread(\n            projects.notifications," in source

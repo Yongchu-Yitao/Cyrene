@@ -1,4 +1,4 @@
-"""M1 tests for the persistent browser session (src/agent/plugin/plugin_impl/cyrene_browser/runtime.py).
+"""M1 tests for the persistent browser session (src/cyrene/plugins/builtin/cyrene_browser/runtime.py).
 
 Covers the live-view foundation without launching a real browser:
   - navigate() drives the shared page and returns extracted text
@@ -21,7 +21,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from agent.plugin import PluginContext
+from cyrene.core.plugin import PluginContext
 
 # Patch missing optional deps before any cyrene import (mirrors test_runtime_fixes).
 try:
@@ -81,7 +81,7 @@ def _capture_publish(monkeypatch):
 
 
 async def test_session_navigate_returns_text_and_emits_frame(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     captured = _capture_publish(monkeypatch)
     session = browser._BrowserSession()
@@ -108,7 +108,7 @@ async def test_session_navigate_returns_text_and_emits_frame(monkeypatch):
 
 
 async def test_session_navigate_returns_immediately_clickable_link_refs(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     session = browser._BrowserSession()
     page = _FakePage()
@@ -140,7 +140,7 @@ async def test_session_navigate_returns_immediately_clickable_link_refs(monkeypa
 
 
 async def test_emit_frame_normalizes_box_and_target(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     captured = _capture_publish(monkeypatch)
     session = browser._BrowserSession()
@@ -160,7 +160,7 @@ async def test_emit_frame_normalizes_box_and_target(monkeypatch):
 
 async def test_emit_frame_is_best_effort(monkeypatch):
     """A metadata publish failure must not raise out of _emit_frame."""
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
     from cyrene.observability import debug
 
     session = browser._BrowserSession()
@@ -175,7 +175,7 @@ async def test_emit_frame_is_best_effort(monkeypatch):
 
 
 async def test_click_requires_navigate_first(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     monkeypatch.setattr(browser, "_PLAYWRIGHT_AVAILABLE", True)
     monkeypatch.setattr(browser, "_session", None)
@@ -187,7 +187,7 @@ async def test_click_requires_navigate_first(monkeypatch):
 
 
 async def test_type_requires_navigate_first(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     monkeypatch.setattr(browser, "_PLAYWRIGHT_AVAILABLE", True)
     monkeypatch.setattr(browser, "_session", None)
@@ -199,7 +199,7 @@ async def test_type_requires_navigate_first(monkeypatch):
 
 
 async def test_navigate_falls_back_to_httpx_without_playwright(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     monkeypatch.setattr(browser, "_PLAYWRIGHT_AVAILABLE", False)
 
@@ -218,7 +218,7 @@ async def test_navigate_falls_back_to_httpx_without_playwright(monkeypatch):
 
 
 def test_html_links_resolve_text_and_image_links_and_skip_non_http():
-    from agent.plugin.plugin_impl.cyrene_browser.runtime import _html_links
+    from cyrene.plugins.builtin.cyrene_browser.runtime import _html_links
 
     links = _html_links(
         """
@@ -237,7 +237,7 @@ def test_html_links_resolve_text_and_image_links_and_skip_non_http():
 
 
 def test_browser_navigate_link_output_is_before_page_text():
-    from agent.plugin.plugin_impl.cyrene_browser.browser_output import page_link_lines
+    from cyrene.plugins.builtin.cyrene_browser.browser_output import page_link_lines
 
     lines = page_link_lines(
         {"links": [{"text": "Target result", "url": "https://example.com/video/1"}]},
@@ -258,7 +258,7 @@ def test_browser_navigate_link_output_is_before_page_text():
 
 
 async def test_navigate_normalizes_bare_domain_before_validation(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     monkeypatch.setattr(browser, "_PLAYWRIGHT_AVAILABLE", False)
 
@@ -277,7 +277,7 @@ async def test_navigate_normalizes_bare_domain_before_validation(monkeypatch):
 
 
 def test_generic_access_gate_signal_requires_paired_markers_and_allows_one_retry():
-    from agent.plugin.plugin_impl.cyrene_browser.runtime import _browser_page_signal
+    from cyrene.plugins.builtin.cyrene_browser.runtime import _browser_page_signal
 
     signal = _browser_page_signal(
         "https://example.com/article/abc",
@@ -296,7 +296,7 @@ def test_generic_access_gate_signal_requires_paired_markers_and_allows_one_retry
 
 
 def test_normalize_electron_page_signal_for_python_tools():
-    from agent.plugin.plugin_impl.cyrene_browser.runtime import _normalize_browser_result
+    from cyrene.plugins.builtin.cyrene_browser.runtime import _normalize_browser_result
 
     result = _normalize_browser_result({"pageSignal": {"kind": "access_gate"}})
 
@@ -307,7 +307,7 @@ def test_normalize_electron_page_signal_for_python_tools():
 async def test_browser_click_ref_surfaces_bounded_access_gate_recovery(monkeypatch):
     import importlib
 
-    module = importlib.import_module("agent.plugin.plugin_impl.cyrene_browser.browser_click_ref")
+    module = importlib.import_module("cyrene.plugins.builtin.cyrene_browser.browser_click_ref")
 
     async def fake_click_ref(_ref):
         return {
@@ -325,7 +325,7 @@ async def test_browser_click_ref_surfaces_bounded_access_gate_recovery(monkeypat
             "text": "当前笔记暂时无法浏览",
         }
 
-    monkeypatch.setattr("agent.plugin.plugin_impl.cyrene_browser.runtime.click_ref", fake_click_ref)
+    monkeypatch.setattr("cyrene.plugins.builtin.cyrene_browser.runtime.click_ref", fake_click_ref)
     result = await module._tool_browser_click_ref(
         {"ref": "e1"}, PluginContext(data={"language": "en"})
     )
@@ -336,7 +336,7 @@ async def test_browser_click_ref_surfaces_bounded_access_gate_recovery(monkeypat
 
 
 def test_click_debounce_is_short_lived_and_session_scoped():
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     session = browser._BrowserSession()
     assert session._click_debounced() is False
@@ -347,7 +347,7 @@ def test_click_debounce_is_short_lived_and_session_scoped():
 
 
 async def test_screenshot_normalizes_bare_domain(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     monkeypatch.setattr(browser, "_PLAYWRIGHT_AVAILABLE", True)
 
@@ -378,7 +378,7 @@ async def test_screenshot_normalizes_bare_domain(monkeypatch, tmp_path):
 
 
 def test_default_browser_user_agent_is_modern_chrome(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     def fake_cfg(key, default):
         return default
@@ -392,7 +392,7 @@ def test_default_browser_user_agent_is_modern_chrome(monkeypatch):
 
 
 def test_browser_runtime_error_filters_install_commands(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
     from cyrene import localization
 
     monkeypatch.setattr(localization, "app_language", lambda explicit=None: "en")
@@ -411,9 +411,9 @@ def test_browser_runtime_error_filters_install_commands(monkeypatch):
 
 def test_browser_live_frames_do_not_ride_sse_as_base64():
     root = Path(__file__).resolve().parent.parent
-    browser_source = (root / "src" / "agent" / "plugin" / "plugin_impl" / "cyrene_browser" / "runtime.py").read_text(encoding="utf-8")
-    routes_source = (root / "src" / "agent" / "plugin" / "plugin_impl" / "cyrene_browser" / "routes.py").read_text(encoding="utf-8")
-    view_source = (root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
+    browser_source = (root / "src" / "cyrene" / "plugins" / "builtin" / "cyrene_browser" / "runtime.py").read_text(encoding="utf-8")
+    routes_source = (root / "src" / "cyrene" / "plugins" / "builtin" / "cyrene_browser" / "routes.py").read_text(encoding="utf-8")
+    view_source = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
 
     emit_frame_body = browser_source.split("async def _emit_frame", 1)[1].split("# -- Screencast", 1)[0]
     assert "page.screenshot" not in emit_frame_body
@@ -426,7 +426,7 @@ def test_browser_live_frames_do_not_ride_sse_as_base64():
 
 
 async def test_launch_context_uses_desktop_ua_and_locale(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     captured: dict = {}
     original_cfg = browser._cfg
@@ -472,7 +472,7 @@ async def test_launch_context_uses_desktop_ua_and_locale(monkeypatch):
 async def test_click_delegates_to_session(monkeypatch):
     """When a page is open, browser.click drives the session and emits a frame."""
     pytest.importorskip("playwright")
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     captured = _capture_publish(monkeypatch)
     monkeypatch.setattr(browser, "_PLAYWRIGHT_AVAILABLE", True)
@@ -541,7 +541,7 @@ class _FakeContext:
 
 
 async def test_screencast_start_stop_bookkeeping(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     session = browser._BrowserSession()
     session._page = _FakePage()
@@ -576,7 +576,7 @@ async def test_screencast_start_stop_bookkeeping(monkeypatch):
 
 
 async def test_screencast_frame_fans_out_and_acks():
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     session = browser._BrowserSession()
     session._page = _FakePage("https://x/")
@@ -597,7 +597,7 @@ async def test_screencast_frame_fans_out_and_acks():
 
 
 async def test_screencast_skips_decode_and_acks_when_queue_full(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     session = browser._BrowserSession()
     session._page = _FakePage()
@@ -625,9 +625,9 @@ async def test_browser_request_takeover_pauses_with_takeover_meta(monkeypatch):
     import json
     from types import SimpleNamespace
 
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl.cyrene_browser import browser_request_takeover as _tools
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as _browser
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_browser import browser_request_takeover as _tools
+    from cyrene.plugins.builtin.cyrene_browser import runtime as _browser
 
     events = []
     switched = []
@@ -673,8 +673,8 @@ async def test_browser_request_takeover_pauses_with_takeover_meta(monkeypatch):
 
 
 async def test_browser_request_takeover_rejects_non_main_agent(monkeypatch):
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl.cyrene_browser import browser_request_takeover as _tools
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_browser import browser_request_takeover as _tools
 
     result = await _tools._tool_browser_request_takeover(
         {"reason": "x"},
@@ -694,7 +694,7 @@ async def test_browser_request_takeover_rejects_non_main_agent(monkeypatch):
 
 
 def test_check_url_blocks_non_http_schemes(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser.runtime import _check_url, SSRFBlockedError
+    from cyrene.plugins.builtin.cyrene_browser.runtime import _check_url, SSRFBlockedError
     from cyrene import localization
 
     monkeypatch.setattr(localization, "app_language", lambda explicit=None: "en")
@@ -705,7 +705,7 @@ def test_check_url_blocks_non_http_schemes(monkeypatch):
 
 
 def test_check_url_blocks_loopback():
-    from agent.plugin.plugin_impl.cyrene_browser.runtime import _check_url, SSRFBlockedError
+    from cyrene.plugins.builtin.cyrene_browser.runtime import _check_url, SSRFBlockedError
 
     with pytest.raises(SSRFBlockedError):
         _check_url("http://127.0.0.1/admin")
@@ -714,14 +714,14 @@ def test_check_url_blocks_loopback():
 
 
 def test_check_url_blocks_localhost_by_name():
-    from agent.plugin.plugin_impl.cyrene_browser.runtime import _check_url, SSRFBlockedError
+    from cyrene.plugins.builtin.cyrene_browser.runtime import _check_url, SSRFBlockedError
 
     with pytest.raises(SSRFBlockedError):
         _check_url("http://localhost/secret")
 
 
 def test_check_url_blocks_private_ranges():
-    from agent.plugin.plugin_impl.cyrene_browser.runtime import _check_url, SSRFBlockedError
+    from cyrene.plugins.builtin.cyrene_browser.runtime import _check_url, SSRFBlockedError
 
     for url in (
         "http://10.0.0.1/",
@@ -734,14 +734,14 @@ def test_check_url_blocks_private_ranges():
 
 
 def test_check_url_blocks_cloud_metadata():
-    from agent.plugin.plugin_impl.cyrene_browser.runtime import _check_url, SSRFBlockedError
+    from cyrene.plugins.builtin.cyrene_browser.runtime import _check_url, SSRFBlockedError
 
     with pytest.raises(SSRFBlockedError):
         _check_url("http://169.254.169.254/latest/meta-data/")
 
 
 def test_check_url_allows_public_urls():
-    from agent.plugin.plugin_impl.cyrene_browser.runtime import _check_url
+    from cyrene.plugins.builtin.cyrene_browser.runtime import _check_url
 
     # Should not raise
     _check_url("https://example.com/page")
@@ -752,7 +752,7 @@ def test_check_url_allows_public_urls():
 async def test_redirect_hook_allows_relative_location():
     import httpx
 
-    from agent.plugin.plugin_impl.cyrene_browser.runtime import _ssrf_redirect_hook
+    from cyrene.plugins.builtin.cyrene_browser.runtime import _ssrf_redirect_hook
 
     response = httpx.Response(
         302,
@@ -767,7 +767,7 @@ async def test_redirect_hook_blocks_protocol_relative_private_location():
     import httpx
     import pytest
 
-    from agent.plugin.plugin_impl.cyrene_browser.runtime import SSRFBlockedError, _ssrf_redirect_hook
+    from cyrene.plugins.builtin.cyrene_browser.runtime import SSRFBlockedError, _ssrf_redirect_hook
 
     response = httpx.Response(
         302,
@@ -780,7 +780,7 @@ async def test_redirect_hook_blocks_protocol_relative_private_location():
 
 
 async def test_navigate_returns_error_for_blocked_url(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
     from cyrene import localization
 
     monkeypatch.setattr(localization, "app_language", lambda explicit=None: "en")
@@ -797,7 +797,7 @@ async def test_navigate_returns_error_for_blocked_url(monkeypatch):
 
 
 async def test_screenshot_returns_error_for_blocked_url(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
     from cyrene import localization
 
     monkeypatch.setattr(localization, "app_language", lambda explicit=None: "en")
@@ -813,7 +813,7 @@ async def test_screenshot_returns_error_for_blocked_url(monkeypatch):
 async def test_session_navigate_blocks_redirect_to_private_ip(monkeypatch):
     """_BrowserSession.navigate() must reject the final URL if the server redirected
     to a blocked destination (e.g. public URL → 301 → 169.254.169.254)."""
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
     from cyrene import localization
 
     monkeypatch.setattr(localization, "app_language", lambda explicit=None: "en")
@@ -848,7 +848,7 @@ async def test_httpx_navigate_ssrf_redirect_error_no_exception_log(monkeypatch):
     not fall through to logger.exception (which would log a noisy traceback)."""
     import logging
 
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     logged_exceptions: list = []
 
@@ -858,12 +858,12 @@ async def test_httpx_navigate_ssrf_redirect_error_no_exception_log(monkeypatch):
                 logged_exceptions.append(record)
 
     handler = _CapturingHandler()
-    logger = logging.getLogger("agent.plugin.plugin_impl.cyrene_browser.runtime")
+    logger = logging.getLogger("cyrene.plugins.builtin.cyrene_browser.runtime")
     logger.addHandler(handler)
     try:
         # Patch _ssrf_redirect_hook to raise SSRFBlockedError unconditionally,
         # simulating a redirect to a blocked target.
-        from agent.plugin.plugin_impl.cyrene_browser.runtime import SSRFBlockedError
+        from cyrene.plugins.builtin.cyrene_browser.runtime import SSRFBlockedError
 
         async def _always_block(response):
             if 300 <= response.status_code < 400:
@@ -886,7 +886,7 @@ async def test_httpx_navigate_ssrf_redirect_error_no_exception_log(monkeypatch):
             except Exception as exc:
                 result["error"] = f"Failed to fetch {url}: {exc}"
                 import logging as _log
-                _log.getLogger("agent.plugin.plugin_impl.cyrene_browser.runtime").exception("browser_navigate failed for %s", url)
+                _log.getLogger("cyrene.plugins.builtin.cyrene_browser.runtime").exception("browser_navigate failed for %s", url)
             return result
 
         result = await fake_navigate("https://redirect-target.example.com/")
@@ -907,7 +907,7 @@ async def test_screenshot_path_closes_file_handle(monkeypatch):
     import os
     import tempfile
 
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     captured_file: list = []
 
@@ -941,7 +941,7 @@ async def test_tool_browser_screenshot_returns_tmp_file(monkeypatch):
     import os
     import tempfile
 
-    from agent.plugin.plugin_impl.cyrene_browser import browser_screenshot as _mod
+    from cyrene.plugins.builtin.cyrene_browser import browser_screenshot as _mod
     from cyrene.runtime import attachments as _attachments
 
     # Create a real temp file to simulate what screenshot() returns.
@@ -952,7 +952,7 @@ async def test_tool_browser_screenshot_returns_tmp_file(monkeypatch):
     async def fake_screenshot(url, **_kw):
         return {"ok": True, "path": tmp.name, "title": "Test Page"}
 
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as _browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as _browser
     monkeypatch.setattr(_browser, "screenshot", fake_screenshot)
     monkeypatch.setattr(_attachments, "primary_model_supports_vision", lambda: False)
 
@@ -973,8 +973,8 @@ async def test_tool_browser_screenshot_returns_primary_model_visual_observation(
     import tempfile
 
     from cyrene.runtime import attachments as _attachments
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as _browser
-    from agent.plugin.plugin_impl.cyrene_browser import browser_screenshot as _mod
+    from cyrene.plugins.builtin.cyrene_browser import runtime as _browser
+    from cyrene.plugins.builtin.cyrene_browser import browser_screenshot as _mod
 
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     tmp.write(_VALID_PNG)
@@ -1009,7 +1009,7 @@ async def test_screenshot_path_cleans_up_on_failure(monkeypatch):
     """If page.screenshot() raises, the pre-created temp file must be deleted (#87)."""
     import os
 
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     session = browser._BrowserSession()
 
@@ -1043,7 +1043,7 @@ async def test_screenshot_path_cleans_up_on_failure(monkeypatch):
 
 
 def test_screenshot_validation_requires_png_format_and_decodability(tmp_path, real_pillow_modules):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     valid = tmp_path / "valid.png"
     valid.write_bytes(_VALID_PNG)
@@ -1066,8 +1066,8 @@ def test_screenshot_validation_requires_png_format_and_decodability(tmp_path, re
 
 
 async def test_tool_browser_screenshot_rejects_invalid_artifact(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as _browser
-    from agent.plugin.plugin_impl.cyrene_browser import browser_screenshot as _mod
+    from cyrene.plugins.builtin.cyrene_browser import runtime as _browser
+    from cyrene.plugins.builtin.cyrene_browser import browser_screenshot as _mod
 
     invalid = tmp_path / "invalid.png"
     invalid.touch()
@@ -1090,7 +1090,7 @@ async def test_tool_browser_screenshot_rejects_invalid_artifact(monkeypatch, tmp
 async def test_user_input_injection_gated_by_control():
     """Mouse/key events are dropped unless the user has taken control, then they
     reach CDP Input.* with the expected params."""
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     session = browser._BrowserSession()
     session._page = _FakePage()
@@ -1129,7 +1129,7 @@ async def test_user_input_injection_gated_by_control():
 async def test_open_close_user_window_toggles_flag(monkeypatch):
     """The user-initiated native window sets/clears _user_window_open and delegates
     to the headless<->headed restart helpers (no pending question)."""
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     session = browser._BrowserSession()
     calls: list = []
@@ -1155,7 +1155,7 @@ async def test_open_close_user_window_toggles_flag(monkeypatch):
 async def test_headed_close_routes_user_window_vs_agent_takeover(monkeypatch):
     """Closing the window auto-returns to headless for a user-opened window, but
     cancels the pending question for an agent-initiated takeover."""
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     session = browser._BrowserSession()
     hit: list = []
@@ -1197,7 +1197,7 @@ async def test_headed_close_routes_user_window_vs_agent_takeover(monkeypatch):
 async def test_agent_actions_yield_while_user_controls(monkeypatch):
     """While the user holds live control, agent navigate/click/type skip the page
     and report the paused message instead of fighting for it."""
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     session = browser._BrowserSession()
     session.set_user_control(True)
@@ -1219,7 +1219,7 @@ async def test_agent_actions_yield_while_user_controls(monkeypatch):
 
 async def test_control_gate_blocks_then_releases():
     """_wait_for_control blocks while controlled and returns True once released."""
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     session = browser._BrowserSession()
     assert await session._wait_for_control(timeout=0.01) is True  # not controlling
@@ -1237,7 +1237,7 @@ async def test_control_gate_blocks_then_releases():
 
 async def test_insert_text_gated_and_inserts_via_cdp():
     """IME/committed text reaches CDP Input.insertText only while user controls."""
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     session = browser._BrowserSession()
     session._page = _FakePage()
@@ -1257,7 +1257,7 @@ async def test_insert_text_gated_and_inserts_via_cdp():
 
 
 async def test_navigate_uses_electron_rpc_when_available(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
@@ -1290,7 +1290,7 @@ async def test_navigate_uses_electron_rpc_when_available(monkeypatch):
 
 
 async def test_electron_rpc_carries_originating_session_context(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
@@ -1335,7 +1335,7 @@ async def test_electron_rpc_carries_originating_session_context(monkeypatch):
 
 
 async def test_close_electron_browser_session_targets_only_requested_chat(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     calls = []
 
@@ -1359,7 +1359,7 @@ async def test_close_electron_browser_session_targets_only_requested_chat(monkey
 
 
 async def test_finish_electron_browser_round_targets_requested_run(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     calls = []
 
@@ -1383,7 +1383,7 @@ async def test_finish_electron_browser_round_targets_requested_run(monkeypatch):
 
 
 async def test_click_and_type_use_electron_rpc_when_available(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
@@ -1407,7 +1407,7 @@ async def test_click_and_type_use_electron_rpc_when_available(monkeypatch):
 
 
 async def test_new_browser_actions_use_electron_rpc(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
@@ -1443,7 +1443,7 @@ async def test_new_browser_actions_use_electron_rpc(monkeypatch):
 
 
 async def test_current_page_screenshot_uses_electron_without_navigation(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
@@ -1471,7 +1471,7 @@ async def test_current_page_screenshot_uses_electron_without_navigation(monkeypa
 
 
 async def test_electron_screenshot_rejects_empty_data_and_removes_artifact(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
     from cyrene import localization
 
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
@@ -1498,7 +1498,7 @@ async def test_electron_screenshot_rejects_empty_data_and_removes_artifact(monke
 
 
 async def test_electron_ok_false_does_not_fall_back_to_playwright(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
@@ -1529,7 +1529,7 @@ async def test_electron_ok_false_does_not_fall_back_to_playwright(monkeypatch):
 
 
 async def test_electron_rpc_errors_never_start_playwright(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
@@ -1565,7 +1565,7 @@ async def test_electron_rpc_errors_never_start_playwright(monkeypatch):
 
 
 async def test_electron_tab_management_apis(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
@@ -1591,7 +1591,7 @@ async def test_electron_tab_management_apis(monkeypatch):
 
 
 async def test_electron_scroll_forwards_nested_target_options(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
@@ -1612,7 +1612,7 @@ async def test_electron_scroll_forwards_nested_target_options(monkeypatch):
 
 
 async def test_browser_scroll_tool_reports_actual_nested_scroll(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import browser_scroll as tool
+    from cyrene.plugins.builtin.cyrene_browser import browser_scroll as tool
 
     captured = {}
 
@@ -1627,7 +1627,7 @@ async def test_browser_scroll_tool_reports_actual_nested_scroll(monkeypatch):
             "y": 302,
         }
 
-    monkeypatch.setattr("agent.plugin.plugin_impl.cyrene_browser.runtime.scroll_page", fake_scroll_page)
+    monkeypatch.setattr("cyrene.plugins.builtin.cyrene_browser.runtime.scroll_page", fake_scroll_page)
 
     result = await tool._tool_browser_scroll(
         {"delta_y": 500, "ref": "e77", "x": 174, "y": 302},
@@ -1639,12 +1639,12 @@ async def test_browser_scroll_tool_reports_actual_nested_scroll(monkeypatch):
 
 
 async def test_browser_scroll_tool_does_not_claim_success_without_movement(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import browser_scroll as tool
+    from cyrene.plugins.builtin.cyrene_browser import browser_scroll as tool
 
     async def fake_scroll_page(**_kwargs):
         return {"ok": True, "moved": False, "actualDeltaY": 0, "x": 10, "y": 20}
 
-    monkeypatch.setattr("agent.plugin.plugin_impl.cyrene_browser.runtime.scroll_page", fake_scroll_page)
+    monkeypatch.setattr("cyrene.plugins.builtin.cyrene_browser.runtime.scroll_page", fake_scroll_page)
 
     result = await tool._tool_browser_scroll(
         {"delta_y": 500}, PluginContext(data={"language": "en"})
@@ -1654,7 +1654,7 @@ async def test_browser_scroll_tool_does_not_claim_success_without_movement(monke
 
 
 async def test_browser_tab_tools_are_registered(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import plugin_pack
+    from cyrene.plugins.builtin.cyrene_browser import plugin_pack
 
     names = {plugin.name for plugin in plugin_pack.plugins}
     assert {
@@ -1667,7 +1667,7 @@ async def test_browser_tab_tools_are_registered(monkeypatch):
 
 
 async def test_browser_navigate_rejects_visible_target_link(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import browser_navigate as tool
+    from cyrene.plugins.builtin.cyrene_browser import browser_navigate as tool
 
     navigated = False
 
@@ -1690,8 +1690,8 @@ async def test_browser_navigate_rejects_visible_target_link(monkeypatch):
         navigated = True
         return {}
 
-    monkeypatch.setattr("agent.plugin.plugin_impl.cyrene_browser.runtime.navigation_guard", fake_navigation_guard)
-    monkeypatch.setattr("agent.plugin.plugin_impl.cyrene_browser.runtime.navigate", fake_navigate)
+    monkeypatch.setattr("cyrene.plugins.builtin.cyrene_browser.runtime.navigation_guard", fake_navigation_guard)
+    monkeypatch.setattr("cyrene.plugins.builtin.cyrene_browser.runtime.navigate", fake_navigate)
 
     raw = await tool._tool_browser_navigate(
         {
@@ -1711,7 +1711,7 @@ async def test_browser_navigate_rejects_visible_target_link(monkeypatch):
 
 
 async def test_browser_navigate_allows_user_requested_exact_url(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import browser_navigate as tool
+    from cyrene.plugins.builtin.cyrene_browser import browser_navigate as tool
 
     guard_args = None
 
@@ -1723,8 +1723,8 @@ async def test_browser_navigate_allows_user_requested_exact_url(monkeypatch):
     async def fake_navigate(url, **_kwargs):
         return {"url": url, "title": "Exact", "text": "", "links": [], "error": None}
 
-    monkeypatch.setattr("agent.plugin.plugin_impl.cyrene_browser.runtime.navigation_guard", fake_navigation_guard)
-    monkeypatch.setattr("agent.plugin.plugin_impl.cyrene_browser.runtime.navigate", fake_navigate)
+    monkeypatch.setattr("cyrene.plugins.builtin.cyrene_browser.runtime.navigation_guard", fake_navigation_guard)
+    monkeypatch.setattr("cyrene.plugins.builtin.cyrene_browser.runtime.navigate", fake_navigate)
 
     raw = await tool._tool_browser_navigate(
         {"url": "https://example.com/exact", "reason": "user_exact_url"},
@@ -1736,7 +1736,7 @@ async def test_browser_navigate_allows_user_requested_exact_url(monkeypatch):
 
 
 async def test_browser_navigate_returns_current_url_guard_error(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import browser_navigate as tool
+    from cyrene.plugins.builtin.cyrene_browser import browser_navigate as tool
 
     async def fake_navigation_guard(url, reason, snapshot_token):
         return {
@@ -1750,8 +1750,8 @@ async def test_browser_navigate_returns_current_url_guard_error(monkeypatch):
     async def unexpected_navigate(*_args, **_kwargs):
         raise AssertionError("navigate must not run")
 
-    monkeypatch.setattr("agent.plugin.plugin_impl.cyrene_browser.runtime.navigation_guard", fake_navigation_guard)
-    monkeypatch.setattr("agent.plugin.plugin_impl.cyrene_browser.runtime.navigate", unexpected_navigate)
+    monkeypatch.setattr("cyrene.plugins.builtin.cyrene_browser.runtime.navigation_guard", fake_navigation_guard)
+    monkeypatch.setattr("cyrene.plugins.builtin.cyrene_browser.runtime.navigate", unexpected_navigate)
 
     result = json.loads(await tool._tool_browser_navigate(
         {"url": "https://example.com/current", "reason": "starting_page"},
@@ -1764,8 +1764,8 @@ async def test_browser_navigate_returns_current_url_guard_error(monkeypatch):
 def test_browser_snapshot_prioritizes_interactive_elements_and_exposes_credential():
     import inspect
 
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
-    from agent.plugin.plugin_impl.cyrene_browser import browser_snapshot
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import browser_snapshot
 
     interactive = "input,textarea,select,button,a[href]"
     assert interactive in browser._BROWSER_INSPECT_JS
@@ -1774,7 +1774,7 @@ def test_browser_snapshot_prioritizes_interactive_elements_and_exposes_credentia
 
 
 async def test_browser_click_ref_reports_popup_as_new_active_tab(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import browser_click_ref as tool
+    from cyrene.plugins.builtin.cyrene_browser import browser_click_ref as tool
 
     async def fake_click_ref(ref):
         assert ref == "e9"
@@ -1789,7 +1789,7 @@ async def test_browser_click_ref_reports_popup_as_new_active_tab(monkeypatch):
             "source_url": "https://search.bilibili.com/all?keyword=test",
         }
 
-    monkeypatch.setattr("agent.plugin.plugin_impl.cyrene_browser.runtime.click_ref", fake_click_ref)
+    monkeypatch.setattr("cyrene.plugins.builtin.cyrene_browser.runtime.click_ref", fake_click_ref)
 
     result = await tool._tool_browser_click_ref(
         {"ref": "e9"}, PluginContext(data={"language": "en"})
@@ -1811,7 +1811,7 @@ def test_electron_click_finish_uses_active_popup_tab():
 
 
 async def test_screenshot_uses_electron_rpc_and_writes_png(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
@@ -1836,9 +1836,9 @@ async def test_browser_plugin_lifecycle_finishes_agent_owned_tabs(monkeypatch, t
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from agent.hook import HookEvent, SESSION_END, STOP
-    from agent.plugin import PluginSetupContext
-    from agent.plugin.plugin_impl.cyrene_browser.lifecycle import (
+    from cyrene.core.hook import HookEvent, SESSION_END, STOP
+    from cyrene.core.plugin import PluginSetupContext
+    from cyrene.plugins.builtin.cyrene_browser.lifecycle import (
         setup_browser_lifecycle,
     )
 

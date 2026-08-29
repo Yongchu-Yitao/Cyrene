@@ -12,7 +12,7 @@ from cyrene.model_runtime.image_generation import (
     GeneratedImage,
     ImageGenerationError,
 )
-from agent.plugin.plugin_impl.cyrene_image import generate_image as generate_image_tool
+from cyrene.plugins.builtin.cyrene_image import generate_image as generate_image_tool
 
 
 def _png_bytes() -> bytes:

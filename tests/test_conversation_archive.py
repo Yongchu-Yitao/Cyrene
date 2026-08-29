@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent.plugin.plugin_impl.cyrene_memory.archive import (
+from cyrene.plugins.builtin.cyrene_memory.archive import (
     archive_session_exchange,
     session_conversation_file,
     session_conversations_dir,

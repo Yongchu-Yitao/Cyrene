@@ -57,9 +57,9 @@ def _projects_payload(workspace, *, two_sessions: bool = False):
 
 async def test_one_shared_coordinator_owns_chat_task_and_goal_loop(tmp_path, monkeypatch):
     from cyrene.runtime.run_coordinator import RunCoordinator
-    from cyrene.workbench import task_runs
-    from cyrene.workbench.chat_runs import ChatRunManager
-    from cyrene.workbench.goal_loop import GoalLoopManager
+    from cyrene.workbench.tasks import task_runs
+    from cyrene.workbench.chat.chat_runs import ChatRunManager
+    from cyrene.workbench.goals.goal_loop import GoalLoopManager
 
     db_path = str(tmp_path / "coordinator.sqlite3")
     manager = ChatRunManager(retention_seconds=0)
@@ -114,7 +114,7 @@ async def test_one_shared_coordinator_owns_chat_task_and_goal_loop(tmp_path, mon
 
 
 def test_project_storage_uses_one_row_per_task_and_updates_only_one(tmp_path):
-    from cyrene.workbench.store import read_document, write_document
+    from cyrene.workbench.persistence.store import read_document, write_document
 
     db_path = tmp_path / "storage.sqlite3"
     payload = _projects_payload(tmp_path, two_sessions=True)
@@ -176,7 +176,7 @@ def test_project_storage_uses_one_row_per_task_and_updates_only_one(tmp_path):
 
 
 def test_normalized_project_read_does_not_request_a_write_lock(tmp_path):
-    from cyrene.workbench.store import read_document, write_document
+    from cyrene.workbench.persistence.store import read_document, write_document
 
     db_path = tmp_path / "read-while-writing.sqlite3"
     payload = _projects_payload(tmp_path)
@@ -198,13 +198,14 @@ async def test_restart_rebinds_provisional_task_run_and_resumes_same_run_id(
     tmp_path,
     monkeypatch,
 ):
-    from cyrene.workbench import project_repository, task_runs
-    from cyrene.workbench.task_runs import (
+    from cyrene.workbench.projects import project_repository
+    from cyrene.workbench.tasks import task_runs
+    from cyrene.workbench.tasks.task_runs import (
         begin_task_run,
         current_task_run_id,
         recover_interrupted_task_runs,
     )
-    from cyrene.workbench.store import write_document
+    from cyrene.workbench.persistence.store import write_document
 
     db_path = str(tmp_path / "recovery.sqlite3")
     payload = _projects_payload(tmp_path)

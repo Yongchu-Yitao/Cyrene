@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from agent.context import (
+from cyrene.core.context import (
     ContextStoreRouter,
     ContextTreeStore,
     ContextValueError,

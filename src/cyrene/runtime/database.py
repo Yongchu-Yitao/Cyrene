@@ -87,9 +87,9 @@ async def get_task_time_totals(db_path: str) -> dict:
     task_total_ms = 0
     task_longest_ms = 0
     task_runs = 0
-    from agent.plugin import active_plugin_service
+    from cyrene.core.plugin import application_plugin_service
 
-    schedules = active_plugin_service("schedules")
+    schedules = application_plugin_service("schedules")
     time_totals = getattr(schedules, "time_totals", None)
     if callable(time_totals):
         schedule_totals = await time_totals()

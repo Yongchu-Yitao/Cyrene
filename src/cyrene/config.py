@@ -58,9 +58,9 @@ def _plugin_editable_env_keys() -> dict[str, dict[str, object]]:
     """Collect credential policies from active application Plugins."""
 
     try:
-        from agent.plugin import active_plugin_application_host
+        from cyrene.core.plugin import application_plugin_scope
 
-        host = active_plugin_application_host()
+        host = application_plugin_scope()
         services = host.active_services.values() if host is not None else ()
     except Exception:
         return {}

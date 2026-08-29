@@ -1,5 +1,5 @@
 def test_checkpointed_attachment_message_is_returned_for_its_run():
-    from route.workbench.chat_routes.run_send_routes import _SendOperation
+    from cyrene.workbench.http.workbench.chat_routes.run_send_routes import _SendOperation
 
     attachment_message = {
         "id": "assistant_attachment",

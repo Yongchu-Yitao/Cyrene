@@ -20,14 +20,14 @@ async def test_seeded_entity_pack_owns_session_and_application_backend(tmp_path)
 
     from fastapi import APIRouter, FastAPI
 
-    from agent.plugin import (
-        PluginApplicationContext,
+    from cyrene.plugins import PluginApplicationContext
+    from cyrene.core.plugin import (
         PluginContext,
         PluginRegistry,
         PluginRuntime,
         PluginSetupContext,
     )
-    from agent.plugin.native_tools import seed_builtin_plugin_directory
+    from cyrene.plugins.native_tools import seed_builtin_plugin_directory
 
     db_path = str(tmp_path / "entities.db")
     plugin_directory = tmp_path / "plugin_impl"
@@ -110,9 +110,9 @@ async def test_seeded_entity_pack_owns_session_and_application_backend(tmp_path)
 
 @pytest.mark.asyncio
 async def test_entity_pack_mounts_attention_context_only_for_proactive_runs(tmp_path):
-    from agent.context import ContextStoreRouter
-    from agent.plugin import PluginSetupContext
-    from agent.plugin.plugin_impl.cyrene_entity import setup
+    from cyrene.core.context import ContextStoreRouter
+    from cyrene.core.plugin import PluginSetupContext
+    from cyrene.plugins.builtin.cyrene_entity import setup
 
     class Entities:
         async def query(self, **_filters):
@@ -150,10 +150,10 @@ async def test_entity_pack_mounts_attention_context_only_for_proactive_runs(tmp_
 
 @pytest.mark.asyncio
 async def test_entity_pack_follows_toolbox_chain_and_shares_service_data(tmp_path):
-    from agent.plugin import PluginContext, PluginRegistry, PluginRuntime
-    from agent.plugin.plugin_impl.cyrene_entity import plugin_pack
+    from cyrene.core.plugin import PluginContext, PluginRegistry, PluginRuntime
+    from cyrene.plugins.builtin.cyrene_entity import plugin_pack
     from cyrene.runtime.database import init_db
-    from agent.plugin.plugin_impl.cyrene_entity.service import EntityService
+    from cyrene.plugins.builtin.cyrene_entity.service import EntityService
 
     db_path = str(tmp_path / "entities.db")
     await init_db(db_path)
@@ -268,8 +268,8 @@ async def test_entity_pack_follows_toolbox_chain_and_shares_service_data(tmp_pat
 @pytest.mark.asyncio
 async def test_entity_service_coordinates_reminders_and_candidate_scope(tmp_path):
     from cyrene.runtime.database import init_db
-    from agent.plugin.plugin_impl.cyrene_entity.service import EntityService
-    from agent.plugin.plugin_impl.cyrene_schedule.service import ScheduleRuntimeService
+    from cyrene.plugins.builtin.cyrene_entity.service import EntityService
+    from cyrene.plugins.builtin.cyrene_schedule.service import ScheduleRuntimeService
 
     db_path = str(tmp_path / "entities.db")
     await init_db(db_path)
@@ -349,9 +349,9 @@ async def test_entity_reminder_rejects_when_schedule_plugin_is_unavailable(
     tmp_path,
     monkeypatch,
 ):
-    from agent.plugin.plugin_impl.cyrene_entity.service import EntityService
+    from cyrene.plugins.builtin.cyrene_entity.service import EntityService
 
-    monkeypatch.setattr("agent.plugin.active_plugin_service", lambda _name: None)
+    monkeypatch.setattr("cyrene.core.plugin.application_plugin_service", lambda _name: None)
     service = EntityService(str(tmp_path / "entities.db"))
     await service.startup()
 

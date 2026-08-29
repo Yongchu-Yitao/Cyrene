@@ -186,7 +186,7 @@ class AgentConnection(Protocol):
 
 ## 7. 扩展中心与已安装 Agent 详情
 
-现有扩展中心位于 `src/webui/frontend/settings-overlay.jsx` 的 `ExtensionsPanel`。第一阶段在这里增加 `agent` 分类，而不是新增 Settings Tab。
+现有扩展中心位于 `src/cyrene/workbench/webui/frontend/settings-overlay.jsx` 的 `ExtensionsPanel`。第一阶段在这里增加 `agent` 分类，而不是新增 Settings Tab。
 
 ### 7.1 Agent Tab 固定布局
 
@@ -378,7 +378,7 @@ GET    /api/agents/{installation_id}/diagnostics
 
 ## 8. Composer：Agent 选择位置与交互
 
-当前 Composer 的模型按钮和弹层位于 `src/webui/frontend/workbench-chat.jsx` 的 `WbcComposer`。根菜单当前包含“模型 / 推理强度 / 权限模式”。
+当前 Composer 的模型按钮和弹层位于 `src/cyrene/workbench/webui/frontend/workbench-chat.jsx` 的 `WbcComposer`。根菜单当前包含“模型 / 推理强度 / 权限模式”。
 
 ### 8.1 已确认位置
 
@@ -479,7 +479,7 @@ POST /api/workbench/chats
 
 ## 9. 对话面板概览中的 Agent 信息
 
-当前概览由 `src/webui/frontend/workbench-chat.jsx` 的 `WbcOverviewTab` 渲染。Agent 信息放在状态行下面、模型行上面。
+当前概览由 `src/cyrene/workbench/webui/frontend/workbench-chat.jsx` 的 `WbcOverviewTab` 渲染。Agent 信息放在状态行下面、模型行上面。
 
 建议布局：
 
@@ -779,7 +779,7 @@ Slash Command 也必须由 Agent Capability/Command 列表提供。Cyrene 专属
 
 ### 16.1 前端
 
-- `src/webui/frontend/workbench-chat.jsx`
+- `src/cyrene/workbench/webui/frontend/workbench-chat.jsx`
   - 扩展 `WorkbenchChatModel.createChat()` 的 Agent/ModelAccess 请求。
   - `ensureChat()` 接收新对话 Draft Binding。
   - `WbcComposer` 根菜单第一行加入 Agent。
@@ -788,33 +788,33 @@ Slash Command 也必须由 Agent Capability/Command 列表提供。Cyrene 专属
   - `WbcQuestionPrompt` 改为使用原始 `optionId`。
   - `WbcOverviewTab` 增加 Agent、连接、模型来源和外部 Session 信息。
   - Chat Header、列表和 Quick Chat 显示/继承 Agent 身份。
-- `src/webui/frontend/settings-overlay.jsx`
+- `src/cyrene/workbench/webui/frontend/settings-overlay.jsx`
   - `ExtensionsPanel` 增加 `agent` 分类。
   - Agent 分类使用“推荐 / 已安装 / 安装其他 Agent”固定布局，不渲染搜索框。
   - “安装其他 Agent”弹窗展示安装提案 API、Manifest 模板和复制按钮。
   - `ExtensionCard` 的 Agent 详情增加登录、模型、能力、运行和诊断区。
   - 不增加新的 Settings Tab。
-- `src/webui/frontend/workbench.css`
+- `src/cyrene/workbench/webui/frontend/workbench.css`
   - 复用现有 `wbc-model-menu`、Overview 键值布局和 Extension Card 视觉语言。
   - 增加 Agent 状态、能力、认证和错误的样式及窄窗口适配。
-- `src/webui/frontend/workbench-i18n.jsx`
+- `src/cyrene/workbench/webui/frontend/workbench-i18n.jsx`
   - 为上述 UI 增加完整中英文文案，Agent 返回的动态 Label 不进入本地翻译映射。
-- `src/webui/frontend/workbench-quick-chat.jsx`
+- `src/cyrene/workbench/webui/frontend/workbench-quick-chat.jsx`
   - 已有对话沿用绑定 Agent。
   - 新 Quick Chat 第一阶段使用默认 Agent；不复制完整 Agent 选择弹层。
-- `src/webui/frontend/platform/api.jsx`
+- `src/cyrene/workbench/webui/frontend/platform/api.jsx`
   - 复用统一错误处理，不新增 Agent 专属 Fetch Wrapper。
 
-根据项目约定，修改源码后必须同步仓库内 `src/webui/static/app` 生成输出。
+根据项目约定，修改源码后必须同步仓库内 `src/cyrene/workbench/webui/static/app` 生成输出。
 
 ### 16.2 后端
 
 - 新增 Agent Domain、Driver Registry、ACP Driver、Profile/Binder 和 Process Manager。
-- `src/route/workbench/chat.py` 不再直接假定唯一 `run_agent`，改由 Agent Runtime 分发。
-- `src/route/schemas.py` 增加 Agent Binding、ModelAccess、Agent Request Response 和能力 Schema。
-- `src/cyrene/workbench/chat_runs.py` 继续负责持久运行、重连和事件缓存，但缓存统一 Agent Event。
-- `src/agent/plugin/plugin_impl/cyrene_extensions/extension_catalog.py` 和 Extension Service 增加 `agent` 类型。
-- `src/route/extensions.py` 继续管理安装生命周期，增加外部 Agent 安装提案、Inspect 和确认接口；新增 Agent Runtime Routes 管理配置、认证、Probe 和诊断。
+- `src/cyrene/workbench/http/workbench/chat.py` 不再直接假定唯一 `run_agent`，改由 Agent Runtime 分发。
+- `src/cyrene/workbench/http/schemas.py` 增加 Agent Binding、ModelAccess、Agent Request Response 和能力 Schema。
+- `src/cyrene/workbench/chat/chat_runs.py` 继续负责持久运行、重连和事件缓存，但缓存统一 Agent Event。
+- `src/cyrene/plugins/builtin/cyrene_extensions/extension_catalog.py` 和 Extension Service 增加 `agent` 类型。
+- `src/cyrene/workbench/http/extensions.py` 继续管理安装生命周期，增加外部 Agent 安装提案、Inspect 和确认接口；新增 Agent Runtime Routes 管理配置、认证、Probe 和诊断。
 - `src/cyrene/runtime/config_store.py` 保存 Agent 默认设置和 Credential Reference，不能在普通 Settings Payload 中返回密钥。
 - `src/cyrene/model_runtime/` 增加本地 Model Gateway 和短期 Token 验证；现有 Provider Client 不能直接作为可公开给 Agent 的 Gateway。
 

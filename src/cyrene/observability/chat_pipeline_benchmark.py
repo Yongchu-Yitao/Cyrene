@@ -455,7 +455,8 @@ def _profile_result(
 
 
 async def _run_profile(profile: BenchmarkProfile, db_path: Path) -> dict[str, Any]:
-    from cyrene.workbench import chat_runs, inbox as inbox_module
+    from cyrene.workbench.application import inbox as inbox_module
+    from cyrene.workbench.chat import chat_runs
 
     fixture = build_mock_task(profile)
     manager = chat_runs.ChatRunManager(retention_seconds=0)

@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-APP_DIR = ROOT / "src" / "webui" / "static" / "app"
+APP_DIR = ROOT / "src" / "cyrene" / "workbench" / "webui" / "static" / "app"
 
 
 def test_math_assets_are_loaded_before_chat_renderers():

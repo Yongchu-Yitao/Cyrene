@@ -67,9 +67,9 @@ def _file_content_hash(path: Path) -> str:
 def _vision_model_fingerprint() -> str:
     """A stable, secret-free fingerprint of models that may receive images."""
     try:
-        from agent.plugin import active_plugin_service
+        from cyrene.core.plugin import application_plugin_service
 
-        service = active_plugin_service("model_configuration")
+        service = application_plugin_service("model_configuration")
         if service is None:
             return ""
 
@@ -95,9 +95,9 @@ def _vision_model_fingerprint() -> str:
 def _local_ocr_fingerprint() -> str:
     """Include local OCR availability in attachment-analysis cache identity."""
     try:
-        from agent.plugin import active_plugin_service
+        from cyrene.core.plugin import application_plugin_service
 
-        service = active_plugin_service("knowledge")
+        service = application_plugin_service("knowledge")
         if service is None:
             return "unavailable:0"
         model_id = service.ocr_model_id
@@ -225,9 +225,9 @@ def is_image_path(path: Path) -> bool:
 def model_supports_multimodal(model: str | None = None) -> bool:
     if model is None:
         try:
-            from agent.plugin import active_plugin_service
+            from cyrene.core.plugin import application_plugin_service
 
-            service = active_plugin_service("model_configuration")
+            service = application_plugin_service("model_configuration")
             vision = service.candidates_for_route("vision") if service is not None else []
             return bool(
                 vision
@@ -239,9 +239,9 @@ def model_supports_multimodal(model: str | None = None) -> bool:
     if not model_name:
         return False
     try:
-        from agent.plugin import active_plugin_service
+        from cyrene.core.plugin import application_plugin_service
 
-        service = active_plugin_service("model_configuration")
+        service = application_plugin_service("model_configuration")
         configuration = service.get_model_configuration() if service is not None else {}
         matched = next(
             (
@@ -270,9 +270,9 @@ def primary_model_supports_vision() -> bool:
     model-name heuristics are intentionally not used for that high-cost path.
     """
     try:
-        from agent.plugin import active_plugin_service
+        from cyrene.core.plugin import application_plugin_service
 
-        service = active_plugin_service("model_configuration")
+        service = application_plugin_service("model_configuration")
         models = service.candidates_for_route("primary") if service is not None else []
         primary = models[0] if models else {}
         return isinstance(primary, dict) and "vision" in set(
@@ -291,9 +291,9 @@ async def analyze_image_with_primary_model(path_str: str, prompt: str) -> dict[s
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
     ]
-    from agent.plugin import active_plugin_service
+    from cyrene.core.plugin import application_plugin_service
 
-    gateway = active_plugin_service("model")
+    gateway = application_plugin_service("model")
     if gateway is None:
         raise RuntimeError("Model Provider Plugins are not available")
     result = await gateway.complete(
@@ -645,9 +645,9 @@ async def run_vision_chat(
     # Vision analysis is an optional high-level execution path. Keep its model
     # Plugin dependency at this service boundary so low-level helpers remain
     # importable by Provider implementations.
-    from agent.plugin import active_plugin_service
+    from cyrene.core.plugin import application_plugin_service
 
-    gateway = active_plugin_service("model")
+    gateway = application_plugin_service("model")
     if gateway is None:
         raise RuntimeError("Model Provider Plugins are not available")
     result = await gateway.complete(
@@ -688,9 +688,9 @@ async def analyze_attachment(path_str: str, prompt: str = "", force_refresh: boo
         payload["multimodal_model"] = model_supports_multimodal()
         recognized = ""
         try:
-            from agent.plugin import active_plugin_service
+            from cyrene.core.plugin import application_plugin_service
 
-            service = active_plugin_service("knowledge")
+            service = application_plugin_service("knowledge")
             model_id = service.ocr_model_id if service is not None else ""
             payload["local_ocr_available"] = bool(
                 service is not None and service.is_local_model_ready(model_id)
@@ -720,9 +720,9 @@ async def analyze_attachment(path_str: str, prompt: str = "", force_refresh: boo
         elif payload.get("ocr_text"):
             payload["note"] = "Text extracted with the local OCR model."
     else:
-        from agent.plugin import active_plugin_service
+        from cyrene.core.plugin import application_plugin_service
 
-        service = active_plugin_service("knowledge")
+        service = application_plugin_service("knowledge")
         text = service.extract_file_text(path)[0] if service is not None else ""
         if text.strip():
             payload["kind"] = "document"

@@ -355,7 +355,7 @@ uv sync
 # pip install -e .
 
 # 3. 预编译 WebUI JSX（仅源码运行需要）
-cd src/webui && npm install && node build-jsx.mjs && cd ../..
+cd src/cyrene/workbench/webui && npm install && node build-jsx.mjs && cd ../../../..
 
 # 4. 启动
 python -m cyrene --workbench</code></pre></div>
@@ -500,7 +500,7 @@ uv sync
 # pip install -e .
 
 # 3. Precompile WebUI JSX (source runs only)
-cd src/webui && npm install && node build-jsx.mjs && cd ../..
+cd src/cyrene/workbench/webui && npm install && node build-jsx.mjs && cd ../../../..
 
 # 4. Launch
 python -m cyrene --workbench</code></pre></div>
@@ -1258,22 +1258,17 @@ cyrene stop</code></pre></div>
       <section data-topic="project-structure">
         <h2>项目结构</h2>
         <div class="code-block"><pre><code>src/
-├── cyrene/                           # 核心领域与 Runtime
-│   ├── agent/ workbench/ model_runtime/ learning/
-│   ├── runtime/ observability/ knowledge/ channels/
-│   ├── tooling/                      # Tool 控制平面、Wire 与 Policy
-│   └── tool_impl/                    # 按领域组织的原生 Tool 实现
-├── route/                            # 全部 FastAPI HTTP/WebSocket Adapter
-│   ├── registry.py                   # 唯一路由组合根
-│   ├── agent/ workbench/ system/
-│   ├── settings/ code/ maps/
-│   └── channels/
-├── webui/                            # App Lifecycle、Auth 与唯一 Workbench SPA
-│   ├── server.py                     # FastAPI 应用工厂，安装 route.registry
-│   ├── frontend/                     # 唯一 React/JSX 源码根
-│   │   ├── platform/                 # Bootstrap、API、SSE、Data、Readiness
-│   │   └── shared/                   # Theme、Feedback、Markdown、Browser、PDF
-│   └── static/app/                   # 唯一生成和打包输出根
+├── cyrene/
+│   ├── core/                         # Host 无关 Agent Runtime
+│   │   ├── context/ hook/            # Context Tree 与 Lifecycle Hook
+│   │   └── plugin/                   # Plugin Scope、Registry 与执行
+│   ├── plugins/                      # Cyrene 产品插件层
+│   │   ├── application.py           # Application Scope Host
+│   │   └── builtin/                 # 标准可编辑功能插件
+│   ├── workbench/                    # Cyrene Host 适配层
+│   │   ├── core_adapter/ http/       # Core 桥接与 HTTP 组装
+│   │   └── webui/                  # App Lifecycle 与唯一 SPA
+│   └── runtime/ model_runtime/ observability/
 ├── tests/
 ├── data/
 ├── workspace/
@@ -1334,22 +1329,17 @@ cyrene stop</code></pre></div>
       <section data-topic="project-structure">
         <h2>Project Structure</h2>
         <div class="code-block"><pre><code>src/
-├── cyrene/                           # Core domain and runtime
-│   ├── agent/ workbench/ model_runtime/ learning/
-│   ├── runtime/ observability/ knowledge/ channels/
-│   ├── tooling/                      # Tool control plane, wire, and policy
-│   └── tool_impl/                    # Native tool implementations by domain
-├── route/                            # FastAPI HTTP/WebSocket adapters
-│   ├── registry.py                   # Sole route composition root
-│   ├── agent/ workbench/ system/
-│   ├── settings/ code/ maps/
-│   └── channels/
-├── webui/                            # App lifecycle, auth, and Workbench SPA
-│   ├── server.py                     # FastAPI app factory; installs route.registry
-│   ├── frontend/                     # Sole React/JSX source root
-│   │   ├── platform/                 # Bootstrap, API, SSE, data, readiness
-│   │   └── shared/                   # Theme, feedback, Markdown, browser, PDF
-│   └── static/app/                   # Sole generated and packaged web output
+├── cyrene/
+│   ├── core/                         # Host-neutral Agent runtime
+│   │   ├── context/ hook/            # Context tree and lifecycle hooks
+│   │   └── plugin/                   # Plugin scopes, registry, and execution
+│   ├── plugins/                      # Cyrene product plugin layer
+│   │   ├── application.py           # Application-scope host
+│   │   └── builtin/                 # Canonical editable feature plugins
+│   ├── workbench/                    # Cyrene host adapter
+│   │   ├── core_adapter/ http/       # Core bridge and HTTP composition
+│   │   └── webui/                  # App lifecycle and sole SPA
+│   └── runtime/ model_runtime/ observability/
 ├── tests/
 ├── data/
 ├── workspace/
@@ -2295,10 +2285,10 @@ cyrene flow --session run_live --round round_xxx --id evt_3b22f9a5c0cb</code></p
 uv pip install -e ".[dev]"
 
 # 运行所有测试
-uv run pytest -q
+uv run pytest -q -W error::pytest.PytestUnhandledThreadExceptionWarning
 
 # 运行特定测试文件
-python -m pytest tests/test_context_trace.py -v
+uv run pytest tests/test_context_trace.py -v
 
 # 带日志输出
 uv run pytest -v --tb=long</code></pre></div>
@@ -2328,13 +2318,13 @@ uv run pytest -v --tb=long</code></pre></div>
 
       <section>
         <h2>添加新工具</h2>
-        <p>如果你想为 Cyrene 添加新的原生工具：</p>
+        <p>Cyrene 的功能工具由 PluginPack 拥有：</p>
         <ol>
-          <li>在 <code>cyrene/tool_impl/</code> 对应领域目录下创建模块（如 <code>knowledge/my_tool.py</code>）</li>
-          <li>模块导出 <code>TOOL_DEF</code>（工具定义字典）和 <code>handler</code>（async 处理函数）</li>
-          <li>在 <code>cyrene/tool_impl/__init__.py::NATIVE_TOOL_MODULES</code> 中注册实现</li>
-          <li>延迟工具还需在 <code>cyrene/tooling/packs.py::CAPABILITY_BINDINGS</code> 中分配稳定 capability ID；直接工具必须显式修改固定 wire contract</li>
-          <li>添加策略/路由测试；可选添加 UI 设置入口</li>
+          <li>在 <code>src/cyrene/plugins/builtin/&lt;pack&gt;/</code> 增加实现，或在用户 <code>plugin_impl/</code> 创建新包</li>
+          <li>定义带 Input Schema 和 Async Handler 的 <code>Plugin</code>，并放入 <code>PluginPack.plugins</code></li>
+          <li>Session Service/Hook 使用 <code>setup</code>；Route、进程 Service、Lifecycle 和 Workbench 贡献使用 <code>application_setup</code></li>
+          <li>除 <code>Bash</code>、<code>Read</code>、<code>Write</code>、<code>toolbox</code> 外，不向 Core 增加功能工具</li>
+          <li>添加 Schema、Policy、Actor、i18n 和 Host Contribution 测试</li>
         </ol>
         <p>MCP 协议工具不需要修改 Cyrene 代码——通过 <code>cyrene mcp add</code> 或 Web UI 直接连接即可。</p>
       </section>
@@ -2387,8 +2377,8 @@ python -m cyrene.observability.context_debug data/debug_*.jsonl --call 1</code><
       <section>
         <h2>Testing</h2>
         <div class="code-block"><pre><code>uv pip install -e ".[dev]"
-uv run pytest -q
-python -m pytest tests/test_context_trace.py -v</code></pre></div>
+uv run pytest -q -W error::pytest.PytestUnhandledThreadExceptionWarning
+uv run pytest tests/test_context_trace.py -v</code></pre></div>
         <div class="note"><strong>Note:</strong> Tests that call a real model use the Provider Plugin connections configured in Settings; other tests need no model credentials.</div>
       </section>
       <section>
@@ -2403,11 +2393,11 @@ python -m pytest tests/test_context_trace.py -v</code></pre></div>
       <section>
         <h2>Adding New Tools</h2>
         <ol>
-          <li>Create the module in the matching domain under <code>cyrene/tool_impl/</code> (for example <code>knowledge/my_tool.py</code>)</li>
-          <li>Export <code>TOOL_DEF</code> (dict) and <code>handler</code> (async callable)</li>
-          <li>Register the implementation in <code>cyrene/tool_impl/__init__.py::NATIVE_TOOL_MODULES</code></li>
-          <li>For a deferred tool, assign a stable capability ID in <code>cyrene/tooling/packs.py::CAPABILITY_BINDINGS</code>; changing the direct wire contract must be intentional</li>
-          <li>Add policy/routing tests and optionally a UI settings entry</li>
+          <li>Add the implementation under <code>src/cyrene/plugins/builtin/&lt;pack&gt;/</code>, or create a pack in the user <code>plugin_impl/</code> directory</li>
+          <li>Define a <code>Plugin</code> with its input schema and async handler, then include it in <code>PluginPack.plugins</code></li>
+          <li>Use <code>setup</code> for Session services/Hooks and <code>application_setup</code> for routes, process services, lifecycle, and Workbench contributions</li>
+          <li>Do not add feature tools to Core; only <code>Bash</code>, <code>Read</code>, <code>Write</code>, and <code>toolbox</code> are kernel tools</li>
+          <li>Add schema, policy, actor, i18n, and host-contribution tests</li>
         </ol>
         <p>For MCP servers, use <code>cyrene mcp add</code> or the Web UI — no code changes needed.</p>
       </section>

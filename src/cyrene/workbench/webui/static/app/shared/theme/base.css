@@ -1,0 +1,156 @@
+/* Shared Workbench theme tokens and browser-level foundation. */
+
+:root,
+html[data-theme="dark"] {
+  --bg: #0c0c0f;
+  --bg-1: #111216;
+  --bg-2: #18191e;
+  --bg-3: #202126;
+  --line: #28292f;
+  --line-2: #383a43;
+  --text: #f1f1f4;
+  --text-2: #c2c3ca;
+  --text-3: #8b8d97;
+  --text-4: #676a74;
+  --accent: #7c5ce8;
+  --accent-dim: rgba(124, 92, 232, 0.24);
+  --accent-faint: rgba(124, 92, 232, 0.06);
+  --warn: #d7a760;
+  --err: #db7373;
+  --info: #7ca4c6;
+  --magenta: #aa91ff;
+  --shell-bg: #0b0b0e;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.14);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.2);
+  --shadow-lg: 0 18px 42px rgba(0, 0, 0, 0.26);
+  --accent-text: #ffffff;
+  --canvas-bg: #0c0c0f;
+  --canvas-bg-soft: #101014;
+  --surface-1: #141519;
+  --surface-2: #191a1f;
+  --surface-3: #212229;
+  --control-bg: #17181d;
+  --control-bg-hover: #222329;
+  --control-bg-active: color-mix(in srgb, var(--accent) 18%, var(--surface-2));
+  --control-border: #30323a;
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+  --r-s: 6px;
+  --r-m: 8px;
+  --r-l: 12px;
+  --r-xl: 16px;
+  --mono: "IBM Plex Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: "Manrope", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+html[data-theme="light"] {
+  --bg: #f5f7f8;
+  --bg-1: #ffffff;
+  --bg-2: #f7f9fa;
+  --bg-3: #edf1f4;
+  --line: #e3e8ed;
+  --line-2: #d2dae2;
+  --text: #171c22;
+  --text-2: #4d5762;
+  --text-3: #717c88;
+  --text-4: #9aa4af;
+  --accent: #4d9a78;
+  --accent-dim: rgba(77, 154, 120, 0.18);
+  --accent-faint: rgba(77, 154, 120, 0.04);
+  --warn: #bf8731;
+  --err: #cf5757;
+  --info: #4d87b8;
+  --magenta: #7565a7;
+  --shell-bg: #fbfcfd;
+  --shadow-sm: 0 1px 2px rgba(19, 24, 29, 0.03);
+  --shadow-md: 0 10px 26px rgba(19, 24, 29, 0.06);
+  --shadow-lg: 0 20px 46px rgba(19, 24, 29, 0.1);
+  --accent-text: #ffffff;
+  --canvas-bg: #f3f5f6;
+  --canvas-bg-soft: #edf1f3;
+  --surface-1: #ffffff;
+  --surface-2: #f7f9fb;
+  --surface-3: #eef2f5;
+  --control-bg: #f2f5f7;
+  --control-bg-hover: #eaf0f4;
+  --control-bg-active: color-mix(in srgb, var(--accent) 14%, white);
+  --control-border: #d6dee6;
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* Native Windows UI fonts retain optical sizing and low-DPI hinting. Keep the
+   bundled cross-platform faces on Retina/HiDPI displays, where they render
+   cleanly and preserve the intended visual identity. */
+@media (max-resolution: 1.5dppx) {
+  html[data-platform="win32"] {
+    --sans: "Segoe UI Variable", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+html {
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+html[data-booting="1"],
+html[data-booting="1"] *,
+html[data-booting="1"] *::before,
+html[data-booting="1"] *::after {
+  transition: none !important;
+}
+
+body {
+  overflow: hidden;
+  background:
+    radial-gradient(
+      circle at top left,
+      color-mix(in srgb, var(--accent) 6%, transparent),
+      transparent 24%
+    ),
+    linear-gradient(180deg, var(--canvas-bg-soft), var(--canvas-bg));
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 16px;
+  font-weight: 560;
+  line-height: 1.6;
+  font-synthesis-weight: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background: var(--line);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  border: 2px solid transparent;
+  background: var(--line-2);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}

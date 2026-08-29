@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 @pytest.mark.asyncio
 async def test_knowledge_store_creates_missing_parent_directory(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_knowledge.store import KnowledgeStore
+    from cyrene.plugins.builtin.cyrene_knowledge.store import KnowledgeStore
 
     db_path = tmp_path / "fresh-profile" / "store" / "knowledge.db"
 
@@ -21,7 +21,7 @@ async def test_knowledge_store_creates_missing_parent_directory(tmp_path):
 
 @pytest.mark.asyncio
 async def test_knowledge_plugin_migrates_legacy_database_once(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_knowledge.service import create_knowledge_service
+    from cyrene.plugins.builtin.cyrene_knowledge.service import create_knowledge_service
 
     legacy_store = tmp_path / "store"
     legacy_store.mkdir()
@@ -220,8 +220,8 @@ async def test_knowledge_plugin_migrates_legacy_database_once(tmp_path):
 
 @pytest.fixture
 async def library_plugin(tmp_path):
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl.cyrene_knowledge.service import create_knowledge_service
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_knowledge.service import create_knowledge_service
 
     service = create_knowledge_service(
         tmp_path / "knowledge",
@@ -241,7 +241,7 @@ async def library_plugin(tmp_path):
 
 @pytest.mark.asyncio
 async def test_list_library_items_reports_real_project_metadata(library_plugin):
-    from agent.plugin.plugin_impl.cyrene_knowledge.list_library_items import handler
+    from cyrene.plugins.builtin.cyrene_knowledge.list_library_items import handler
 
     service, context = library_plugin
     item = await service.create_item(
@@ -268,7 +268,7 @@ async def test_list_library_items_reports_real_project_metadata(library_plugin):
 
 @pytest.mark.asyncio
 async def test_search_library_returns_stable_paper_id(library_plugin):
-    from agent.plugin.plugin_impl.cyrene_knowledge.search_library import handler
+    from cyrene.plugins.builtin.cyrene_knowledge.search_library import handler
 
     service, context = library_plugin
     item = await service.create_item(
@@ -289,7 +289,7 @@ async def test_search_library_returns_stable_paper_id(library_plugin):
 
 
 def test_library_tools_are_registered_as_read_only():
-    from agent.plugin.plugin_impl.cyrene_knowledge import plugin_pack
+    from cyrene.plugins.builtin.cyrene_knowledge import plugin_pack
 
     plugins = {plugin.name: plugin for plugin in plugin_pack.plugins}
     assert plugins["ListLibraryItems"].metadata["read_only"] is True
@@ -299,7 +299,7 @@ def test_library_tools_are_registered_as_read_only():
 
 @pytest.mark.asyncio
 async def test_update_library_metadata_fills_only_missing_fields(library_plugin):
-    from agent.plugin.plugin_impl.cyrene_knowledge import update_library_metadata as tool
+    from cyrene.plugins.builtin.cyrene_knowledge import update_library_metadata as tool
 
     service, context = library_plugin
     item = await service.create_item(
@@ -343,7 +343,7 @@ async def test_update_library_metadata_fills_only_missing_fields(library_plugin)
 
 @pytest.mark.asyncio
 async def test_update_library_metadata_can_correct_verified_existing_fields(library_plugin):
-    from agent.plugin.plugin_impl.cyrene_knowledge.update_library_metadata import handler
+    from cyrene.plugins.builtin.cyrene_knowledge.update_library_metadata import handler
 
     service, context = library_plugin
     item = await service.create_item(

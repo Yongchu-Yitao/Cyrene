@@ -1,0 +1,137 @@
+<!doctype html>
+<html><head><link rel="stylesheet" href="../fonts.css?v=0.9.0-beta3-adb4b48b8a"><meta charset="utf-8"><style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+  body { padding: 6px; font-family: Manrope, "Noto Sans SC", system-ui, "Segoe UI", sans-serif; font-synthesis-weight: none; }
+  #menu { width: 100%; height: 100%; display: flex; flex-direction: column; gap: 4px; padding: 7px; overflow-x: hidden; overflow-y: auto; scrollbar-width: none; border: 1px solid var(--line, #d8dce4); border-radius: 14px; background: var(--panel, #fff); color: var(--text, #17191d); box-shadow: none; opacity: 0; transform: translate3d(0,-10px,0) scale(.985); transform-origin: top center; }
+  #menu::-webkit-scrollbar { display: none; width: 0; height: 0; }
+  body.open #menu { animation: picker-in 220ms cubic-bezier(.22,1,.36,1) both; }
+  body.closing #menu { pointer-events: none; animation: picker-out 150ms cubic-bezier(.4,0,.2,1) both; }
+  .row { min-height: 44px; display: flex; flex: 0 0 auto; align-items: center; gap: 4px; padding: 3px; border-radius: 10px; color: var(--muted, #6f737b); }
+  .row:hover { background: var(--hover, rgba(23,25,29,.06)); color: var(--text, #17191d); }
+  .row.active { background: var(--selected, rgba(23,25,29,.045)); color: var(--text, #17191d); box-shadow: inset 0 0 0 1px var(--line, #d8dce4); }
+  button { border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+  button:focus-visible { outline: none; }
+  .row:focus-within { background: var(--hover, rgba(23,25,29,.06)); color: var(--text, #17191d); box-shadow: inset 0 0 0 1px var(--line, #d8dce4); }
+  .select { min-width: 0; min-height: 38px; display: flex; flex: 1 1 auto; align-items: center; gap: 10px; padding: 5px 8px; text-align: left; }
+  .select b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
+  .favicon { position: relative; width: 22px; height: 22px; flex: 0 0 22px; display: grid; place-items: center; border-radius: 6px; background: var(--hover, rgba(23,25,29,.06)); color: var(--faint, #9297a1); overflow: hidden; }
+  .favicon img { position: absolute; inset: 3px; width: 16px; height: 16px; object-fit: contain; }
+  .actions { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
+  .actions button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border-radius: 8px; color: var(--faint, #9297a1); }
+  .actions button:hover, .actions button.active { background: var(--hover, rgba(23,25,29,.07)); color: var(--text, #17191d); }
+  svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  @media (max-resolution: 1.5dppx) {
+    html[data-platform="win32"] body { font-family: "Segoe UI Variable", "Microsoft YaHei UI", "Segoe UI", sans-serif; font-weight: 400; }
+    html[data-platform="win32"] .select b, html[data-platform="win32"] .row.active { font-weight: 600; }
+  }
+  @keyframes picker-in { from { opacity: 0; transform: translate3d(0,-10px,0) scale(.985); } to { opacity: 1; transform: translate3d(0,0,0) scale(1); } }
+  @keyframes picker-out { from { opacity: 1; transform: translate3d(0,0,0) scale(1); } to { opacity: 0; transform: translate3d(0,-8px,0) scale(.985); } }
+  @media (prefers-reduced-motion: reduce) { body.open #menu { animation-duration: 1ms; } body.closing #menu { animation-duration: 1ms; } }
+</style></head><body><div id="menu" role="menu"></div><script>
+  document.documentElement.dataset.platform = new URLSearchParams(location.search).get('platform') || '';
+  const menu = document.getElementById('menu');
+  const icons = {
+    tab: '<svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M4 9h16"/></svg>',
+    reload: '<svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>',
+    volume: '<svg viewBox="0 0 24 24"><path d="M11 5 6.5 9H3v6h3.5L11 19Z"/><path d="M15 9a4 4 0 0 1 0 6"/></svg>',
+    muted: '<svg viewBox="0 0 24 24"><path d="M11 5 6.5 9H3v6h3.5L11 19Z"/><path d="m16 10 5 5m0-5-5 5"/></svg>',
+    close: '<svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg>'
+  };
+  let state = { visible: false, tabs: [], activeTabId: '', labels: {}, colors: {} };
+  let wasVisible = false;
+  function action(type, tabId) { window.browserTabPicker.action(type, tabId || ''); }
+  function iconButton(type, tab, label, active) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = active ? 'active' : '';
+    button.dataset.key = type + ':' + String(tab.id || '');
+    button.setAttribute('role', 'menuitem');
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.innerHTML = icons[type] || '';
+    button.addEventListener('click', () => action(type === 'volume' || type === 'muted' ? 'mute' : type, tab.id));
+    return button;
+  }
+  function render() {
+    const focusKey = document.activeElement && document.activeElement.dataset
+      ? String(document.activeElement.dataset.key || '')
+      : '';
+    const colors = state.colors || {};
+    Object.keys(colors).forEach((key) => document.documentElement.style.setProperty('--' + key, String(colors[key] || '')));
+    menu.setAttribute('aria-label', String(state.labels && state.labels.tabs || 'Browser tabs'));
+    menu.replaceChildren();
+    (Array.isArray(state.tabs) ? state.tabs : []).forEach((tab) => {
+      const selected = String(tab.id || '') === String(state.activeTabId || '');
+      const row = document.createElement('div');
+      row.className = 'row' + (selected ? ' active' : '');
+      row.setAttribute('role', 'none');
+      const select = document.createElement('button');
+      select.type = 'button';
+      select.className = 'select';
+      select.dataset.key = 'select:' + String(tab.id || '');
+      select.setAttribute('role', 'menuitemradio');
+      select.setAttribute('aria-checked', selected ? 'true' : 'false');
+      const favicon = document.createElement('span');
+      favicon.className = 'favicon';
+      favicon.innerHTML = icons.tab;
+      if (tab.favicon) {
+        const image = document.createElement('img');
+        image.src = String(tab.favicon);
+        image.alt = '';
+        image.addEventListener('error', () => image.remove());
+        favicon.appendChild(image);
+      }
+      const title = document.createElement('b');
+      title.textContent = String(tab.title || tab.url || state.labels.browser || 'Browser');
+      select.append(favicon, title);
+      select.addEventListener('click', () => action('select', tab.id));
+      const actions = document.createElement('span');
+      actions.className = 'actions';
+      actions.append(
+        iconButton('reload', tab, state.labels.reload || 'Reload', false),
+        iconButton(tab.muted ? 'muted' : 'volume', tab, tab.muted ? (state.labels.unmute || 'Unmute') : (state.labels.mute || 'Mute'), !!tab.muted),
+        iconButton('close', tab, state.labels.close || 'Close tab', false)
+      );
+      row.append(select, actions);
+      menu.appendChild(row);
+    });
+    document.body.classList.toggle('closing', !state.visible);
+    if (state.visible && !wasVisible) {
+      document.body.classList.remove('open', 'closing');
+      void menu.offsetWidth;
+      requestAnimationFrame(() => {
+        document.body.classList.add('open');
+        const target = menu.querySelector('.row.active .select') || menu.querySelector('button');
+        if (target) target.focus({ preventScroll: true });
+      });
+    } else if (state.visible) {
+      document.body.classList.add('open');
+      document.body.classList.remove('closing');
+      if (focusKey) {
+        const target = Array.from(menu.querySelectorAll('button')).find((button) => button.dataset.key === focusKey);
+        if (target) target.focus({ preventScroll: true });
+      }
+    } else {
+      document.body.classList.remove('open');
+    }
+    wasVisible = !!state.visible;
+  }
+  window.browserTabPicker.onState((next) => { state = next || state; render(); });
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { event.preventDefault(); action('dismiss', ''); return; }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const buttons = Array.from(menu.querySelectorAll('button'));
+    if (!buttons.length) return;
+    event.preventDefault();
+    const current = Math.max(0, buttons.indexOf(document.activeElement));
+    const next = event.key === 'Home' ? 0
+      : event.key === 'End' ? buttons.length - 1
+      : event.key === 'ArrowDown' ? (current + 1) % buttons.length
+      : (current - 1 + buttons.length) % buttons.length;
+    buttons[next].focus({ preventScroll: true });
+  });
+  menu.addEventListener('animationend', (event) => { if (!state.visible && event.animationName === 'picker-out') window.browserTabPicker.hiddenReady(); });
+  window.browserTabPicker.ready();
+</script></body></html>

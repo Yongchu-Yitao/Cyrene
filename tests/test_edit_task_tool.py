@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from agent.plugin import PluginContext, PluginRegistry, PluginRuntime
-from agent.plugin.plugin_impl.cyrene_schedule import plugin_pack
+from cyrene.core.plugin import PluginContext, PluginRegistry, PluginRuntime
+from cyrene.plugins.builtin.cyrene_schedule import plugin_pack
 from cyrene.runtime.database import init_db
-from agent.plugin.plugin_impl.cyrene_schedule.service import ScheduleRuntimeService
+from cyrene.plugins.builtin.cyrene_schedule.service import ScheduleRuntimeService
 
 
 @pytest.mark.asyncio

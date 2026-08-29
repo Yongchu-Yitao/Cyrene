@@ -1870,7 +1870,8 @@ beta9 远程控制与 Workbench 功能的基础上，本版集中修复 Windows 
   校验、项目和设备 Shell 所有权、设置与模型验证、附件限制、缩略图和错误清理。
 - **配置迁移与前端契约扩展** — 覆盖 Custom/Codex 独立持久化、Legacy Migration、
   Timezone 同步、模型来源切换、聊天排序、内嵌图片结构与操作按钮。
-- **设计回归材料随源码提交** — `design-qa.md`、远程共享专项记录及聊天玻璃层、
+- **设计回归材料随源码提交** — `project-notes/audits/design-regression.md`、
+  远程共享专项记录及聊天玻璃层、
   内嵌图片多个阶段的对比与最终截图一并保存，便于后续视觉回归。
 - **版本号完整同步** — Python 包、UV Lock、Electron Manifest/Lock、README
   Badge、Web 文档、Wechat Client、WebUI Cache Key 和相关契约测试统一更新为
@@ -2028,7 +2029,8 @@ Workbench 资料库、右键菜单、侧边 Agent 和卡片布局，并为 **Ope
 - **隐藏滚动条而不禁止滚动** — Conversation Transcript、Rail、Overview、
   Library 和 Memory 在鼠标、触控板与键盘下仍可滚动，但不再显示破坏整体表面的
   Scrollbar。
-- **设计回归资料随代码保存** — `design-qa.md` 与对应截图记录浅色、深色、滚动
+- **设计回归资料随代码保存** — `project-notes/audits/design-regression.md`
+  与对应截图记录浅色、深色、滚动
   和遮罩迭代，便于后续验证视觉契约。
 
 #### 构建、依赖、质量与发布

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 
 def test_deepseek_balance_normalization_preserves_provider_currencies():
-    from agent.plugin.plugin_impl.cyrene_model.telemetry import _normalize_deepseek
+    from cyrene.plugins.builtin.cyrene_model.telemetry import _normalize_deepseek
 
     result = _normalize_deepseek({
         "is_available": True,
@@ -39,7 +39,7 @@ def test_deepseek_balance_normalization_preserves_provider_currencies():
 
 
 def test_minimax_quota_does_not_treat_undocumented_status_as_unlimited():
-    from agent.plugin.plugin_impl.cyrene_model.telemetry import _normalize_minimax
+    from cyrene.plugins.builtin.cyrene_model.telemetry import _normalize_minimax
 
     result = _normalize_minimax({
         "model_remains": [{
@@ -68,7 +68,7 @@ def test_minimax_quota_does_not_treat_undocumented_status_as_unlimited():
 
 
 def test_minimax_count_plan_treats_usage_count_as_remaining():
-    from agent.plugin.plugin_impl.cyrene_model.telemetry import _normalize_minimax
+    from cyrene.plugins.builtin.cyrene_model.telemetry import _normalize_minimax
 
     result = _normalize_minimax({
         "model_remains": [{
@@ -88,7 +88,7 @@ def test_minimax_count_plan_treats_usage_count_as_remaining():
 
 
 def test_minimax_http_200_business_error_is_rejected():
-    from agent.plugin.plugin_impl.cyrene_model.telemetry import (
+    from cyrene.plugins.builtin.cyrene_model.telemetry import (
         ProviderTelemetryError,
         _normalize_minimax,
     )
@@ -102,7 +102,7 @@ def test_minimax_http_200_business_error_is_rejected():
 
 @pytest.mark.asyncio
 async def test_provider_requests_use_official_account_endpoints(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_model import telemetry
+    from cyrene.plugins.builtin.cyrene_model import telemetry
 
     requested = []
 
@@ -157,7 +157,7 @@ async def test_provider_requests_use_official_account_endpoints(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_custom_provider_host_cannot_receive_account_credentials():
-    from agent.plugin.plugin_impl.cyrene_model.telemetry import (
+    from cyrene.plugins.builtin.cyrene_model.telemetry import (
         ProviderTelemetryError,
         provider_telemetry,
     )
@@ -175,7 +175,7 @@ async def test_custom_provider_host_cannot_receive_account_credentials():
 async def test_cached_provider_usage_returns_immediately_and_refreshes_in_background(
     monkeypatch,
 ):
-    from agent.plugin.plugin_impl.cyrene_model import telemetry
+    from cyrene.plugins.builtin.cyrene_model import telemetry
 
     connection = {
         "id": "deepseek",
@@ -216,7 +216,7 @@ async def test_cached_provider_usage_returns_immediately_and_refreshes_in_backgr
 
 @pytest.mark.asyncio
 async def test_configured_provider_usage_skips_connections_without_api_keys(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_model import telemetry
+    from cyrene.plugins.builtin.cyrene_model import telemetry
 
     model_service = type("ModelService", (), {
         "get_model_configuration": lambda self: {
@@ -234,10 +234,10 @@ async def test_configured_provider_usage_skips_connections_without_api_keys(monk
         ],
         }
     })()
-    import agent.plugin as plugin_api
+    import cyrene.core.plugin as plugin_api
     monkeypatch.setattr(
         plugin_api,
-        "active_plugin_service",
+        "application_plugin_service",
         lambda name: model_service if name == "model_configuration" else None,
     )
     fetch = AsyncMock(return_value={
@@ -255,8 +255,8 @@ async def test_configured_provider_usage_skips_connections_without_api_keys(monk
 
 
 def test_provider_usage_route_forwards_explicit_refresh(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_model import telemetry
-    from agent.plugin.plugin_impl.cyrene_model.routes import register_model_configuration_routes
+    from cyrene.plugins.builtin.cyrene_model import telemetry
+    from cyrene.plugins.builtin.cyrene_model.routes import register_model_configuration_routes
 
     fetch = AsyncMock(return_value=[{
         "connection_id": "deepseek",

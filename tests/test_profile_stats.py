@@ -9,7 +9,7 @@ import pytest
 import aiosqlite
 
 from cyrene.runtime import database as cy_db
-from cyrene.workbench import presentation_runtime as routes
+from cyrene.workbench.artifacts import presentation_runtime as routes
 
 
 @pytest.mark.asyncio
@@ -153,15 +153,15 @@ async def test_tool_stats_merges_profile_display_aliases_before_limit(tmp_path):
 
 @pytest.mark.asyncio
 async def test_task_time_totals_merges_task_logs_and_goal_runs(tmp_path, monkeypatch):
-    import agent.plugin
-    from agent.plugin.plugin_impl.cyrene_schedule.service import ScheduleRuntimeService
+    import cyrene.core.plugin
+    from cyrene.plugins.builtin.cyrene_schedule.service import ScheduleRuntimeService
 
     db_path = str(tmp_path / "tasks.db")
     await cy_db.init_db(db_path)
     schedules = ScheduleRuntimeService(db_path)
     monkeypatch.setattr(
-        agent.plugin,
-        "active_plugin_service",
+        cyrene.core.plugin,
+        "application_plugin_service",
         lambda name: schedules if name == "schedules" else None,
     )
 

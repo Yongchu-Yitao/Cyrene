@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 async def test_chat_detail_starts_workspace_snapshot_prewarm(tmp_path):
     from fastapi import APIRouter
 
-    from route.workbench.chat_routes.chats import register_chat_routes
+    from cyrene.workbench.http.workbench.chat_routes.chats import register_chat_routes
 
     workspace_dir = str(tmp_path.resolve())
     chat = {
@@ -59,7 +59,7 @@ async def test_chat_detail_starts_workspace_snapshot_prewarm(tmp_path):
 
 
 def test_workspace_snapshot_records_created_modified_deleted_and_binary(tmp_path):
-    from cyrene.workbench.workspace_changes import (
+    from cyrene.workbench.workspaces.workspace_changes import (
         capture_workspace_snapshot,
         compare_workspace_snapshots,
     )
@@ -95,7 +95,7 @@ def test_workspace_snapshot_records_created_modified_deleted_and_binary(tmp_path
 
 
 def test_workspace_snapshot_ignores_git_and_detects_dotfiles(tmp_path):
-    from cyrene.workbench.workspace_changes import (
+    from cyrene.workbench.workspaces.workspace_changes import (
         capture_workspace_snapshot,
         compare_workspace_snapshots,
     )
@@ -114,7 +114,7 @@ def test_workspace_snapshot_ignores_git_and_detects_dotfiles(tmp_path):
 
 
 def test_workspace_snapshot_ignores_cyrene_managed_run_state(tmp_path):
-    from cyrene.workbench.workspace_changes import (
+    from cyrene.workbench.workspaces.workspace_changes import (
         capture_workspace_snapshot,
         compare_workspace_snapshots,
         is_cyrene_managed_workspace_path,
@@ -144,7 +144,7 @@ def test_workspace_snapshot_ignores_cyrene_managed_run_state(tmp_path):
 
 
 def test_user_owned_same_name_folders_are_kept_without_signature(tmp_path):
-    from cyrene.workbench.workspace_changes import is_cyrene_managed_workspace_path
+    from cyrene.workbench.workspaces.workspace_changes import is_cyrene_managed_workspace_path
 
     (tmp_path / "conversations").mkdir()
     (tmp_path / "conversations" / "notes.md").write_text(
@@ -169,7 +169,7 @@ def test_user_owned_same_name_folders_are_kept_without_signature(tmp_path):
 
 
 def test_workspace_diff_keeps_rows_separate_without_final_newline(tmp_path):
-    from cyrene.workbench.workspace_changes import (
+    from cyrene.workbench.workspaces.workspace_changes import (
         capture_workspace_snapshot,
         compare_workspace_snapshots,
     )
@@ -185,7 +185,7 @@ def test_workspace_diff_keeps_rows_separate_without_final_newline(tmp_path):
 
 
 def test_incremental_workspace_snapshot_reuses_unchanged_file_state(tmp_path):
-    from cyrene.workbench.workspace_changes import capture_workspace_snapshot
+    from cyrene.workbench.workspaces.workspace_changes import capture_workspace_snapshot
 
     unchanged = tmp_path / "unchanged.txt"
     changed = tmp_path / "changed.txt"
@@ -202,7 +202,7 @@ def test_incremental_workspace_snapshot_reuses_unchanged_file_state(tmp_path):
 
 
 def test_watcher_incremental_snapshot_only_refreshes_dirty_paths(tmp_path):
-    from cyrene.workbench.workspace_changes import (
+    from cyrene.workbench.workspaces.workspace_changes import (
         capture_workspace_snapshot,
         compare_workspace_snapshots,
     )
@@ -238,7 +238,7 @@ def test_watcher_incremental_snapshot_only_refreshes_dirty_paths(tmp_path):
 
 
 def test_change_store_keeps_diff_private_until_file_fetch(tmp_path):
-    from cyrene.workbench.workspace_changes import (
+    from cyrene.workbench.workspaces.workspace_changes import (
         get_chat_file_change,
         list_chat_change_sets,
         save_change_set,
@@ -272,7 +272,7 @@ def test_change_store_keeps_diff_private_until_file_fetch(tmp_path):
 
 
 def test_change_store_hides_historical_cyrene_managed_records(tmp_path):
-    from cyrene.workbench.workspace_changes import (
+    from cyrene.workbench.workspaces.workspace_changes import (
         _write_store,
         get_chat_file_change,
         list_chat_change_sets,
@@ -322,7 +322,7 @@ def test_change_store_hides_historical_cyrene_managed_records(tmp_path):
 
 
 def test_change_store_never_persists_new_cyrene_managed_records(tmp_path):
-    from cyrene.workbench.workspace_changes import _read_store, save_change_set
+    from cyrene.workbench.workspaces.workspace_changes import _read_store, save_change_set
 
     db_path = str(tmp_path / "cyrene.runtime.database")
     ignored = save_change_set(db_path, {
@@ -353,7 +353,7 @@ def test_change_store_never_persists_new_cyrene_managed_records(tmp_path):
 
 
 def test_overlapping_change_set_reports_nonexclusive_attribution(tmp_path):
-    from cyrene.workbench.workspace_changes import build_change_set, capture_workspace_snapshot
+    from cyrene.workbench.workspaces.workspace_changes import build_change_set, capture_workspace_snapshot
 
     before = capture_workspace_snapshot(tmp_path)
     (tmp_path / "shared.txt").write_text("changed\n", encoding="utf-8")

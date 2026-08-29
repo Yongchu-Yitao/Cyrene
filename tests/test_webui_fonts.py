@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FRONTEND = ROOT / "src" / "webui" / "frontend"
+FRONTEND = ROOT / "src" / "cyrene" / "workbench" / "webui" / "frontend"
 FONT_DIR = FRONTEND / "assets" / "fonts"
 
 
@@ -38,7 +38,7 @@ def test_cross_platform_fonts_are_bundled_and_declared_without_size_overrides():
 
 def test_font_assets_are_preloaded_hashed_and_copied_to_static_output():
     index = (FRONTEND / "index.html").read_text(encoding="utf-8")
-    build_script = (ROOT / "src/webui/build-jsx.mjs").read_text(encoding="utf-8")
+    build_script = (ROOT / "src/cyrene/workbench/webui/build-jsx.mjs").read_text(encoding="utf-8")
     base_css = (FRONTEND / "shared/theme/base.css").read_text(encoding="utf-8")
 
     assert 'href="assets/fonts/manrope-variable.woff2" as="font"' in index

@@ -8,15 +8,15 @@ from pathlib import Path
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from agent.plugin import PluginContext, PluginRegistry, PluginRuntime
-from agent.plugin.plugin_impl.cyrene_knowledge import plugin_pack
-from agent.plugin.plugin_impl.cyrene_knowledge.routes import register_routes
-from agent.plugin.plugin_impl.cyrene_knowledge.service import (
+from cyrene.core.plugin import PluginContext, PluginRegistry, PluginRuntime
+from cyrene.plugins.builtin.cyrene_knowledge import plugin_pack
+from cyrene.plugins.builtin.cyrene_knowledge.routes import register_routes
+from cyrene.plugins.builtin.cyrene_knowledge.service import (
     KnowledgeService,
     WorkspaceNotFoundError,
     WorkspaceRequiredError,
 )
-from agent.plugin.plugin_impl.cyrene_knowledge.zotero import sync_zotero
+from cyrene.plugins.builtin.cyrene_knowledge.zotero import sync_zotero
 
 
 def _workspace(value: str) -> str:
@@ -300,11 +300,11 @@ def test_zotero_sync_is_order_independent_and_idempotent(tmp_path: Path, monkeyp
         return records, 3
 
     monkeypatch.setattr(
-        "agent.plugin.plugin_impl.cyrene_knowledge.zotero.ZoteroClient.collections",
+        "cyrene.plugins.builtin.cyrene_knowledge.zotero.ZoteroClient.collections",
         fake_collections,
     )
     monkeypatch.setattr(
-        "agent.plugin.plugin_impl.cyrene_knowledge.zotero.ZoteroClient.items",
+        "cyrene.plugins.builtin.cyrene_knowledge.zotero.ZoteroClient.items",
         fake_items,
     )
 
@@ -381,17 +381,3 @@ def test_completed_workbench_artifacts_archive_into_plugin_storage(
     assert len(listed[0]["attachments"]) == 1
     assert run["knowledgeDocumentIds"] == [listed[0]["id"]]
     assert project["context"]["knowledgeDocumentIds"] == [listed[0]["id"]]
-
-
-def test_plugin_backend_has_no_legacy_knowledge_imports() -> None:
-    plugin_root = (
-        Path(__file__).parents[1]
-        / "src"
-        / "agent"
-        / "plugin"
-        / "plugin_impl"
-        / "cyrene_knowledge"
-    )
-    source = "\n".join(path.read_text(encoding="utf-8") for path in plugin_root.glob("*.py"))
-    assert "cyrene.knowledge" not in source
-    assert "route.workbench.library" not in source

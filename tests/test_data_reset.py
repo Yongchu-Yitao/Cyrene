@@ -30,7 +30,7 @@ async def test_plugin_data_reset_uses_generic_service_lifecycle():
 
 
 def test_reset_endpoint_requires_explicit_confirmation(monkeypatch, tmp_path: Path):
-    from route.settings import general
+    from cyrene.workbench.http.settings import general
 
     reset = AsyncMock(return_value={"ok": True})
     app = FastAPI()
@@ -39,7 +39,7 @@ def test_reset_endpoint_requires_explicit_confirmation(monkeypatch, tmp_path: Pa
     # the activation adapter; reset itself remains injected below.
     monkeypatch.setattr(
         general,
-        "active_plugin_application_host",
+        "application_plugin_scope",
         lambda: SimpleNamespace(registry=SimpleNamespace()),
     )
     general.register_settings_routes(
@@ -103,7 +103,7 @@ def test_config_reset_replaces_persisted_and_live_environment(monkeypatch):
 async def test_delete_all_local_models_cancels_runtime_and_removes_root(
     monkeypatch, tmp_path: Path
 ):
-    from agent.plugin.plugin_impl.cyrene_knowledge import local_models
+    from cyrene.plugins.builtin.cyrene_knowledge import local_models
 
     root = tmp_path / "knowledge_models"
     (root / "qwen3-embedding-0.6b").mkdir(parents=True)
@@ -131,7 +131,7 @@ async def test_delete_all_local_models_cancels_runtime_and_removes_root(
 async def test_clear_browser_data_erases_electron_and_playwright_profiles(
     monkeypatch, tmp_path: Path
 ):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     profile = tmp_path / "browser_profile"
     profile.mkdir()

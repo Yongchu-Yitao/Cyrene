@@ -22,7 +22,7 @@ def test_remote_context_catalog_refreshes_live_without_restart():
     workbench = workbench_chat_source()
     settings = workbench_settings_source()
     events = (
-        root / "src" / "webui" / "frontend" / "platform" / "events.jsx"
+        root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "platform" / "events.jsx"
     ).read_text(encoding="utf-8")
 
     assert 'workbenchServices.api().json("/api/context/state"' in workbench

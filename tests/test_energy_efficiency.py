@@ -25,8 +25,8 @@ async def test_scheduler_uses_independent_maintenance_cadences(
     tmp_path,
     monkeypatch,
 ):
-    from agent.plugin import background
-    from cyrene.workbench import notifications as workbench_notifications
+    from cyrene.plugins import background
+    from cyrene.workbench.application import notifications as workbench_notifications
 
     monkeypatch.setenv("CYRENE_PLUGIN_IMPL_DIR", str(tmp_path / "plugin_impl"))
     monkeypatch.setenv("SCHEDULER_INTERVAL", "60")
@@ -48,13 +48,14 @@ async def test_scheduler_uses_independent_maintenance_cadences(
     assert jobs["scheduled_tasks"].trigger.interval.total_seconds() == 60
     assert jobs["behavior_learning"].trigger.interval.total_seconds() == 600
     assert jobs["proactive_heartbeat"].trigger.interval.total_seconds() == 1800
+    assert jobs["proactive_heartbeat"].next_run_time is not None
     assert jobs["steward"].trigger.interval.total_seconds() == 3600
     assert jobs["short_term_cleanup"].trigger.interval.total_seconds() == 86400
 
 
 async def test_due_task_job_invokes_hidden_plugin_not_maintenance(monkeypatch, tmp_path):
-    from agent.plugin import background
-    from cyrene.workbench import notifications as workbench_notifications
+    from cyrene.plugins import background
+    from cyrene.workbench.application import notifications as workbench_notifications
 
     monkeypatch.setenv("CYRENE_PLUGIN_IMPL_DIR", str(tmp_path / "plugin_impl"))
     monkeypatch.setattr(workbench_notifications, "configure_store", lambda _path: None)
@@ -88,7 +89,7 @@ async def test_disabled_background_packs_are_not_scheduled_or_invoked(
 ):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-    from agent.plugin.background import BackgroundPluginHost
+    from cyrene.plugins.background import BackgroundPluginHost
 
     monkeypatch.setenv("CYRENE_PLUGIN_IMPL_DIR", str(tmp_path / "plugin_impl"))
     scheduler = AsyncIOScheduler()
@@ -113,7 +114,7 @@ async def test_disabled_background_packs_are_not_scheduled_or_invoked(
     assert "plugin_registry_sync" in jobs
 
     plugin_call = AsyncMock()
-    monkeypatch.setattr("agent.plugin.background.PluginRuntime.call", plugin_call)
+    monkeypatch.setattr("cyrene.plugins.background.PluginRuntime.call", plugin_call)
     for plugin_name, job_id in (
         ("schedule.tick", "scheduled_tasks"),
         ("proactive.heartbeat", "proactive_heartbeat"),
@@ -126,8 +127,8 @@ async def test_disabled_background_packs_are_not_scheduled_or_invoked(
 
 
 def test_steward_reads_recent_workbench_session_archives(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_memory import steward
-    from cyrene.workbench import context as workbench_context
+    from cyrene.plugins.builtin.cyrene_memory import steward
+    from cyrene.workbench.sessions import context as workbench_context
 
     conversations = tmp_path / "conversations"
     conversations.mkdir()
@@ -169,7 +170,7 @@ def test_steward_reads_recent_workbench_session_archives(tmp_path, monkeypatch):
 
 
 def test_steward_normalizes_soul_commands_and_excludes_entities():
-    from agent.plugin.plugin_impl.cyrene_memory import steward
+    from cyrene.plugins.builtin.cyrene_memory import steward
 
     result = steward.normalize_soul_commands(
         "APPEND MEMORY:HIGH_IMPACT :: exact fact\n"
@@ -190,8 +191,8 @@ def test_steward_normalizes_soul_commands_and_excludes_entities():
 async def test_steward_processes_workbench_archive_without_owner_id(
     tmp_path, monkeypatch
 ):
-    import agent.plugin as plugin_runtime
-    from agent.plugin.plugin_impl.cyrene_memory import steward
+    import cyrene.core.plugin as plugin_runtime
+    from cyrene.plugins.builtin.cyrene_memory import steward
 
     model_runner = AsyncMock(return_value="SKIP")
     monkeypatch.setattr(steward, "has_daily_conversation", lambda *_args, **_kwargs: False)
@@ -209,7 +210,7 @@ async def test_steward_processes_workbench_archive_without_owner_id(
         read=lambda: "# Independent Soul",
         apply_update=lambda _commands: [],
     )
-    monkeypatch.setattr(plugin_runtime, "active_plugin_service", lambda _name: None)
+    monkeypatch.setattr(plugin_runtime, "application_plugin_service", lambda _name: None)
 
     ran = await steward.run_steward_if_needed(
         memory_service,
@@ -229,8 +230,8 @@ async def test_steward_processes_workbench_archive_without_owner_id(
 
 
 async def test_steward_background_plugin_delegates_to_memory_service():
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl import cyrene_memory
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin import cyrene_memory
 
     run_steward = AsyncMock(return_value=True)
     service = SimpleNamespace(run_steward_if_needed=run_steward)

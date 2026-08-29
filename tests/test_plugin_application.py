@@ -11,20 +11,22 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from agent import AgentSession
-from agent.plugin import (
+from cyrene.core import AgentSession
+from cyrene.core.plugin import (
     Plugin,
-    PluginApplicationHost,
     PluginContext,
     PluginPack,
     PluginRegistry,
     PluginRuntime,
-    resolve_agent_plugin_registry,
 )
-from agent.plugin.application import set_active_plugin_application_host
-from agent.plugin.background import BackgroundPluginHost, background_job_spec
-from cyrene.workbench import presentation_runtime
-from cyrene.workbench.presentation_service import PresentationQueryService
+from cyrene.plugins import (
+    PluginApplicationHost,
+    resolve_plugin_registry,
+    set_application_plugin_scope,
+)
+from cyrene.plugins.background import BackgroundPluginHost, background_job_spec
+from cyrene.workbench.artifacts import presentation_runtime
+from cyrene.workbench.artifacts.presentation_service import PresentationQueryService
 
 
 def _host(tmp_path: Path, registry: PluginRegistry) -> PluginApplicationHost:
@@ -41,13 +43,13 @@ def _host(tmp_path: Path, registry: PluginRegistry) -> PluginApplicationHost:
 def test_agent_registry_reuses_matching_application_host(tmp_path):
     registry = PluginRegistry()
     host = _host(tmp_path, registry)
-    set_active_plugin_application_host(host)
+    set_application_plugin_scope(host)
     try:
-        resolved, load_plugins = resolve_agent_plugin_registry(
+        resolved, load_plugins = resolve_plugin_registry(
             tmp_path / "plugin_impl"
         )
     finally:
-        set_active_plugin_application_host(None)
+        set_application_plugin_scope(None)
 
     assert resolved is registry
     assert load_plugins is False
@@ -292,7 +294,7 @@ def test_reload_failure_stops_application_pack_and_repair_requires_restart(
     def write_pack() -> None:
         initializer.write_text(
             '''\
-from agent.plugin import PluginPack
+from cyrene.core.plugin import PluginPack
 
 def setup(context):
     events = context.services["events"]
@@ -322,7 +324,7 @@ plugin_pack = PluginPack(
     host.attach(router)
     host.app.include_router(router)
     monkeypatch.setattr(
-        "agent.plugin.application.seed_builtin_plugin_directory",
+        "cyrene.plugins.application.seed_builtin_plugin_directory",
         lambda _directory: object(),
     )
 
@@ -342,7 +344,7 @@ plugin_pack = PluginPack(
     assert events == ["startup", "shutdown"]
     assert host.restart_required_packs == ("reload-demo",)
     assert host.pack_operational("reload-demo") is False
-    from route.plugins import plugin_registry_status
+    from cyrene.workbench.http.plugins import plugin_registry_status
 
     status = plugin_registry_status(host)
     assert status["application_restart_required"] is True
@@ -420,7 +422,7 @@ def test_background_host_uses_authoritative_state_and_cancels_inflight_work(
     plugin_directory = tmp_path / "background_plugins"
     plugin_directory.mkdir()
     monkeypatch.setattr(
-        "agent.plugin.background.seed_builtin_plugin_directory",
+        "cyrene.plugins.background.seed_builtin_plugin_directory",
         lambda _directory: None,
     )
     background = BackgroundPluginHost(
@@ -429,7 +431,7 @@ def test_background_host_uses_authoritative_state_and_cancels_inflight_work(
     )
 
     async def scenario() -> None:
-        set_active_plugin_application_host(host)
+        set_application_plugin_scope(host)
         try:
             await host.startup()
             background.attach()
@@ -459,13 +461,13 @@ def test_background_host_uses_authoritative_state_and_cancels_inflight_work(
         finally:
             await background.shutdown()
             await host.shutdown()
-            set_active_plugin_application_host(None)
+            set_application_plugin_scope(None)
 
     asyncio.run(scenario())
 
 
 def test_model_pack_owns_settings_routes_services_and_frontend_marker(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_model import plugin_pack
+    from cyrene.plugins.builtin.cyrene_model import plugin_pack
 
     registry = PluginRegistry(include_core=False)
     registry.register_pack(plugin_pack, source="test")
@@ -502,9 +504,9 @@ def test_code_pack_gates_http_websocket_frontend_and_wake_lifecycle(
     tmp_path,
     monkeypatch,
 ):
-    from agent.plugin.plugin_impl.cyrene_code import plugin_pack
+    from cyrene.plugins.builtin.cyrene_code import plugin_pack
     from cyrene.runtime import shell_wake
-    from agent.plugin.plugin_impl.cyrene_code.terminal import client as terminal_client
+    from cyrene.plugins.builtin.cyrene_code.terminal import client as terminal_client
 
     class FakeConnection:
         async def read(self):
@@ -586,7 +588,7 @@ def test_code_pack_gates_http_websocket_frontend_and_wake_lifecycle(
 
 
 def test_extensions_pack_gates_agent_routes_services_and_frontend_markers(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_extensions import plugin_pack
+    from cyrene.plugins.builtin.cyrene_extensions import plugin_pack
 
     registry = PluginRegistry(include_core=False)
     registry.register_pack(plugin_pack, source="test")
@@ -617,7 +619,7 @@ def test_extensions_pack_gates_agent_routes_services_and_frontend_markers(tmp_pa
 
 
 def test_cli_pack_owns_catalog_hook_routes_service_and_frontend_marker(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_cli import plugin_pack
+    from cyrene.plugins.builtin.cyrene_cli import plugin_pack
 
     registry = PluginRegistry(include_core=False)
     registry.register_pack(plugin_pack, source="test")
@@ -691,7 +693,7 @@ def test_failed_application_startup_hides_pack_contributions(tmp_path):
     assert "broken_demo" not in host.active_services
     assert host.frontend_modules == []
     assert host.search_providers == {}
-    from route.plugins import plugin_registry_status
+    from cyrene.workbench.http.plugins import plugin_registry_status
 
     status = plugin_registry_status(host)
     pack_status = next(item for item in status["packs"] if item["id"] == "broken_demo")
@@ -700,13 +702,13 @@ def test_failed_application_startup_hides_pack_contributions(tmp_path):
     assert pack_status["running"] is False
     assert pack_status["startup_error"] == "migration failed"
     assert pack_status["restart_required"] is False
-    from route.settings.plugin_service import get_plugin_settings
+    from cyrene.workbench.http.settings.plugin_service import get_plugin_settings
 
-    set_active_plugin_application_host(host)
+    set_application_plugin_scope(host)
     try:
         settings_status = get_plugin_settings(registry)
     finally:
-        set_active_plugin_application_host(None)
+        set_application_plugin_scope(None)
     settings_pack = next(
         item for item in settings_status["packs"] if item["id"] == "broken_demo"
     )
@@ -748,7 +750,7 @@ def test_application_startup_logs_pack_and_handler_timings(tmp_path, caplog):
     host = _host(tmp_path, registry)
     host.attach(APIRouter())
 
-    caplog.set_level("INFO", logger="agent.plugin.application")
+    caplog.set_level("INFO", logger="cyrene.plugins.application")
     asyncio.run(host.startup())
 
     assert events == ["store", "service"]
@@ -817,7 +819,7 @@ def test_required_session_setup_requires_operational_application_pack(tmp_path):
     host.attach(APIRouter())
 
     async def scenario() -> None:
-        set_active_plugin_application_host(host)
+        set_application_plugin_scope(host)
         try:
             await host.startup()
             session = AgentSession(
@@ -837,18 +839,18 @@ def test_required_session_setup_requires_operational_application_pack(tmp_path):
                         "required-application-demo"
                     ),
                 ):
-                    session.active_plugin_services()
+                    session.application_plugin_services()
             finally:
                 session.close()
         finally:
             await host.shutdown()
-            set_active_plugin_application_host(None)
+            set_application_plugin_scope(None)
 
     asyncio.run(scenario())
 
 
 def test_knowledge_pack_owns_tools_routes_search_and_frontend(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_knowledge import plugin_pack
+    from cyrene.plugins.builtin.cyrene_knowledge import plugin_pack
 
     registry = PluginRegistry()
     registry.register_pack(plugin_pack, source="test")

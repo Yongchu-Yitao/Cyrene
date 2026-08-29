@@ -8,10 +8,11 @@ from pathlib import Path
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from agent.plugin import PluginApplicationHost, PluginRegistry
-from agent.plugin.plugin_impl.cyrene_voice import plugin_pack
-from agent.plugin.plugin_impl.cyrene_voice import service as voice_service
-from agent.plugin.plugin_impl.cyrene_voice.voice_command import (
+from cyrene.core.plugin import PluginRegistry
+from cyrene.plugins import PluginApplicationHost
+from cyrene.plugins.builtin.cyrene_voice import plugin_pack
+from cyrene.plugins.builtin.cyrene_voice import service as voice_service
+from cyrene.plugins.builtin.cyrene_voice.voice_command import (
     VoiceCommandApplicationService,
     VoiceCommandResult,
 )

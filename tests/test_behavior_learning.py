@@ -15,14 +15,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 def test_behavior_media_route_serves_plugin_owned_path_with_spaces(
     monkeypatch, tmp_path
 ):
-    from agent.plugin.plugin_impl.cyrene_skills import orchestrator as learning
-    from agent.plugin.plugin_impl.cyrene_skills.application_service import (
+    from cyrene.plugins.builtin.cyrene_skills import orchestrator as learning
+    from cyrene.plugins.builtin.cyrene_skills.application_service import (
         LearningApplicationService,
         MediaRepository,
         ProjectResolver,
         ToolChainProjection,
     )
-    from agent.plugin.plugin_impl.cyrene_skills import routes as learning_routes
+    from cyrene.plugins.builtin.cyrene_skills import routes as learning_routes
 
     data_dir = tmp_path / "Application Support" / "Cyrene" / "data"
     target = data_dir / "behavior-media" / "turn_1" / "capture.png"
@@ -68,7 +68,7 @@ def test_behavior_media_route_serves_plugin_owned_path_with_spaces(
 def test_installed_skill_uses_migrated_plugin_path(
     monkeypatch, tmp_path
 ):
-    from agent.plugin.plugin_impl.cyrene_skills import skills
+    from cyrene.plugins.builtin.cyrene_skills import skills
 
     installed_root = tmp_path / "current" / "data" / "installed_skills"
     skill_dir = installed_root / "demo-skill"
@@ -94,10 +94,10 @@ def test_legacy_learning_data_migrates_once_and_rewrites_paths(
     monkeypatch,
     tmp_path,
 ):
-    from agent.plugin.plugin_impl.cyrene_skills.application import (
+    from cyrene.plugins.builtin.cyrene_skills.application import (
         migrate_legacy_learning_data,
     )
-    from agent.plugin.plugin_impl.cyrene_skills import skills
+    from cyrene.plugins.builtin.cyrene_skills import skills
 
     legacy_root = tmp_path / "data"
     plugin_root = legacy_root / "plugin_data" / "cyrene_skills"
@@ -241,9 +241,9 @@ def _make_step(tool_name: str) -> dict:
     }
 
 async def test_parameterized_runner_applies_typed_defaults(tmp_path, monkeypatch):
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl.cyrene_skills import run_learned_skill as runner
-    from agent.plugin.plugin_impl.cyrene_skills import orchestrator as bl
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_skills import run_learned_skill as runner
+    from cyrene.plugins.builtin.cyrene_skills import orchestrator as bl
 
     skill = _make_skill_with_steps([{
         "enabled": True,
@@ -273,7 +273,7 @@ async def test_parameterized_runner_applies_typed_defaults(tmp_path, monkeypatch
 
 
 def test_parameterized_runner_detects_unsafe_script_wrapper():
-    from agent.plugin.plugin_impl.cyrene_skills import run_learned_skill as runner
+    from cyrene.plugins.builtin.cyrene_skills import run_learned_skill as runner
 
     wrapper = {
         "enabled": True,

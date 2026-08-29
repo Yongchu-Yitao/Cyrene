@@ -4,7 +4,7 @@ import pytest
 
 
 async def test_simplexng_fetches_pages_and_returns_evidence(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
 
     results = [
         {
@@ -34,7 +34,7 @@ async def test_simplexng_fetches_pages_and_returns_evidence(monkeypatch):
 
 
 async def test_simplexng_preview_fetches_only_first_three_pages(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
 
     async def fake_search(_query, **_kwargs):
         return [
@@ -75,7 +75,7 @@ async def test_simplexng_preview_fetches_only_first_three_pages(monkeypatch):
 
 
 async def test_preview_gives_remaining_page_five_seconds_after_first_success(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
 
     assert search._PREVIEW_REMAINING_TIMEOUT == 5.0
     results = [
@@ -102,7 +102,7 @@ async def test_preview_gives_remaining_page_five_seconds_after_first_success(mon
 
 
 async def test_simplexng_pipeline_makes_no_internal_model_calls(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
 
     async def fake_search(_query, **_kwargs):
         return [{
@@ -151,7 +151,7 @@ class _FakeSearchSession:
 
 
 async def test_simplexng_engine_outage_is_not_reported_as_zero_results(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
 
     payload = {
         "results": [],
@@ -168,8 +168,8 @@ async def test_simplexng_engine_outage_is_not_reported_as_zero_results(monkeypat
 
 
 async def test_all_simplexng_engine_failures_continue_to_next_provider(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content.search_settings import SearchRuntimeSettings
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content.search_settings import SearchRuntimeSettings
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
 
     payload = {
         "results": [],
@@ -202,7 +202,7 @@ async def test_all_simplexng_engine_failures_continue_to_next_provider(monkeypat
 
 
 async def test_simplexng_genuine_empty_result_remains_empty(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
 
     payload = {"results": [], "unresponsive_engines": []}
     monkeypatch.setattr(search, "_get_simplexng_url", lambda: "http://127.0.0.1:8888")
@@ -213,7 +213,7 @@ async def test_simplexng_genuine_empty_result_remains_empty(monkeypatch):
 
 
 async def test_simplexng_result_without_snippet_or_page_content_is_unusable(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
 
     async def fake_search(_query, **_kwargs):
         return [{
@@ -254,8 +254,8 @@ class _FakeProviderSession:
 
 
 def test_proxied_session_does_not_allow_system_proxy_override(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
-    from agent.plugin.plugin_impl.cyrene_content import search_service as searxng_manager
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content import search_service as searxng_manager
 
     configured = "http://proxy.example.test:8080"
     monkeypatch.setattr(
@@ -271,7 +271,7 @@ def test_proxied_session_does_not_allow_system_proxy_override(monkeypatch):
 
 
 async def test_tavily_uses_bearer_auth_and_normalizes_results(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
 
     calls = []
     payload = {
@@ -298,7 +298,7 @@ async def test_tavily_uses_bearer_auth_and_normalizes_results(monkeypatch):
 
 
 async def test_brave_uses_subscription_token_and_normalizes_results(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
 
     calls = []
     payload = {
@@ -351,7 +351,7 @@ class _FakeSession:
 
 
 async def test_fetch_url_decodes_chinese_page_without_charset_declaration(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
 
     # 中文站点头部无 charset 时 requests 默认 ISO-8859-1,UTF-8 页面会整体乱码
     body = "广州天气 雷阵雨 26℃".encode("utf-8")
@@ -368,7 +368,7 @@ async def test_fetch_url_decodes_chinese_page_without_charset_declaration(monkey
 
 
 async def test_fetch_url_respects_declared_non_utf8_charset(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_content import search_backend as search
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
 
     body = "广州天气".encode("gbk")
     monkeypatch.setattr(
@@ -383,7 +383,7 @@ async def test_fetch_url_respects_declared_non_utf8_charset(monkeypatch):
 
 
 def test_web_search_contract_exposes_preview_and_content_detail_modes():
-    from agent.plugin.plugin_impl.cyrene_content.definitions import get_native_tool_def
+    from cyrene.plugins.builtin.cyrene_content.definitions import get_native_tool_def
 
     tool = get_native_tool_def("WebSearch")["function"]
     description = tool["description"]
@@ -397,7 +397,7 @@ def test_web_search_contract_exposes_preview_and_content_detail_modes():
 
 
 def test_self_contained_result_preserves_evidence_order():
-    from agent.plugin.plugin_impl.cyrene_content.search_backend import _self_contained_search_result
+    from cyrene.plugins.builtin.cyrene_content.search_backend import _self_contained_search_result
 
     sources = [
         {"title": "First", "url": "https://example.test/first", "snippet": "one"},

@@ -197,8 +197,9 @@ backend attach as clients, so closing a view never terminates a terminal.
 
 ### Code Tools
 
-Codebase-aware implementations live under `cyrene/tool_impl/code/` and are
-progressively exposed through `code_tools`:
+Codebase-aware implementations live in the editable
+`cyrene.plugins.builtin.cyrene_code` pack and are progressively exposed through
+`code_tools`:
 
 - **Indexer** — builds a SQLite index of symbols, references, imports, and file hashes
 - **Analysis** — query symbols, callers, references, and file summaries
@@ -273,8 +274,8 @@ Cyrene ships one Workbench front-end. Its primary areas are Task, Chat,
 Knowledge/Library, Schedule, and Memory. Search, Browser/PDF/Diff views,
 settings, onboarding, help, profile, and Quick Chat are overlays, panels, or
 secondary surfaces rather than separate legacy pages. The source lives under
-`src/webui/frontend`; the only generated web output root is
-`src/webui/static/app`.
+`src/cyrene/workbench/webui/frontend`; the only generated web output root is
+`src/cyrene/workbench/webui/static/app`.
 
 `WorkbenchTopbar` keeps two deliberately separate collections: a local
 MRU/pinned list of at most three task/chat session tabs, and a persistent
@@ -348,52 +349,46 @@ cross-install restore and can contain credentials.
 
 ```
 src/
-├── cyrene/                          # Core engine
-│   ├── agent/                       # Agent loop and internal public API
-│   ├── workbench/                   # Workbench business services
-│   ├── model_runtime/               # Provider/model runtime (separate from legacy llm.py)
-│   ├── learning/                    # Behavior and skill learning
-│   ├── runtime/                     # Bootstrap, lifecycle, scheduling, persistence
-│   ├── observability/               # Traces, debugging, and telemetry
-│   ├── knowledge/                   # Document ingestion, embeddings, and storage
-│   ├── channels/                    # Telegram and WeChat adapters
-│   ├── tooling/                     # Stable tool control plane and backends
-│   ├── tool_impl/                   # Native tool implementations by domain
-│   ├── config.py                    # Environment configuration
-│   ├── call_llm.py                  # Stable model-call facade
-│   ├── browser.py                   # Browser session facade/runtime
-│   ├── subagent.py                  # Subagent orchestration
-│   ├── memory.py                    # Memory context assembly
-│   ├── cli.py                       # `cyrene` daemon HTTP client
-│   ├── tools.py                     # Public tooling facade
-│   ├── __init__.py                  # Installs lazy legacy module aliases
-│   ├── __main__.py                  # `python -m cyrene`
-│   └── local_cli.py                 # Legacy direct-file compatibility shim
-├── route/                           # All FastAPI HTTP/WebSocket adapters
-│   ├── registry.py                  # Single route composition root
-│   ├── schemas.py / errors.py       # Request contracts and API errors
-│   ├── agent/                       # Chat, browser, sessions, collaboration
-│   ├── workbench/                   # Projects, chats, tasks, knowledge, memory
-│   ├── system/                      # Events, shell, updates, instance identity
-│   ├── settings/ / code/ / maps/    # Domain-specific adapters
-│   └── channels/                    # Channel-specific HTTP callbacks
-├── webui/                           # FastAPI app lifecycle + React SPA hosting
-│   ├── server.py                    # FastAPI app factory; installs route.registry
-│   ├── workbench_*.py               # Background managers and UI support services
-│   ├── auth.py                      # Local auth middleware
-│   ├── frontend/                    # Sole React/JSX source root
-│   │   ├── platform/                # Bootstrap, API, SSE, data, readiness
-│   │   └── shared/                  # Shared UI capabilities
-│   └── static/app/                  # Sole generated/bundled output root
+├── cyrene/
+│   ├── core/                        # Host-neutral Agent runtime
+│   │   ├── context/                 # Persistent Context Tree
+│   │   ├── hook/                    # Tree-local lifecycle hooks
+│   │   └── plugin/                  # Plugin values, scopes, registry, execution
+│   ├── plugins/                     # Cyrene product plugin layer
+│   │   ├── application.py          # Application-scope plugin host
+│   │   ├── context.py              # Workbench application contribution SDK
+│   │   ├── model_*.py              # Model-provider composition
+│   │   └── builtin/                # Canonical editable feature plugins
+│   ├── workbench/                   # Cyrene host adapter
+│   │   ├── application/            # App orchestration, events, notifications
+│   │   ├── chat/                   # Chat services, repositories, and runs
+│   │   ├── tasks/                  # Task execution and workflow services
+│   │   ├── projects/               # Project lifecycle, files, and composition
+│   │   ├── goals/                  # Durable goal-loop runtime
+│   │   ├── planning/               # Planning contracts and helpers
+│   │   ├── artifacts/              # Artifacts, presentation, and exports
+│   │   ├── sessions/               # Session context and presentation
+│   │   ├── control/                # External control ports and projections
+│   │   ├── workspaces/             # Workspace changes and diff services
+│   │   ├── ui/                     # UI surface abstractions
+│   │   ├── core_adapter/           # Session/chat/task bridge to core
+│   │   ├── http/                   # FastAPI/HTTP composition
+│   │   ├── persistence/            # Workbench persistence
+│   │   └── webui/                 # App lifecycle and sole SPA source/output
+│   ├── agent_runtime/               # External ACP agent integration
+│   ├── model_runtime/               # Provider transport/runtime support
+│   ├── runtime/                     # Process bootstrap and lifecycle
+│   └── observability/               # Traces, debugging, and telemetry
 tests/                               # Test suite
 data/                                # Source-run state, debug logs, uploads
 workspace/                           # Source-run SOUL.md and user workspace
 store/                               # Source-run SQLite databases
 ```
 
-Historical imports such as `cyrene.db`, `cyrene.scheduler`, and
-`cyrene.workbench_runtime` are resolved lazily by
-`cyrene/runtime/module_compat.py` to the exact canonical module object; they do not
-require duplicate top-level implementation files. `local_cli.py` remains a
-legacy direct-file compatibility shim; current source and Electron development
-launches use the `cyrene` project entry point.
+`cyrene.core` never imports `cyrene.plugins` or `cyrene.workbench`. The product
+layer supplies model and application services through plugin scopes, while the
+Workbench explicitly receives that application scope when opening a core
+session. The former top-level `agent`, `route`, and `webui` packages have been
+removed; no compatibility packages or duplicate implementations are shipped.
+Workbench business modules are grouped by domain; its package root contains no
+business-service implementations or legacy forwarding modules.

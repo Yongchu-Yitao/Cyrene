@@ -1,0 +1,257 @@
+"""Helpers for mapping an agent session to a Workbench project scope."""
+
+from __future__ import annotations
+
+import json
+import re
+import sqlite3
+import threading
+from typing import Any
+
+from cyrene.workbench.persistence.store import ensure_schema
+
+_DEFAULT_DATA_KEY = "default"
+_WORKBENCH_DB_PATH = ""
+_SCOPE_CACHE_LOCK = threading.RLock()
+_SCOPE_CACHE_SIGNATURE: tuple[Any, ...] | None = None
+_SCOPE_CACHE: dict[str, Any] = {"sessions": {}, "projectIdsByDataKey": {}}
+
+
+def configure_store(db_path: str) -> None:
+    global _WORKBENCH_DB_PATH
+    global _SCOPE_CACHE_SIGNATURE, _SCOPE_CACHE
+    normalized = str(db_path or "").strip()
+    if not normalized:
+        raise ValueError("Workbench context requires a database path")
+    _WORKBENCH_DB_PATH = normalized
+    with _SCOPE_CACHE_LOCK:
+        _SCOPE_CACHE_SIGNATURE = None
+        _SCOPE_CACHE = {"sessions": {}, "projectIdsByDataKey": {}}
+
+
+def _database() -> str:
+    if not _WORKBENCH_DB_PATH:
+        raise RuntimeError("Workbench context is not configured")
+    return _WORKBENCH_DB_PATH
+
+
+def _safe_workbench_data_key(raw: str | None) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return _DEFAULT_DATA_KEY
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("._")
+    return cleaned or _DEFAULT_DATA_KEY
+
+
+def read_project_state() -> dict[str, Any]:
+    """Public lightweight project state for adjacent read-only resolvers."""
+    database = _database()
+    ensure_schema(database)
+    with sqlite3.connect(database, timeout=5) as conn:
+        conn.execute("PRAGMA busy_timeout = 5000")
+        row = conn.execute(
+            "SELECT payload_json FROM workbench_state WHERE key = 'projects'"
+        ).fetchone()
+    if row is None:
+        return {"projects": []}
+    try:
+        payload = json.loads(str(row[0]))
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("invalid Workbench projects payload") from exc
+    return payload if isinstance(payload, dict) else {"projects": []}
+
+
+def _read_projects() -> list[dict[str, Any]]:
+    payload = read_project_state()
+    projects = payload.get("projects") if isinstance(payload, dict) else None
+    return projects if isinstance(projects, list) else []
+
+
+def read_projects() -> list[dict[str, Any]]:
+    """Public read-only project lookup for adjacent domains."""
+    return _read_projects()
+
+
+def resolve_workbench_project_id(project_ref: str | None) -> str | None:
+    """Resolve a project id or storage key to its canonical project id."""
+    raw = str(project_ref or "").strip()
+    data_key = _safe_workbench_data_key(raw)
+    for project in read_projects():
+        if not isinstance(project, dict):
+            continue
+        project_id = str(project.get("id") or "").strip()
+        if not project_id:
+            continue
+        if project_id == raw:
+            return project_id
+        project_data_key = _safe_workbench_data_key(
+            project.get("dataKey") or project_id
+        )
+        if project_data_key == data_key:
+            return project_id
+    return None
+
+
+def _sqlite_scope_signature() -> tuple[Any, ...]:
+    database = _database()
+    ensure_schema(database)
+    with sqlite3.connect(database, timeout=5) as conn:
+        conn.execute("PRAGMA busy_timeout = 5000")
+        rows = conn.execute(
+            """
+            SELECT key, updated_at FROM workbench_state
+            WHERE key IN ('chats', 'projects') ORDER BY key
+            """
+        ).fetchall()
+    return ("sqlite",) + tuple((str(key), str(updated_at)) for key, updated_at in rows)
+
+
+def _scope_signature() -> tuple[Any, ...]:
+    return _sqlite_scope_signature()
+
+
+def _scope_sources() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    database = _database()
+    ensure_schema(database)
+    with sqlite3.connect(database, timeout=5) as conn:
+        conn.execute("PRAGMA busy_timeout = 5000")
+        chat_rows = conn.execute(
+            "SELECT payload_json FROM workbench_chats ORDER BY ordinal, chat_id"
+        ).fetchall()
+        project_row = conn.execute(
+            "SELECT payload_json FROM workbench_state WHERE key = 'projects'"
+        ).fetchone()
+
+    chats: list[dict[str, Any]] = []
+    for (payload_json,) in chat_rows:
+        try:
+            chat = json.loads(str(payload_json))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(chat, dict):
+            chats.append(chat)
+
+    if project_row is None:
+        return chats, []
+    try:
+        projects_payload = json.loads(str(project_row[0]))
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("invalid Workbench projects payload") from exc
+    projects = projects_payload.get("projects") if isinstance(projects_payload, dict) else None
+    return chats, projects if isinstance(projects, list) else []
+
+
+def _build_scope_cache() -> dict[str, Any]:
+    chats, projects = _scope_sources()
+    sessions: dict[str, dict[str, str]] = {}
+    project_ids_by_data_key: dict[str, str] = {}
+    project_keys: dict[str, str] = {}
+    for project in projects:
+        if not isinstance(project, dict):
+            continue
+        project_id = str(project.get("id") or "").strip()
+        if not project_id:
+            continue
+        project_key = _safe_workbench_data_key(project.get("dataKey") or project_id)
+        project_keys[project_id] = project_key
+        project_ids_by_data_key.setdefault(project_key, project_id)
+        for session in project.get("sessions") or []:
+            if not isinstance(session, dict):
+                continue
+            session_id = str(session.get("id") or "").strip()
+            if session_id:
+                sessions.setdefault(
+                    session_id,
+                    {
+                        "project_id": project_id,
+                        "project_key": project_key,
+                        "session_kind": str(session.get("kind") or "task").strip() or "task",
+                    },
+                )
+    # Chat ownership remains authoritative when a stale task summary happens
+    # to retain the same id.
+    for chat in chats:
+        if not isinstance(chat, dict):
+            continue
+        session_id = str(chat.get("id") or "").strip()
+        project_id = str(chat.get("projectId") or "").strip()
+        if session_id and project_id:
+            sessions[session_id] = {
+                "project_id": project_id,
+                "project_key": project_keys.get(
+                    project_id, _safe_workbench_data_key(project_id)
+                ),
+                "session_kind": "chat",
+            }
+    return {
+        "sessions": sessions,
+        "projectIdsByDataKey": project_ids_by_data_key,
+    }
+
+
+def _scope_cache() -> dict[str, Any]:
+    global _SCOPE_CACHE_SIGNATURE, _SCOPE_CACHE
+    signature = _scope_signature()
+    with _SCOPE_CACHE_LOCK:
+        if signature == _SCOPE_CACHE_SIGNATURE:
+            return _SCOPE_CACHE
+        # Recheck after building so a concurrent chat/project commit cannot
+        # publish an index paired with the preceding version marker.
+        for _attempt in range(2):
+            cache = _build_scope_cache()
+            latest_signature = _scope_signature()
+            if latest_signature == signature:
+                _SCOPE_CACHE = cache
+                _SCOPE_CACHE_SIGNATURE = latest_signature
+                return _SCOPE_CACHE
+            signature = latest_signature
+        _SCOPE_CACHE = cache
+        _SCOPE_CACHE_SIGNATURE = signature
+        return _SCOPE_CACHE
+
+
+def resolve_workbench_session_scope(session_id: str | None) -> dict[str, str | None]:
+    """Resolve project id, storage key and kind from one versioned index."""
+    sid = str(session_id or "").strip()
+    scope = _scope_cache().get("sessions", {}).get(sid) if sid else None
+    if not isinstance(scope, dict):
+        return {"project_id": None, "project_key": None, "session_kind": None}
+    return {
+        "project_id": str(scope.get("project_id") or "") or None,
+        "project_key": str(scope.get("project_key") or "") or None,
+        "session_kind": str(scope.get("session_kind") or "") or None,
+    }
+
+
+def resolve_workbench_project_id_for_data_key(data_key: str | None) -> str | None:
+    key = _safe_workbench_data_key(data_key)
+    value = _scope_cache().get("projectIdsByDataKey", {}).get(key)
+    return str(value or "").strip() or None
+
+
+def resolve_workbench_project_data_key_for_session(session_id: str | None) -> str | None:
+    """Resolve a Workbench chat/task session to its project storage key."""
+    return resolve_workbench_session_scope(session_id)["project_key"]
+
+
+def resolve_workbench_project_id_for_session(session_id: str | None) -> str | None:
+    """Resolve a Workbench chat/task session to its owning project id."""
+    return resolve_workbench_session_scope(session_id)["project_id"]
+
+
+def resolve_workbench_session_kind(session_id: str | None) -> str | None:
+    """Return ``chat`` or a project-session kind for a Workbench session."""
+    return resolve_workbench_session_scope(session_id)["session_kind"]
+
+
+__all__ = [
+    "configure_store",
+    "read_projects",
+    "read_project_state",
+    "resolve_workbench_project_id",
+    "resolve_workbench_project_data_key_for_session",
+    "resolve_workbench_project_id_for_data_key",
+    "resolve_workbench_project_id_for_session",
+    "resolve_workbench_session_scope",
+    "resolve_workbench_session_kind",
+]

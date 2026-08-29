@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
 def test_workbench_init_task_plan_normalizes_llm_payload():
-    from cyrene.workbench.task_initialization_runtime import _workbench_coerce_init_task_plan
+    from cyrene.workbench.tasks.task_initialization_runtime import _workbench_coerce_init_task_plan
 
     fallback = [{"title": "fallback", "goal": "fallback", "priority": "medium"}]
     plan = _workbench_coerce_init_task_plan(
@@ -38,7 +38,7 @@ def test_workbench_init_task_plan_normalizes_llm_payload():
 
 
 def test_workbench_init_tool_creates_task_sessions_from_major_plan():
-    from cyrene.workbench.task_initialization_runtime import _workbench_create_sessions_from_init_plan
+    from cyrene.workbench.tasks.task_initialization_runtime import _workbench_create_sessions_from_init_plan
 
     project = {"id": "project_1", "sessions": [{"id": "init_1", "kind": "init"}]}
     created = _workbench_create_sessions_from_init_plan(
@@ -68,7 +68,7 @@ def test_workbench_init_tool_creates_task_sessions_from_major_plan():
 
 
 def test_workbench_follow_up_seed_uses_current_task_state():
-    from cyrene.workbench.planning_runtime import _workbench_follow_up_seed
+    from cyrene.workbench.planning.planning_runtime import _workbench_follow_up_seed
 
     seed = _workbench_follow_up_seed({
         "title": "修复登录流程",
@@ -99,7 +99,7 @@ def test_workbench_follow_up_seed_uses_current_task_state():
 
 
 def test_workbench_follow_up_seed_keeps_explicit_request_with_source_context():
-    from cyrene.workbench.planning_runtime import _workbench_follow_up_seed
+    from cyrene.workbench.planning.planning_runtime import _workbench_follow_up_seed
 
     seed = _workbench_follow_up_seed(
         {
@@ -119,7 +119,7 @@ def test_workbench_follow_up_seed_keeps_explicit_request_with_source_context():
 
 
 def test_workbench_plan_revision_preserves_existing_steps_when_feedback_is_supplemental():
-    from cyrene.workbench.planning_runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
+    from cyrene.workbench.planning.planning_runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
 
     existing = [
         _workbench_new_plan_step("读取项目上下文", "理解当前实现", 1, "task_1"),
@@ -137,7 +137,7 @@ def test_workbench_plan_revision_preserves_existing_steps_when_feedback_is_suppl
 
 
 def test_workbench_plan_graph_rejects_cycles_missing_dependencies_and_invalid_order():
-    from cyrene.workbench.planning_runtime import _workbench_validate_plan_graph
+    from cyrene.workbench.planning.planning_runtime import _workbench_validate_plan_graph
 
     valid, _, code = _workbench_validate_plan_graph([
         {"id": "a", "title": "A", "dependsOn": []},
@@ -168,7 +168,7 @@ def test_workbench_plan_graph_rejects_cycles_missing_dependencies_and_invalid_or
 
 
 def test_workbench_plan_coercion_resolves_dependency_indexes():
-    from cyrene.workbench.planning_runtime import _workbench_coerce_plan_steps
+    from cyrene.workbench.planning.planning_runtime import _workbench_coerce_plan_steps
 
     steps = _workbench_coerce_plan_steps(
         {
@@ -187,7 +187,7 @@ def test_workbench_plan_coercion_resolves_dependency_indexes():
 
 
 def test_workbench_plan_revision_drops_only_invalid_dependency_edges():
-    from cyrene.workbench.planning_runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
+    from cyrene.workbench.planning.planning_runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
 
     existing = [
         _workbench_new_plan_step("A", "", 1, "task_1"),
@@ -215,7 +215,7 @@ def test_workbench_plan_revision_drops_only_invalid_dependency_edges():
 
 
 def test_workbench_plan_revision_allows_explicit_replacement():
-    from cyrene.workbench.planning_runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
+    from cyrene.workbench.planning.planning_runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
 
     existing = [_workbench_new_plan_step("旧计划", "", 1, "task_1")]
     generated = [_workbench_new_plan_step("新计划", "", 1, "task_1")]
@@ -228,7 +228,7 @@ def test_workbench_plan_revision_allows_explicit_replacement():
 
 
 def test_workbench_agent_selected_replacement_does_not_append_old_plan():
-    from cyrene.workbench.planning_runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
+    from cyrene.workbench.planning.planning_runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
 
     existing = [_workbench_new_plan_step("旧计划", "", 1, "task_1")]
     generated = [_workbench_new_plan_step("完全不同的新计划", "", 1, "task_1")]
@@ -241,7 +241,7 @@ def test_workbench_agent_selected_replacement_does_not_append_old_plan():
 
 
 def test_workbench_revision_preserves_matching_step_identity_and_progress():
-    from cyrene.workbench.planning_runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
+    from cyrene.workbench.planning.planning_runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
 
     existing = [
         _workbench_new_plan_step("实现接口", "旧描述", 1, "task_1"),
@@ -269,7 +269,7 @@ def test_workbench_revision_preserves_matching_step_identity_and_progress():
 
 
 def test_workbench_repeated_partial_revisions_cannot_grow_plan_unbounded():
-    from cyrene.workbench.planning_runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
+    from cyrene.workbench.planning.planning_runtime import _workbench_new_plan_step, _workbench_reconcile_revised_plan
 
     existing = [
         _workbench_new_plan_step(f"旧步骤 {index}", "", index, "task_1")
@@ -285,7 +285,7 @@ def test_workbench_repeated_partial_revisions_cannot_grow_plan_unbounded():
 
 
 def test_workbench_acceptance_normalizes_agent_payload_and_resets_status():
-    from cyrene.workbench.planning_runtime import _workbench_coerce_acceptance_criteria
+    from cyrene.workbench.planning.planning_runtime import _workbench_coerce_acceptance_criteria
 
     criteria = _workbench_coerce_acceptance_criteria(
         {
@@ -306,7 +306,7 @@ def test_workbench_acceptance_normalizes_agent_payload_and_resets_status():
 
 
 def test_workbench_json_parser_skips_stray_braces_before_valid_object():
-    from cyrene.workbench.task_initialization_runtime import _workbench_parse_json_object
+    from cyrene.workbench.tasks.task_initialization_runtime import _workbench_parse_json_object
 
     parsed = _workbench_parse_json_object(
         '说明里有一个无效片段 {not json}，最终结果是 '
@@ -318,7 +318,7 @@ def test_workbench_json_parser_skips_stray_braces_before_valid_object():
 
 
 def test_workbench_json_parser_does_not_accept_nested_object_from_malformed_outer_json():
-    from cyrene.workbench.task_initialization_runtime import _workbench_parse_json_object
+    from cyrene.workbench.tasks.task_initialization_runtime import _workbench_parse_json_object
 
     parsed = _workbench_parse_json_object(
         '{"results": [{"id": "a1", "passed": true}], "reason": "ok",}'
@@ -328,7 +328,7 @@ def test_workbench_json_parser_does_not_accept_nested_object_from_malformed_oute
 
 
 def test_workbench_file_changes_from_write_and_edit_events(tmp_path):
-    from cyrene.workbench.artifact_runtime import _workbench_file_changes_from_tool_event
+    from cyrene.workbench.artifacts.artifact_runtime import _workbench_file_changes_from_tool_event
 
     write_changes = _workbench_file_changes_from_tool_event(
         {"tool": "Write", "args": {"path": str(tmp_path / "notes.md")}, "result": ""},
@@ -346,7 +346,7 @@ def test_workbench_file_changes_from_write_and_edit_events(tmp_path):
 
 
 def test_workbench_file_changes_parse_tool_result_fallback(tmp_path):
-    from cyrene.workbench.artifact_runtime import _workbench_file_changes_from_tool_event
+    from cyrene.workbench.artifacts.artifact_runtime import _workbench_file_changes_from_tool_event
 
     changes = _workbench_file_changes_from_tool_event(
         {"tool": "custom_write", "args": {}, "result": f"Wrote {tmp_path / 'out.txt'}"},
@@ -358,7 +358,7 @@ def test_workbench_file_changes_parse_tool_result_fallback(tmp_path):
 
 
 def test_workbench_file_changes_reject_paths_outside_workspace(tmp_path):
-    from cyrene.workbench.artifact_runtime import _workbench_file_changes_from_tool_event
+    from cyrene.workbench.artifacts.artifact_runtime import _workbench_file_changes_from_tool_event
 
     outside = tmp_path.parent / "outside.md"
     absolute = _workbench_file_changes_from_tool_event(
@@ -375,7 +375,7 @@ def test_workbench_file_changes_reject_paths_outside_workspace(tmp_path):
 
 
 def test_workbench_file_changes_reject_cyrene_managed_run_state(tmp_path):
-    from cyrene.workbench.artifact_runtime import (
+    from cyrene.workbench.artifacts.artifact_runtime import (
         _workbench_file_changes_from_tool_event,
         _workbench_git_status_delta,
         _workbench_workspace_file_snapshot,
@@ -404,7 +404,7 @@ def test_workbench_file_changes_reject_cyrene_managed_run_state(tmp_path):
 
 
 def test_workbench_git_status_snapshot_is_scoped_to_nested_workspace(tmp_path):
-    from cyrene.workbench.artifact_runtime import _workbench_git_status_snapshot
+    from cyrene.workbench.artifacts.artifact_runtime import _workbench_git_status_snapshot
 
     repo = tmp_path / "repo"
     workspace = repo / "workspace"
@@ -420,7 +420,7 @@ def test_workbench_git_status_snapshot_is_scoped_to_nested_workspace(tmp_path):
 
 
 def test_workbench_git_status_delta_and_step_related_files():
-    from cyrene.workbench.artifact_runtime import _workbench_apply_step_file_changes, _workbench_git_status_delta
+    from cyrene.workbench.artifacts.artifact_runtime import _workbench_apply_step_file_changes, _workbench_git_status_delta
 
     changes = _workbench_git_status_delta({"old.py": " M"}, {"old.py": " M", "new.py": "??", "app.py": " M"})
     assert [(item["path"], item["status"]) for item in changes] == [("new.py", "created"), ("app.py", "modified")]
@@ -431,7 +431,7 @@ def test_workbench_git_status_delta_and_step_related_files():
 
 
 def test_workbench_workspace_snapshot_detects_named_shell_output(tmp_path):
-    from cyrene.workbench.artifact_runtime import (
+    from cyrene.workbench.artifacts.artifact_runtime import (
         _workbench_workspace_file_snapshot,
         _workbench_workspace_snapshot_delta,
         _workbench_workspace_text_snapshot,
@@ -463,7 +463,7 @@ def test_workbench_workspace_snapshot_detects_named_shell_output(tmp_path):
 
 
 def test_workbench_workspace_snapshot_delta_records_text_diffs_without_git(tmp_path):
-    from cyrene.workbench.artifact_runtime import (
+    from cyrene.workbench.artifacts.artifact_runtime import (
         _workbench_merge_file_changes,
         _workbench_recorded_diff_for_path,
         _workbench_workspace_file_snapshot,
@@ -517,7 +517,7 @@ def test_workbench_workspace_snapshot_delta_records_text_diffs_without_git(tmp_p
 
 
 def test_workbench_recorded_diff_blocks_misleading_current_snapshot_fallback(tmp_path):
-    from cyrene.workbench.artifact_runtime import (
+    from cyrene.workbench.artifacts.artifact_runtime import (
         _workbench_git_diff_for_path,
         _workbench_recorded_diff_for_path,
         _workbench_workspace_file_snapshot,
@@ -564,7 +564,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_workbench_git_diff_for_tracked_and_untracked_files(tmp_path):
-    from cyrene.workbench.artifact_runtime import _workbench_git_diff_for_path
+    from cyrene.workbench.artifacts.artifact_runtime import _workbench_git_diff_for_path
 
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
     tracked = tmp_path / "app.py"
@@ -596,7 +596,7 @@ async def test_workbench_git_diff_for_tracked_and_untracked_files(tmp_path):
 
 @pytest.mark.asyncio
 async def test_workbench_file_diff_falls_back_to_current_text_snapshot(tmp_path):
-    from cyrene.workbench.artifact_runtime import _workbench_git_diff_for_path
+    from cyrene.workbench.artifacts.artifact_runtime import _workbench_git_diff_for_path
 
     report = tmp_path / "report.tex"
     report.write_text("\\section{Result}\n", encoding="utf-8")
@@ -624,7 +624,7 @@ async def test_workbench_file_diff_falls_back_to_current_text_snapshot(tmp_path)
 
 @pytest.mark.asyncio
 async def test_workbench_git_diff_rejects_paths_outside_workspace(tmp_path):
-    from cyrene.workbench.artifact_runtime import _workbench_git_diff_for_path
+    from cyrene.workbench.artifacts.artifact_runtime import _workbench_git_diff_for_path
 
     outside = tmp_path.parent / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
@@ -633,7 +633,7 @@ async def test_workbench_git_diff_rejects_paths_outside_workspace(tmp_path):
 
 
 def test_workbench_generation_error_redacts_credentials():
-    from cyrene.workbench.task_initialization_runtime import _workbench_generation_error
+    from cyrene.workbench.tasks.task_initialization_runtime import _workbench_generation_error
 
     error = _workbench_generation_error(
         RuntimeError("Bearer secret-token sk-abcdefghijkl api_key=private-value")
@@ -646,7 +646,7 @@ def test_workbench_generation_error_redacts_credentials():
 
 
 def test_workbench_promote_file_artifacts_promotes_and_dedups():
-    from cyrene.workbench.artifact_runtime import _workbench_promote_file_artifacts
+    from cyrene.workbench.artifacts.artifact_runtime import _workbench_promote_file_artifacts
 
     session = {"artifacts": [
         {"id": "a1", "type": "task_brief", "name": "task-brief.md", "status": "draft"},
@@ -677,7 +677,7 @@ def test_workbench_promote_file_artifacts_promotes_and_dedups():
 
 
 def test_workbench_promote_file_artifacts_pins_attachment_copy(tmp_path):
-    from cyrene.workbench.artifact_runtime import _workbench_promote_file_artifacts
+    from cyrene.workbench.artifacts.artifact_runtime import _workbench_promote_file_artifacts
 
     (tmp_path / "report.md").write_text("# Report\n", encoding="utf-8")
     session = {"artifacts": []}
@@ -715,7 +715,7 @@ def test_workbench_promote_file_artifacts_pins_attachment_copy(tmp_path):
 
 def test_workbench_promote_file_artifacts_attachment_flows_from_tool_event():
     """send_file's real tool-event result pins the attachment on the change."""
-    from cyrene.workbench.artifact_runtime import _workbench_file_changes_from_tool_event
+    from cyrene.workbench.artifacts.artifact_runtime import _workbench_file_changes_from_tool_event
 
     changes = _workbench_file_changes_from_tool_event(
         {
@@ -733,7 +733,7 @@ def test_workbench_promote_file_artifacts_attachment_flows_from_tool_event():
 
 
 def test_workbench_promote_file_artifacts_no_attachment_keeps_workspace_path(tmp_path):
-    from cyrene.workbench.artifact_runtime import _workbench_promote_file_artifacts
+    from cyrene.workbench.artifacts.artifact_runtime import _workbench_promote_file_artifacts
 
     (tmp_path / "report.md").write_text("# Report\n", encoding="utf-8")
     session = {"artifacts": []}
@@ -752,7 +752,7 @@ def test_workbench_promote_file_artifacts_no_attachment_keeps_workspace_path(tmp
 
 
 def test_workbench_final_artifact_file_changes_use_declared_artifacts_only():
-    from cyrene.workbench.artifact_runtime import _workbench_final_artifact_file_changes
+    from cyrene.workbench.artifacts.artifact_runtime import _workbench_final_artifact_file_changes
 
     session = {
         "runs": [{"fileChanges": [
@@ -779,7 +779,7 @@ def test_workbench_final_artifact_file_changes_use_declared_artifacts_only():
 
 
 def test_workbench_prunes_non_file_and_duplicate_artifacts():
-    from cyrene.workbench.artifact_runtime import _workbench_prune_non_file_artifacts
+    from cyrene.workbench.artifacts.artifact_runtime import _workbench_prune_non_file_artifacts
 
     session = {"artifacts": [
         {"id": "brief", "type": "task_brief", "name": "task-brief.md"},

@@ -1,6 +1,6 @@
 """Application RPC contributed by the example PluginPack."""
 
-from agent.plugin import PluginApplicationContext
+from cyrene.plugins import PluginApplicationContext
 from cyrene.runtime.database import get_token_usage_stats
 
 

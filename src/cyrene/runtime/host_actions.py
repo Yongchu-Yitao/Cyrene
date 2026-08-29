@@ -9,8 +9,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from agent.plugin.execution import current_plugin_execution
-from agent.plugin.native_runtime import run_context_value
+from cyrene.core.plugin.execution import current_plugin_execution
+from cyrene.plugins.native_runtime import run_context_value
 from cyrene.config import DATA_DIR
 from cyrene.runtime.host_bridge import HostBridgeError, call_host
 

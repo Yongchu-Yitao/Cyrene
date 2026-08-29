@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from agent.plugin import active_plugin_service
+from cyrene.core.plugin import application_plugin_service
 from cyrene.config import DATA_DIR
 from cyrene.localization import localized
 
@@ -25,7 +25,7 @@ def init_setup_flag() -> None:
 def is_setup_done() -> bool:
     """A missing Soul contribution must never block core process startup."""
 
-    if active_plugin_service("soul_onboarding") is None:
+    if application_plugin_service("soul_onboarding") is None:
         return True
     return True if _SETUP_FLAG is None else _SETUP_FLAG.exists()
 
@@ -44,7 +44,7 @@ def mark_setup_done() -> None:
 async def run_setup() -> None:
     """Collect CLI input while Soul owns validation, generation, and writes."""
 
-    onboarding = active_plugin_service("soul_onboarding")
+    onboarding = application_plugin_service("soul_onboarding")
     save = getattr(onboarding, "save", None)
     if not callable(save):
         return

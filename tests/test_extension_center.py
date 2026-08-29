@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agent.plugin import PluginContext
+from cyrene.core.plugin import PluginContext
 
 from conftest import (
     workbench_settings_source,
@@ -16,7 +16,7 @@ from conftest import (
 
 @pytest.mark.asyncio
 async def test_cli_search_falls_back_to_aqua_standard_registry(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     class Response:
         def raise_for_status(self):
@@ -57,7 +57,7 @@ async def test_cli_search_falls_back_to_aqua_standard_registry(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_advanced_cli_search_combines_npm_pypi_and_rubygems(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     extension_service = object.__new__(service.ExtensionService)
     monkeypatch.setattr(service, "_bundled_binary", lambda _name: None)
@@ -87,7 +87,7 @@ async def _async_result(value):
 
 @pytest.mark.asyncio
 async def test_toolchain_search_adds_only_deduplicated_mise_core_runtimes(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     registry = [
         {"short": "dotnet", "backends": ["core:dotnet"], "description": ".NET SDK"},
@@ -131,7 +131,7 @@ async def test_toolchain_search_adds_only_deduplicated_mise_core_runtimes(monkey
 
 
 def test_dynamic_toolchain_install_accepts_only_matching_mise_core_refs(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     started = []
 
@@ -178,7 +178,7 @@ def _skill(tmp_path: Path, *, description: str = "Full private workflow") -> Pat
 
 
 def test_skill_snapshot_progressive_load_and_resource_confinement(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_skills import skills
+    from cyrene.plugins.builtin.cyrene_skills import skills
 
     records = []
     monkeypatch.setattr(skills, "_SKILLS_DIR", tmp_path / "installed")
@@ -206,7 +206,7 @@ def test_skill_snapshot_progressive_load_and_resource_confinement(tmp_path, monk
 
 
 def test_extension_service_installs_local_skill_through_canonical_service(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     source = tmp_path / "demo-skill"
     source.mkdir()
@@ -241,21 +241,8 @@ def test_extension_service_installs_local_skill_through_canonical_service(tmp_pa
 
 
 
-def test_legacy_skill_panel_and_api_are_removed_from_active_sources():
-    root = Path(__file__).resolve().parents[1]
-    frontend = workbench_settings_source()
-    cli = root.joinpath("src/cyrene/cli_chat.py").read_text(encoding="utf-8")
-    registry = root.joinpath("src/route/registry.py").read_text(encoding="utf-8")
-
-    assert not root.joinpath("src/route/skills.py").exists()
-    assert "LegacySkillsPanel" not in frontend
-    assert "/api/skills" not in frontend
-    assert "/api/skills" not in cli
-    assert "register_skill_routes" not in registry
-
-
 def test_skill_directory_and_archive_reject_links_and_expansion(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_skills import skills
+    from cyrene.plugins.builtin.cyrene_skills import skills
 
     root = _skill(tmp_path)
     outside = tmp_path / "outside.txt"
@@ -273,7 +260,7 @@ def test_skill_directory_and_archive_reject_links_and_expansion(tmp_path, monkey
 
 
 def test_extension_environment_is_isolated_and_system_path_wins(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     monkeypatch.setattr(service, "_ROOT", tmp_path / "extensions")
     monkeypatch.setattr(service, "_MISE_DATA", tmp_path / "extensions" / "mise")
@@ -290,7 +277,7 @@ def test_extension_environment_is_isolated_and_system_path_wins(tmp_path, monkey
 
 
 def test_agent_process_environment_appends_managed_paths_without_installer_token(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     mise_shims = tmp_path / "extensions" / "mise" / "shims"
     uv_bin = tmp_path / "extensions" / "python-bin"
@@ -337,7 +324,7 @@ def test_agent_process_environment_appends_managed_paths_without_installer_token
 
 
 def test_disabled_managed_mise_extensions_are_hidden_from_the_agent_environment(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     mise_shims = tmp_path / "extensions" / "mise" / "shims"
     mise_shims.mkdir(parents=True)
@@ -377,7 +364,7 @@ def test_disabled_managed_mise_extensions_are_hidden_from_the_agent_environment(
 
 @pytest.mark.asyncio
 async def test_cli_and_toolchain_activation_is_persisted_and_reflected_in_cards(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     records = {
         "extension_clis": [{
@@ -447,7 +434,7 @@ async def test_cli_and_toolchain_activation_is_persisted_and_reflected_in_cards(
 
 
 def test_detected_system_extension_hides_binding_and_install_actions(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     system = {
         "path": "/usr/local/texlive/bin/pdflatex",
@@ -470,7 +457,7 @@ def test_detected_system_extension_hides_binding_and_install_actions(monkeypatch
 
 @pytest.mark.asyncio
 async def test_agent_cli_activation_delegates_to_the_cli_plugin_service():
-    from agent.plugin.plugin_impl.cyrene_cli import tools
+    from cyrene.plugins.builtin.cyrene_cli import tools
 
     calls = []
 
@@ -493,8 +480,8 @@ async def test_cli_mise_install_keeps_old_activation_flow_and_schedules_new_hook
     tmp_path,
     monkeypatch,
 ):
-    import agent.plugin as plugin_api
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    import cyrene.core.plugin as plugin_api
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     settings = {}
     manager_commands = []
@@ -538,7 +525,7 @@ async def test_cli_mise_install_keeps_old_activation_flow_and_schedules_new_hook
         lambda key, value: settings.__setitem__(key, value),
     )
     monkeypatch.setattr(service, "_audit", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(plugin_api, "active_plugin_service", lambda name: CliService() if name == "cli" else None)
+    monkeypatch.setattr(plugin_api, "application_plugin_service", lambda name: CliService() if name == "cli" else None)
 
     extension_service = object.__new__(service.ExtensionService)
     extension_service.tasks = Tasks()
@@ -618,7 +605,7 @@ def test_plugin_center_install_tasks_poll_cancel_and_refresh_runtime():
 
 
 def test_extension_dependency_conflicts_have_a_stable_reason_code():
-    from agent.plugin.plugin_impl.cyrene_extensions.extension_service import _extension_error_reason
+    from cyrene.plugins.builtin.cyrene_extensions.extension_service import _extension_error_reason
 
     error = RuntimeError("package does not satisfy Python >=3.10 and requirements are unsatisfiable")
     assert _extension_error_reason(error) == "dependency_conflict"
@@ -649,7 +636,7 @@ def test_cli_plugin_center_uses_advanced_search_and_exact_install_request():
 
 
 def test_install_task_store_redacts_nested_secrets(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     monkeypatch.setattr(service, "_TASK_FILE", tmp_path / "tasks.json")
     monkeypatch.setattr(service, "_STAGING_DIR", tmp_path / "staging")
@@ -669,7 +656,7 @@ def test_install_task_store_redacts_nested_secrets(tmp_path, monkeypatch):
 
 
 def test_install_task_store_recovers_interrupted_tasks_and_staging(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     task_file = tmp_path / "tasks.json"
     staging = tmp_path / "staging"
@@ -686,7 +673,7 @@ def test_install_task_store_recovers_interrupted_tasks_and_staging(tmp_path, mon
 
 
 def test_verified_tar_allows_internal_links_and_rejects_escaping_links(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_extensions.extension_service import _extract_verified_tar
+    from cyrene.plugins.builtin.cyrene_extensions.extension_service import _extract_verified_tar
 
     safe_archive = tmp_path / "safe.tar.xz"
     with tarfile.open(safe_archive, "w:xz") as handle:
@@ -716,7 +703,7 @@ def test_verified_tar_allows_internal_links_and_rejects_escaping_links(tmp_path)
 
 
 def test_manual_binding_records_but_never_mutates_executable(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     executable = tmp_path / "node"
     executable.write_text("#!/bin/sh\necho v22.0.0\n", encoding="utf-8")
@@ -737,7 +724,7 @@ def test_manual_binding_records_but_never_mutates_executable(tmp_path, monkeypat
 
 @pytest.mark.asyncio
 async def test_environment_list_returns_only_installed_compact_metadata(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import list_environment
+    from cyrene.plugins.builtin.cyrene_extensions import list_environment
 
     uv_enabled = True
 
@@ -814,7 +801,7 @@ async def test_environment_list_returns_only_installed_compact_metadata(monkeypa
 
 @pytest.mark.asyncio
 async def test_environment_search_returns_review_ready_requests_and_partial_errors(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import search_environment
+    from cyrene.plugins.builtin.cyrene_extensions import search_environment
 
     searched_kinds = []
 
@@ -865,7 +852,7 @@ async def test_environment_search_returns_review_ready_requests_and_partial_erro
 
 @pytest.mark.asyncio
 async def test_environment_search_does_not_offer_reinstall_for_system_extension(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import search_environment
+    from cyrene.plugins.builtin.cyrene_extensions import search_environment
 
     class FakeService:
         def list_extensions(self):
@@ -903,7 +890,7 @@ async def test_environment_search_does_not_offer_reinstall_for_system_extension(
 
 @pytest.mark.asyncio
 async def test_mcp_registry_keeps_pypi_packages_and_refreshes_stale_version(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service
 
     class Response:
         def __init__(self, payload):
@@ -950,7 +937,7 @@ async def test_mcp_registry_keeps_pypi_packages_and_refreshes_stale_version(monk
 
 @pytest.mark.asyncio
 async def test_environment_search_returns_machine_readable_mcp_fallback(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import search_environment
+    from cyrene.plugins.builtin.cyrene_extensions import search_environment
 
     class FakeService:
         def list_extensions(self):
@@ -977,7 +964,7 @@ async def test_environment_search_returns_machine_readable_mcp_fallback(monkeypa
 
 @pytest.mark.asyncio
 async def test_manage_extensions_exposes_local_mcp_action(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import manage_extensions
+    from cyrene.plugins.builtin.cyrene_extensions import manage_extensions
 
     started = []
 

@@ -25,7 +25,7 @@ def test_sidebar_browser_keeps_resize_cursor_without_native_page_handle():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     viewport = (
-        root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx"
+        root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx"
     ).read_text(encoding="utf-8")
     workbench = workbench_shell_source()
     styles = workbench_style_source()

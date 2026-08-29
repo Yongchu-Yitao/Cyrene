@@ -8,8 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_workbench_background_preferences_are_exposed_and_applied_before_paint():
     settings = workbench_settings_source()
-    bootstrap = (ROOT / "src/webui/frontend/entry/bootstrap.jsx").read_text(encoding="utf-8")
-    index = (ROOT / "src/webui/frontend/index.html").read_text(encoding="utf-8")
+    bootstrap = (ROOT / "src/cyrene/workbench/webui/frontend/entry/bootstrap.jsx").read_text(encoding="utf-8")
+    index = (ROOT / "src/cyrene/workbench/webui/frontend/index.html").read_text(encoding="utf-8")
     styles = workbench_style_source()
     translations = workbench_i18n_source()
 
@@ -89,7 +89,7 @@ def test_workbench_background_preferences_are_exposed_and_applied_before_paint()
 
 
 def test_quick_chat_tracks_workbench_background_preferences():
-    quick_chat = (ROOT / "src/webui/frontend/workbench-quick-chat.jsx").read_text(encoding="utf-8")
+    quick_chat = (ROOT / "src/cyrene/workbench/webui/frontend/workbench-quick-chat.jsx").read_text(encoding="utf-8")
 
     assert 'quickChatReadTweak("backgroundLight", null)' in quick_chat
     assert 'quickChatReadTweak("backgroundDark", null)' in quick_chat

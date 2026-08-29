@@ -6,22 +6,19 @@ import json
 import re
 from pathlib import Path
 
-from agent.plugin import (
+from cyrene.core.plugin import (
     Plugin,
     PluginCustomizationState,
     PluginPack,
     PluginRegistry,
 )
-from agent.plugin.native_tools import seed_builtin_plugin_directory
+from cyrene.plugins.native_tools import seed_builtin_plugin_directory
 
 
 _HAN_CHARACTER = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _CATALOG_PATH = (
     Path(__file__).parents[1]
-    / "src"
-    / "agent"
-    / "plugin"
-    / "plugin_impl"
+    / "src" / "cyrene" / "plugins" / "builtin"
     / "i18n.json"
 )
 
@@ -80,7 +77,7 @@ def test_registry_merges_editable_catalog_with_authored_i18n_and_fallbacks(
     pack.mkdir(parents=True)
     (pack / "__init__.py").write_text(
         '''
-from agent.plugin import Plugin, PluginPack
+from cyrene.core.plugin import Plugin, PluginPack
 
 plugin_pack = PluginPack(
     id="sample_pack",
@@ -99,7 +96,7 @@ plugin_pack = PluginPack(
     )
     (root / "odd_tool.py").write_text(
         '''
-from agent.plugin import Plugin
+from cyrene.core.plugin import Plugin
 
 plugin = Plugin(
     name="odd.customTool",

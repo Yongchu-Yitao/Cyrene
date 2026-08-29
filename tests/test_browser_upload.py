@@ -32,9 +32,9 @@ def _file(*, sha256: str = "a" * 64) -> dict:
 
 
 async def test_upload_executes_after_central_plugin_review(monkeypatch, tmp_path):
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
-    from agent.plugin.plugin_impl.cyrene_browser import browser_upload_files as tool
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import browser_upload_files as tool
 
     target = _target()
     files = [_file()]
@@ -67,9 +67,9 @@ async def test_upload_executes_after_central_plugin_review(monkeypatch, tmp_path
 
 
 async def test_changed_file_binding_cancels_after_approval(monkeypatch):
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
-    from agent.plugin.plugin_impl.cyrene_browser import browser_upload_files as tool
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import browser_upload_files as tool
 
     target = _target()
     before = [_file(sha256="a" * 64)]
@@ -101,9 +101,9 @@ async def test_changed_file_binding_cancels_after_approval(monkeypatch):
 
 
 async def test_non_http_destination_is_rejected_before_reading_files(monkeypatch):
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
-    from agent.plugin.plugin_impl.cyrene_browser import browser_upload_files as tool
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import browser_upload_files as tool
 
     async def fake_prepare(**_kwargs):
         target = _target()
@@ -127,7 +127,7 @@ async def test_non_http_destination_is_rejected_before_reading_files(monkeypatch
 
 
 async def test_electron_upload_transport_uses_dedicated_rpc(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     calls = []
 
@@ -150,9 +150,9 @@ async def test_electron_upload_transport_uses_dedicated_rpc(monkeypatch):
 
 
 async def test_intercepted_chooser_message_is_actionable():
-    from agent.plugin.plugin_impl.cyrene_browser.browser_output import file_chooser_instruction
+    from cyrene.plugins.builtin.cyrene_browser.browser_output import file_chooser_instruction
 
-    from agent.plugin import PluginContext
+    from cyrene.core.plugin import PluginContext
 
     message = file_chooser_instruction(
         {
@@ -173,7 +173,7 @@ async def test_intercepted_chooser_message_is_actionable():
 
 
 async def test_approved_file_snapshot_preserves_exact_bytes_and_name(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_browser import browser_upload_files as tool
+    from cyrene.plugins.builtin.cyrene_browser import browser_upload_files as tool
 
     source = tmp_path / "report.txt"
     source.write_bytes(b"approved bytes")

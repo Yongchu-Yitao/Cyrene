@@ -1,12 +1,14 @@
 # Cyrene 无 Loop Agent Kernel 重构设计
 
-> 状态：与当前设计和实现对齐的实施文档
+> 状态：重构已完成；本文保留设计决策和历史分期
 >
-> 更新日期：2026-08-26
+> 更新日期：2026-08-29
 >
-> 新内核目录：[`src/agent`](../src/agent/)
+> 新内核目录：[`src/cyrene/core`](../src/cyrene/core/)
 >
-> 当前阶段：Context Tree 与 Hook 基座已经实现；Plugin、Model、Tool 与前端兼容层尚待逐步接入
+> 当前结果：Core、Plugin/Model/Tool 与 Workbench Adapter 已全部接入；
+> 旧 `src/agent`、`src/route`、`src/webui` 已删除，不保留兼容外壳。
+> 当前正式架构以 [`docs/architecture.zh-CN.md`](../docs/architecture.zh-CN.md) 为准。
 
 ## 1. 重构后的设计与架构
 
@@ -147,10 +149,10 @@ Subagent、Terminal、媒体和 Browser 都可以产生独立支线。Plugin 可
 
 ### 1.6 与 Cyrene 其他运行时的边界
 
-- 新内核固定放在 [`src/agent`](../src/agent/)，不放进 `src/cyrene/agent_runtime`。
+- 新内核固定放在 [`src/cyrene/core`](../src/cyrene/core/)，不放进 `src/cyrene/agent_runtime`。
 - 外部 Agent/ACP 的 `cyrene.agent_runtime` 独立存在，不属于这次内核重写。
-- 旧 `cyrene.agent` 最终完全弃用，不作为新内核内部依赖或长期兼容层。
-- 迁移期间通过前端/API adapter 保持现有 Workbench 合同，不要求前端一次性重写。
+- 旧 `src/agent` 已完全弃用，不作为新内核内部依赖或兼容层。
+- 现有 Workbench 合同由 `cyrene.workbench` Adapter 保持。
 - Terminal、Media、Browser、Office、Knowledge 等业务 Manager 可以继续复用；它们通过 Plugin 接入。
 
 ### 1.7 当前实现状态
@@ -165,16 +167,16 @@ Subagent、Terminal、媒体和 Browser 都可以产生独立支线。Plugin 可
 | Plugin Registry 按 `plugin_id` 恢复 | 已实现基础版本 |
 | 初始 root Hook 注册 | 已实现 `initial_hooks` |
 | 自动 ContextUsed | 已实现估算器和可注入计量器 |
-| 正式 Plugin 生命周期/配置管理 | 尚未实现 |
-| Model Plugin | 尚未实现 |
-| Tool Plugin 与现有 executor adapter | 尚未实现 |
-| Ask User/审批/计划确认迁移 | 尚未实现 |
-| Subagent/Terminal/Media 等迁移 | 尚未实现 |
-| 前端兼容层和旧后端切换 | 尚未实现 |
+| 正式 Plugin 生命周期/配置管理 | 已实现 Application/Session/Run Scope |
+| Model Plugin | 已实现并迁移到 `cyrene.plugins` |
+| Tool Plugin 与 executor | 已实现，功能工具位于 `cyrene.plugins.builtin` |
+| Ask User/审批/计划确认迁移 | 已实现 |
+| Subagent/Terminal/Media 等迁移 | 已实现 |
+| Workbench Adapter 与旧包删除 | 已实现 |
 
 ## 2. 为什么从 Agent Loop 改成这个结构
 
-当前 `cyrene.agent` 将模型调用、上下文拼装、工具解析、并发提交、用户等待、审批、计划、Subagent、重试、压缩和最终回答集中在一次持续执行中。随着能力增加，控制语义逐渐表现为局部变量、特殊返回值、消息内容、UI 状态和外部 Manager 回调的组合。
+重构前的 `cyrene.agent` 将模型调用、上下文拼装、工具解析、并发提交、用户等待、审批、计划、Subagent、重试、压缩和最终回答集中在一次持续执行中。随着能力增加，控制语义逐渐表现为局部变量、特殊返回值、消息内容、UI 状态和外部 Manager 回调的组合。
 
 主要问题不是 Python 中存在 `while`，而是任务的进度由 loop 的局部控制流拥有：
 
@@ -777,7 +779,7 @@ Skill 可以组合：
 ## 14. 新内核目录和代码职责
 
 ```text
-src/agent/
+src/cyrene/core/
   __init__.py
   context/
     __init__.py
@@ -804,7 +806,7 @@ src/agent/
 后续推荐新增，而不是塞回已有文件：
 
 ```text
-src/agent/
+src/cyrene/core/
   plugin/
     manifest.py
     registry.py
@@ -871,7 +873,7 @@ src/agent/
 
 状态：已完成基础实现。
 
-- 独立 `src/agent`；
+- 独立 `src/cyrene/core`；
 - universal Context Tree；
 - 每树数据库和锁；
 - Hook persistence 和有序队列；
@@ -912,7 +914,7 @@ src/agent/
 - Subagent 独立树与 merge；
 - Terminal、Media、Office 和 Remote callback。
 
-### Phase 6：Session/Project 与前端兼容
+### Phase 6：Session/Project 与 Workbench Adapter
 
 - Session → tree/branch binding；
 - Project 多分支共享树；
@@ -925,7 +927,7 @@ src/agent/
 - 按功能矩阵和会话级开关灰度；
 - 新 Session 使用新内核；
 - 旧 Session 只读或通过 importer 转换；
-- 完整验收后删除 `cyrene.agent`；
+- 完整验收后删除旧 `src/agent`；
 - 不让新内核依赖旧 Agent loop 作为永久 fallback。
 
 外部 Agent/ACP 不参与这次删除，继续由独立 `cyrene.agent_runtime` 管理。
@@ -975,7 +977,7 @@ Plugin 高度可自定义，但工具权限、凭据隔离、项目路径和外�
 
 - Agent 业务进度不依赖长期 loop 调用栈；
 - Context Tree、Hook、Plugin 是唯一内核抽象；
-- 新内核不调用旧 `cyrene.agent`；
+- 新内核不调用旧 `src/agent`；
 - 外部 Agent/ACP 边界保持独立；
 - Plugin 决定挂载，Hook 不隐式修改 Context。
 

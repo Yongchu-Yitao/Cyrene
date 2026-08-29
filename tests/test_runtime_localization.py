@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 from cyrene import localization
 from cyrene.runtime import settings_store
-from cyrene.workbench import notifications
+from cyrene.workbench.application import notifications
 
 
 def test_effective_language_precedence(monkeypatch) -> None:

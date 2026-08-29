@@ -1,7 +1,7 @@
 """Storage usage scan for the settings → Data panel.
 
 The category paths intentionally parallel ``_MANAGED_DIRECTORIES``
-(cyrene/runtime/backup.py) and ``_reset_app_data`` (cyrene/workbench/runtime.py).
+(cyrene/runtime/backup.py) and ``reset_app_data`` (cyrene/runtime/data_reset.py).
 Grouping differs (one storage chip may cover several backup roots), but when
 directories are added or removed all three lists must be updated together.
 
@@ -53,9 +53,9 @@ STORAGE_CATEGORIES: list[tuple[str, tuple[Path, ...], _NameFilter | None]] = [
 
 def _active_plugin_storage_paths() -> Mapping[str, Iterable[Path]]:
     try:
-        from agent.plugin import active_plugin_application_host
+        from cyrene.core.plugin import application_plugin_scope
 
-        host = active_plugin_application_host()
+        host = application_plugin_scope()
         if host is None:
             return {}
         result: dict[str, list[Path]] = {}

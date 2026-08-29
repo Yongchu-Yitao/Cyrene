@@ -9,14 +9,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agent.plugin import active_plugin_service
+from cyrene.core.plugin import application_plugin_service
 from cyrene.config import DATA_DIR, DB_PATH
 
 logger = logging.getLogger(__name__)
 
 
 def _memory_service():
-    service = active_plugin_service("memory")
+    service = application_plugin_service("memory")
     if service is None:
         raise RuntimeError("memory Plugin is not available")
     return service
@@ -80,7 +80,7 @@ def _primary_model() -> dict[str, Any]:
     """Return the canonical primary-route model, including its secret."""
 
     try:
-        service = active_plugin_service("model_configuration")
+        service = application_plugin_service("model_configuration")
         candidates = service.candidates_for_route("primary") if service is not None else []
     except Exception:
         logger.warning("Failed to resolve the primary model route", exc_info=True)
@@ -101,7 +101,7 @@ def _provider_id(candidate: dict[str, Any]) -> str:
 def _personality_status() -> dict[str, Any]:
     """Return an optional onboarding step contributed by the Soul Plugin."""
 
-    service = active_plugin_service("soul_onboarding")
+    service = application_plugin_service("soul_onboarding")
     status = getattr(service, "status", None)
     if not callable(status):
         return {
@@ -161,7 +161,7 @@ def _has_existing_data() -> bool:
     # Workbench chat threads. Memory documents are intentionally not inspected
     # here; their storage layout belongs to the memory Plugin.
     try:
-        from cyrene.workbench.store import has_document_data
+        from cyrene.workbench.persistence.store import has_document_data
 
         if DB_PATH.exists() and has_document_data(DB_PATH, "chats"):
             return True
@@ -261,7 +261,7 @@ def get_onboarding_status() -> dict[str, Any]:
 
 async def test_llm_connection(api_key: str, base_url: str, model: str) -> str:
     """Public onboarding API for a non-persisting text connectivity probe."""
-    service = active_plugin_service("model_probe")
+    service = application_plugin_service("model_probe")
     if service is None:
         raise RuntimeError("model Plugin is not available")
     return await service.test_connection(api_key, base_url, model)
@@ -271,7 +271,7 @@ async def test_llm_vision_capability(
     api_key: str, base_url: str, model: str
 ) -> dict[str, Any]:
     """Public onboarding API for a non-blocking image capability probe."""
-    service = active_plugin_service("model_probe")
+    service = application_plugin_service("model_probe")
     if service is None:
         raise RuntimeError("model Plugin is not available")
     return await service.probe_vision(api_key, base_url, model)
@@ -340,9 +340,9 @@ async def save_codex_oauth_setup(
     reasoning_effort: str = "",
 ) -> dict[str, Any]:
     """Persist a logged-in Codex model as the primary onboarding candidate."""
-    from agent.plugin import active_plugin_service
+    from cyrene.core.plugin import application_plugin_service
 
-    model_service = active_plugin_service("model_configuration")
+    model_service = application_plugin_service("model_configuration")
     if model_service is None:
         raise RuntimeError("model Plugin is not available")
     clean_model = model.strip()
@@ -439,7 +439,7 @@ def _save_primary_model(
 ) -> None:
     """Upsert the onboarding model directly into the canonical model graph."""
 
-    model_service = active_plugin_service("model_configuration")
+    model_service = application_plugin_service("model_configuration")
     if model_service is None:
         raise RuntimeError("model Plugin is not available")
     configuration = model_service.get_model_configuration()

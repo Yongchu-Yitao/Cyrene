@@ -8,20 +8,20 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from agent.plugin import (
+from cyrene.core.plugin import (
     Plugin,
-    PluginApplicationHost,
     PluginCustomizationState,
     PluginPack,
     PluginRegistry,
     PluginSetupContext,
 )
-from agent.context import ContextStoreRouter
-from agent.hook import SESSION_START
-from agent.plugin.plugin_impl.cyrene_soul.service import setup_soul
-from agent.plugin.plugin_impl.cyrene_context.service import setup_runtime_context
+from cyrene.plugins import PluginApplicationHost
+from cyrene.core.context import ContextStoreRouter
+from cyrene.core.hook import SESSION_START
+from cyrene.plugins.builtin.cyrene_soul.service import setup_soul
+from cyrene.plugins.builtin.cyrene_context.service import setup_runtime_context
 from cyrene.runtime import settings_store
-from route.plugins import register_plugin_routes
+from cyrene.workbench.http.plugins import register_plugin_routes
 
 
 def test_tool_management_api_edits_exposure_and_persistently_deletes(

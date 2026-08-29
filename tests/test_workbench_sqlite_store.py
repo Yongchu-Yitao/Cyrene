@@ -4,7 +4,7 @@ import multiprocessing
 import sqlite3
 from pathlib import Path
 
-from cyrene.workbench.store import (
+from cyrene.workbench.persistence.store import (
     mutate_chat,
     patch_document_fields,
     read_chat_summaries,

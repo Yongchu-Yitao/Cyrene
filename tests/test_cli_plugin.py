@@ -9,14 +9,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent.hook import PRE_TOOL_USE, HookEvent
-from agent.plugin.plugin_impl.cyrene_cli import setup
-from agent.plugin.plugin_impl.cyrene_cli.hooks import CliHookService
+from cyrene.core.hook import PRE_TOOL_USE, HookEvent
+from cyrene.plugins.builtin.cyrene_cli import setup
+from cyrene.plugins.builtin.cyrene_cli.hooks import CliHookService
 
 
 @pytest.fixture
 def cli_hook_settings(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_cli import hooks as hooks_module
+    from cyrene.plugins.builtin.cyrene_cli import hooks as hooks_module
 
     values = {}
     monkeypatch.setattr(hooks_module, "get_setting", lambda key, default=None: values.get(key, default))

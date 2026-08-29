@@ -8,13 +8,13 @@ import threading
 
 import pytest
 
-from agent import AgentSession
-from agent.hook import SESSION_END, SESSION_START
-from agent.plugin import Plugin, PluginPack, PluginRegistry
-from agent.workbench import (
+from cyrene.core import AgentSession
+from cyrene.core.hook import SESSION_END, SESSION_START
+from cyrene.core.plugin import Plugin, PluginPack, PluginRegistry
+from cyrene.workbench.core_adapter import (
     WorkbenchSessionBridge,
 )
-from agent.workbench.bridge import (
+from cyrene.workbench.core_adapter.bridge import (
     _normalized_usage,
     _turn_metrics,
     project_tool_activity_messages,

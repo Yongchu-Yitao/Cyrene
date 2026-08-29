@@ -6,9 +6,9 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-from agent.plugin import Plugin, PluginContext, PluginRegistry, PluginRuntime
-from agent.plugin import model_router
-from agent.workbench import chat_runtime
+from cyrene.core.plugin import Plugin, PluginContext, PluginRegistry, PluginRuntime
+from cyrene.plugins import model_router
+from cyrene.workbench.core_adapter import chat_runtime
 
 
 def run(coroutine):
@@ -129,7 +129,7 @@ def test_model_router_forwards_session_messages_and_normalizes_tools(monkeypatch
 
 
 def test_model_gateway_routes_one_exact_identity_without_route_fallback(monkeypatch):
-    from agent.plugin.model_gateway import PluginModelGateway
+    from cyrene.plugins.model_gateway import PluginModelGateway
 
     captured = {}
     identity = {
@@ -149,7 +149,7 @@ def test_model_gateway_routes_one_exact_identity_without_route_fallback(monkeypa
     }
 
     monkeypatch.setattr(
-        "agent.plugin.model_catalog.resolve_exact_model_candidate",
+        "cyrene.plugins.model_catalog.resolve_exact_model_candidate",
         lambda requested: candidate if requested == identity else None,
     )
     monkeypatch.setattr(
@@ -276,7 +276,7 @@ def test_model_router_falls_back_through_provider_plugins(monkeypatch):
 
 
 def test_permission_model_usage_does_not_report_agent_context():
-    from agent.plugin.plugin_impl.cyrene_model._shared import (
+    from cyrene.plugins.builtin.cyrene_model._shared import (
         ModelProvider,
         _normalized_result,
     )
@@ -379,7 +379,7 @@ def test_production_runtime_seeds_forwards_context_and_leaves_final_reply_to_lif
 
     monkeypatch.setattr(
         chat_runtime,
-        "resolve_agent_plugin_registry",
+        "resolve_plugin_registry",
         fake_resolve,
     )
     monkeypatch.setattr(chat_runtime.WorkbenchSessionBridge, "open", fake_open)
@@ -436,7 +436,7 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     monkeypatch,
 ):
     from cyrene.runtime import host_bridge
-    from route.workbench.chat_routes.run_send_routes import _SendOperation
+    from cyrene.workbench.http.workbench.chat_routes.run_send_routes import _SendOperation
 
     captured = {}
 
@@ -508,7 +508,7 @@ def test_builtin_workbench_route_always_uses_new_runtime(
             conversation_runtime=SimpleNamespace(send=fake_runtime),
         ),
     )
-    from cyrene.workbench.chat_external_turn_service import ExternalTurnProjection
+    from cyrene.workbench.chat.chat_external_turn_service import ExternalTurnProjection
 
     operation.external = ExternalTurnProjection()
 
@@ -545,7 +545,7 @@ def test_builtin_workbench_route_always_uses_new_runtime(
 
 
 def test_builtin_runtime_message_fields_preserve_latest_request_usage():
-    from route.workbench.chat_routes.run_send_routes import _SendOperation
+    from cyrene.workbench.http.workbench.chat_routes.run_send_routes import _SendOperation
 
     operation = object.__new__(_SendOperation)
     fields = operation._runtime_message_fields(

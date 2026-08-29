@@ -14,9 +14,9 @@ import numpy as np
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from agent.plugin.plugin_impl.cyrene_voice import engine
-from agent.plugin.plugin_impl.cyrene_voice import minimax as minimax_tts
-from agent.plugin.plugin_impl.cyrene_voice import routes as voice_routes
+from cyrene.plugins.builtin.cyrene_voice import engine
+from cyrene.plugins.builtin.cyrene_voice import minimax as minimax_tts
+from cyrene.plugins.builtin.cyrene_voice import routes as voice_routes
 
 
 def _patch_voice_model_service(monkeypatch, ready, *, model_dir=None):
@@ -29,7 +29,7 @@ def _patch_voice_model_service(monkeypatch, ready, *, model_dir=None):
     )
     monkeypatch.setattr(
         engine,
-        "active_plugin_service",
+        "application_plugin_service",
         lambda name: service if name == "knowledge" else None,
     )
     return service
@@ -324,10 +324,10 @@ def test_minimax_adapter_uses_configured_connection_and_decodes_hex(monkeypatch)
             "options": {"provider_preset": "minimax"},
         }],
     })
-    import agent.plugin as plugin_api
+    import cyrene.core.plugin as plugin_api
     monkeypatch.setattr(
         plugin_api,
-        "active_plugin_service",
+        "application_plugin_service",
         lambda name: model_service if name == "model_configuration" else None,
     )
 
@@ -490,7 +490,7 @@ def test_voice_controls_follow_existing_chat_layout():
     chat = workbench_chat_source()
     settings = workbench_settings_source()
     shell = workbench_shell_source()
-    shortcuts = (root / "src/webui/frontend/workbench-shortcuts.jsx").read_text(encoding="utf-8")
+    shortcuts = (root / "src/cyrene/workbench/webui/frontend/workbench-shortcuts.jsx").read_text(encoding="utf-8")
 
     composer = frontend_module_source("features/chat/composer.jsx")
     composer_voice = frontend_module_source("features/chat/composer-voice.jsx")

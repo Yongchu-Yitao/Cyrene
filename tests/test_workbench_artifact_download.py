@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from cyrene.workbench.artifact_runtime import _workbench_artifact_download_target
+from cyrene.workbench.artifacts.artifact_runtime import _workbench_artifact_download_target
 
 
 def _session(path: str, artifact_type: str = "file_change") -> dict:
@@ -19,7 +19,7 @@ def _session(path: str, artifact_type: str = "file_change") -> dict:
 
 
 def test_artifact_download_prefers_pinned_webui_exports_copy(monkeypatch, tmp_path):
-    from cyrene.workbench import artifact_runtime as runtime
+    from cyrene.workbench.artifacts import artifact_runtime as runtime
 
     exports = tmp_path / "webui_exports"
     exports.mkdir()
@@ -66,7 +66,7 @@ def test_artifact_download_target_resolves_registered_workspace_file(tmp_path):
 
 
 def test_artifact_download_raises_when_no_copy_exists(monkeypatch, tmp_path):
-    from cyrene.workbench import artifact_runtime as runtime
+    from cyrene.workbench.artifacts import artifact_runtime as runtime
 
     exports = tmp_path / "webui_exports"
     exports.mkdir()
@@ -82,7 +82,7 @@ def test_artifact_download_raises_when_no_copy_exists(monkeypatch, tmp_path):
 def test_artifact_download_rebases_generated_project_workspace(
     monkeypatch, tmp_path
 ):
-    from cyrene.workbench import artifact_runtime as runtime
+    from cyrene.workbench.artifacts import artifact_runtime as runtime
 
     app_workspace = tmp_path / "current" / "workspace"
     # Generated project workspaces live under .cyrene/projects.

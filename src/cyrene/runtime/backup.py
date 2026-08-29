@@ -223,9 +223,9 @@ def _plugin_backup_descriptors(
 ) -> tuple[list[_Source], list[str]]:
     """Collect backup contributions through the generic Plugin service API."""
 
-    from agent.plugin import active_plugin_application_host
+    from cyrene.core.plugin import application_plugin_scope
 
-    host = active_plugin_application_host()
+    host = application_plugin_scope()
     if host is None:
         return [], []
     sources: list[_Source] = []
@@ -747,7 +747,7 @@ async def restore_backup(zip_path: str, *, dry_run: bool = False) -> dict[str, A
 async def _restore_with_locks(path: Path) -> dict[str, Any]:
     try:
         from apscheduler.schedulers.base import STATE_RUNNING
-        from agent.plugin.background import background_plugin_scheduler
+        from cyrene.plugins.background import background_plugin_scheduler
 
         scheduler = background_plugin_scheduler()
         scheduler_was_running = scheduler is not None and getattr(scheduler, "state", None) == STATE_RUNNING

@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 def test_startup_recovers_crashed_running_chat_and_clears_stale_question(tmp_path):
     from cyrene.runtime.database import init_db
-    from cyrene.workbench.chat_repository import ChatRepository
-    from cyrene.workbench.chat_runs import ChatRunManager
+    from cyrene.workbench.chat.chat_repository import ChatRepository
+    from cyrene.workbench.chat.chat_runs import ChatRunManager
 
     payload = {
         "chats": [
@@ -42,11 +42,11 @@ def test_startup_recovers_crashed_running_chat_and_clears_stale_question(tmp_pat
 
 
 async def test_stream_status_projection_is_skipped_after_reply_and_nonfatal_after_error():
-    from cyrene.workbench.chat_run_lifecycle_service import (
+    from cyrene.workbench.chat.chat_run_lifecycle_service import (
         ChatRunLifecycleApplicationService,
         ChatRunLifecycleDependencies,
     )
-    from cyrene.workbench.chat_runs import ChatRun
+    from cyrene.workbench.chat.chat_runs import ChatRun
 
     published = []
 
@@ -99,7 +99,7 @@ async def test_stream_status_projection_is_skipped_after_reply_and_nonfatal_afte
 
 
 async def test_finished_run_remains_replayable_during_retention_window():
-    from cyrene.workbench.chat_runs import ChatRunManager
+    from cyrene.workbench.chat.chat_runs import ChatRunManager
 
     manager = ChatRunManager(retention_seconds=45)
 
@@ -120,7 +120,7 @@ async def test_finished_run_remains_replayable_during_retention_window():
 
 
 async def test_deleted_chat_run_is_cancelled_awaited_and_forgotten(tmp_path):
-    from cyrene.workbench.chat_runs import ChatRunManager
+    from cyrene.workbench.chat.chat_runs import ChatRunManager
 
     manager = ChatRunManager(retention_seconds=45)
     manager.configure(str(tmp_path / "deleted-run.sqlite3"))
@@ -149,7 +149,7 @@ async def test_deleted_chat_run_is_cancelled_awaited_and_forgotten(tmp_path):
 async def test_finished_run_events_reload_from_sqlite_after_memory_cleanup(
     tmp_path,
 ):
-    from cyrene.workbench.chat_runs import ChatRunManager
+    from cyrene.workbench.chat.chat_runs import ChatRunManager
 
     db_path = str(tmp_path / "durable-runs.sqlite3")
     manager = ChatRunManager(retention_seconds=0)
@@ -183,7 +183,7 @@ async def test_finished_run_events_reload_from_sqlite_after_memory_cleanup(
 
 
 def test_corrupt_durable_event_is_dropped_without_breaking_replay(tmp_path):
-    from cyrene.workbench.chat_runs import ChatRun, ChatRunEventStore
+    from cyrene.workbench.chat.chat_runs import ChatRun, ChatRunEventStore
 
     db_path = str(tmp_path / "corrupt-durable-event.sqlite3")
     store = ChatRunEventStore(db_path)
@@ -204,7 +204,7 @@ def test_corrupt_durable_event_is_dropped_without_breaking_replay(tmp_path):
 
 def test_durable_events_are_compressed_and_trimmed_like_live_buffer(monkeypatch, tmp_path):
     import sqlite3
-    from cyrene.workbench import chat_runs
+    from cyrene.workbench.chat import chat_runs
 
     monkeypatch.setattr(chat_runs, "_MAX_BUFFER_EVENTS", 5)
     db_path = str(tmp_path / "compact-durable-events.sqlite3")
@@ -236,7 +236,7 @@ async def test_stream_deltas_are_batched_into_one_sqlite_transaction(
     monkeypatch,
     tmp_path,
 ):
-    from cyrene.workbench.chat_runs import ChatRun, ChatRunEventStore
+    from cyrene.workbench.chat.chat_runs import ChatRun, ChatRunEventStore
 
     store = ChatRunEventStore(str(tmp_path / "batched-events.sqlite3"))
     run = ChatRun("chat_batched", {"type": "ack", "chatId": "chat_batched"})
@@ -271,7 +271,7 @@ async def test_stream_deltas_are_batched_into_one_sqlite_transaction(
 
 
 async def test_durable_event_lock_cannot_block_or_fail_live_reply(monkeypatch, tmp_path):
-    from cyrene.workbench.chat_runs import ChatRun, ChatRunEventStore
+    from cyrene.workbench.chat.chat_runs import ChatRun, ChatRunEventStore
 
     store = ChatRunEventStore(str(tmp_path / "locked-events.sqlite3"))
     run = ChatRun("chat_locked", {"type": "ack", "chatId": "chat_locked"})
@@ -299,7 +299,7 @@ async def test_durable_event_lock_cannot_block_or_fail_live_reply(monkeypatch, t
 
 
 def test_startup_marks_unfinished_durable_run_as_process_restarted(tmp_path):
-    from cyrene.workbench.chat_runs import ChatRun, ChatRunEventStore, ChatRunManager
+    from cyrene.workbench.chat.chat_runs import ChatRun, ChatRunEventStore, ChatRunManager
 
     db_path = str(tmp_path / "crashed-run.sqlite3")
     store = ChatRunEventStore(db_path)
@@ -319,8 +319,8 @@ def test_startup_marks_unfinished_durable_run_as_process_restarted(tmp_path):
 
 
 async def test_chat_run_storage_setup_runs_off_the_event_loop(monkeypatch, tmp_path):
-    from cyrene.workbench.inbox import WorkbenchAgentInbox
-    from cyrene.workbench.chat_runs import ChatRunManager
+    from cyrene.workbench.application.inbox import WorkbenchAgentInbox
+    from cyrene.workbench.chat.chat_runs import ChatRunManager
 
     started = threading.Event()
     release = threading.Event()

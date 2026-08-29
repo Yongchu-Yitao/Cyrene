@@ -14,7 +14,7 @@ def _png_base64() -> str:
 def test_mcp_image_is_stored_as_artifact_without_persisting_base64(
     tmp_path, real_pillow_modules
 ):
-    from agent.plugin.plugin_impl.cyrene_mcp import content as mcp_content
+    from cyrene.plugins.builtin.cyrene_mcp import content as mcp_content
 
     content_directory = tmp_path / "mcp-content"
     encoded = _png_base64()
@@ -43,7 +43,7 @@ def test_mcp_image_is_stored_as_artifact_without_persisting_base64(
 def test_mcp_artifact_becomes_ephemeral_image_url_observation_for_next_request(
     tmp_path, real_pillow_modules
 ):
-    from agent.plugin.plugin_impl.cyrene_mcp import content as mcp_content
+    from cyrene.plugins.builtin.cyrene_mcp import content as mcp_content
 
     encoded = _png_base64()
     result = mcp_content.serialize_mcp_result(

@@ -7,8 +7,8 @@ async def test_generate_session_title_uses_exact_candidate_without_truncation(mo
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from agent import plugin as plugin_runtime
-    from cyrene.workbench.session_naming import generate_session_title
+    from cyrene.core import plugin as plugin_runtime
+    from cyrene.workbench.sessions.session_naming import generate_session_title
 
     captured = {}
 
@@ -18,7 +18,7 @@ async def test_generate_session_title_uses_exact_candidate_without_truncation(mo
         return {"content": "  修复登录超时问题。  "}
 
     gateway = SimpleNamespace(complete=AsyncMock(side_effect=fake_call))
-    monkeypatch.setattr(plugin_runtime, "active_plugin_service", lambda _name: gateway)
+    monkeypatch.setattr(plugin_runtime, "application_plugin_service", lambda _name: gateway)
 
     message = "请帮我排查登录接口偶发超时" * 300
     candidate = {"id": "chosen", "model": "chosen-model"}

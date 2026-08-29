@@ -724,9 +724,9 @@ def _parse_ctx_str(ctx_str: str) -> int:
 
 def _profile_ctx_limit(profile_id: str) -> int:
     """Read one profile window through the optional model service port."""
-    from agent.plugin import active_plugin_service
+    from cyrene.core.plugin import application_plugin_service
 
-    service = active_plugin_service("model_configuration")
+    service = application_plugin_service("model_configuration")
     if service is None:
         return 0
     configuration = service.get_model_configuration()
@@ -769,9 +769,9 @@ def _profile_ctx_limit(profile_id: str) -> int:
 
 
 def _configured_model_profiles() -> list[dict]:
-    from agent.plugin import active_plugin_service
+    from cyrene.core.plugin import application_plugin_service
 
-    service = active_plugin_service("model_configuration")
+    service = application_plugin_service("model_configuration")
     if service is None:
         return []
     configuration = service.get_model_configuration()
@@ -911,9 +911,9 @@ def effective_ctx_limit_for_model(
 
 def get_current_ctx_limit() -> int:
     """Context window for the first profile in the primary route."""
-    from agent.plugin import active_plugin_service
+    from cyrene.core.plugin import application_plugin_service
 
-    service = active_plugin_service("model_configuration")
+    service = application_plugin_service("model_configuration")
     if service is None:
         return 0
     models = service.candidates_for_route("primary")

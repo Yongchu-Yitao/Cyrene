@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cyrene.workbench.conversation_context_service import (
+from cyrene.workbench.chat.conversation_context_service import (
     AgentContextRepository,
     ConversationContextQueryService,
     ConversationInboxQueryService,
@@ -223,7 +223,7 @@ def test_plugin_session_context_is_disclosed_per_contributor(tmp_path):
 
 @pytest.mark.asyncio
 async def test_new_agent_context_tree_drives_summary_blocks_and_plugin_usage(tmp_path):
-    from agent.context import ContextStoreRouter
+    from cyrene.core.context import ContextStoreRouter
 
     context_directory = tmp_path / "agent-context"
     router = ContextStoreRouter(context_directory)
@@ -772,7 +772,7 @@ async def test_idle_inbox_reports_the_latest_agent_round_as_its_scope():
 
 @pytest.mark.asyncio
 async def test_context_compaction_node_replaces_projected_model_history(tmp_path):
-    from agent.context import ContextStoreRouter
+    from cyrene.core.context import ContextStoreRouter
 
     context_directory = tmp_path / "agent-context"
     router = ContextStoreRouter(context_directory)

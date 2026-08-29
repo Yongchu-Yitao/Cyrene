@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from agent.plugin.plugin_impl.cyrene_knowledge.service import create_knowledge_service
+from cyrene.plugins.builtin.cyrene_knowledge.service import create_knowledge_service
 
 
 def _legacy_database(path: Path) -> None:

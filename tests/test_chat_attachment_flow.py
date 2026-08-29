@@ -46,8 +46,8 @@ def test_managed_attachment_path_rebases_after_portable_restore(
 
 @pytest.mark.asyncio
 async def test_analyze_attachment_missing_file_returns_terminal_upload_error(tmp_path):
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl.cyrene_content.analyze_attachment import (
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_content.analyze_attachment import (
         _tool_analyze_attachment,
     )
     from cyrene.runtime.attachments import UPLOADS_DIR

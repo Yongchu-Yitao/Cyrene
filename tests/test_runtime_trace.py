@@ -72,7 +72,7 @@ async def test_standalone_inbox_trace_does_not_write_sqlite_on_result_path(
 ):
     """Inbox diagnostics without a run root must not create a synchronous trace root."""
     from cyrene.runtime import database
-    from cyrene.workbench.inbox import WorkbenchAgentInbox
+    from cyrene.workbench.application.inbox import WorkbenchAgentInbox
 
     persistence_calls = 0
 

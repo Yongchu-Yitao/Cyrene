@@ -1,4 +1,4 @@
-from agent.plugin.plugin_impl.cyrene_content.web_fetch import _extract_response_text
+from cyrene.plugins.builtin.cyrene_content.web_fetch import _extract_response_text
 
 
 def test_extract_response_text_removes_html_and_hidden_content():

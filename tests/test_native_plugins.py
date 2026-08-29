@@ -9,9 +9,9 @@ from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
 
-from agent.plugin import PluginContext, PluginRegistry, PluginRuntime
-from agent.plugin import native_tools
-from agent.plugin.native_tools import (
+from cyrene.core.plugin import PluginContext, PluginRegistry, PluginRuntime
+from cyrene.plugins import native_tools
+from cyrene.plugins.native_tools import (
     CORE_PLUGIN_NAMES,
     USER_STANDALONE_PLUGIN_NAMES,
     mark_builtin_plugin_deleted,
@@ -434,9 +434,7 @@ def test_frozen_build_reads_the_packaged_canonical_tree(tmp_path, monkeypatch):
     canonical = (
         bundle
         / "builtin_plugin_sources"
-        / "agent"
-        / "plugin"
-        / "plugin_impl"
+        / "cyrene" / "plugins" / "builtin"
     )
     pack = canonical / "cyrene_application"
     pack.mkdir(parents=True)

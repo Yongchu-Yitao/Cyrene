@@ -11,9 +11,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from agent.context import ContextStoreRouter
-from agent.hook import POST_TOOL_USE
-from agent.plugin import (
+from cyrene.core.context import ContextStoreRouter
+from cyrene.core.hook import POST_TOOL_USE
+from cyrene.core.plugin import (
     Plugin,
     PluginBatchRunner,
     PluginCall,
@@ -24,13 +24,13 @@ from agent.plugin import (
     PluginCustomizationState,
     PluginRegistryError,
     PluginUnavailableError,
-    ensure_model_router,
 )
-from agent.plugin.core_impl import PermissionReviewPlugin
+from cyrene.core.plugin.core_impl import PermissionReviewPlugin
+from cyrene.plugins import ensure_model_router
 
 
 CANONICAL_PLUGIN_DIRECTORY = (
-    Path(__file__).parents[1] / "src" / "agent" / "plugin" / "plugin_impl"
+    Path(__file__).parents[1] / "src" / "cyrene" / "plugins" / "builtin"
 )
 
 
@@ -209,7 +209,7 @@ def test_registry_includes_core_and_loads_user_tool_pack(tmp_path):
     package.mkdir(parents=True)
     (package / "__init__.py").write_text(
         """
-from agent.plugin import Plugin, PluginPack
+from cyrene.core.plugin import Plugin, PluginPack
 
 def search(arguments, context):
     return {"query": arguments["query"], "tree_id": context.tree_id}
@@ -279,7 +279,7 @@ def test_reload_failure_quarantines_stale_session_registry_until_it_refreshes(
     def write_plugin(value: str) -> None:
         standalone.write_text(
             f'''\
-from agent.plugin import Plugin
+from cyrene.core.plugin import Plugin
 plugin = Plugin(
     name="SharedTool",
     description="shared",
@@ -318,7 +318,7 @@ def test_refresh_reuses_unchanged_modules_and_retains_changed_service_modules(
     package.mkdir(parents=True)
     (package / "__init__.py").write_text(
         '''\
-from agent.plugin import Plugin, PluginPack
+from cyrene.core.plugin import Plugin, PluginPack
 from .service import Service
 
 service = Service()
@@ -421,7 +421,7 @@ def test_toolbox_lists_and_refreshes_standalone_plugin_files(tmp_path):
             )
             standalone.write_text(
                 f'''\
-from agent.plugin import Plugin
+from cyrene.core.plugin import Plugin
 
 def handle(arguments, _context):
     return "standalone-{version}:" + arguments["value"] + arguments.get("suffix", "")
@@ -707,7 +707,7 @@ def test_toolbox_reads_live_registry_and_refreshes_added_changed_and_deleted_pac
             )
             initializer.write_text(
                 f'''\
-from agent.plugin import Plugin, PluginPack
+from cyrene.core.plugin import Plugin, PluginPack
 
 def live(arguments, _context):
     return "version-{version}:" + arguments["value"] + arguments.get("suffix", "")

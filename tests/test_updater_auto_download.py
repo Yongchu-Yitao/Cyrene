@@ -31,13 +31,17 @@ def _info(sha256: str = SHA, size: int = 1000) -> updater.UpdateInfo:
     )
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def fresh_auto_state(monkeypatch):
     updater._auto_download_task = None
     updater._notified_update_keys.clear()
     updater._state_restored = False
     # 阻止测试期间的真实持久化写入（各测试自行 patch get/set_ 模拟存储）。
     monkeypatch.setattr("cyrene.runtime.settings_store.set_", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "cyrene.runtime.settings_store.get",
+        lambda _key, default=None: default,
+    )
     updater._download_progress.update({
         "downloaded": 0, "total": 0, "done": False,
         "path": "", "expected_sha256": "", "actual_sha256": "",
@@ -162,7 +166,7 @@ async def test_auto_download_failure_keeps_retryable_state(fresh_auto_state, mon
 
 
 async def test_run_update_check_once_auto_downloads_and_notifies(fresh_auto_state, monkeypatch, tmp_path):
-    from cyrene.workbench import notifications
+    from cyrene.workbench.application import notifications
 
     notifications.configure_store(str(tmp_path / "workbench.sqlite3"))
     monkeypatch.setattr(updater, "download_update", _fake_download(size=11))

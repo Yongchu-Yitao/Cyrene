@@ -50,7 +50,7 @@ jobs:
           cache: "npm"
           cache-dependency-path: |
             electron/package-lock.json
-            src/webui/package-lock.json
+            src/cyrene/workbench/webui/package-lock.json
 
       - name: Install Python deps
         run: |
@@ -67,7 +67,7 @@ jobs:
         run: cd electron && npm ci --prefer-offline --no-audit --no-fund
 
       - name: Build WebUI JS
-        run: cd src/webui && npm ci --prefer-offline --no-audit --no-fund && node build-jsx.mjs
+        run: cd src/cyrene/workbench/webui && npm ci --prefer-offline --no-audit --no-fund && node build-jsx.mjs
 
       - name: Verify critical imports
         run: python -c "from typing_extensions import Sentinel; from pydantic_core import core_schema; print('imports-ok')"
@@ -143,7 +143,7 @@ jobs:
           cache: "npm"
           cache-dependency-path: |
             electron/package-lock.json
-            src/webui/package-lock.json
+            src/cyrene/workbench/webui/package-lock.json
 
       - name: Install Python deps
         run: |
@@ -187,7 +187,7 @@ jobs:
           if ($result.ok -ne $true) { throw "Windows App Use provider smoke test failed: $(@($raw) -join [Environment]::NewLine)" }
 
       - name: Build WebUI JS
-        run: cd src/webui && npm ci --prefer-offline --no-audit --no-fund && node build-jsx.mjs
+        run: cd src/cyrene/workbench/webui && npm ci --prefer-offline --no-audit --no-fund && node build-jsx.mjs
 
       - name: Apply Windows compatibility patches
         shell: python
@@ -411,7 +411,7 @@ jobs:
           cache: "npm"
           cache-dependency-path: |
             electron/package-lock.json
-            src/webui/package-lock.json
+            src/cyrene/workbench/webui/package-lock.json
 
       - name: Install Python deps
         shell: powershell
@@ -478,7 +478,7 @@ jobs:
           if ($result.ok -ne $true) { throw "Windows App Use provider smoke test failed: $(@($raw) -join [Environment]::NewLine)" }
 
       - name: Build WebUI JS
-        run: cd src/webui && npm ci --prefer-offline --no-audit --no-fund && node build-jsx.mjs
+        run: cd src/cyrene/workbench/webui && npm ci --prefer-offline --no-audit --no-fund && node build-jsx.mjs
 
       - name: Verify build environment imports
         run: |
@@ -582,7 +582,7 @@ jobs:
           cache: "npm"
           cache-dependency-path: |
             electron/package-lock.json
-            src/webui/package-lock.json
+            src/cyrene/workbench/webui/package-lock.json
 
       # No system deps needed — Electron handles the window on all platforms.
       # No appimagetool needed — electron-builder produces AppImage.
@@ -602,7 +602,7 @@ jobs:
         run: cd electron && npm ci --prefer-offline --no-audit --no-fund
 
       - name: Build WebUI JS
-        run: cd src/webui && npm ci --prefer-offline --no-audit --no-fund && node build-jsx.mjs
+        run: cd src/cyrene/workbench/webui && npm ci --prefer-offline --no-audit --no-fund && node build-jsx.mjs
 
       - name: Verify build environment imports
         run: |

@@ -16,11 +16,11 @@ from conftest import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from route.registry import register_routes
+from cyrene.workbench.http.registry import register_routes
 
 
 def test_zotero_local_api_rejects_non_loopback_urls():
-    from agent.plugin.plugin_impl.cyrene_knowledge.zotero_settings import (
+    from cyrene.plugins.builtin.cyrene_knowledge.zotero_settings import (
         normalize_zotero,
     )
 
@@ -74,7 +74,7 @@ def test_settings_ui_moves_zotero_to_integrations_and_keeps_embedding_in_models(
     root = Path(__file__).resolve().parent.parent
     source = workbench_settings_source()
     model_source = (
-        root / "src/webui/frontend/settings-model-configuration.jsx"
+        root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx"
     ).read_text(encoding="utf-8")
     styles = workbench_style_source()
     translations = workbench_i18n_source()
@@ -93,7 +93,7 @@ def test_settings_ui_moves_zotero_to_integrations_and_keeps_embedding_in_models(
     assert '"/api/workbench/library/zotero/sync?workspace="' in source
     assert 'disabled: !!integrationBusy || !(p.project && p.project.id)' in source
     general_panel = (
-        root / "src/webui/frontend/features/settings/general.jsx"
+        root / "src/cyrene/workbench/webui/frontend/features/settings/general.jsx"
     ).read_text(encoding="utf-8")
     assert 'settings.zoteroIntegration' in general_panel
     assert 'p.integrationsOnly && hasKnowledge && React.cloneElement(SectionBlock' in general_panel
@@ -110,7 +110,7 @@ def test_settings_ui_moves_zotero_to_integrations_and_keeps_embedding_in_models(
     assert translations.count('"settings.zoteroIntegration"') == 2
     assert translations.count('"settings.zoteroImportAction"') == 2
 
-    library = (root / "src/webui/frontend/workbench-library.jsx").read_text(encoding="utf-8")
+    library = (root / "src/cyrene/workbench/webui/frontend/workbench-library.jsx").read_text(encoding="utf-8")
     assert '"/api/workbench/library/embedding/status?workspace="' in library
     assert '"/api/workbench/library/reembed?workspace="' in library
     assert 'L("library.vectorizeAll", "Vectorize all")' in library
@@ -133,10 +133,10 @@ def test_profile_is_a_settings_item_without_a_collapsed_settings_icon_stack():
     assert len(icon_names) == 19
     assert len(set(icon_names)) == len(icon_names)
     assert 'className: "settings-overlay-tab-glyph"' in settings
-    build_source = (root / "src/webui/build-jsx.mjs").read_text(encoding="utf-8")
+    build_source = (root / "src/cyrene/workbench/webui/build-jsx.mjs").read_text(encoding="utf-8")
     assert '@tabler/icons/icons/outline' in build_source
     assert "'code.svg'," in build_source
-    assert (root / "src/webui/static/app/settings-icons/code.svg").is_file()
+    assert (root / "src/cyrene/workbench/webui/static/app/settings-icons/code.svg").is_file()
     assert 'tab === "profile" && React.createElement("div", { className: "settings-profile-panel" }' in settings
     assert 'if (page === "profile") {' in workbench
     assert 'setSettingsTab("profile")' in workbench

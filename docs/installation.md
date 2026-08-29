@@ -17,10 +17,10 @@ cd Cyrene
 uv sync
 
 # Build JSX assets when the checkout does not already contain compiled output.
-cd src/webui
+cd src/cyrene/workbench/webui
 npm install
 node build-jsx.mjs
-cd ../..
+cd ../../../..
 
 uv run python -m cyrene
 ```
@@ -84,10 +84,10 @@ its transitive dependencies, and installs Cyrene without re-resolving those
 dependencies. After that environment is prepared:
 
 ```bash
-cd src/webui
+cd src/cyrene/workbench/webui
 npm install
 npm run build
-cd ../..
+cd ../../../..
 
 uv run python -m cyrene
 ```
@@ -98,7 +98,7 @@ uv run python -m cyrene
 > ```
 
 Do not patch `site-packages` pre-emptively. Cyrene launches SimpleXNG through
-`cyrene.tooling.backends.simplexng_child`, which supplies the Windows `uvloop`
+`cyrene.plugins.builtin.cyrene_content.simplexng_child`, which supplies the Windows `uvloop`
 and multiprocessing compatibility behavior at runtime and ensures JSON search
 output is enabled. This launcher solves runtime incompatibilities after
 installation; it cannot repair an earlier package-resolution failure.

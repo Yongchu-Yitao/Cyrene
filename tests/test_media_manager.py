@@ -5,11 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent.plugin.plugin_impl.cyrene_media.manager import MediaJobManager
+from cyrene.plugins.builtin.cyrene_media.manager import MediaJobManager
 
 
 def test_media_plugin_migrates_legacy_queue_database(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_media.application import (
+    from cyrene.plugins.builtin.cyrene_media.application import (
         _migrate_legacy_database,
     )
 

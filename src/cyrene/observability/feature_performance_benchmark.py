@@ -147,7 +147,7 @@ async def _benchmark_terminal(
     *,
     now_iso: Callable[[], str] = _utc_now_iso,
 ) -> dict[str, Any]:
-    from agent.plugin.plugin_impl.cyrene_code.terminal.manager import TerminalManager, TerminalSession
+    from cyrene.plugins.builtin.cyrene_code.terminal.manager import TerminalManager, TerminalSession
 
     manager = TerminalManager(
         output_limit=max(16 * 1024 * 1024, config.terminal_chunks * config.terminal_chunk_bytes),
@@ -234,8 +234,8 @@ async def _benchmark_terminal(
 async def _benchmark_knowledge_search(
     config: FeatureBenchmarkConfig, root: Path
 ) -> dict[str, Any]:
-    from agent.plugin.plugin_impl.cyrene_knowledge.retrieve import search_knowledge
-    from agent.plugin.plugin_impl.cyrene_knowledge.store import KnowledgeStore
+    from cyrene.plugins.builtin.cyrene_knowledge.retrieve import search_knowledge
+    from cyrene.plugins.builtin.cyrene_knowledge.store import KnowledgeStore
 
     store = KnowledgeStore(root / "knowledge")
     documents = max(1, config.knowledge_documents)
@@ -292,7 +292,7 @@ async def _benchmark_knowledge_search(
 async def _benchmark_knowledge_write(
     config: FeatureBenchmarkConfig, root: Path
 ) -> dict[str, Any]:
-    from agent.plugin.plugin_impl.cyrene_knowledge.store import KnowledgeStore
+    from cyrene.plugins.builtin.cyrene_knowledge.store import KnowledgeStore
 
     store = KnowledgeStore(root / "knowledge-write")
     documents = max(1, min(config.knowledge_documents, 12))
@@ -373,10 +373,10 @@ async def _benchmark_scheduled_tasks(
     config: FeatureBenchmarkConfig, root: Path
 ) -> dict[str, Any]:
     from cyrene.runtime import database
-    from agent.plugin.plugin_impl.cyrene_schedule.migrations import (
+    from cyrene.plugins.builtin.cyrene_schedule.migrations import (
         initialize_schedule_database,
     )
-    from agent.plugin.plugin_impl.cyrene_schedule.repository import (
+    from cyrene.plugins.builtin.cyrene_schedule.repository import (
         ScheduleRepository,
     )
 

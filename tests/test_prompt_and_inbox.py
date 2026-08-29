@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 def _model_registry():
-    from agent.plugin import Plugin, PluginRegistry
+    from cyrene.core.plugin import Plugin, PluginRegistry
 
     registry = PluginRegistry()
     registry.register_plugin(
@@ -26,7 +26,7 @@ def _model_registry():
 
 
 def test_default_prompt_requires_plugin_discovery_for_external_information():
-    from agent.plugin.plugin_impl.cyrene_system_prompt.system_prompt import SYSTEM_PROMPT
+    from cyrene.plugins.builtin.cyrene_system_prompt.system_prompt import SYSTEM_PROMPT
 
     assert "current" in SYSTEM_PROMPT
     assert "external information" in SYSTEM_PROMPT
@@ -40,9 +40,9 @@ def test_default_prompt_requires_plugin_discovery_for_external_information():
 
 
 def test_web_search_and_mid_run_message_are_direct_tools():
-    from agent.plugin import PluginRegistry
-    from agent.plugin.plugin_impl.cyrene_content import plugin_pack as content_pack
-    from agent.plugin.plugin_impl.cyrene_delivery import plugin_pack as delivery_pack
+    from cyrene.core.plugin import PluginRegistry
+    from cyrene.plugins.builtin.cyrene_content import plugin_pack as content_pack
+    from cyrene.plugins.builtin.cyrene_delivery import plugin_pack as delivery_pack
 
     registry = PluginRegistry(include_core=False)
     registry.register_pack(content_pack, source="test-content")
@@ -56,16 +56,13 @@ def test_web_search_and_mid_run_message_are_direct_tools():
 
 
 def test_reopened_tree_mounts_system_prompt_from_required_plugin(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_system_prompt.system_prompt import SYSTEM_PROMPT
-    from agent.session import AgentSession
+    from cyrene.plugins.builtin.cyrene_system_prompt.system_prompt import SYSTEM_PROMPT
+    from cyrene.core.session import AgentSession
 
     plugin_directory = tmp_path / "plugin_impl"
     shutil.copytree(
         Path(__file__).parents[1]
-        / "src"
-        / "agent"
-        / "plugin"
-        / "plugin_impl"
+        / "src" / "cyrene" / "plugins" / "builtin"
         / "cyrene_system_prompt",
         plugin_directory / "cyrene_system_prompt",
     )

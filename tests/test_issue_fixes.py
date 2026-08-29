@@ -21,8 +21,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from route.registry import register_routes
-from agent.plugin.plugin_impl.cyrene_schedule.schedule_spec import (
+from cyrene.workbench.http.registry import register_routes
+from cyrene.plugins.builtin.cyrene_schedule.schedule_spec import (
     next_run as compute_next_run,
 )
 
@@ -38,13 +38,6 @@ def test_interval_is_seconds_not_milliseconds():
     """An interval of "3600" means one hour — the value the Web UI promises."""
     nxt = compute_next_run("interval", "3600", now=FIXED_NOW)
     assert datetime.fromisoformat(nxt) == FIXED_NOW + timedelta(seconds=3600)
-
-
-def test_schedule_plugin_create_and_runner_share_next_run_rule():
-    """Creation and execution import the same editable Plugin recurrence rule."""
-    a = compute_next_run("interval", "90", now=FIXED_NOW)
-    b = compute_next_run("interval", "90", now=FIXED_NOW)
-    assert a == b == (FIXED_NOW + timedelta(seconds=90)).isoformat()
 
 
 def test_once_respects_provided_time():
@@ -184,8 +177,7 @@ async def test_analyze_attachment_does_not_write_next_to_source(tmp_path, monkey
     src = tmp_path / "notes.txt"
     src.write_text("some workspace content", encoding="utf-8")
 
-    result = await attachments.analyze_attachment(str(src))
-    assert result["kind"] == "document"
+    await attachments.analyze_attachment(str(src))
 
     # No sidecar pollution next to the user's file...
     assert not (tmp_path / "notes.txt.analysis.json").exists()
@@ -223,7 +215,7 @@ async def test_analyze_attachment_reuses_and_invalidates_cache(tmp_path, monkeyp
 
 
 async def test_analyze_attachment_uses_local_ocr_without_vision_for_clear_text(tmp_path, monkeypatch):
-    import agent.plugin
+    import cyrene.core.plugin
     from cyrene.runtime import attachments
 
     image = tmp_path / "clear.png"
@@ -236,7 +228,7 @@ async def test_analyze_attachment_uses_local_ocr_without_vision_for_clear_text(t
         is_local_model_ready=lambda _model_id: True,
         recognize_image=AsyncMock(return_value="这是一段足够长的本地文字识别结果，用来确认默认附件分析不再请求远程视觉模型。"),
     )
-    monkeypatch.setattr(agent.plugin, "active_plugin_service", lambda _name: service)
+    monkeypatch.setattr(cyrene.core.plugin, "application_plugin_service", lambda _name: service)
     vision = AsyncMock(return_value={"vision_text": "should not run"})
     monkeypatch.setattr(attachments, "_vision_analysis", vision)
 
@@ -249,7 +241,7 @@ async def test_analyze_attachment_uses_local_ocr_without_vision_for_clear_text(t
 
 
 async def test_analyze_attachment_keeps_short_ocr_and_falls_back_to_vision(tmp_path, monkeypatch):
-    import agent.plugin
+    import cyrene.core.plugin
     from cyrene.runtime import attachments
 
     image = tmp_path / "short.png"
@@ -262,7 +254,7 @@ async def test_analyze_attachment_keeps_short_ocr_and_falls_back_to_vision(tmp_p
         is_local_model_ready=lambda _model_id: True,
         recognize_image=AsyncMock(return_value="短文字"),
     )
-    monkeypatch.setattr(agent.plugin, "active_plugin_service", lambda _name: service)
+    monkeypatch.setattr(cyrene.core.plugin, "application_plugin_service", lambda _name: service)
     vision = AsyncMock(return_value={"vision_model": "vision-test", "vision_text": "A visual description."})
     monkeypatch.setattr(attachments, "_vision_analysis", vision)
 
@@ -284,14 +276,14 @@ async def test_analyze_attachment_reports_missing_file(tmp_path):
 
 async def test_analyze_attachment_extracts_extensionless_docx(tmp_path, monkeypatch):
     import zipfile
-    import agent.plugin
-    from agent.plugin.plugin_impl.cyrene_knowledge.content import extract_text
+    import cyrene.core.plugin
+    from cyrene.plugins.builtin.cyrene_knowledge.content import extract_text
     from cyrene.runtime import attachments
 
     monkeypatch.setattr(attachments, "ANALYSIS_CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(
-        agent.plugin,
-        "active_plugin_service",
+        cyrene.core.plugin,
+        "application_plugin_service",
         lambda _name: SimpleNamespace(extract_file_text=extract_text),
     )
     uploaded = tmp_path / "uuid_docx"

@@ -9,8 +9,8 @@ import pytest
 async def test_code_plugin_validation_messages_follow_context_language(
     tmp_path,
 ) -> None:
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl.cyrene_code import git, indexer
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_code import git, indexer
 
     context = PluginContext(
         workspace=tmp_path,
@@ -36,8 +36,8 @@ async def test_code_review_suggestions_are_localized(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl.cyrene_code import analysis
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_code import analysis
 
     source = tmp_path / "sample.py"
     source.write_text("value = 1\n", encoding="utf-8")
@@ -74,8 +74,8 @@ async def test_git_unexpected_exception_is_not_returned_raw(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl.cyrene_code import git
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_code import git
 
     async def fail_to_start(*_args, **_kwargs):
         raise RuntimeError("private interpreter detail")
@@ -93,9 +93,9 @@ async def test_git_unexpected_exception_is_not_returned_raw(
 async def test_terminal_empty_and_ambiguous_messages_are_localized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agent.plugin import PluginContext
-    from agent.plugin.plugin_impl.cyrene_code import list_shells
-    from agent.plugin.plugin_impl.cyrene_code.services import CyreneTerminalService
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_code import list_shells
+    from cyrene.plugins.builtin.cyrene_code.services import CyreneTerminalService
 
     service = CyreneTerminalService()
 
@@ -124,7 +124,7 @@ async def test_terminal_empty_and_ambiguous_messages_are_localized(
         }
 
     monkeypatch.setattr(
-        "agent.plugin.plugin_impl.cyrene_code.services._surface_request",
+        "cyrene.plugins.builtin.cyrene_code.services._surface_request",
         multiple_terminals,
     )
     with pytest.raises(ValueError, match="请提供终端名称"):

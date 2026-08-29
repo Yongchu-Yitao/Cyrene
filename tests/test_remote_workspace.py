@@ -8,13 +8,13 @@ import sys
 
 import pytest
 
-from agent.plugin import PluginContext
-from agent.plugin.plugin_impl.cyrene_remote.commands import RemoteCommandExecutor
-from agent.plugin.plugin_impl.cyrene_remote.control import (
+from cyrene.core.plugin import PluginContext
+from cyrene.plugins.builtin.cyrene_remote.commands import RemoteCommandExecutor
+from cyrene.plugins.builtin.cyrene_remote.control import (
     DEFAULT_REMOTE_CAPABILITIES,
     RemoteControlStore,
 )
-from agent.plugin.plugin_impl.cyrene_remote.workspace import (
+from cyrene.plugins.builtin.cyrene_remote.workspace import (
     RemoteJobManager,
     RemoteWorkspaceFiles,
 )
@@ -37,11 +37,11 @@ def paired_stores(monkeypatch, tmp_path):
 
 def _bind_workspace(monkeypatch, workspace):
     monkeypatch.setattr(
-        "agent.plugin.plugin_impl.cyrene_remote.workspace.find_workbench_project_lightweight",
+        "cyrene.plugins.builtin.cyrene_remote.workspace.find_workbench_project_lightweight",
         lambda project_id: {"id": project_id, "workspacePath": str(workspace)},
     )
     monkeypatch.setattr(
-        "agent.plugin.plugin_impl.cyrene_remote.workspace.resolve_project_workspace_dir",
+        "cyrene.plugins.builtin.cyrene_remote.workspace.resolve_project_workspace_dir",
         lambda _project: str(workspace),
     )
 
@@ -191,7 +191,7 @@ async def test_remote_download_accumulates_digest_without_final_file_rescan(
     monkeypatch,
     tmp_path,
 ):
-    from agent.plugin.plugin_impl.cyrene_remote import files as remote_files_tool
+    from cyrene.plugins.builtin.cyrene_remote import files as remote_files_tool
 
     content = b"streamed remote payload"
     expected = hashlib.sha256(content).hexdigest()
@@ -257,7 +257,7 @@ async def test_remote_download_accumulates_digest_without_final_file_rescan(
 
 @pytest.mark.asyncio
 async def test_remote_sync_upload_reuses_stable_manifest_digest(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_remote import files as remote_files_tool
+    from cyrene.plugins.builtin.cyrene_remote import files as remote_files_tool
 
     source = tmp_path / "stable.bin"
     source.write_bytes(b"stable manifest bytes")

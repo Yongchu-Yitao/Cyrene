@@ -18,9 +18,9 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from agent.plugin import PluginContext
+from cyrene.core.plugin import PluginContext
 
-from agent.plugin.plugin_impl.cyrene_remote.control import (
+from cyrene.plugins.builtin.cyrene_remote.control import (
     BASE_REMOTE_CAPABILITIES,
     DEFAULT_REMOTE_CAPABILITIES,
     InMemoryRemoteRelay,
@@ -30,20 +30,20 @@ from agent.plugin.plugin_impl.cyrene_remote.control import (
     RemoteIdentityStore,
     WebSocketRemoteRelay,
 )
-from agent.plugin.plugin_impl.cyrene_remote.commands import (
+from cyrene.plugins.builtin.cyrene_remote.commands import (
     RemoteCommandExecutor,
     RemoteControlRuntime,
     _chat_detail,
     public_remote_event,
 )
-from agent.plugin.plugin_impl.cyrene_remote.relay import CyreneRelayServer
-from agent.plugin.plugin_impl.cyrene_remote.pairing import (
+from cyrene.plugins.builtin.cyrene_remote.relay import CyreneRelayServer
+from cyrene.plugins.builtin.cyrene_remote.pairing import (
     DirectPairingServer,
     connect_by_address,
     normalize_pairing_address,
 )
-from agent.plugin.plugin_impl.cyrene_remote.harness import handler as remote_harness
-from agent.plugin.plugin_impl.cyrene_remote.application import register_remote_routes
+from cyrene.plugins.builtin.cyrene_remote.harness import handler as remote_harness
+from cyrene.plugins.builtin.cyrene_remote.application import register_remote_routes
 
 
 def _register_remote_test_routes(router, app, db_path, *, projects=None):
@@ -820,7 +820,7 @@ def test_remote_shell_requires_live_code_plugin_even_with_stale_grant(
         project_scopes=["project_1"],
     )
     monkeypatch.setattr(
-        "agent.plugin.plugin_impl.cyrene_remote.control._remote_shell_plugin_available",
+        "cyrene.plugins.builtin.cyrene_remote.control._remote_shell_plugin_available",
         lambda: True,
     )
     shell_commands = (
@@ -839,7 +839,7 @@ def test_remote_shell_requires_live_code_plugin_even_with_stale_grant(
         ) == (True, "")
 
     monkeypatch.setattr(
-        "agent.plugin.plugin_impl.cyrene_remote.control._remote_shell_plugin_available",
+        "cyrene.plugins.builtin.cyrene_remote.control._remote_shell_plugin_available",
         lambda: False,
     )
     for command in shell_commands:
@@ -854,7 +854,7 @@ def test_remote_shell_requires_live_code_plugin_even_with_stale_grant(
         from cyrene.localization import localized
 
         monkeypatch.setattr(
-            "agent.plugin.plugin_impl.cyrene_remote.commands.active_plugin_service",
+            "cyrene.plugins.builtin.cyrene_remote.commands.application_plugin_service",
             lambda _name: None,
         )
         executor = RemoteCommandExecutor(store=target, db_path=target.db_path)
@@ -1169,14 +1169,14 @@ def test_remote_harness_filters_by_granted_plugin_pack_and_uses_bound_context(
             project_scopes=["project_1"],
         )
         monkeypatch.setattr(
-            "agent.plugin.plugin_impl.cyrene_remote.commands._remote_project",
+            "cyrene.plugins.builtin.cyrene_remote.commands._remote_project",
             lambda project_id: {
                 "id": project_id,
                 "workspacePath": str(tmp_path),
             },
         )
         monkeypatch.setattr(
-            "agent.plugin.plugin_impl.cyrene_remote.commands._remote_project_workspace",
+            "cyrene.plugins.builtin.cyrene_remote.commands._remote_project_workspace",
             lambda _project: str(tmp_path),
         )
         observed = {"calls": []}
@@ -1241,7 +1241,7 @@ def test_remote_harness_filters_by_granted_plugin_pack_and_uses_bound_context(
             services={},
         )
         monkeypatch.setattr(
-            "agent.plugin.plugin_impl.cyrene_remote.commands.active_plugin_application_host",
+            "cyrene.plugins.builtin.cyrene_remote.commands.application_plugin_scope",
             lambda: host,
         )
         executor = RemoteCommandExecutor(
@@ -1352,7 +1352,7 @@ def test_remote_shell_is_direct_project_scoped_and_device_owned(
             project_scopes=["project_1"],
         )
         monkeypatch.setattr(
-            "agent.plugin.plugin_impl.cyrene_remote.commands._remote_project",
+            "cyrene.plugins.builtin.cyrene_remote.commands._remote_project",
             lambda project_id: {
                 "id": project_id,
                 "name": "Authorized project",
@@ -1360,7 +1360,7 @@ def test_remote_shell_is_direct_project_scoped_and_device_owned(
             },
         )
         monkeypatch.setattr(
-            "agent.plugin.plugin_impl.cyrene_remote.commands._remote_project_workspace",
+            "cyrene.plugins.builtin.cyrene_remote.commands._remote_project_workspace",
             lambda _project: str(tmp_path),
         )
         observed = {}
@@ -1396,7 +1396,7 @@ def test_remote_shell_is_direct_project_scoped_and_device_owned(
 
         fake_client = FakeTerminalClient()
         monkeypatch.setattr(
-            "agent.plugin.plugin_impl.cyrene_remote.commands.active_plugin_service",
+            "cyrene.plugins.builtin.cyrene_remote.commands.application_plugin_service",
             lambda name: fake_client if name == "remote_shell" else None,
         )
         executor = RemoteCommandExecutor(
@@ -1460,7 +1460,7 @@ def test_remote_harness_sends_list_and_exact_authorized_invoke(monkeypatch):
         }
         commands = []
         monkeypatch.setattr(
-            "agent.plugin.plugin_impl.cyrene_remote.harness.resolve_selected_remote_device",
+            "cyrene.plugins.builtin.cyrene_remote.harness.resolve_selected_remote_device",
             lambda *_args, **_kwargs: ({}, device),
         )
 
@@ -1468,7 +1468,7 @@ def test_remote_harness_sends_list_and_exact_authorized_invoke(monkeypatch):
             commands.append(args)
             return {"ok": True, "result": {"status": "success"}}
         monkeypatch.setattr(
-            "agent.plugin.plugin_impl.cyrene_remote.harness.request_remote_command",
+            "cyrene.plugins.builtin.cyrene_remote.harness.request_remote_command",
             send,
         )
 
@@ -1524,7 +1524,7 @@ def test_remote_command_reads_only_attachment_referenced_by_shared_chat(
     async def scenario():
         from cyrene import config as cyrene_config
         from cyrene.runtime import attachments as managed_attachments
-        from agent.plugin.plugin_impl.cyrene_remote import (
+        from cyrene.plugins.builtin.cyrene_remote import (
             commands as remote_commands_module,
         )
 
@@ -1712,7 +1712,7 @@ def test_remote_status_assembles_chunks_into_local_attachment(
     async def scenario():
         from cyrene import config as cyrene_config
         from cyrene.runtime import attachments as managed_attachments
-        from agent.plugin.plugin_impl.cyrene_remote import status as remote_status
+        from cyrene.plugins.builtin.cyrene_remote import status as remote_status
 
         data_dir = tmp_path / "data"
         exports = data_dir / "exports"
@@ -2223,7 +2223,7 @@ def test_remote_relay_requires_tls_except_on_localhost():
 
 
 def test_mobile_model_copy_exports_api_key_but_never_codex_oauth(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_remote import commands as commands_module
+    from cyrene.plugins.builtin.cyrene_remote import commands as commands_module
 
     graph = {
         "version": 10,
@@ -2257,7 +2257,7 @@ def test_mobile_model_copy_exports_api_key_but_never_codex_oauth(monkeypatch):
     host = SimpleNamespace(
         service=lambda name: service if name == "model_configuration" else None
     )
-    monkeypatch.setattr(commands_module, "active_plugin_application_host", lambda: host)
+    monkeypatch.setattr(commands_module, "application_plugin_scope", lambda: host)
 
     copied = RemoteCommandExecutor._settings_models_copy({})["models"]
 

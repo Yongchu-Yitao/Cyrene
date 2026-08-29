@@ -79,8 +79,8 @@ test('shortcut UI retries only its action patch and preserves concurrent user or
     Array, String, Math, setTimeout, clearTimeout,
   });
   for (const relative of [
-    '../src/webui/frontend/platform/runtime.jsx',
-    '../src/webui/frontend/workbench-shortcuts.jsx',
+    '../src/cyrene/workbench/webui/frontend/platform/runtime.jsx',
+    '../src/cyrene/workbench/webui/frontend/workbench-shortcuts.jsx',
   ]) {
     let source = fs.readFileSync(path.join(__dirname, relative), 'utf8');
     if (relative.endsWith('workbench-shortcuts.jsx')) {

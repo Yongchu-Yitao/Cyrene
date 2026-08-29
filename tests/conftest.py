@@ -19,6 +19,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 _REAL_PIL_IMAGE = importlib.import_module("PIL.Image")
 
+
+@pytest.fixture(autouse=True)
+def _isolate_persisted_app_language(monkeypatch):
+    """Keep unit tests independent from the developer's saved UI language."""
+    from cyrene.plugins import set_application_plugin_scope
+    from cyrene.runtime import settings_store
+
+    set_application_plugin_scope(None)
+    original_get = settings_store.get
+
+    def get_setting(key, default=None):
+        if key == "app_language":
+            return "en"
+        return original_get(key, default)
+
+    monkeypatch.setattr(settings_store, "get", get_setting)
+    yield
+    set_application_plugin_scope(None)
+
 _WORKBENCH_CHAT_SOURCE_FILES = (
     "workbench-chat.jsx",
     "features/chat/core.jsx",
@@ -162,7 +181,7 @@ _WORKBENCH_SETTINGS_SOURCE_FILES = (
 
 
 def _frontend_source(relative_files: tuple[str, ...]) -> str:
-    frontend = Path(__file__).resolve().parent.parent / "src" / "webui" / "frontend"
+    frontend = Path(__file__).resolve().parent.parent / "src" / "cyrene" / "workbench" / "webui" / "frontend"
     return "\n".join((frontend / relative).read_text(encoding="utf-8") for relative in relative_files)
 
 
@@ -203,7 +222,7 @@ def workbench_chat_source() -> str:
 def workbench_chat_route_source() -> str:
     """Return Chat HTTP adapters and their delegated application implementation."""
     source_root = Path(__file__).resolve().parent.parent / "src"
-    src = source_root / "route" / "workbench"
+    src = source_root / "cyrene" / "workbench" / "http" / "workbench"
     files = (
         src / "chat.py",
         src / "chat_routes" / "context.py",
@@ -212,9 +231,7 @@ def workbench_chat_route_source() -> str:
         src / "chat_routes" / "pinned_routes.py",
         src / "chat_routes" / "collection_routes.py",
         source_root
-        / "agent"
-        / "plugin"
-        / "plugin_impl"
+        / "cyrene" / "plugins" / "builtin"
         / "cyrene_voice"
         / "workbench_routes.py",
         src / "chat_routes" / "side_agents_routes.py",
@@ -232,8 +249,8 @@ def workbench_chat_route_source() -> str:
         src / "chat_routes" / "run_answer_routes.py",
         src / "chat_routes" / "conversation_context.py",
         src / "chat_routes" / "files.py",
-        source_root / "cyrene" / "workbench" / "chat_external_turn_service.py",
-        source_root / "cyrene" / "workbench" / "chat_reply_finalization_service.py",
+        source_root / "cyrene" / "workbench" / "chat" / "chat_external_turn_service.py",
+        source_root / "cyrene" / "workbench" / "chat" / "chat_reply_finalization_service.py",
     )
     return "\n".join(path.read_text(encoding="utf-8") for path in files)
 
@@ -241,7 +258,26 @@ def workbench_chat_route_source() -> str:
 def workbench_runtime_source() -> str:
     """Return the explicit Workbench application-service implementation set."""
     workbench = Path(__file__).resolve().parent.parent / "src" / "cyrene" / "workbench"
-    files = sorted(path for path in workbench.glob("*.py") if path.name not in {"__init__.py", "runtime.py"})
+    domain_packages = (
+        "application",
+        "artifacts",
+        "chat",
+        "control",
+        "goals",
+        "persistence",
+        "planning",
+        "projects",
+        "sessions",
+        "tasks",
+        "ui",
+        "workspace",
+    )
+    files = sorted(
+        path
+        for package in domain_packages
+        for path in (workbench / package).glob("*.py")
+        if path.name != "__init__.py"
+    )
     return "\n".join(path.read_text(encoding="utf-8") for path in files)
 
 
@@ -253,7 +289,7 @@ def real_pillow_modules():
     sys.modules["PIL"] = _REAL_PIL
     sys.modules["PIL.Image"] = _REAL_PIL_IMAGE
     _REAL_PIL.Image = _REAL_PIL_IMAGE
-    from agent.plugin.plugin_impl.cyrene_mcp import content as mcp_content
+    from cyrene.plugins.builtin.cyrene_mcp import content as mcp_content
 
     previous_mcp_image = mcp_content.Image
     mcp_content.Image = _REAL_PIL_IMAGE

@@ -5,14 +5,14 @@ from __future__ import annotations
 import asyncio
 import threading
 
-from agent.session import AgentSession
-from agent.hook import (
+from cyrene.core.session import AgentSession
+from cyrene.core.hook import (
     CONTEXT_CHANGE,
     SESSION_START,
     TURN_START,
     with_session_start_cache_fingerprint,
 )
-from agent.plugin import Plugin, PluginContext, PluginPack, PluginRegistry
+from cyrene.core.plugin import Plugin, PluginContext, PluginPack, PluginRegistry
 
 
 def run(coroutine):

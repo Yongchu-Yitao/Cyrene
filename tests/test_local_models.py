@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from agent.plugin.plugin_impl.cyrene_knowledge import local_models
-from agent.plugin.plugin_impl.cyrene_knowledge import local_onnx
+from cyrene.plugins.builtin.cyrene_knowledge import local_models
+from cyrene.plugins.builtin.cyrene_knowledge import local_onnx
 
 
 def test_sherpa_provider_prefers_cuda_then_apple_coreml(monkeypatch):
@@ -126,7 +126,7 @@ def test_windows_arm_registers_qnn_npu_session(monkeypatch):
 
 
 def test_windows_arm_ocr_uses_only_x64_sidecar(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_knowledge import ocr
+    from cyrene.plugins.builtin.cyrene_knowledge import ocr
 
     sidecar = tmp_path / "CyreneOcr.exe"
     sidecar.touch()
@@ -148,7 +148,7 @@ def test_windows_arm_ocr_uses_only_x64_sidecar(monkeypatch, tmp_path):
 
 
 def test_windows_arm_ocr_does_not_fall_back_to_x64_modules(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_knowledge import ocr
+    from cyrene.plugins.builtin.cyrene_knowledge import ocr
 
     monkeypatch.setattr(ocr.sys, "platform", "win32")
     monkeypatch.setattr(ocr.platform, "machine", lambda: "arm64")

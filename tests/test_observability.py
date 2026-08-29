@@ -6,11 +6,11 @@ import asyncio
 import json
 import logging
 
-from agent.context import ContextStoreRouter
-from agent.hook import POST_TOOL_USE
-from agent.observability import LOG_PREFIX, MAX_STRING_LENGTH, safe_log_value
-from agent.plugin import Plugin, PluginContext, PluginPack, PluginRegistry, PluginRuntime
-from agent.session import AgentSession
+from cyrene.core.context import ContextStoreRouter
+from cyrene.core.hook import POST_TOOL_USE
+from cyrene.core.observability import LOG_PREFIX, MAX_STRING_LENGTH, safe_log_value
+from cyrene.core.plugin import Plugin, PluginContext, PluginPack, PluginRegistry, PluginRuntime
+from cyrene.core.session import AgentSession
 
 
 def _operations(caplog) -> list[dict]:
@@ -174,7 +174,7 @@ def test_agent_session_logs_state_transitions_and_output_events(tmp_path, caplog
 
     operations = _operations(caplog)
     agent_operations = [
-        item for item in operations if item["component"] == "agent.session"
+        item for item in operations if item["component"] == "cyrene.core.session"
     ]
     assert any(
         item["action"] == "submit"

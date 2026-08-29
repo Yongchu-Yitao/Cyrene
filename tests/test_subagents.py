@@ -8,8 +8,8 @@ import shutil
 import threading
 from pathlib import Path
 
-from agent import AgentSession
-from agent.plugin import (
+from cyrene.core import AgentSession
+from cyrene.core.plugin import (
     Plugin,
     PluginActivationState,
     PluginContext,
@@ -17,12 +17,12 @@ from agent.plugin import (
     PluginRegistry,
     PluginRuntime,
 )
-from agent.workbench import WorkbenchSessionBridge
+from cyrene.workbench.core_adapter import WorkbenchSessionBridge
 from cyrene.runtime import inbox
 
 
 CANONICAL_PLUGIN_DIRECTORY = (
-    Path(__file__).parents[1] / "src" / "agent" / "plugin" / "plugin_impl"
+    Path(__file__).parents[1] / "src" / "cyrene" / "plugins" / "builtin"
 )
 
 

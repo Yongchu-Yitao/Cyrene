@@ -4,12 +4,12 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from agent.plugin import PluginContext
+from cyrene.core.plugin import PluginContext
 
 
 def _force_language(monkeypatch: pytest.MonkeyPatch, language: str) -> None:
     from cyrene import localization
-    from route import errors as route_errors
+    from cyrene.workbench.http import errors as route_errors
 
     monkeypatch.setattr(
         localization,
@@ -24,7 +24,7 @@ def _force_language(monkeypatch: pytest.MonkeyPatch, language: str) -> None:
 
 
 def test_browser_runtime_errors_are_localized_and_redacted(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import runtime as browser
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 
     _force_language(monkeypatch, "zh")
 
@@ -55,7 +55,7 @@ def test_browser_runtime_errors_are_localized_and_redacted(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_browser_live_service_localizes_and_redacts_dispatch_errors(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser.live_service import (
+    from cyrene.plugins.builtin.cyrene_browser.live_service import (
         BrowserLiveController,
         BrowserServiceError,
     )
@@ -78,7 +78,7 @@ async def test_browser_live_service_localizes_and_redacts_dispatch_errors(monkey
 
 @pytest.mark.asyncio
 async def test_browser_plugin_result_uses_invocation_language():
-    from agent.plugin.plugin_impl.cyrene_browser import browser_scroll
+    from cyrene.plugins.builtin.cyrene_browser import browser_scroll
 
     result = await browser_scroll._tool_browser_scroll(
         {"delta_y": "not-an-integer"},
@@ -90,7 +90,7 @@ async def test_browser_plugin_result_uses_invocation_language():
 
 @pytest.mark.asyncio
 async def test_browser_plugin_relocalizes_and_redacts_backend_error(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser import browser_scroll, runtime
+    from cyrene.plugins.builtin.cyrene_browser import browser_scroll, runtime
 
     _force_language(monkeypatch, "en")
 
@@ -113,7 +113,7 @@ async def test_browser_plugin_relocalizes_and_redacts_backend_error(monkeypatch)
 
 
 def test_file_chooser_instruction_uses_invocation_language():
-    from agent.plugin.plugin_impl.cyrene_browser.browser_output import (
+    from cyrene.plugins.builtin.cyrene_browser.browser_output import (
         file_chooser_instruction,
     )
 
@@ -135,7 +135,7 @@ def test_file_chooser_instruction_uses_invocation_language():
 
 
 def test_browser_route_rejects_invalid_json_without_leaking_parser_details(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_browser.routes import register_browser_routes
+    from cyrene.plugins.builtin.cyrene_browser.routes import register_browser_routes
 
     _force_language(monkeypatch, "zh")
     app = FastAPI()

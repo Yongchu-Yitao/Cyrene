@@ -77,9 +77,9 @@ _ACP_INLINE_IMAGE_MAX_ENCODED_CHARS = ((_ACP_INLINE_IMAGE_MAX_BYTES + 2) // 3) *
 def _external_agent_installation(installation_id: str) -> dict[str, Any] | None:
     """Resolve one optional Agent installation through its Plugin service."""
 
-    from agent.plugin import active_plugin_service
+    from cyrene.core.plugin import application_plugin_service
 
-    service = active_plugin_service("extensions")
+    service = application_plugin_service("extensions")
     resolver = getattr(service, "get_agent_installation", None)
     if not callable(resolver):
         return None
@@ -178,7 +178,7 @@ def normalize_session_config_options(raw: Any) -> list[dict[str, Any]]:
     return result
 
 # Integration seam (phase 1): external /messages wiring lives in the route
-# layer (``src/route/workbench/chat.py``, owned by the workbench worker).  The
+# layer (``src/cyrene/workbench/http/workbench/chat.py``, owned by the workbench worker).  The
 # seam is one call site inside the existing ChatRunManager runner: when the
 # chat binding's driver is ``acp_stdio``, run the turn through
 # ``run_external_agent_turn(chat=chat, message=message, publish=run.publish,

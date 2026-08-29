@@ -7,8 +7,8 @@ from typing import Any
 
 import httpx
 
-from agent.plugin.execution import current_plugin_execution
-from agent.plugin.native_runtime import run_context_value
+from cyrene.core.plugin.execution import current_plugin_execution
+from cyrene.plugins.native_runtime import run_context_value
 
 _ALLOWED_METHODS = frozenset({
     "host.status",
@@ -60,7 +60,7 @@ async def call_host(
         if normalized_method in {"ui.snapshot.current", "ui.gesture.execute_current"}:
             if not active_ui_instance_id:
                 raise NoCurrentSurface("this run has no current UI surface")
-            from cyrene.workbench.ui_surface import request
+            from cyrene.workbench.ui.ui_surface import request
             result = await request(
                 active_ui_instance_id,
                 "snapshot" if normalized_method == "ui.snapshot.current" else "act",

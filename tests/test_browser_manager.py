@@ -98,7 +98,7 @@ def test_browser_manager_topbar_uses_page_favicons_and_opaque_flyout():
 
 
 def test_browser_manager_can_pin_pages_and_pinned_browser_keeps_its_favicon():
-    source = read("src/webui/frontend/features/shell/topbar.jsx")
+    source = read("src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx")
     styles = workbench_style_source()
 
     assert "function toggleManagedBrowserPin(page, event)" in source
@@ -115,7 +115,7 @@ def test_browser_manager_can_pin_pages_and_pinned_browser_keeps_its_favicon():
 
 
 def test_browser_manager_uses_packaged_tabler_icon_assets_and_i18n():
-    build = read("src/webui/build-jsx.mjs")
+    build = read("src/cyrene/workbench/webui/build-jsx.mjs")
     source = workbench_shell_source()
     translations = workbench_i18n_source()
 

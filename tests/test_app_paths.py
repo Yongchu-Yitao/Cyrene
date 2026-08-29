@@ -1,6 +1,59 @@
 import os
 
+from cyrene.core.plugin import registry as plugin_registry
 from cyrene.runtime.paths import cleanup_temporary_artifacts, resolve_app_paths
+
+
+def test_source_paths_use_independent_development_roots():
+    paths = resolve_app_paths(
+        platform="darwin",
+        home="/Users/alice",
+        env={},
+        bundled=False,
+        install_resources="/checkout/Cyrene",
+    )
+
+    assert str(paths.install_resources) == "/checkout/Cyrene"
+    assert str(paths.user_data) == "/Users/alice/Library/Application Support/Cyrene-dev"
+    assert paths.runtime_base == paths.user_data
+    assert paths.workspace == paths.user_data / "workspace"
+    assert paths.store == paths.user_data / "store"
+    assert paths.data == paths.user_data / "data"
+    assert str(paths.cache) == "/Users/alice/Library/Caches/Cyrene-dev"
+    assert str(paths.temp) == "/Users/alice/Library/Caches/Cyrene-dev/tmp"
+
+
+def test_source_paths_preserve_explicit_overrides(tmp_path):
+    paths = resolve_app_paths(
+        platform="darwin",
+        home="/Users/alice",
+        env={
+            "CYRENE_USER_DATA_DIR": str(tmp_path / "custom-data"),
+            "CYRENE_CACHE_DIR": str(tmp_path / "custom-cache"),
+            "CYRENE_BASE_DIR": str(tmp_path / "custom-runtime"),
+        },
+        bundled=False,
+        install_resources="/checkout/Cyrene",
+    )
+
+    assert paths.user_data == tmp_path / "custom-data"
+    assert paths.cache == tmp_path / "custom-cache"
+    assert paths.temp == tmp_path / "custom-cache" / "tmp"
+    assert paths.runtime_base == tmp_path / "custom-runtime"
+
+
+def test_default_plugin_directory_uses_shared_development_root(monkeypatch, tmp_path):
+    development_root = tmp_path / "Cyrene-dev"
+    monkeypatch.delenv("CYRENE_PLUGIN_IMPL_DIR", raising=False)
+    monkeypatch.setattr(
+        plugin_registry,
+        "user_data_dir",
+        lambda: development_root,
+    )
+
+    assert plugin_registry.default_plugin_impl_directory() == (
+        development_root / "plugin_impl"
+    ).resolve()
 
 
 def test_packaged_macos_paths_are_separated():

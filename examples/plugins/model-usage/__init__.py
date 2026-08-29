@@ -1,6 +1,6 @@
 """Example sandboxed Workbench view for the unified PluginPack framework."""
 
-from agent.plugin import PluginPack
+from cyrene.core.plugin import PluginPack
 
 from .application import setup_application
 

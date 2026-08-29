@@ -2077,7 +2077,8 @@ inline image cards that retain viewing, dragging, opening, and downloading.
 - Config migration and frontend contract tests cover Custom/Codex independent
   persistence, legacy migration, timezone synchronization, source switching,
   chat ordering, inline image structure, and both image actions.
-- `design-qa.md`, a dedicated remote-sharing QA record, and comparison/final
+- `project-notes/audits/design-regression.md`, a dedicated remote-sharing QA
+  record, and comparison/final
   captures for unified chat glass and inline images are committed with the
   implementation for future visual regression review.
 - Python package, UV lock, Electron manifest/lock, README badges, web docs,
@@ -2274,7 +2275,8 @@ remain unchanged.
 - **Scrollbars are hidden without disabling scroll** — conversation transcript,
   rail, Overview, Library, and Memory continue to support mouse, trackpad, and
   keyboard scrolling without visually heavy scrollbars.
-- **Design regression evidence is checked in** — `design-qa.md` and screenshots
+- **Design regression evidence is checked in** —
+  `project-notes/audits/design-regression.md` and screenshots
   record light, dark, scroll, and overlay iterations for later verification.
 
 #### Build, dependency, quality, and release changes

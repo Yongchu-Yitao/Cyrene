@@ -68,7 +68,7 @@ def _configuration(api_key: str = "sk-private") -> dict:
 
 
 def test_runtime_candidate_merges_connection_and_profile_transport_options():
-    from agent.plugin.plugin_impl.cyrene_model.configuration import (
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
         candidate_for_profile,
         normalize_model_configuration,
     )
@@ -95,7 +95,7 @@ def test_runtime_candidate_merges_connection_and_profile_transport_options():
 
 
 def test_model_connection_proxy_opt_in_survives_normalization_and_runtime_projection():
-    from agent.plugin.plugin_impl.cyrene_model.configuration import (
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
         candidate_for_profile,
         normalize_model_configuration,
         public_model_configuration,
@@ -115,7 +115,7 @@ def test_model_connection_proxy_opt_in_survives_normalization_and_runtime_projec
 def test_save_redacts_secrets_and_persists_only_the_canonical_graph(
     isolated_model_store,
 ):
-    from agent.plugin.plugin_impl.cyrene_model.configuration import (
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
         public_model_configuration,
         save_model_configuration,
     )
@@ -159,7 +159,7 @@ def test_save_redacts_secrets_and_persists_only_the_canonical_graph(
 
 
 def test_blank_secret_is_retained_and_clear_is_explicit(isolated_model_store):
-    from agent.plugin.plugin_impl.cyrene_model.configuration import (
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
         get_model_configuration,
         save_model_configuration,
     )
@@ -179,8 +179,8 @@ def test_blank_secret_is_retained_and_clear_is_explicit(isolated_model_store):
 
 
 def test_user_model_plugin_is_projected_as_an_editable_provider_connection():
-    from agent.plugin.plugin_impl.cyrene_model.configuration import normalize_model_configuration
-    from agent.plugin.plugin_impl.cyrene_model.routes import _public_configuration_with_plugins
+    from cyrene.plugins.builtin.cyrene_model.configuration import normalize_model_configuration
+    from cyrene.plugins.builtin.cyrene_model.routes import _public_configuration_with_plugins
 
     class CatalogService:
         @staticmethod
@@ -235,8 +235,8 @@ def test_user_model_plugin_is_projected_as_an_editable_provider_connection():
 
 
 def test_configured_user_model_plugin_connection_is_not_duplicated():
-    from agent.plugin.plugin_impl.cyrene_model.configuration import normalize_model_configuration
-    from agent.plugin.plugin_impl.cyrene_model.routes import _public_configuration_with_plugins
+    from cyrene.plugins.builtin.cyrene_model.configuration import normalize_model_configuration
+    from cyrene.plugins.builtin.cyrene_model.routes import _public_configuration_with_plugins
 
     class CatalogService:
         @staticmethod
@@ -272,9 +272,9 @@ def test_configured_user_model_plugin_connection_is_not_duplicated():
 
 @pytest.mark.asyncio
 async def test_embedding_profile_test_checks_the_exact_discovered_model(monkeypatch):
-    from agent.plugin import Plugin, PluginRegistry
-    import agent.plugin.model_catalog as model_catalog
-    from agent.plugin.plugin_impl.cyrene_model.routes import _test_model
+    from cyrene.core.plugin import Plugin, PluginRegistry
+    import cyrene.plugins.model_catalog as model_catalog
+    from cyrene.plugins.builtin.cyrene_model.routes import _test_model
 
     captured = {}
 
@@ -318,9 +318,9 @@ async def test_embedding_profile_test_checks_the_exact_discovered_model(monkeypa
 
 @pytest.mark.asyncio
 async def test_model_discovery_dispatches_through_provider_plugin(monkeypatch):
-    from agent.plugin import Plugin, PluginContext, PluginRegistry
-    import agent.plugin.model_catalog as model_catalog
-    from agent.plugin.plugin_impl.cyrene_model.routes import _discover
+    from cyrene.core.plugin import Plugin, PluginContext, PluginRegistry
+    import cyrene.plugins.model_catalog as model_catalog
+    from cyrene.plugins.builtin.cyrene_model.routes import _discover
 
     captured = {}
 
@@ -375,7 +375,7 @@ async def test_model_discovery_dispatches_through_provider_plugin(monkeypatch):
 def test_default_provider_connections_include_managed_local_provider(
     isolated_model_store,
 ):
-    from agent.plugin.plugin_impl.cyrene_model.configuration import (
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
         CONFIG_VERSION,
         get_model_configuration,
         save_model_configuration,
@@ -538,7 +538,7 @@ def test_default_provider_connections_include_managed_local_provider(
 
 
 def test_managed_connections_can_be_deleted_and_readded(isolated_model_store):
-    from agent.plugin.plugin_impl.cyrene_model.configuration import (
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
         get_model_configuration,
         save_model_configuration,
     )
@@ -598,7 +598,7 @@ def test_managed_connections_can_be_deleted_and_readded(isolated_model_store):
 
 
 def test_profile_route_validation_rejects_dangling_references():
-    from agent.plugin.plugin_impl.cyrene_model.configuration import normalize_model_configuration
+    from cyrene.plugins.builtin.cyrene_model.configuration import normalize_model_configuration
 
     raw = _configuration()
     raw["routes"]["primary"] = ["missing-profile"]
@@ -607,7 +607,7 @@ def test_profile_route_validation_rejects_dangling_references():
 
 
 def test_selectable_models_include_non_default_chat_profiles_only():
-    from agent.plugin.plugin_impl.cyrene_model.configuration import (
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
         normalize_model_configuration,
         selectable_model_candidates,
     )
@@ -640,7 +640,7 @@ def test_selectable_models_include_non_default_chat_profiles_only():
 def test_deleting_connection_persists_the_canonical_graph(
     isolated_model_store,
 ):
-    from agent.plugin.plugin_impl.cyrene_model.configuration import (
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
         get_model_configuration,
         save_model_configuration,
     )
@@ -674,11 +674,11 @@ def test_deleting_connection_persists_the_canonical_graph(
 
 def test_frontend_registers_split_pages_and_live_context_contract():
     root = Path(__file__).resolve().parents[1]
-    settings = (root / "src/webui/frontend/settings-model-configuration.jsx").read_text()
+    settings = (root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx").read_text()
     overlay = workbench_settings_source()
     chat = workbench_chat_source()
     i18n = workbench_i18n_source()
-    styles = (root / "src/webui/frontend/settings-model-configuration.css").read_text()
+    styles = (root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.css").read_text()
 
     assert 'register("model-settings"' in settings
     assert "ServicesPage: ServicesPage" in settings
@@ -780,10 +780,10 @@ def test_frontend_registers_split_pages_and_live_context_contract():
 def test_codex_oauth_service_exposes_cli_download_and_progress():
     root = Path(__file__).resolve().parents[1]
     settings = (
-        root / "src/webui/frontend/settings-model-configuration.jsx"
+        root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx"
     ).read_text()
     styles = (
-        root / "src/webui/frontend/settings-model-configuration.css"
+        root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.css"
     ).read_text()
     i18n = workbench_i18n_source()
 
@@ -823,10 +823,10 @@ def test_codex_oauth_service_exposes_cli_download_and_progress():
 
 def test_settings_and_provider_icons_are_inlined_before_first_render():
     root = Path(__file__).resolve().parents[1]
-    build = (root / "src/webui/build-jsx.mjs").read_text()
-    index = (root / "src/webui/frontend/index.html").read_text()
+    build = (root / "src/cyrene/workbench/webui/build-jsx.mjs").read_text()
+    index = (root / "src/cyrene/workbench/webui/frontend/index.html").read_text()
     overlay = workbench_settings_source()
-    settings = (root / "src/webui/frontend/settings-model-configuration.jsx").read_text()
+    settings = (root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx").read_text()
 
     assert "<!-- CYRENE_ICON_ASSETS -->" in index
     assert "function inlineIconAssets(" in build
@@ -842,8 +842,8 @@ def test_settings_and_provider_icons_are_inlined_before_first_render():
 
 def test_model_service_credentials_are_agent_write_only_and_r3():
     root = Path(__file__).resolve().parents[1]
-    settings = (root / "src/webui/frontend/settings-model-configuration.jsx").read_text()
-    surface = (root / "src/webui/frontend/platform/ui-surface.jsx").read_text()
+    settings = (root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx").read_text()
+    surface = (root / "src/cyrene/workbench/webui/frontend/platform/ui-surface.jsx").read_text()
 
     assert '"data-cyrene-agent-secret-input": "true"' in settings
     assert '"data-cyrene-risk": "R3"' in settings
@@ -860,8 +860,8 @@ def test_model_service_credentials_are_agent_write_only_and_r3():
 
 def test_model_service_api_row_has_per_connection_proxy_switch():
     root = Path(__file__).resolve().parents[1]
-    settings = (root / "src/webui/frontend/settings-model-configuration.jsx").read_text()
-    styles = (root / "src/webui/frontend/settings-model-configuration.css").read_text()
+    settings = (root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx").read_text()
+    styles = (root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.css").read_text()
 
     assert 'className: "wb-mcfg-api-proxy-row"' in settings
     assert 'checked: selected.use_proxy === true' in settings
@@ -873,8 +873,8 @@ def test_model_service_api_row_has_per_connection_proxy_switch():
 
 def test_services_autosave_is_single_flight_retryable_and_current_only():
     root = Path(__file__).resolve().parents[1]
-    settings = (root / "src/webui/frontend/settings-model-configuration.jsx").read_text()
-    styles = (root / "src/webui/frontend/settings-model-configuration.css").read_text()
+    settings = (root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx").read_text()
+    styles = (root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.css").read_text()
 
     hook = settings.split("function useModelConfiguration(props) {", 1)[1].split(
         "function LoadingState(props) {", 1

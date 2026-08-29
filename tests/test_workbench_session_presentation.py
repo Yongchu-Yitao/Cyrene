@@ -6,12 +6,12 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from agent.context import ContextStoreRouter, TreeNotFoundError
-from agent.workbench.chat_runtime import workbench_agent_data_directory
-from cyrene.workbench import store
-from cyrene.workbench.conversation_context_service import AgentContextRepository
-from cyrene.workbench.session_presentation import WorkbenchSessionPresentation
-from route.agent.sessions import register_session_routes
+from cyrene.core.context import ContextStoreRouter, TreeNotFoundError
+from cyrene.workbench.core_adapter.chat_runtime import workbench_agent_data_directory
+from cyrene.workbench.persistence import store
+from cyrene.workbench.chat.conversation_context_service import AgentContextRepository
+from cyrene.workbench.sessions.session_presentation import WorkbenchSessionPresentation
+from cyrene.workbench.http.agent.sessions import register_session_routes
 
 
 def _empty_store():

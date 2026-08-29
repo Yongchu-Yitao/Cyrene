@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from agent.plugin import PluginContext
-from agent.plugin.plugin_impl.cyrene_memory import application
-from agent.plugin.plugin_impl.cyrene_memory import recall_memory
-from agent.plugin.plugin_impl.cyrene_memory import structured
+from cyrene.core.plugin import PluginContext
+from cyrene.plugins.builtin.cyrene_memory import application
+from cyrene.plugins.builtin.cyrene_memory import recall_memory
+from cyrene.plugins.builtin.cyrene_memory import structured
 
 
 def test_memory_read_model_exposes_stable_ids_in_compatibility_label_fields(
@@ -123,8 +123,8 @@ async def test_memory_tool_empty_results_follow_plugin_context_language(monkeypa
 
 
 def test_memory_search_defaults_use_frontend_translation_markers(monkeypatch, tmp_path):
-    from cyrene.workbench import context as workbench_context
-    from cyrene.workbench import store as workbench_store
+    from cyrene.workbench.sessions import context as workbench_context
+    from cyrene.workbench.persistence import store as workbench_store
 
     monkeypatch.setattr(workbench_context, "read_projects", lambda: [])
     monkeypatch.setattr(
@@ -156,13 +156,13 @@ def test_memory_search_defaults_use_frontend_translation_markers(monkeypatch, tm
 
 def test_memory_frontend_localizes_codes_instead_of_rendering_backend_labels():
     root = Path(__file__).resolve().parents[1]
-    source = (root / "src/webui/frontend/workbench-memory.jsx").read_text(
+    source = (root / "src/cyrene/workbench/webui/frontend/workbench-memory.jsx").read_text(
         encoding="utf-8"
     )
-    en = (root / "src/webui/frontend/shared/i18n/catalog-en.jsx").read_text(
+    en = (root / "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-en.jsx").read_text(
         encoding="utf-8"
     )
-    zh = (root / "src/webui/frontend/shared/i18n/catalog-zh.jsx").read_text(
+    zh = (root / "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-zh.jsx").read_text(
         encoding="utf-8"
     )
 

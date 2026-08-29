@@ -11,15 +11,15 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from agent.plugin import (
-    PluginApplicationContext,
-    PluginApplicationHost,
+from cyrene.plugins import PluginApplicationContext
+from cyrene.core.plugin import (
     PluginContext,
     PluginRegistry,
     PluginRuntime,
 )
-from agent.plugin.plugin_impl.cyrene_memory import plugin_pack
-from agent.plugin.plugin_impl.cyrene_memory import application as memory_application
+from cyrene.plugins import PluginApplicationHost
+from cyrene.plugins.builtin.cyrene_memory import plugin_pack
+from cyrene.plugins.builtin.cyrene_memory import application as memory_application
 
 
 def run(coroutine):
@@ -72,7 +72,7 @@ def test_memory_pack_completes_toolbox_list_describe_invoke_chain(tmp_path):
 
 
 def test_seeded_user_directory_loads_complete_memory_pack(tmp_path):
-    from agent.plugin.native_tools import seed_builtin_plugin_directory
+    from cyrene.plugins.native_tools import seed_builtin_plugin_directory
     from cyrene.runtime.database import init_db
 
     seeded_root = tmp_path / "seeded"
@@ -111,9 +111,9 @@ def test_seeded_user_directory_loads_complete_memory_pack(tmp_path):
 
 
 def test_memory_pack_mounts_session_context_through_hook(monkeypatch, tmp_path):
-    from agent.session import AgentSession
-    from agent.plugin import Plugin, PluginPack
-    from agent.plugin.plugin_impl.cyrene_memory.service import MemoryService
+    from cyrene.core.session import AgentSession
+    from cyrene.core.plugin import Plugin, PluginPack
+    from cyrene.plugins.builtin.cyrene_memory.service import MemoryService
 
     captured = []
 
@@ -177,9 +177,9 @@ def test_memory_plugin_mounts_recent_conversation_for_proactive_run(
 ):
     from datetime import datetime, timezone
 
-    from agent.hook import HookEvent, TURN_START
-    from agent.plugin.plugin_impl.cyrene_memory import archive
-    from agent.plugin.plugin_impl.cyrene_memory.service import MemoryService
+    from cyrene.core.hook import HookEvent, TURN_START
+    from cyrene.plugins.builtin.cyrene_memory import archive
+    from cyrene.plugins.builtin.cyrene_memory.service import MemoryService
 
     async def recent_conversations(days=1):
         assert days == 1
@@ -210,8 +210,8 @@ def test_memory_context_uses_chat_snapshot_instead_of_live_project_store(
     monkeypatch,
     tmp_path,
 ):
-    from agent.plugin.plugin_impl.cyrene_memory import project_memory, short_term, structured
-    from agent.plugin.plugin_impl.cyrene_memory.service import MemoryService
+    from cyrene.plugins.builtin.cyrene_memory import project_memory, short_term, structured
+    from cyrene.plugins.builtin.cyrene_memory.service import MemoryService
 
     monkeypatch.setattr(
         short_term,
@@ -256,7 +256,7 @@ def test_memory_context_uses_chat_snapshot_instead_of_live_project_store(
 def test_memory_transcript_uses_the_shared_context_lifecycle_projection(tmp_path):
     from types import SimpleNamespace
 
-    from agent.plugin.plugin_impl.cyrene_memory.service import MemoryService
+    from cyrene.plugins.builtin.cyrene_memory.service import MemoryService
 
     path = [
         SimpleNamespace(id="root", value={"role": "system", "content": "base"}),
@@ -323,9 +323,9 @@ def test_memory_transcript_uses_the_shared_context_lifecycle_projection(tmp_path
 def test_memory_plugin_session_end_owns_automatic_capture(monkeypatch, tmp_path):
     from datetime import datetime, timezone
 
-    from agent.context import ContextStoreRouter
-    from agent.hook import HookEvent, SESSION_END
-    from agent.plugin.plugin_impl.cyrene_memory.service import MemoryService
+    from cyrene.core.context import ContextStoreRouter
+    from cyrene.core.hook import HookEvent, SESSION_END
+    from cyrene.plugins.builtin.cyrene_memory.service import MemoryService
 
     captured = {}
 
@@ -364,7 +364,7 @@ def test_memory_plugin_session_end_owns_automatic_capture(monkeypatch, tmp_path)
     monkeypatch.setattr(MemoryService, "_persist_learning_snapshot", persist)
     monkeypatch.setattr(MemoryService, "_capture_and_learn", capture)
     monkeypatch.setattr(
-        "agent.plugin.plugin_impl.cyrene_memory.project_memory.claim_structured_memory_threshold",
+        "cyrene.plugins.builtin.cyrene_memory.project_memory.claim_structured_memory_threshold",
         lambda *_args, **_kwargs: 10,
     )
 
@@ -434,10 +434,10 @@ def test_memory_plugin_session_end_owns_automatic_capture(monkeypatch, tmp_path)
 
 
 def test_project_learning_uses_exact_tool_call_node(monkeypatch, tmp_path):
-    from agent.context import ContextStoreRouter
-    from agent.plugin.plugin_impl.cyrene_memory.service import MemoryService
-    from agent.plugin.plugin_impl.cyrene_memory import project_memory
-    from cyrene.workbench.chat_repository import ChatRepository
+    from cyrene.core.context import ContextStoreRouter
+    from cyrene.plugins.builtin.cyrene_memory.service import MemoryService
+    from cyrene.plugins.builtin.cyrene_memory import project_memory
+    from cyrene.workbench.chat.chat_repository import ChatRepository
 
     captured = {}
 
@@ -628,11 +628,11 @@ def test_memory_pack_attaches_real_application_contributions(tmp_path):
 
 
 def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_memory import archive
-    from agent.plugin.plugin_impl.cyrene_soul import plugin_pack as soul_pack
-    from agent.plugin.plugin_impl.cyrene_soul import store as soul_store
+    from cyrene.plugins.builtin.cyrene_memory import archive
+    from cyrene.plugins.builtin.cyrene_soul import plugin_pack as soul_pack
+    from cyrene.plugins.builtin.cyrene_soul import store as soul_store
     from cyrene.runtime.database import init_db
-    from cyrene.workbench.store import write_document
+    from cyrene.workbench.persistence.store import write_document
 
     database = tmp_path / "runtime.db"
     run(init_db(str(database)))
@@ -752,15 +752,13 @@ def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch
     run(host.shutdown())
     frontend = (
         Path(__file__).resolve().parents[1]
-        / "src"
-        / "webui"
+        / "src" / "cyrene" / "workbench" / "webui"
         / "frontend"
         / "workbench-memory.jsx"
     ).read_text(encoding="utf-8")
     project_frontend = (
         Path(__file__).resolve().parents[1]
-        / "src"
-        / "webui"
+        / "src" / "cyrene" / "workbench" / "webui"
         / "frontend"
         / "features"
         / "shell"
@@ -768,8 +766,7 @@ def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch
     ).read_text(encoding="utf-8")
     chat_frontend = (
         Path(__file__).resolve().parents[1]
-        / "src"
-        / "webui"
+        / "src" / "cyrene" / "workbench" / "webui"
         / "frontend"
         / "features"
         / "chat"
@@ -777,15 +774,13 @@ def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch
     ).read_text(encoding="utf-8")
     settings_frontend = (
         Path(__file__).resolve().parents[1]
-        / "src"
-        / "webui"
+        / "src" / "cyrene" / "workbench" / "webui"
         / "frontend"
         / "settings-overlay.jsx"
     ).read_text(encoding="utf-8")
     search_frontend = (
         Path(__file__).resolve().parents[1]
-        / "src"
-        / "webui"
+        / "src" / "cyrene" / "workbench" / "webui"
         / "frontend"
         / "shared"
         / "search"
@@ -793,8 +788,7 @@ def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch
     ).read_text(encoding="utf-8")
     compiled_frontend = (
         Path(__file__).resolve().parents[1]
-        / "src"
-        / "webui"
+        / "src" / "cyrene" / "workbench" / "webui"
         / "static"
         / "app"
         / "compiled"
@@ -821,8 +815,8 @@ def test_memory_application_search_preserves_visibility_and_project_scope(
     monkeypatch,
     tmp_path,
 ):
-    from cyrene.workbench import context as workbench_context
-    from cyrene.workbench import store as workbench_store
+    from cyrene.workbench.sessions import context as workbench_context
+    from cyrene.workbench.persistence import store as workbench_store
 
     monkeypatch.setattr(
         workbench_context,
@@ -863,8 +857,8 @@ def test_memory_application_search_preserves_visibility_and_project_scope(
 
 
 def test_memory_application_owns_workbench_learning_policy(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_memory import structured
-    from cyrene.workbench.store import ensure_schema
+    from cyrene.plugins.builtin.cyrene_memory import structured
+    from cyrene.workbench.persistence.store import ensure_schema
 
     database = tmp_path / "memory-policy.db"
     ensure_schema(database)
@@ -893,7 +887,7 @@ def test_memory_application_owns_workbench_learning_policy(tmp_path):
 
 
 def test_memory_application_owns_workbench_lifecycle_operations(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_memory import project_memory, structured
+    from cyrene.plugins.builtin.cyrene_memory import project_memory, structured
 
     calls: list[tuple] = []
     monkeypatch.setattr(
@@ -954,7 +948,7 @@ def test_memory_application_owns_archive_storage_and_backup_contract(
     monkeypatch,
     tmp_path,
 ):
-    from agent.plugin.plugin_impl.cyrene_memory import archive
+    from cyrene.plugins.builtin.cyrene_memory import archive
 
     conversations = tmp_path / "workspace" / ".cyrene" / "conversations"
     monkeypatch.setattr(archive, "CONVERSATIONS_DIR", conversations)
@@ -1001,8 +995,8 @@ def test_memory_application_owns_archive_storage_and_backup_contract(
 
 
 def test_memory_application_owns_existing_data_detection(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_memory import archive
-    from cyrene.workbench.store import ensure_schema, write_document
+    from cyrene.plugins.builtin.cyrene_memory import archive
+    from cyrene.workbench.persistence.store import ensure_schema, write_document
 
     database = tmp_path / "memory-existing.db"
     ensure_schema(database)

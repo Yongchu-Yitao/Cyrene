@@ -3,9 +3,9 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILD_SCRIPT = ROOT / "src" / "webui" / "build-jsx.mjs"
-PDFJS_ASSETS = ROOT / "src" / "webui" / "static" / "app" / "pdfjs"
-PDFJS_SETUP = ROOT / "src" / "webui" / "frontend" / "shared" / "pdf" / "bridge.jsx"
+BUILD_SCRIPT = ROOT / "src" / "cyrene" / "workbench" / "webui" / "build-jsx.mjs"
+PDFJS_ASSETS = ROOT / "src" / "cyrene" / "workbench" / "webui" / "static" / "app" / "pdfjs"
+PDFJS_SETUP = ROOT / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "shared" / "pdf" / "bridge.jsx"
 
 
 def test_pdfjs_build_uses_legacy_assets_for_every_javascript_context():

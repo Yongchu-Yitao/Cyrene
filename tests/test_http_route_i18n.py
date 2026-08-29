@@ -7,12 +7,12 @@ from types import SimpleNamespace
 
 from fastapi import APIRouter
 
-from cyrene.workbench.task_execution_service import TaskExecutionResponse
-from route import errors as route_errors
-from agent.plugin.plugin_impl.cyrene_content.routes import register_search_routes
-from route.workbench.chat_routes import run_action_routes, run_send_routes
-from agent.plugin.plugin_impl.cyrene_voice.workbench_routes import register_voice_routes
-from route.workbench.task_session_routes.responses import service_response
+from cyrene.workbench.tasks.task_execution_service import TaskExecutionResponse
+from cyrene.workbench.http import errors as route_errors
+from cyrene.plugins.builtin.cyrene_content.routes import register_search_routes
+from cyrene.workbench.http.workbench.chat_routes import run_action_routes, run_send_routes
+from cyrene.plugins.builtin.cyrene_voice.workbench_routes import register_voice_routes
+from cyrene.workbench.http.workbench.task_session_routes.responses import service_response
 
 
 def _json_body(response) -> dict:

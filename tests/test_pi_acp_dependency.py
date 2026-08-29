@@ -28,7 +28,7 @@ from cyrene.agent_runtime import AcpProcessManager
 # ---------------------------------------------------------------------------
 
 def test_pi_acp_catalog_declares_pinned_runtime_dependency():
-    from agent.plugin.plugin_impl.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
+    from cyrene.plugins.builtin.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
 
     profile = RECOMMENDED_AGENTS["pi-acp"]
     assert profile["distribution"] == {"kind": "npm", "package": "pi-acp@0.0.33"}
@@ -44,7 +44,7 @@ def test_pi_acp_catalog_declares_pinned_runtime_dependency():
 
 
 def test_other_recommended_agents_do_not_declare_dependencies():
-    from agent.plugin.plugin_impl.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
+    from cyrene.plugins.builtin.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
 
     for agent_id in ("opencode", "codex-acp"):
         assert "dependency" not in RECOMMENDED_AGENTS[agent_id]
@@ -55,7 +55,7 @@ def test_other_recommended_agents_do_not_declare_dependencies():
 # ---------------------------------------------------------------------------
 
 def _service(tasks=None):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service_module
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service_module
 
     extension_service = object.__new__(service_module.ExtensionService)
     extension_service.tasks = tasks or _FakeTasks()
@@ -77,7 +77,7 @@ class _FakeTasks:
 
 
 def _patch_extension_dirs(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service_module
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service_module
 
     monkeypatch.setattr(service_module, "_STAGING_DIR", tmp_path / "staging")
     monkeypatch.setattr(service_module, "_AGENT_DIR", tmp_path / "agents")
@@ -98,7 +98,7 @@ def _stage_shims(tmp_path, task_id, *, with_dependency: bool):
 
 @pytest.mark.asyncio
 async def test_npm_install_command_bundles_dependency_package(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
+    from cyrene.plugins.builtin.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
 
     _patch_extension_dirs(monkeypatch, tmp_path)
     install_root = tmp_path / "agents" / "pi-acp" / "0.0.33"
@@ -128,8 +128,8 @@ async def test_npm_install_command_bundles_dependency_package(monkeypatch, tmp_p
 
 @pytest.mark.asyncio
 async def test_npm_install_missing_dependency_raises_with_clear_message(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service_module
-    from agent.plugin.plugin_impl.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service_module
+    from cyrene.plugins.builtin.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
 
     _patch_extension_dirs(monkeypatch, tmp_path)
 
@@ -153,7 +153,7 @@ async def test_npm_install_missing_dependency_raises_with_clear_message(monkeypa
 
 @pytest.mark.asyncio
 async def test_npm_install_idempotent_only_when_dependency_present(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
+    from cyrene.plugins.builtin.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
 
     _patch_extension_dirs(monkeypatch, tmp_path)
     install_root = tmp_path / "agents" / "pi-acp" / "0.0.33"
@@ -179,7 +179,7 @@ async def test_npm_install_idempotent_only_when_dependency_present(monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_npm_install_reinstalls_when_dependency_shim_missing(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
+    from cyrene.plugins.builtin.cyrene_extensions.extension_catalog import RECOMMENDED_AGENTS
 
     _patch_extension_dirs(monkeypatch, tmp_path)
     install_root = tmp_path / "agents" / "pi-acp" / "0.0.33"
@@ -317,7 +317,7 @@ def test_validation_rejects_component_missing_from_managed_and_global_path(monke
 
 
 def test_agent_install_completeness_accepts_global_dependency(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_extensions import extension_service as service_module
+    from cyrene.plugins.builtin.cyrene_extensions import extension_service as service_module
 
     monkeypatch.setattr(service_module, "_AGENT_DIR", tmp_path / "agents")
     install_bin = tmp_path / "agents" / "pi-acp" / "0.0.33" / "node_modules" / ".bin"

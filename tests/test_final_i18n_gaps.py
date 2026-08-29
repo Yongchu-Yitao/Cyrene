@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from agent.plugin import Plugin, PluginContext, PluginRegistry, PluginRuntime
+from cyrene.core.plugin import Plugin, PluginContext, PluginRegistry, PluginRuntime
 
 
 @pytest.mark.asyncio
@@ -39,9 +39,9 @@ async def test_plugin_argument_validation_follows_invocation_language() -> None:
 
 @pytest.mark.asyncio
 async def test_map_and_cli_validation_follow_invocation_language(tmp_path) -> None:
-    from agent.plugin.plugin_impl.cyrene_cli.tools import search_cli_plugins
-    from agent.plugin.plugin_impl.cyrene_map.service import MapService, map_database
-    from agent.plugin.plugin_impl.cyrene_map.tools import _tool_pin_location
+    from cyrene.plugins.builtin.cyrene_cli.tools import search_cli_plugins
+    from cyrene.plugins.builtin.cyrene_map.service import MapService, map_database
+    from cyrene.plugins.builtin.cyrene_map.tools import _tool_pin_location
 
     map_service = MapService(map_database(tmp_path))
     map_service.initialize()
@@ -67,7 +67,7 @@ async def test_map_and_cli_validation_follow_invocation_language(tmp_path) -> No
 
 @pytest.mark.asyncio
 async def test_plugin_development_errors_and_guide_are_bilingual(tmp_path) -> None:
-    from agent.plugin.plugin_impl.cyrene_plugin_development.tools import (
+    from cyrene.plugins.builtin.cyrene_plugin_development.tools import (
         authoring_guide,
         scaffold,
     )
@@ -96,7 +96,7 @@ async def test_plugin_development_errors_and_guide_are_bilingual(tmp_path) -> No
 
 @pytest.mark.asyncio
 async def test_voice_readiness_error_uses_requested_language() -> None:
-    from agent.plugin.plugin_impl.cyrene_voice.voice_command import (
+    from cyrene.plugins.builtin.cyrene_voice.voice_command import (
         VoiceCommandApplicationService,
     )
 
@@ -124,7 +124,7 @@ async def test_voice_readiness_error_uses_requested_language() -> None:
 
 
 def test_application_envelope_localizes_and_masks_error_summary(monkeypatch) -> None:
-    from cyrene.workbench import app_control
+    from cyrene.workbench.application import app_control
 
     monkeypatch.setattr(
         app_control,

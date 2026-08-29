@@ -5,8 +5,8 @@ from typing import Any
 import pytest
 
 from cyrene.runtime import settings_store
-from cyrene.workbench import planning_contracts
-from cyrene.workbench.chat_service import ChatService
+from cyrene.workbench.planning import planning_contracts
+from cyrene.workbench.chat.chat_service import ChatService
 
 
 def test_planning_contract_uses_effective_language(monkeypatch) -> None:

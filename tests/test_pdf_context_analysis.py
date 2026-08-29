@@ -3,7 +3,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from agent.plugin.plugin_impl.cyrene_content.pdf_routes import (
+from cyrene.plugins.builtin.cyrene_content.pdf_routes import (
     _MAX_CONTEXT_CHARS,
     _MAX_CONTEXT_PAGES,
     _MAX_SELECTED_TEXT_CHARS,
@@ -96,8 +96,8 @@ def test_context_planner_can_choose_non_adjacent_reference_pages():
 
 
 def test_pdfjs_inventory_and_agent_selected_context_extraction():
-    runtime_path = ROOT / "src" / "webui" / "frontend" / "platform" / "runtime.jsx"
-    setup_path = ROOT / "src" / "webui" / "frontend" / "shared" / "pdf" / "bridge.jsx"
+    runtime_path = ROOT / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "platform" / "runtime.jsx"
+    setup_path = ROOT / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "shared" / "pdf" / "bridge.jsx"
     script = f"""
 const fs = require('fs');
 const vm = require('vm');
@@ -177,10 +177,7 @@ def test_both_pdf_viewers_submit_automatic_context():
     workbench = workbench_chat_source()
     routes = (
         ROOT
-        / "src"
-        / "agent"
-        / "plugin"
-        / "plugin_impl"
+        / "src" / "cyrene" / "plugins" / "builtin"
         / "cyrene_content"
         / "pdf_routes.py"
     ).read_text(encoding="utf-8")

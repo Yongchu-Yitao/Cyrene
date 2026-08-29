@@ -59,12 +59,12 @@ def test_quick_chat_shortcut_is_persisted_by_the_main_process():
 
 def test_quick_chat_surface_is_loaded_without_uploading_the_screenshot():
     quick_chat = (
-        ROOT / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx"
+        ROOT / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-quick-chat.jsx"
     ).read_text(encoding="utf-8")
-    app = (ROOT / "src" / "webui" / "frontend" / "entry" / "bootstrap.jsx").read_text(
+    app = (ROOT / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "entry" / "bootstrap.jsx").read_text(
         encoding="utf-8"
     )
-    index = (ROOT / "src" / "webui" / "frontend" / "index.html").read_text(
+    index = (ROOT / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "index.html").read_text(
         encoding="utf-8"
     )
 
@@ -88,7 +88,7 @@ def test_quick_chat_surface_is_loaded_without_uploading_the_screenshot():
 
 def test_quick_chat_reuses_the_shared_composer_not_a_fork():
     quick_chat = (
-        ROOT / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx"
+        ROOT / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-quick-chat.jsx"
     ).read_text(encoding="utf-8")
     chat = workbench_chat_source()
 
@@ -108,7 +108,7 @@ def test_quick_chat_reuses_the_shared_composer_not_a_fork():
 
 def test_quick_chat_send_close_and_sync_contract():
     quick_chat = (
-        ROOT / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx"
+        ROOT / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-quick-chat.jsx"
     ).read_text(encoding="utf-8")
     chat = workbench_chat_source()
     workbench = workbench_shell_source()

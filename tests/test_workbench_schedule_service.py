@@ -5,22 +5,23 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from agent.plugin import PluginApplicationHost, PluginRegistry
-from agent.plugin.native_tools import seed_builtin_plugin_directory
-from agent.plugin.plugin_impl.cyrene_entity.service import EntityService
-from agent.plugin.plugin_impl.cyrene_schedule.repository import ScheduleRepository
-from agent.plugin.plugin_impl.cyrene_schedule.routes import (
+from cyrene.core.plugin import PluginRegistry
+from cyrene.plugins import PluginApplicationHost
+from cyrene.plugins.native_tools import seed_builtin_plugin_directory
+from cyrene.plugins.builtin.cyrene_entity.service import EntityService
+from cyrene.plugins.builtin.cyrene_schedule.repository import ScheduleRepository
+from cyrene.plugins.builtin.cyrene_schedule.routes import (
     register_workbench_schedule_routes,
 )
-from agent.plugin.plugin_impl.cyrene_schedule.service import ScheduleRuntimeService
-from agent.plugin.plugin_impl.cyrene_schedule.workbench_repository import (
+from cyrene.plugins.builtin.cyrene_schedule.service import ScheduleRuntimeService
+from cyrene.plugins.builtin.cyrene_schedule.workbench_repository import (
     WorkspaceProjectResolver,
 )
-from agent.plugin.plugin_impl.cyrene_schedule.workbench_service import (
+from cyrene.plugins.builtin.cyrene_schedule.workbench_service import (
     ScheduleApplicationService,
 )
 from cyrene.runtime.database import init_db
-from cyrene.workbench.store import ensure_schema as ensure_workbench_schema
+from cyrene.workbench.persistence.store import ensure_schema as ensure_workbench_schema
 
 
 def _client(tmp_path, notifications):

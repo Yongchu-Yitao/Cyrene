@@ -1,0 +1,229 @@
+"""Persistent notification center store for the Workbench UI."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+from cyrene.localization import app_language
+from cyrene.workbench.projects import project_repository, project_runtime
+from cyrene.workbench.persistence.store import read_document, write_document
+
+_STORE_DB_PATH = ""
+_MAX_ITEMS = 400
+_VALID_TABS = {"all", "mention", "comment", "system"}
+
+
+def _publish_notification_change(change: str, **details: Any) -> None:
+    from cyrene.observability.debug import publish_event_sync
+
+    publish_event_sync({
+        "type": "notification_changed",
+        "change": change,
+        **details,
+    })
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _short_id(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:10]}"
+
+
+def _resolve_project_ref(project_ref: str | None) -> dict[str, str]:
+    raw = str(project_ref or "").strip()
+    out = {"projectId": "", "projectKey": "", "projectName": "", "workspacePath": ""}
+    if not raw:
+        return out
+    try:
+        payload = project_repository._read_workbench_store_lightweight()
+        for project in payload.get("projects", []):
+            pid = str(project.get("id") or "")
+            pkey = str(project_runtime._workbench_project_data_key(project) or "")
+            if raw in (pid, pkey):
+                out["projectId"] = pid
+                out["projectKey"] = pkey
+                out["projectName"] = str(project.get("name") or "")
+                out["workspacePath"] = str(project.get("workspacePath") or "")
+                return out
+    except Exception:
+        pass
+    out["projectId"] = raw
+    out["projectKey"] = raw
+    return out
+
+
+def _read_store() -> dict[str, Any]:
+    if not _STORE_DB_PATH:
+        raise RuntimeError("Workbench notifications are not configured")
+    data = read_document(
+        _STORE_DB_PATH,
+        "notifications",
+        lambda: {"items": []},
+    )
+    if isinstance(data, dict) and isinstance(data.get("items"), list):
+        return data
+    return {"items": []}
+
+
+def _write_store(payload: dict[str, Any]) -> None:
+    if not _STORE_DB_PATH:
+        raise RuntimeError("Workbench notifications are not configured")
+    merged = write_document(
+        _STORE_DB_PATH,
+        "notifications",
+        payload,
+        lambda: {"items": []},
+    )
+    payload.clear()
+    payload.update(merged)
+    if hasattr(payload, "_workbench_base"):
+        payload._workbench_base = getattr(merged, "_workbench_base", dict(merged))
+
+
+def configure_store(db_path: str) -> None:
+    global _STORE_DB_PATH
+    normalized = str(db_path or "").strip()
+    if not normalized:
+        raise ValueError("Workbench notifications require a database path")
+    _STORE_DB_PATH = normalized
+
+
+def append_notification(
+    *,
+    title: str,
+    body: str = "",
+    tab: str = "system",
+    project_ref: str | None = None,
+    source: str = "",
+    source_label: str = "",
+    link_label: str = "",
+    meta: dict[str, Any] | None = None,
+    created_at: str | None = None,
+    language: str | None = None,
+) -> dict[str, Any]:
+    title = str(title or "").strip()
+    if not title:
+        raise ValueError("title is required")
+    tab = str(tab or "system").strip().lower()
+    if tab not in _VALID_TABS or tab == "all":
+        tab = "system"
+    project = _resolve_project_ref(project_ref)
+    item = {
+        "id": _short_id("notif"),
+        "title": title[:120],
+        "body": str(body or "").strip()[:400],
+        "tab": tab,
+        "projectId": project["projectId"],
+        "projectKey": project["projectKey"],
+        "projectName": project["projectName"],
+        "workspacePath": project["workspacePath"],
+        "source": str(source or "").strip()[:80],
+        "sourceLabel": str(source_label or "").strip()[:80],
+        "linkLabel": str(link_label or "").strip()[:80],
+        "createdAt": str(created_at or _utc_now_iso()),
+        "language": app_language(language),
+        "read": False,
+        "meta": meta if isinstance(meta, dict) else {},
+    }
+    payload = _read_store()
+    items = payload.setdefault("items", [])
+    items.insert(0, item)
+    del items[_MAX_ITEMS:]
+    _write_store(payload)
+    _publish_notification_change("created", notification_id=item["id"])
+    return item
+
+
+def _remove_visible_unread(
+    payload: dict[str, Any],
+    *,
+    visible_chat_id: str = "",
+    visible_session_id: str = "",
+) -> int:
+    """Drop unread notifications whose underlying message is already on screen."""
+    chat_id = str(visible_chat_id or "").strip()
+    session_id = str(visible_session_id or "").strip()
+    if not chat_id and not session_id:
+        return 0
+
+    items = payload.get("items", [])
+    kept: list[dict[str, Any]] = []
+    removed = 0
+    for item in items:
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        is_visible = (
+            (bool(chat_id) and str(meta.get("chatId") or "") == chat_id)
+            or (bool(session_id) and str(meta.get("sessionId") or "") == session_id)
+        )
+        if not item.get("read") and is_visible:
+            removed += 1
+            continue
+        kept.append(item)
+
+    if removed:
+        payload["items"] = kept
+        _write_store(payload)
+        _publish_notification_change("removed", count=removed)
+    return removed
+
+
+def list_notifications(
+    *,
+    tab: str = "all",
+    limit: int = 80,
+    visible_chat_id: str = "",
+    visible_session_id: str = "",
+) -> dict[str, Any]:
+    tab = str(tab or "all").strip().lower()
+    if tab not in _VALID_TABS:
+        tab = "all"
+    limit = max(1, min(int(limit or 80), 200))
+    payload = _read_store()
+    _remove_visible_unread(
+        payload,
+        visible_chat_id=visible_chat_id,
+        visible_session_id=visible_session_id,
+    )
+    items = payload.get("items", [])
+    filtered = [item for item in items if tab == "all" or str(item.get("tab") or "") == tab]
+    unread_total = 0
+    unread_by_tab = {"mention": 0, "comment": 0, "system": 0}
+    for item in items:
+        if item.get("read"):
+            continue
+        unread_total += 1
+        key = str(item.get("tab") or "")
+        if key in unread_by_tab:
+            unread_by_tab[key] += 1
+    return {
+        "items": filtered[:limit],
+        "unreadCount": unread_total,
+        "counts": {
+            "all": len(items),
+            "mention": sum(1 for item in items if str(item.get("tab") or "") == "mention"),
+            "comment": sum(1 for item in items if str(item.get("tab") or "") == "comment"),
+            "system": sum(1 for item in items if str(item.get("tab") or "") == "system"),
+        },
+        "unreadByTab": {"all": unread_total, **unread_by_tab},
+    }
+
+
+def mark_notifications_read(ids: list[str] | None = None, *, mark_all: bool = False) -> dict[str, Any]:
+    payload = _read_store()
+    items = payload.get("items", [])
+    wanted = {str(item).strip() for item in (ids or []) if str(item).strip()}
+    changed = 0
+    for item in items:
+        if item.get("read"):
+            continue
+        if mark_all or str(item.get("id") or "") in wanted:
+            item["read"] = True
+            changed += 1
+    if changed:
+        _write_store(payload)
+        _publish_notification_change("read", count=changed)
+    return {"ok": True, "changed": changed}

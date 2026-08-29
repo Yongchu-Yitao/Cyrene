@@ -95,14 +95,14 @@ def _benchmark_spec(round_index: int) -> dict[str, Any]:
 
 async def _default_caller(method: str, args: dict[str, Any]) -> dict[str, Any]:
     global _LOCAL_PLUGIN_RUNTIME
-    from agent.plugin import (
+    from cyrene.core.plugin import (
         PluginActivationState,
         PluginContext,
         PluginRegistry,
         PluginRuntime,
         default_plugin_impl_directory,
     )
-    from agent.plugin.native_tools import seed_builtin_plugin_directory
+    from cyrene.plugins.native_tools import seed_builtin_plugin_directory
     from cyrene.runtime import settings_store
 
     plugin_name = _BENCHMARK_PLUGINS.get(method)
@@ -148,7 +148,7 @@ class _GatewayCaller:
     def __init__(self) -> None:
         import httpx
 
-        from agent.plugin.plugin_impl.cyrene_office.gateway import OfficeGatewayFiles
+        from cyrene.plugins.builtin.cyrene_office.gateway import OfficeGatewayFiles
 
         material = OfficeGatewayFiles()
         material.ensure()

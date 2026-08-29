@@ -1,4 +1,4 @@
-from agent.plugin.plugin_impl.cyrene_composer_context.application import (
+from cyrene.plugins.builtin.cyrene_composer_context.application import (
     ComposerContextService,
     ProjectResolver,
 )

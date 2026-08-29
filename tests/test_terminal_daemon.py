@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from agent.plugin.plugin_impl.cyrene_code.terminal.client import (
+from cyrene.plugins.builtin.cyrene_code.terminal.client import (
     LIFECYCLE_VERSION,
     TerminalDaemonClient,
     TerminalRequestError,
 )
-from agent.plugin.plugin_impl.cyrene_code.terminal.daemon import TerminalDaemon
+from cyrene.plugins.builtin.cyrene_code.terminal.daemon import TerminalDaemon
 
 
 @pytest.mark.asyncio
@@ -88,7 +88,7 @@ async def test_legacy_retirement_never_uses_signal_zero(
     monkeypatch.setattr(client, "_recorded_request", recorded_request)
     monkeypatch.setattr(client, "_wait_for_legacy_retirement", retired)
     monkeypatch.setattr(
-        "agent.plugin.plugin_impl.cyrene_code.terminal.client.os.kill",
+        "cyrene.plugins.builtin.cyrene_code.terminal.client.os.kill",
         lambda pid, signum: signals.append((pid, signum)),
     )
 
@@ -105,7 +105,7 @@ async def test_terminal_daemon_survives_view_disconnect_until_explicit_delete(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    import agent.plugin.plugin_impl.cyrene_code.terminal.manager as manager_module
+    import cyrene.plugins.builtin.cyrene_code.terminal.manager as manager_module
 
     state_dir = tmp_path / "daemon-state"
     monkeypatch.setattr(
@@ -114,7 +114,7 @@ async def test_terminal_daemon_survives_view_disconnect_until_explicit_delete(
         classmethod(lambda cls, project_id, cwd="": tmp_path),
     )
     monkeypatch.setattr(
-        "agent.plugin.plugin_impl.cyrene_code.terminal.shell_runtime.interactive_argv",
+        "cyrene.plugins.builtin.cyrene_code.terminal.shell_runtime.interactive_argv",
         lambda: ("sh", ["/bin/sh"]),
     )
     client = TerminalDaemonClient(state_dir=state_dir)
@@ -231,7 +231,7 @@ async def test_exited_terminal_input_does_not_drop_daemon_subscription(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    import agent.plugin.plugin_impl.cyrene_code.terminal.manager as manager_module
+    import cyrene.plugins.builtin.cyrene_code.terminal.manager as manager_module
 
     state_dir = tmp_path / "daemon-state"
     monkeypatch.setattr(
@@ -240,7 +240,7 @@ async def test_exited_terminal_input_does_not_drop_daemon_subscription(
         classmethod(lambda cls, project_id, cwd="": tmp_path),
     )
     monkeypatch.setattr(
-        "agent.plugin.plugin_impl.cyrene_code.terminal.shell_runtime.interactive_argv",
+        "cyrene.plugins.builtin.cyrene_code.terminal.shell_runtime.interactive_argv",
         lambda: ("sh", ["/bin/sh", "-c", "exit 0"]),
     )
     client = TerminalDaemonClient(state_dir=state_dir)
@@ -283,7 +283,7 @@ async def test_terminal_daemon_shutdown_closes_views_and_recovers_shell(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    import agent.plugin.plugin_impl.cyrene_code.terminal.manager as manager_module
+    import cyrene.plugins.builtin.cyrene_code.terminal.manager as manager_module
 
     state_dir = tmp_path / "daemon-state"
     monkeypatch.setattr(
@@ -292,7 +292,7 @@ async def test_terminal_daemon_shutdown_closes_views_and_recovers_shell(
         classmethod(lambda cls, project_id, cwd="": tmp_path),
     )
     monkeypatch.setattr(
-        "agent.plugin.plugin_impl.cyrene_code.terminal.shell_runtime.interactive_argv",
+        "cyrene.plugins.builtin.cyrene_code.terminal.shell_runtime.interactive_argv",
         lambda: ("sh", ["/bin/sh"]),
     )
     client = TerminalDaemonClient(state_dir=state_dir)
@@ -359,7 +359,7 @@ async def test_terminal_daemon_shutdown_closes_views_and_recovers_shell(
 
 
 def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
-    frontend = Path(__file__).parents[1] / "src/webui/frontend"
+    frontend = Path(__file__).parents[1] / "src/cyrene/workbench/webui/frontend"
     source = (frontend / "terminal/entry.jsx").read_text(encoding="utf-8")
     zh_catalog = (frontend / "shared/i18n/catalog-zh.jsx").read_text(
         encoding="utf-8"
@@ -404,6 +404,14 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert 'box-shadow: none !important;' in terminal_styles
     assert 'terminal.write("\\u001b[?25h")' in source
     assert 'message.type === "replay_complete"' in source
+    assert 'cursorRef.current = 0;\n    setHasContent(false);' in source
+    assert 'if (replayGeometryActive) return;' in source
+    assert 'message.terminal.cols || terminal.cols' in source
+    assert 'message.terminal.rows || terminal.rows' in source
+    assert 'replayGeometryActive = false;\n      applyDesiredGeometry();' in source
+    assert 'if (!replayNeedsFullRefresh)' in source
+    assert 'terminal.resize(pulseCols, actualRows);' in source
+    assert 'terminal.resize(actualCols, actualRows);' in source
     assert 'tailSpacer.className = "wbc-terminal-tail-spacer"' in source
     assert 'pendingUserInputMarker = createInteractionMarker()' in source
     assert 'replaceLastInteractionMarker(pendingUserInputMarker || createInteractionMarker())' in source

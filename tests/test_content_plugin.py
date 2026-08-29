@@ -4,33 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 
 from fastapi import APIRouter, FastAPI
 
-from agent.plugin import (
-    PluginApplicationHost,
+from cyrene.core.plugin import (
     PluginContext,
     PluginRegistry,
     PluginRuntime,
 )
-from agent.plugin.plugin_impl.cyrene_content import plugin_pack
-from agent.plugin.plugin_impl.cyrene_content import tool_result_store, web_search
+from cyrene.plugins import PluginApplicationHost
+from cyrene.plugins.builtin.cyrene_content import plugin_pack
+from cyrene.plugins.builtin.cyrene_content import tool_result_store
 
 
 def run(coroutine):
     return asyncio.run(coroutine)
-
-
-def test_content_pack_has_no_legacy_tooling_dependency():
-    root = Path(web_search.__file__).parent
-    sources = "\n".join(
-        path.read_text(encoding="utf-8") for path in sorted(root.glob("*.py"))
-    )
-    assert "cyrene.tooling" not in sources
-    assert "cyrene.agent.context" not in sources
-    assert "from route.pdf" not in sources
-    assert "from route.search" not in sources
 
 
 def test_disabled_content_pack_mounts_no_routes_or_process_services(tmp_path):

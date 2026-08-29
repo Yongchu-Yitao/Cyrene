@@ -127,7 +127,7 @@ def test_scan_includes_plugin_defined_storage_categories(
 def test_browser_profile_is_contributed_by_browser_application(
     tmp_path: Path,
 ) -> None:
-    from agent.plugin.plugin_impl.cyrene_browser.application import (
+    from cyrene.plugins.builtin.cyrene_browser.application import (
         BrowserApplicationService,
     )
 
@@ -143,12 +143,12 @@ def test_knowledge_application_contributes_legacy_database_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agent.plugin.plugin_impl.cyrene_knowledge import (
+    from cyrene.plugins.builtin.cyrene_knowledge import (
         local_models,
         ocr,
         opencv_runtime,
     )
-    from agent.plugin.plugin_impl.cyrene_knowledge.service import (
+    from cyrene.plugins.builtin.cyrene_knowledge.service import (
         create_knowledge_service,
     )
 

@@ -7,12 +7,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agent.workbench.task_runtime import (
+from cyrene.workbench.core_adapter.task_runtime import (
     TaskAgentResult,
     TaskAgentRuntime,
     TaskAgentRuntimeError,
 )
-from route.registry import register_routes
+from cyrene.workbench.http.registry import register_routes
 
 
 class _FakeAgentRuntime:
@@ -66,14 +66,14 @@ class _SqliteProjectStore:
 
     def read_text(self, encoding="utf-8"):
         del encoding
-        from cyrene.workbench import project_repository
+        from cyrene.workbench.projects import project_repository
 
         project_repository._configure_workbench_store(self.db_path)
         return json.dumps(project_repository._read_workbench_store())
 
     def write_text(self, text, encoding="utf-8"):
         del encoding
-        from cyrene.workbench import project_repository
+        from cyrene.workbench.projects import project_repository
 
         project_repository._configure_workbench_store(self.db_path)
         project_repository._write_workbench_store(json.loads(text))
@@ -134,8 +134,8 @@ def _store(tmp_path, *, status="planning", revision=3):
 
 
 def _app(monkeypatch, tmp_path):
-    from cyrene.workbench import goal_loop as goal_loop
-    from cyrene.workbench import project_repository as routes
+    from cyrene.workbench.goals import goal_loop as goal_loop
+    from cyrene.workbench.projects import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path)
     db_path = store_path.db_path
@@ -194,7 +194,7 @@ def test_goal_loop_preview_and_start_without_changing_goal(monkeypatch, tmp_path
     assert stored_session["approvedPlanDefinitionRevision"] == 3
 
     async def read_run():
-        from cyrene.workbench.goal_loop import _get_run_by_session
+        from cyrene.workbench.goals.goal_loop import _get_run_by_session
         return await _get_run_by_session(db_path, "session_1")
 
     run = asyncio.run(read_run())
@@ -235,14 +235,14 @@ async def test_goal_loop_concurrent_start_returns_conflict_not_server_error(monk
     conflict = first if first.status_code == 409 else second
     assert conflict.json()["code"] == "goal_loop_exists"
 
-    from cyrene.workbench import goal_loop as goal_loop
+    from cyrene.workbench.goals import goal_loop as goal_loop
 
     rows = await goal_loop._fetch_all(db_path, "SELECT * FROM goal_runs WHERE session_id = ?", ("session_1",))
     assert len(rows) == 1
 
 
 async def test_goal_loop_start_rolls_back_run_when_projection_write_fails(monkeypatch, tmp_path):
-    from cyrene.workbench import goal_loop as goal_loop
+    from cyrene.workbench.goals import goal_loop as goal_loop
 
     app, db_path, _store_path = _app(monkeypatch, tmp_path)
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=True)
@@ -275,8 +275,8 @@ async def test_goal_loop_start_rolls_back_run_when_projection_write_fails(monkey
 
 async def test_goal_loop_startup_recovers_hard_crash_state_and_stale_lease(monkeypatch, tmp_path):
     """Persisted running state is the exact state left by SIGKILL/power loss."""
-    from cyrene.workbench import goal_loop as goal_loop
-    from cyrene.workbench import project_repository as routes
+    from cyrene.workbench.goals import goal_loop as goal_loop
+    from cyrene.workbench.projects import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path, status="running")
     db_path = store_path.db_path
@@ -337,8 +337,8 @@ async def test_goal_loop_startup_recovers_hard_crash_state_and_stale_lease(monke
 
 
 async def test_goal_loop_graceful_restart_pauses_then_recovers(monkeypatch, tmp_path):
-    from cyrene.workbench import goal_loop as goal_loop
-    from cyrene.workbench import project_repository as routes
+    from cyrene.workbench.goals import goal_loop as goal_loop
+    from cyrene.workbench.projects import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path, status="running")
     db_path = store_path.db_path
@@ -481,7 +481,7 @@ def test_goal_loop_preview_returns_service_unavailable_before_generation_when_st
     monkeypatch,
     tmp_path,
 ):
-    from cyrene.workbench.goal_loop_repository import SqliteGoalLoopRepository
+    from cyrene.workbench.goals.goal_loop_repository import SqliteGoalLoopRepository
 
     generation_called = False
 
@@ -516,8 +516,8 @@ def test_goal_loop_preview_returns_service_unavailable_before_generation_when_st
 
 
 async def test_goal_loop_runner_completes_after_independent_verification(monkeypatch, tmp_path):
-    from cyrene.workbench import goal_loop as goal_loop
-    from cyrene.workbench import project_repository as routes
+    from cyrene.workbench.goals import goal_loop as goal_loop
+    from cyrene.workbench.projects import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path)
     db_path = store_path.db_path
@@ -574,8 +574,8 @@ async def test_goal_loop_runner_completes_after_independent_verification(monkeyp
 async def test_goal_loop_pauses_when_execution_infrastructure_is_unavailable(
     monkeypatch, tmp_path, failure_kind, expected_reason
 ):
-    from cyrene.workbench import goal_loop as goal_loop
-    from cyrene.workbench import project_repository as routes
+    from cyrene.workbench.goals import goal_loop as goal_loop
+    from cyrene.workbench.projects import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path)
     db_path = store_path.db_path
@@ -627,7 +627,7 @@ async def test_goal_loop_pauses_when_execution_infrastructure_is_unavailable(
 
 
 def test_goal_loop_skipped_prerequisite_blocks_dependent_step():
-    from cyrene.workbench import goal_loop
+    from cyrene.workbench.goals import goal_loop
 
     plan = [
         {"id": "step_a", "status": "skipped", "dependsOn": []},
@@ -639,8 +639,8 @@ def test_goal_loop_skipped_prerequisite_blocks_dependent_step():
 
 
 async def test_goal_loop_runner_blocks_after_repeated_step_verification_failure(monkeypatch, tmp_path):
-    from cyrene.workbench import goal_loop as goal_loop
-    from cyrene.workbench import project_repository as routes
+    from cyrene.workbench.goals import goal_loop as goal_loop
+    from cyrene.workbench.projects import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path)
     db_path = store_path.db_path
@@ -697,8 +697,8 @@ async def test_resume_after_answer_does_not_re_execute_the_answered_step(monkeyp
     """Answering a goal-loop clarification must resume the loop WITHOUT resetting
     the answered step back to pending — otherwise the runner re-executes the same
     step and the agent re-asks the same question."""
-    from cyrene.workbench import goal_loop as goal_loop
-    from cyrene.workbench import project_repository as routes
+    from cyrene.workbench.goals import goal_loop as goal_loop
+    from cyrene.workbench.projects import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path, status="running")
     db_path = store_path.db_path
@@ -739,8 +739,8 @@ async def test_resume_after_answer_does_not_re_execute_the_answered_step(monkeyp
 
 
 async def test_resume_after_answer_pauses_on_permission_denied(monkeypatch, tmp_path):
-    from cyrene.workbench import goal_loop as goal_loop
-    from cyrene.workbench import project_repository as routes
+    from cyrene.workbench.goals import goal_loop as goal_loop
+    from cyrene.workbench.projects import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path, status="running")
     db_path = store_path.db_path
@@ -773,8 +773,8 @@ async def test_resume_after_answer_pauses_on_permission_denied(monkeypatch, tmp_
 
 
 async def test_begin_async_answer_tags_step_and_resumes_run(monkeypatch, tmp_path):
-    from cyrene.workbench import goal_loop as goal_loop
-    from cyrene.workbench import project_repository as routes
+    from cyrene.workbench.goals import goal_loop as goal_loop
+    from cyrene.workbench.projects import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path, status="waiting_for_user")
     db_path = store_path.db_path
@@ -832,9 +832,9 @@ async def test_begin_async_answer_tags_step_and_resumes_run(monkeypatch, tmp_pat
 
 
 async def test_goal_loop_worker_resumes_via_answer_pending_and_completes(monkeypatch, tmp_path):
-    from cyrene.workbench import artifact_runtime
-    from cyrene.workbench import goal_loop as goal_loop
-    from cyrene.workbench import project_repository as routes
+    from cyrene.workbench.artifacts import artifact_runtime
+    from cyrene.workbench.goals import goal_loop as goal_loop
+    from cyrene.workbench.projects import project_repository as routes
 
     _data_dir, store_path = _store(tmp_path, status="running")
     db_path = store_path.db_path

@@ -1,5 +1,6 @@
-"""Workbench application services.
+"""Cyrene's Workbench host adapter.
 
-HTTP adapters and user interfaces depend on these modules; Workbench business
-logic must not depend on either presentation layer.
+Business modules live in domain packages such as :mod:`chat`, :mod:`tasks`,
+and :mod:`projects`.  The package root intentionally exposes no legacy module
+aliases; HTTP and WebUI remain outer presentation adapters.
 """

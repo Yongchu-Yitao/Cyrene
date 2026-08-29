@@ -25,7 +25,7 @@ from openai_codex.generated.v2_all import (
 )
 from pydantic import BaseModel
 
-from agent.plugin.validation import (
+from cyrene.core.plugin.validation import (
     PluginInputValidationError,
     PluginSchemaError,
     validate_plugin_arguments,

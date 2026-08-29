@@ -4,15 +4,15 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
-from agent.plugin.plugin_impl.cyrene_memory import structured as memory
-from agent.plugin.plugin_impl.cyrene_memory.routes_structured import (
+from cyrene.plugins.builtin.cyrene_memory import structured as memory
+from cyrene.plugins.builtin.cyrene_memory.routes_structured import (
     register_workbench_memory_routes,
 )
 
 
 def test_workspace_memory_crud_preserves_history_and_stale_semantics(tmp_path, monkeypatch):
     original_db_path = memory._STORE_DB_PATH
-    from cyrene.workbench.store import ensure_schema
+    from cyrene.workbench.persistence.store import ensure_schema
 
     database = tmp_path / "memory.db"
     ensure_schema(database)

@@ -24,8 +24,8 @@ function loadSurface(search = '') {
     URLSearchParams,
   });
   for (const relative of [
-    '../src/webui/frontend/platform/runtime.jsx',
-    '../src/webui/frontend/platform/ui-surface.jsx',
+    '../src/cyrene/workbench/webui/frontend/platform/runtime.jsx',
+    '../src/cyrene/workbench/webui/frontend/platform/ui-surface.jsx',
   ]) {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, relative), 'utf8'),
@@ -174,8 +174,8 @@ function loadSurfaceWithDocument() {
     window, console, Map, Math, Number, Promise, String, URLSearchParams, WeakMap,
   });
   for (const relative of [
-    '../src/webui/frontend/platform/runtime.jsx',
-    '../src/webui/frontend/platform/ui-surface.jsx',
+    '../src/cyrene/workbench/webui/frontend/platform/runtime.jsx',
+    '../src/cyrene/workbench/webui/frontend/platform/ui-surface.jsx',
   ]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, relative), 'utf8'), context, { filename: relative });
   }
@@ -578,7 +578,7 @@ test('agent cursor keeps animated movement but still schedules stale-position fa
 
 test('semantic actions wait on renderer animation completion instead of fixed cursor sleeps', () => {
   const source = fs.readFileSync(
-    path.join(__dirname, '../src/webui/frontend/platform/ui-surface.jsx'), 'utf8'
+    path.join(__dirname, '../src/cyrene/workbench/webui/frontend/platform/ui-surface.jsx'), 'utf8'
   );
   const completion = source.slice(
     source.indexOf('async function waitForCursorAnimations'),

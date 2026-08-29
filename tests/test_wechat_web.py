@@ -8,11 +8,12 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from agent.plugin import PluginContext
+from cyrene.core.plugin import PluginContext
+from cyrene.plugins import PluginApplicationHost
 
 
 def test_qr_image_data_uri_is_self_contained():
-    from agent.plugin.plugin_impl.cyrene_channels.routes import _qr_image_data_uri
+    from cyrene.plugins.builtin.cyrene_channels.routes import _qr_image_data_uri
 
     data_uri = _qr_image_data_uri(
         "https://liteapp.weixin.qq.com/q/example?qrcode=test&bot_type=3"
@@ -26,7 +27,7 @@ def test_qr_image_data_uri_is_self_contained():
 
 
 def test_channels_pack_exposes_one_fixed_runtime_plugin():
-    from agent.plugin.plugin_impl.cyrene_channels import plugin_pack
+    from cyrene.plugins.builtin.cyrene_channels import plugin_pack
 
     assert [plugin.name for plugin in plugin_pack.plugins] == [
         "cyrene_channels.runtime"
@@ -46,11 +47,11 @@ def test_channels_pack_exposes_one_fixed_runtime_plugin():
 
 
 def test_qr_login_route_returns_local_qr_image(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_channels.application import (
+    from cyrene.plugins.builtin.cyrene_channels.application import (
         ChannelsApplicationService,
     )
-    from agent.plugin.plugin_impl.cyrene_channels import wechat
-    from agent.plugin.plugin_impl.cyrene_channels.routes import register_wechat_routes
+    from cyrene.plugins.builtin.cyrene_channels import wechat
+    from cyrene.plugins.builtin.cyrene_channels.routes import register_wechat_routes
 
     async def fake_get_qr_code(self):
         return "qr-id", "https://liteapp.weixin.qq.com/q/example?qrcode=qr-id&bot_type=3"
@@ -73,13 +74,12 @@ def test_qr_login_route_returns_local_qr_image(monkeypatch):
 def test_channels_pack_routes_and_polling_follow_activation(tmp_path, monkeypatch):
     import asyncio
 
-    from agent.plugin import (
-        PluginApplicationHost,
+    from cyrene.core.plugin import (
         PluginRegistry,
-        set_active_plugin_application_host,
+        set_application_plugin_scope,
     )
-    from agent.plugin.plugin_impl.cyrene_channels import plugin_pack
-    from agent.plugin.plugin_impl.cyrene_channels.application import (
+    from cyrene.plugins.builtin.cyrene_channels import plugin_pack
+    from cyrene.plugins.builtin.cyrene_channels.application import (
         ChannelsApplicationService,
     )
 
@@ -109,7 +109,7 @@ def test_channels_pack_routes_and_polling_follow_activation(tmp_path, monkeypatc
     router = APIRouter()
     host.attach(router)
     app.include_router(router)
-    set_active_plugin_application_host(host)
+    set_application_plugin_scope(host)
 
     try:
         from cyrene.runtime import settings_service
@@ -135,7 +135,7 @@ def test_channels_pack_routes_and_polling_follow_activation(tmp_path, monkeypatc
         assert events == []
     finally:
         asyncio.run(host.shutdown())
-        set_active_plugin_application_host(None)
+        set_application_plugin_scope(None)
 
     enabled_registry = PluginRegistry(include_core=False)
     enabled_registry.register_pack(plugin_pack, source="test-enabled")
@@ -152,7 +152,7 @@ def test_channels_pack_routes_and_polling_follow_activation(tmp_path, monkeypatc
     enabled_router = APIRouter()
     enabled_host.attach(enabled_router)
     enabled_app.include_router(enabled_router)
-    set_active_plugin_application_host(enabled_host)
+    set_application_plugin_scope(enabled_host)
     try:
         from cyrene.runtime import settings_service
 
@@ -181,4 +181,4 @@ def test_channels_pack_routes_and_polling_follow_activation(tmp_path, monkeypatc
         assert "TELEGRAM_BOT_TOKEN" not in config.editable_env_keys()
     finally:
         asyncio.run(enabled_host.shutdown())
-        set_active_plugin_application_host(None)
+        set_application_plugin_scope(None)

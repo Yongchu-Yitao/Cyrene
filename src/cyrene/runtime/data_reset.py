@@ -47,10 +47,10 @@ def remove_directory_children(
 
 async def reset_process_runtime_state(db_path: str = "") -> None:
     from cyrene.runtime.shell_wake import get_shell_wake_service
-    from cyrene.workbench.chat_runs import get_chat_run_manager, shutdown_chat_runs
-    from cyrene.workbench.task_runs import shutdown_task_runs
+    from cyrene.workbench.chat.chat_runs import get_chat_run_manager, shutdown_chat_runs
+    from cyrene.workbench.tasks.task_runs import shutdown_task_runs
 
-    goal_loop = importlib.import_module("cyrene.workbench.goal_loop")
+    goal_loop = importlib.import_module("cyrene.workbench.goals.goal_loop")
     manager = get_chat_run_manager()
     for chat_id in list(manager.runs):
         await manager.terminate(chat_id, termination_reason="application_data_reset")
@@ -104,16 +104,16 @@ class DataResetApplicationService:
         self.db_path = str(db_path)
 
     async def reset_app_data(self) -> dict[str, Any]:
-        from agent.plugin import active_plugin_application_host
+        from cyrene.core.plugin import application_plugin_scope
         from cyrene.config import CACHE_DIR, STORE_DIR
         from cyrene.runtime.database import init_db
         from cyrene.runtime.inbox import clear_all_inboxes
         from cyrene.runtime.onboarding import get_onboarding_status, reset_onboarding_state
         from cyrene.runtime import settings_store
-        from cyrene.workbench import presentation_runtime
+        from cyrene.workbench.artifacts import presentation_runtime
 
         await reset_process_runtime_state(self.db_path)
-        plugin_host = active_plugin_application_host()
+        plugin_host = application_plugin_scope()
         plugin_cleared = await prepare_plugin_data_reset(plugin_host)
         if plugin_host is not None:
             await plugin_host.shutdown()
@@ -143,7 +143,7 @@ class DataResetApplicationService:
         remove_path_checked(db_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         await init_db(str(db_path))
-        from cyrene.workbench.chat_runs import startup_chat_runs
+        from cyrene.workbench.chat.chat_runs import startup_chat_runs
 
         startup_chat_runs(str(db_path))
         if plugin_host is not None:

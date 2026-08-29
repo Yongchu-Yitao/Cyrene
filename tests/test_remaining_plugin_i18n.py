@@ -4,12 +4,12 @@ import json
 
 import pytest
 
-from agent.plugin import PluginContext
+from cyrene.core.plugin import PluginContext
 
 
 @pytest.mark.asyncio
 async def test_extension_search_localizes_and_masks_source_failures(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_extensions import search_environment
+    from cyrene.plugins.builtin.cyrene_extensions import search_environment
 
     class Service:
         def list_extensions(self):
@@ -41,7 +41,7 @@ async def test_extension_search_localizes_and_masks_source_failures(monkeypatch)
 
 
 def test_remote_tool_error_uses_stable_code_and_masks_exception():
-    from agent.plugin.plugin_impl.cyrene_remote.common import remote_tool_error
+    from cyrene.plugins.builtin.cyrene_remote.common import remote_tool_error
 
     payload = remote_tool_error(
         RuntimeError("private transport diagnostic"),
@@ -55,7 +55,7 @@ def test_remote_tool_error_uses_stable_code_and_masks_exception():
 
 @pytest.mark.asyncio
 async def test_remote_command_boundary_replaces_raw_error(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_remote import commands
+    from cyrene.plugins.builtin.cyrene_remote import commands
 
     executor = object.__new__(commands.RemoteCommandExecutor)
 
@@ -83,8 +83,8 @@ async def test_remote_command_boundary_replaces_raw_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_learned_skill_lookup_masks_internal_exception(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_skills import get_learned_skill
-    from agent.plugin.plugin_impl.cyrene_skills import orchestrator
+    from cyrene.plugins.builtin.cyrene_skills import get_learned_skill
+    from cyrene.plugins.builtin.cyrene_skills import orchestrator
 
     async def fail(*_args, **_kwargs):
         raise RuntimeError("private learning database diagnostic")
@@ -103,10 +103,10 @@ async def test_learned_skill_lookup_masks_internal_exception(monkeypatch):
 
 
 def test_skill_validation_and_default_soul_follow_requested_language(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_skills.skills import (
+    from cyrene.plugins.builtin.cyrene_skills.skills import (
         install_skill_from_path,
     )
-    from agent.plugin.plugin_impl.cyrene_soul.store import default_soul
+    from cyrene.plugins.builtin.cyrene_soul.store import default_soul
 
     result = install_skill_from_path(
         tmp_path / "missing",
@@ -120,7 +120,7 @@ def test_skill_validation_and_default_soul_follow_requested_language(tmp_path):
 
 
 def test_entity_reminder_prompt_follows_session_language(tmp_path):
-    from agent.plugin.plugin_impl.cyrene_entity.service import EntityService
+    from cyrene.plugins.builtin.cyrene_entity.service import EntityService
 
     service = EntityService(
         str(tmp_path / "entities.db"),

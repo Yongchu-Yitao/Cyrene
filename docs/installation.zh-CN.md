@@ -17,10 +17,10 @@ cd Cyrene
 uv sync
 
 # Checkout 未包含编译产物时构建 JSX
-cd src/webui
+cd src/cyrene/workbench/webui
 npm install
 node build-jsx.mjs
-cd ../..
+cd ../../../..
 
 uv run python -m cyrene
 ```
@@ -80,16 +80,16 @@ Windows 开发请以仓库中的
 Environment 准备好后：
 
 ```bash
-cd src/webui
+cd src/cyrene/workbench/webui
 npm install
 npm run build
-cd ../..
+cd ../../../..
 
 uv run python -m cyrene
 ```
 
 不要预先手工修改 `site-packages`。Cyrene 通过
-`cyrene.tooling.backends.simplexng_child` 启动 SimpleXNG，在 Runtime 提供
+`cyrene.plugins.builtin.cyrene_content.simplexng_child` 启动 SimpleXNG，在 Runtime 提供
 Windows `uvloop`、Multiprocessing Compatibility，并确保启用 JSON Search
 Output。这个 Launcher 解决的是安装完成后的 Runtime Compatibility，无法修复
 发生在更早阶段的 Package-resolution Failure。

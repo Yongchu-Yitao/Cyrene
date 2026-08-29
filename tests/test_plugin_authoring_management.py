@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent.plugin import Plugin, PluginContext, PluginPack, PluginRegistry
+from cyrene.core.plugin import Plugin, PluginContext, PluginPack, PluginRegistry
 
 
 class _FakeHost:
@@ -25,7 +25,7 @@ async def test_plugin_source_manager_requires_user_review_for_seeded_source(
     tmp_path,
     monkeypatch,
 ) -> None:
-    from agent.plugin.plugin_impl.cyrene_plugin_development import tools
+    from cyrene.plugins.builtin.cyrene_plugin_development import tools
 
     plugin_root = tmp_path / "plugin_impl"
     source = plugin_root / "cyrene_seeded" / "tool.py"
@@ -36,7 +36,7 @@ async def test_plugin_source_manager_requires_user_review_for_seeded_source(
         encoding="utf-8",
     )
     host = _FakeHost(plugin_root)
-    monkeypatch.setattr(tools, "active_plugin_application_host", lambda: host)
+    monkeypatch.setattr(tools, "application_plugin_scope", lambda: host)
     context = PluginContext(workspace=tmp_path, data={"language": "zh"})
 
     inspected = json.loads(await tools.manage_plugin_source(
@@ -65,14 +65,14 @@ async def test_plugin_source_manager_updates_user_source_with_revision_guard(
     tmp_path,
     monkeypatch,
 ) -> None:
-    from agent.plugin.plugin_impl.cyrene_plugin_development import tools
+    from cyrene.plugins.builtin.cyrene_plugin_development import tools
 
     plugin_root = tmp_path / "plugin_impl"
     source = plugin_root / "my_plugin" / "tool.py"
     source.parent.mkdir(parents=True)
     source.write_text("value = 1\n", encoding="utf-8")
     host = _FakeHost(plugin_root)
-    monkeypatch.setattr(tools, "active_plugin_application_host", lambda: host)
+    monkeypatch.setattr(tools, "application_plugin_scope", lambda: host)
     context = PluginContext(workspace=tmp_path)
     inspected = json.loads(await tools.manage_plugin_source(
         {"action": "read", "path": "my_plugin/tool.py"}, context
@@ -99,7 +99,7 @@ async def test_hook_manager_exposes_user_mutation_and_blocks_unconfirmed_system_
     tmp_path,
     monkeypatch,
 ) -> None:
-    from agent.plugin.plugin_impl.cyrene_plugin_development import tools
+    from cyrene.plugins.builtin.cyrene_plugin_development import tools
 
     class Hooks:
         values: dict[str, dict] = {}
@@ -136,7 +136,7 @@ async def test_hook_manager_exposes_user_mutation_and_blocks_unconfirmed_system_
             return self.values[hook_id]
 
     host = _FakeHost(tmp_path / "plugin_impl")
-    monkeypatch.setattr(tools, "active_plugin_application_host", lambda: host)
+    monkeypatch.setattr(tools, "application_plugin_scope", lambda: host)
     current_system_hook = {
         "id": "core-permission-review",
         "event": "PreToolUse",
@@ -149,7 +149,7 @@ async def test_hook_manager_exposes_user_mutation_and_blocks_unconfirmed_system_
         "created_at": "2026-08-28T00:00:00+00:00",
         "action": {"type": "plugin"},
     }
-    from agent.workbench import hook_listing as hook_listing_module
+    from cyrene.workbench.core_adapter import hook_listing as hook_listing_module
     monkeypatch.setattr(
         hook_listing_module,
         "runtime_hook_listing",
@@ -245,10 +245,10 @@ async def test_hook_manager_reuses_background_generation_service(
     tmp_path,
     monkeypatch,
 ) -> None:
-    from agent.plugin.plugin_impl.cyrene_plugin_development import tools
+    from cyrene.plugins.builtin.cyrene_plugin_development import tools
 
     host = _FakeHost(tmp_path / "plugin_impl")
-    monkeypatch.setattr(tools, "active_plugin_application_host", lambda: host)
+    monkeypatch.setattr(tools, "application_plugin_scope", lambda: host)
 
     class HookGenerationService:
         hooks = SimpleNamespace(list=lambda: [])
@@ -284,7 +284,7 @@ async def test_plugin_manager_lists_switches_and_deletes_installed_packs(
     tmp_path,
     monkeypatch,
 ) -> None:
-    from agent.plugin.plugin_impl.cyrene_plugin_development import tools
+    from cyrene.plugins.builtin.cyrene_plugin_development import tools
     from cyrene.runtime import settings_store
 
     async def run(_arguments, _context):
@@ -321,7 +321,7 @@ async def test_plugin_manager_lists_switches_and_deletes_installed_packs(
             return SimpleNamespace(created=(), updated=()), ()
 
     host = Host()
-    monkeypatch.setattr(tools, "active_plugin_application_host", lambda: host)
+    monkeypatch.setattr(tools, "application_plugin_scope", lambda: host)
     monkeypatch.setattr(settings_store, "save_enabled_plugins", lambda _value: None)
     monkeypatch.setattr(settings_store, "save_enabled_plugin_packs", lambda _value: None)
     context = PluginContext(workspace=tmp_path)
@@ -343,7 +343,7 @@ async def test_plugin_manager_lists_switches_and_deletes_installed_packs(
 
 
 def test_plugin_development_pack_exposes_reviewed_source_and_hook_managers() -> None:
-    from agent.plugin.plugin_impl.cyrene_plugin_development import plugin_pack
+    from cyrene.plugins.builtin.cyrene_plugin_development import plugin_pack
 
     by_name = {plugin.name: plugin for plugin in plugin_pack.plugins}
     assert {"PluginManager", "PluginSourceManager", "HookManager"} <= set(by_name)

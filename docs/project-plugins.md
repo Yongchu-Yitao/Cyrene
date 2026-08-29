@@ -14,7 +14,8 @@ standalone tool may be one Python file exporting `plugin`. A pack is a directory
 whose `__init__.py` exports `plugin_pack`.
 
 ```python
-from agent.plugin import PluginPack
+from cyrene.core.plugin import PluginPack
+from cyrene.plugins import PluginApplicationContext
 from .application import setup_application
 
 plugin_pack = PluginPack(
@@ -56,8 +57,8 @@ and finalize work.
 A minimal context plugin returns one block from `SessionStart`:
 
 ```python
-from agent.hook import SESSION_START, HookEvent
-from agent.plugin import PluginPack, PluginSetupContext
+from cyrene.core.hook import SESSION_START, HookEvent
+from cyrene.core.plugin import PluginPack, PluginSetupContext
 
 
 def setup(context: PluginSetupContext) -> None:
@@ -126,6 +127,26 @@ tools remain discoverable through
 `toolbox.list → toolbox.describe → toolbox.invoke`. Both paths use the active
 plugin's `input_schema`, runtime validation, `PreToolUse`, and `PostToolUse`.
 
+## Contribution scopes
+
+`PluginPack` contributions have three explicit lifetimes:
+
+| Scope | API | Owner |
+|---|---|---|
+| Application | `application_setup` / `APPLICATION_SETUP` | Cyrene's plugin application host; routes, process services, search, frontend RPC, startup and shutdown |
+| Session | `setup` / `SESSION_SETUP` | `cyrene.core.AgentSession`; ContextTree Hooks and conversation-local services |
+| Run | `PluginContext.services` and `RUN_SERVICE` | One invocation/run; request data and ephemeral service bindings |
+
+The callback fields are convenient forms of the same typed extension system;
+hosts consume normalized `ExtensionContribution` values. Core code must not
+import Workbench or FastAPI types. Application callbacks receive
+`cyrene.plugins.PluginApplicationContext`, while session and run callbacks use
+the host-neutral classes from `cyrene.core.plugin`.
+
+The former `agent.*`, `route.*`, and `webui.*` Python packages do not exist and
+are not compatibility aliases. Plugin code must use the canonical `cyrene.core`,
+`cyrene.plugins`, and `cyrene.workbench` APIs shown here.
+
 ## Workbench views
 
 Every `project_tools[].view` must reference a `frontend_views[].id` in the same
@@ -140,7 +161,7 @@ async def load(arguments, request_context):
     return {"ok": True, "project_id": request_context["project_id"]}
 
 
-def setup_application(context):
+def setup_application(context: PluginApplicationContext) -> None:
     context.provide_frontend_method("dashboard.load", load)
 ```
 

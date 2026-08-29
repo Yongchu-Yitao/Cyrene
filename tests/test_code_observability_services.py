@@ -9,10 +9,10 @@ import pytest
 
 from cyrene.observability.debug_event_repository import DebugEventRepository
 from cyrene.runtime.log_repository import LogRepository, LogRepositoryError
-from cyrene.workbench import code_format_service as format_module
-from agent.plugin.plugin_impl.cyrene_code.code_format_service import CodeFormatService
-from agent.plugin.plugin_impl.cyrene_code.project_files import ProjectFileService
-from agent.plugin.plugin_impl.cyrene_code.workspace_diff_service import WorkspaceDiffService
+from cyrene.workbench.artifacts import code_format_service as format_module
+from cyrene.plugins.builtin.cyrene_code.code_format_service import CodeFormatService
+from cyrene.plugins.builtin.cyrene_code.project_files import ProjectFileService
+from cyrene.plugins.builtin.cyrene_code.workspace_diff_service import WorkspaceDiffService
 
 
 def _file_service(root: Path) -> ProjectFileService:

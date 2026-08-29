@@ -121,7 +121,7 @@ def _run_terminal_smoke_test() -> None:
         raise RuntimeError("terminal smoke test is Windows-only")
 
     async def run() -> None:
-        from agent.plugin.plugin_impl.cyrene_code.terminal.client import (
+        from cyrene.plugins.builtin.cyrene_code.terminal.client import (
             TerminalDaemonClient,
         )
 
@@ -347,7 +347,7 @@ if __name__ == "__main__":
 
             _runpy.run_path(str(_plugin_child), run_name="__main__")
         else:
-            from agent.plugin.plugin_impl.cyrene_content.simplexng_child import (
+            from cyrene.plugins.builtin.cyrene_content.simplexng_child import (
                 main as _run_simplexng_child,
             )
 
@@ -356,7 +356,7 @@ if __name__ == "__main__":
 
     if "--launch-terminal-daemon" in sys.argv:
         sys.argv.remove("--launch-terminal-daemon")
-        from agent.plugin.plugin_impl.cyrene_code.terminal.daemon import (
+        from cyrene.plugins.builtin.cyrene_code.terminal.daemon import (
             main as _run_terminal_daemon,
         )
         _run_terminal_daemon()

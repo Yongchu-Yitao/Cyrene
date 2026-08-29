@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from cyrene.workbench.project_services import (
+from cyrene.workbench.projects.project_services import (
     AgentRunProjectPort,
     ChatProjectPort,
     KnowledgeProjectPort,

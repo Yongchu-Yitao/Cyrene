@@ -5,8 +5,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_ROOT = ROOT / "src" / "agent" / "plugin"
-IMPLEMENTATION_ROOT = PLUGIN_ROOT / "plugin_impl"
+PLUGIN_ROOT = ROOT / "src" / "cyrene" / "plugins"
+IMPLEMENTATION_ROOT = PLUGIN_ROOT / "builtin"
 PROTOCOL_PURE_PACKS = tuple(
     path.name
     for path in sorted(IMPLEMENTATION_ROOT.iterdir())

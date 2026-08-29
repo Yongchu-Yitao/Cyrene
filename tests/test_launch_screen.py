@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_launch_screen_is_static_minimal_and_theme_aware():
-    index = (ROOT / "src/webui/frontend/index.html").read_text(encoding="utf-8")
+    index = (ROOT / "src/cyrene/workbench/webui/frontend/index.html").read_text(encoding="utf-8")
 
     assert 'id="cyrene-launch-screen"' in index
     assert '<img src="logo-mark.png"' in index
@@ -31,11 +31,11 @@ def test_launch_screen_is_static_minimal_and_theme_aware():
 
 
 def test_launch_screen_waits_for_initial_workbench_content():
-    data = (ROOT / "src/webui/frontend/platform/data-store.jsx").read_text(encoding="utf-8")
-    app = (ROOT / "src/webui/frontend/entry/bootstrap.jsx").read_text(encoding="utf-8")
+    data = (ROOT / "src/cyrene/workbench/webui/frontend/platform/data-store.jsx").read_text(encoding="utf-8")
+    app = (ROOT / "src/cyrene/workbench/webui/frontend/entry/bootstrap.jsx").read_text(encoding="utf-8")
     workbench = workbench_shell_source()
-    ui_surface = (ROOT / "src/webui/frontend/platform/ui-surface.jsx").read_text(encoding="utf-8")
-    markdown_actions = (ROOT / "src/webui/frontend/shared/markdown/actions.jsx").read_text(encoding="utf-8")
+    ui_surface = (ROOT / "src/cyrene/workbench/webui/frontend/platform/ui-surface.jsx").read_text(encoding="utf-8")
+    markdown_actions = (ROOT / "src/cyrene/workbench/webui/frontend/shared/markdown/actions.jsx").read_text(encoding="utf-8")
 
     assert "DATA_STORE.ready = bootstrapData()" in data
     assert 'window.CyreneUI.data = window.CyreneUI.register("data", DATA_STORE)' in data
@@ -47,7 +47,7 @@ def test_launch_screen_waits_for_initial_workbench_content():
     assert 'window.location.reload()' in app
     assert 'retries < 2' in app
     assert 'root.dispatchEvent(new CustomEvent("cyrene:ready"))' in (
-        ROOT / "src/webui/frontend/platform/readiness.jsx"
+        ROOT / "src/cyrene/workbench/webui/frontend/platform/readiness.jsx"
     ).read_text(encoding="utf-8")
     assert "if (loading || launchReadyRef.current) return undefined" in workbench
     assert "Promise.resolve(dataStore.ready)" in workbench
@@ -66,13 +66,13 @@ def test_launch_screen_waits_for_initial_workbench_content():
 
 
 def test_terminal_frontend_preserves_tui_controls_and_large_scrollback():
-    terminal = (ROOT / "src/webui/frontend/terminal/entry.jsx").read_text(
+    terminal = (ROOT / "src/cyrene/workbench/webui/frontend/terminal/entry.jsx").read_text(
         encoding="utf-8"
     )
     shell_integration = (
-        ROOT / "src/webui/frontend/terminal/shell-integration.mjs"
+        ROOT / "src/cyrene/workbench/webui/frontend/terminal/shell-integration.mjs"
     ).read_text(encoding="utf-8")
-    styles = (ROOT / "src/webui/frontend/terminal/terminal.css").read_text(
+    styles = (ROOT / "src/cyrene/workbench/webui/frontend/terminal/terminal.css").read_text(
         encoding="utf-8"
     )
 
@@ -135,7 +135,7 @@ vm.runInThisContext(match[1]);
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 '''
     result = subprocess.run(
-        ["node", "-e", script, str(ROOT / "src/webui/frontend/index.html")],
+        ["node", "-e", script, str(ROOT / "src/cyrene/workbench/webui/frontend/index.html")],
         cwd=ROOT,
         check=True,
         capture_output=True,

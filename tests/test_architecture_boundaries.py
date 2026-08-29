@@ -19,8 +19,10 @@ PRIVATE_IMPORT_TOTAL_BUDGET = 148
 
 CYRENE_TOP_LEVEL_DIRECTORIES = {
     "agent_runtime",
+    "core",
     "model_runtime",
     "observability",
+    "plugins",
     "runtime",
     "workbench",
 }
@@ -34,34 +36,52 @@ CYRENE_TOP_LEVEL_FILES = {
     "localization.py",
 }
 
+WORKBENCH_DOMAIN_DIRECTORIES = {
+    "application",
+    "artifacts",
+    "chat",
+    "control",
+    "core_adapter",
+    "goals",
+    "http",
+    "persistence",
+    "planning",
+    "projects",
+    "sessions",
+    "tasks",
+    "ui",
+    "webui",
+    "workspaces",
+}
+
 # Historical namespace-wide imports are migration debt. The set may shrink but
 # no new module may join it.
 IMPORT_STAR_ALLOWLIST = {
-    "src/route/agent/sessions.py",
-    "src/route/backup.py",
-    "src/route/notifications.py",
-    "src/route/system/shell.py",
-    "src/route/system/updates.py",
-    "src/route/tasks.py",
-    "src/route/usage.py",
+    "src/cyrene/workbench/http/agent/sessions.py",
+    "src/cyrene/workbench/http/backup.py",
+    "src/cyrene/workbench/http/notifications.py",
+    "src/cyrene/workbench/http/system/shell.py",
+    "src/cyrene/workbench/http/system/updates.py",
+    "src/cyrene/workbench/http/tasks.py",
+    "src/cyrene/workbench/http/usage.py",
 }
 
 DYNAMIC_NAMESPACE_ALLOWLIST: set[str] = set()
 JAVASCRIPT_IMPORT_STAR_ALLOWLIST = {
-    "src/webui/build-jsx.mjs",
+    "src/cyrene/workbench/webui/build-jsx.mjs",
 }
 JAVASCRIPT_DYNAMIC_NAMESPACE_ALLOWLIST = {
     "electron/agent-cursor.js",
 }
 JAVASCRIPT_SERVICE_REGISTRY_ALLOWLIST = {
-    "src/webui/frontend/entry/bootstrap.jsx",
-    "src/webui/frontend/platform/api.jsx",
-    "src/webui/frontend/platform/data-store.jsx",
+    "src/cyrene/workbench/webui/frontend/entry/bootstrap.jsx",
+    "src/cyrene/workbench/webui/frontend/platform/api.jsx",
+    "src/cyrene/workbench/webui/frontend/platform/data-store.jsx",
     # Feature modules compose registered services for their own surfaces.
-    "src/webui/frontend/features/settings/custom-plugins.jsx",
-    "src/webui/frontend/features/settings/plugin-center-add.jsx",
-    "src/webui/frontend/shared/i18n/translations.jsx",
-    "src/webui/frontend/workbench-i18n.jsx",
+    "src/cyrene/workbench/webui/frontend/features/settings/custom-plugins.jsx",
+    "src/cyrene/workbench/webui/frontend/features/settings/plugin-center-add.jsx",
+    "src/cyrene/workbench/webui/frontend/shared/i18n/translations.jsx",
+    "src/cyrene/workbench/webui/frontend/workbench-i18n.jsx",
 }
 
 
@@ -72,6 +92,55 @@ def test_cyrene_top_level_matches_final_architecture() -> None:
 
     assert directories == CYRENE_TOP_LEVEL_DIRECTORIES
     assert files == CYRENE_TOP_LEVEL_FILES
+
+
+def test_workbench_root_contains_only_domain_packages() -> None:
+    workbench_dir = SRC_ROOT / "cyrene" / "workbench"
+    directories = {
+        path.name
+        for path in workbench_dir.iterdir()
+        if path.is_dir() and path.name != "__pycache__"
+    }
+    python_files = {
+        path.name for path in workbench_dir.iterdir() if path.suffix == ".py"
+    }
+
+    assert directories == WORKBENCH_DOMAIN_DIRECTORIES
+    assert python_files == {"__init__.py"}
+
+
+def test_core_does_not_depend_on_product_or_workbench_layers() -> None:
+    forbidden_roots = {
+        "agent",
+        "route",
+        "webui",
+        "fastapi",
+        "starlette",
+        "cyrene.plugins",
+        "cyrene.workbench",
+        "cyrene.runtime",
+        "cyrene.model_runtime",
+        "cyrene.observability",
+    }
+    violations: list[str] = []
+    core_root = SRC_ROOT / "cyrene" / "core"
+    for path in core_root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                modules = [node.module]
+            else:
+                continue
+            for module in modules:
+                if any(
+                    module == root or module.startswith(f"{root}.")
+                    for root in forbidden_roots
+                ):
+                    violations.append(f"{_relative_source(path)}: {module}")
+
+    assert violations == []
 
 
 def _application_python_files() -> list[Path]:
@@ -147,10 +216,10 @@ def test_dynamic_namespace_injection_budget_can_only_decrease() -> None:
 def _application_javascript_files() -> list[Path]:
     roots = (
         REPOSITORY_ROOT / "electron",
-        REPOSITORY_ROOT / "src" / "webui" / "build",
-        REPOSITORY_ROOT / "src" / "webui" / "frontend",
+        REPOSITORY_ROOT / "src" / "cyrene" / "workbench" / "webui" / "build",
+        REPOSITORY_ROOT / "src" / "cyrene" / "workbench" / "webui" / "frontend",
     )
-    files = [REPOSITORY_ROOT / "src" / "webui" / "build-jsx.mjs"]
+    files = [REPOSITORY_ROOT / "src" / "cyrene" / "workbench" / "webui" / "build-jsx.mjs"]
     for root in roots:
         for suffix in ("*.js", "*.jsx", "*.mjs"):
             files.extend(
@@ -186,7 +255,7 @@ def test_javascript_dynamic_namespace_budget_can_only_decrease() -> None:
 
 
 def test_javascript_service_registry_is_confined_to_composition_modules() -> None:
-    frontend_root = REPOSITORY_ROOT / "src" / "webui" / "frontend"
+    frontend_root = REPOSITORY_ROOT / "src" / "cyrene" / "workbench" / "webui" / "frontend"
     current = {
         _relative_source(path)
         for path in frontend_root.rglob("*.jsx")
@@ -382,7 +451,7 @@ def test_source_tree_has_no_static_import_cycles() -> None:
 
 def test_plugin_execution_import_does_not_require_registry_import_order() -> None:
     """Plugin execution services must not depend on registry import order."""
-    code = "from agent.plugin.execution import invoke_plugin, publish_plugin_progress\nprint(invoke_plugin.__name__, publish_plugin_progress.__name__)\n"
+    code = "from cyrene.core.plugin.execution import invoke_plugin, publish_plugin_progress\nprint(invoke_plugin.__name__, publish_plugin_progress.__name__)\n"
 
     output = subprocess.check_output(
         [sys.executable, "-c", code],
@@ -400,7 +469,7 @@ def _private_import_counts() -> Counter[str]:
         for path in (SRC_ROOT / package).rglob("*.py"):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
-                if not isinstance(node, ast.ImportFrom) or node.level or not node.module or not node.module.startswith(("cyrene.", "webui.")):
+                if not isinstance(node, ast.ImportFrom) or node.level or not node.module or not node.module.startswith(("cyrene.", "cyrene.workbench.webui.")):
                     continue
                 counts[node.module] += sum(alias.name.startswith("_") and alias.name != "__all__" for alias in node.names)
     return +counts

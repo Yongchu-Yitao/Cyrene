@@ -15,7 +15,7 @@ def _plugin_context(
     conversation_source: str = "desktop_local",
     ui_instance_id: str = "surface-main",
 ):
-    from agent.plugin import PluginContext
+    from cyrene.core.plugin import PluginContext
 
     return PluginContext(
         data={
@@ -33,8 +33,8 @@ def _plugin_context(
 
 
 def _bind_plugin_context(context, *, name: str = "test_plugin"):
-    from agent.plugin import PluginCall
-    from agent.plugin.execution import bind_plugin_execution
+    from cyrene.core.plugin import PluginCall
+    from cyrene.core.plugin.execution import bind_plugin_execution
 
     return bind_plugin_execution(
         object(),
@@ -44,8 +44,8 @@ def _bind_plugin_context(context, *, name: str = "test_plugin"):
 
 
 def test_operation_and_ui_action_manifests_are_classified():
-    from cyrene.workbench.app_operations import OPERATION_BY_ID, validate_manifest
-    from cyrene.workbench.ui_actions import validate_ui_action_ledger
+    from cyrene.workbench.application.app_operations import OPERATION_BY_ID, validate_manifest
+    from cyrene.workbench.ui.ui_actions import validate_ui_action_ledger
 
     assert validate_manifest() == ()
     assert validate_ui_action_ledger() == ()
@@ -59,7 +59,7 @@ def test_operation_and_ui_action_manifests_are_classified():
 
 
 def test_agent_model_secret_input_is_redacted_from_self_control_audit_payloads():
-    from cyrene.workbench.app_control import _redact
+    from cyrene.workbench.application.app_control import _redact
 
     payload = {
         "node_id": "model_api_key",
@@ -72,7 +72,7 @@ def test_agent_model_secret_input_is_redacted_from_self_control_audit_payloads()
 
 
 def test_background_business_controls_are_internal_only():
-    from agent.plugin.plugin_impl.cyrene_application import plugin_pack
+    from cyrene.plugins.builtin.cyrene_application import plugin_pack
 
     plugins = {plugin.name: plugin for plugin in plugin_pack.plugins}
     assert {
@@ -93,9 +93,9 @@ def test_current_tree_exposes_project_switch_chat_search_and_shared_pip_maximize
     root = Path(__file__).resolve().parents[1]
     workbench = workbench_shell_source()
     chat = workbench_chat_source()
-    model = (root / "src/webui/frontend/workbench-model.jsx").read_text(encoding="utf-8")
-    welcome = (root / "src/webui/frontend/workbench-welcome.jsx").read_text(encoding="utf-8")
-    ui_surface = (root / "src/webui/frontend/platform/ui-surface.jsx").read_text(encoding="utf-8")
+    model = (root / "src/cyrene/workbench/webui/frontend/workbench-model.jsx").read_text(encoding="utf-8")
+    welcome = (root / "src/cyrene/workbench/webui/frontend/workbench-welcome.jsx").read_text(encoding="utf-8")
+    ui_surface = (root / "src/cyrene/workbench/webui/frontend/platform/ui-surface.jsx").read_text(encoding="utf-8")
     electron = (root / "electron/main.js").read_text(encoding="utf-8")
 
     assert 'node_id: "project_switcher"' in workbench
@@ -129,7 +129,7 @@ def test_current_tree_exposes_project_switch_chat_search_and_shared_pip_maximize
     assert 'return onDelete && onDelete(menuChatId);' in chat
     assert 'data-cyrene-risk="R2"' in chat
     assert '[role="alertdialog"][aria-modal="true"]' in (
-        root / "src/webui/frontend/platform/ui-surface.jsx"
+        root / "src/cyrene/workbench/webui/frontend/platform/ui-surface.jsx"
     ).read_text(encoding="utf-8")
     assert 'onDoubleClick={effectiveMode === "pip" ? maximizeBrowserWindow : undefined}' in chat
     assert 'gesture_aliases: ["double_press", "maximize_button"]' in chat
@@ -152,7 +152,7 @@ def test_current_tree_exposes_project_switch_chat_search_and_shared_pip_maximize
 
 
 def test_window_control_schema_requires_argument_bound_idempotency_key():
-    from agent.plugin.plugin_impl.cyrene_application.window import TOOL_DEF
+    from cyrene.plugins.builtin.cyrene_application.window import TOOL_DEF
 
     function = TOOL_DEF["function"]
     assert function["parameters"]["required"] == ["action", "idempotency_key"]
@@ -161,7 +161,7 @@ def test_window_control_schema_requires_argument_bound_idempotency_key():
 
 @pytest.mark.asyncio
 async def test_settings_describe_reports_its_own_operation_id(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_application import settings_describe
+    from cyrene.plugins.builtin.cyrene_application import settings_describe
 
     monkeypatch.setattr(
         settings_describe,
@@ -343,8 +343,8 @@ async def test_update_install_uses_host_prepare_launch_commit_order(monkeypatch,
 
 @pytest.mark.asyncio
 async def test_session_message_target_is_bound_to_current_tree(monkeypatch, tmp_path):
-    from agent.plugin.plugin_impl.cyrene_application import session_message
-    from cyrene.workbench import app_control
+    from cyrene.plugins.builtin.cyrene_application import session_message
+    from cyrene.workbench.application import app_control
 
     context = _plugin_context()
     monkeypatch.setattr(app_control, "_AUDIT_PATH", tmp_path / "audit.jsonl")
@@ -413,7 +413,7 @@ async def test_session_message_target_is_bound_to_current_tree(monkeypatch, tmp_
 
 @pytest.mark.asyncio
 async def test_session_message_cannot_submit_calling_session(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_application import session_message
+    from cyrene.plugins.builtin.cyrene_application import session_message
 
     context = _plugin_context(session_id="same")
 
@@ -453,8 +453,9 @@ async def test_session_message_cannot_submit_calling_session(monkeypatch):
 async def test_application_plugins_reach_current_surface_broker_end_to_end(
     monkeypatch, tmp_path,
 ):
-    from agent.plugin.plugin_impl.cyrene_application import ui_click, ui_snapshot
-    from cyrene.workbench import app_control, ui_surface
+    from cyrene.plugins.builtin.cyrene_application import ui_click, ui_snapshot
+    from cyrene.workbench.application import app_control
+    from cyrene.workbench.ui import ui_surface
 
     monkeypatch.delenv("CYRENE_ELECTRON_RPC_PORT", raising=False)
     monkeypatch.delenv("CYRENE_ELECTRON_RPC_TOKEN", raising=False)
@@ -532,7 +533,7 @@ async def test_application_plugins_reach_current_surface_broker_end_to_end(
 async def test_ui_inspect_uses_target_node_lease_across_unrelated_revision_changes(
     monkeypatch,
 ):
-    from agent.plugin.plugin_impl.cyrene_application import _ui_snapshot, ui_inspect
+    from cyrene.plugins.builtin.cyrene_application import _ui_snapshot, ui_inspect
 
     calls = []
 
@@ -591,10 +592,10 @@ async def test_non_pointer_ui_actions_still_move_cursor_to_their_target(
 ):
     from importlib import import_module
 
-    from agent.plugin.plugin_impl.cyrene_application import _ui_action
-    from cyrene.workbench import app_control
+    from cyrene.plugins.builtin.cyrene_application import _ui_action
+    from cyrene.workbench.application import app_control
 
-    module = import_module(f"agent.plugin.plugin_impl.cyrene_application.{module_name}")
+    module = import_module(f"cyrene.plugins.builtin.cyrene_application.{module_name}")
     monkeypatch.setattr(app_control, "_AUDIT_PATH", tmp_path / "audit.jsonl")
     monkeypatch.setattr(app_control, "_IDEMPOTENCY_PATH", tmp_path / "idempotency.json")
     calls = []
@@ -645,7 +646,7 @@ async def test_non_pointer_ui_actions_still_move_cursor_to_their_target(
 
 @pytest.mark.asyncio
 async def test_ui_snapshot_exposes_visible_and_calling_session_mismatch(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_application import _ui_snapshot, ui_snapshot
+    from cyrene.plugins.builtin.cyrene_application import _ui_snapshot, ui_snapshot
 
     async def fake_host(method, _args):
         assert method == "ui.snapshot.current"
@@ -684,8 +685,8 @@ async def test_ui_snapshot_exposes_visible_and_calling_session_mismatch(monkeypa
 async def test_ui_action_exact_retry_replays_before_reading_new_tree(
     monkeypatch, tmp_path,
 ):
-    from agent.plugin.plugin_impl.cyrene_application import _ui_action, ui_click
-    from cyrene.workbench import app_control
+    from cyrene.plugins.builtin.cyrene_application import _ui_action, ui_click
+    from cyrene.workbench.application import app_control
 
     monkeypatch.setattr(app_control, "_AUDIT_PATH", tmp_path / "audit.jsonl")
     monkeypatch.setattr(app_control, "_IDEMPOTENCY_PATH", tmp_path / "idempotency.json")
@@ -737,8 +738,8 @@ async def test_ui_action_exact_retry_replays_before_reading_new_tree(
 async def test_ui_action_accepts_unchanged_node_lease_across_global_revision(
     monkeypatch, tmp_path,
 ):
-    from agent.plugin.plugin_impl.cyrene_application import _ui_action, ui_click
-    from cyrene.workbench import app_control
+    from cyrene.plugins.builtin.cyrene_application import _ui_action, ui_click
+    from cyrene.workbench.application import app_control
 
     monkeypatch.setattr(app_control, "_AUDIT_PATH", tmp_path / "audit.jsonl")
     monkeypatch.setattr(app_control, "_IDEMPOTENCY_PATH", tmp_path / "idempotency.json")
@@ -794,8 +795,8 @@ async def test_ui_action_accepts_unchanged_node_lease_across_global_revision(
 async def test_ui_double_click_requires_declared_double_press_and_maximizes_browser(
     monkeypatch, tmp_path,
 ):
-    from agent.plugin.plugin_impl.cyrene_application import _ui_action, ui_double_click
-    from cyrene.workbench import app_control
+    from cyrene.plugins.builtin.cyrene_application import _ui_action, ui_double_click
+    from cyrene.workbench.application import app_control
 
     monkeypatch.setattr(app_control, "_AUDIT_PATH", tmp_path / "audit.jsonl")
     monkeypatch.setattr(app_control, "_IDEMPOTENCY_PATH", tmp_path / "idempotency.json")
@@ -857,7 +858,7 @@ async def test_ui_double_click_requires_declared_double_press_and_maximizes_brow
 
 @pytest.mark.asyncio
 async def test_desktop_settings_describe_uses_electron_cas_revision(monkeypatch):
-    from agent.plugin.plugin_impl.cyrene_application import settings_describe
+    from cyrene.plugins.builtin.cyrene_application import settings_describe
 
     async def fake_host(method, args):
         assert (method, args) == ("desktop.settings.get", {})

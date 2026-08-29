@@ -10,7 +10,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parent.parent
-FRONTEND = ROOT / "src/webui/frontend"
+FRONTEND = ROOT / "src/cyrene/workbench/webui/frontend"
 
 
 class _ComposerContextStub:
@@ -544,7 +544,7 @@ def test_overflow_menu_keeps_internal_scroll_open_and_has_no_accent_outline():
 def test_topbar_overlay_captures_browser_frame_before_hiding_native_view():
     shell = workbench_shell_source()
     viewport = (
-        ROOT / "src/webui/frontend/shared/browser/viewport.jsx"
+        ROOT / "src/cyrene/workbench/webui/frontend/shared/browser/viewport.jsx"
     ).read_text(encoding="utf-8")
 
     coordinator = shell.split("function wbSetBrowserOverlayObscured", 1)[1].split(
@@ -590,7 +590,7 @@ def test_overflow_count_uses_the_i18n_parameter_position():
 
 
 def test_task_summary_exposes_compact_plan_progress_for_the_topbar():
-    from cyrene.workbench.project_repository import _workbench_session_summary
+    from cyrene.workbench.projects.project_repository import _workbench_session_summary
 
     summary = _workbench_session_summary(
         {
@@ -613,7 +613,7 @@ def test_task_summary_exposes_compact_plan_progress_for_the_topbar():
 
 
 def test_chat_summary_exposes_live_run_status_without_stale_running_state():
-    from cyrene.workbench.chat_application import public_chat_light as _public_chat_light
+    from cyrene.workbench.chat.chat_application import public_chat_light as _public_chat_light
 
     summary = _public_chat_light(
         {
@@ -630,7 +630,7 @@ def test_chat_summary_exposes_live_run_status_without_stale_running_state():
 
 
 def test_chat_summary_separates_latest_request_usage_from_lifetime_usage():
-    from cyrene.workbench.chat_application import public_chat_light as _public_chat_light
+    from cyrene.workbench.chat.chat_application import public_chat_light as _public_chat_light
 
     summary = _public_chat_light(
         {
@@ -685,7 +685,7 @@ def test_chat_summary_separates_latest_request_usage_from_lifetime_usage():
 
 
 def test_chat_summary_does_not_treat_legacy_turn_totals_as_latest_request():
-    from cyrene.workbench.chat_application import public_chat_light as _public_chat_light
+    from cyrene.workbench.chat.chat_application import public_chat_light as _public_chat_light
 
     summary = _public_chat_light(
         {
@@ -712,7 +712,7 @@ def test_chat_summary_does_not_treat_legacy_turn_totals_as_latest_request():
 
 
 def test_chat_summary_preserves_failed_cancelled_and_awaiting_run_outcomes():
-    from cyrene.workbench.chat_application import public_chat_light as _public_chat_light
+    from cyrene.workbench.chat.chat_application import public_chat_light as _public_chat_light
 
     base = {
         "projectId": "project-1",
@@ -749,7 +749,7 @@ def test_chat_summary_preserves_failed_cancelled_and_awaiting_run_outcomes():
 
 
 def test_public_chat_collection_resolves_historical_defaults_once(monkeypatch):
-    from cyrene.workbench import chat_application
+    from cyrene.workbench.chat import chat_application
 
     class ComposerContext:
         def __init__(self):
@@ -1004,7 +1004,7 @@ def test_browser_copy_helper_creates_target_session_tab_without_reusing_owner():
 
 def test_topbar_sessions_and_resources_have_keyboard_control():
     shell = workbench_shell_source()
-    shortcuts = (ROOT / "src/webui/frontend/workbench-shortcuts.jsx").read_text(
+    shortcuts = (ROOT / "src/cyrene/workbench/webui/frontend/workbench-shortcuts.jsx").read_text(
         encoding="utf-8"
     )
 
