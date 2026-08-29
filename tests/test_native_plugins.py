@@ -49,6 +49,7 @@ MODEL_VISIBLE_PACK_IDS = TOOL_PACK_IDS - {"cyrene_image"}
 CONTEXT_PACK_IDS = frozenset({
     "cyrene_composer_context",
     "cyrene_context",
+    "cyrene_split_context",
     "cyrene_soul",
     "cyrene_system_prompt",
 })
