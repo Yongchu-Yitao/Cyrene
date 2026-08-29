@@ -173,7 +173,7 @@ import { wbcErrorText } from "./errors.jsx"
 
   function listChatGroups(projectId) {
     if (!String(projectId || "").trim()) {
-      return Promise.resolve({ groups: [] });
+      return Promise.resolve({ groups: [], migrationRequired: false });
     }
     return apiJson("/api/workbench/chat-groups?project=" + encodeURIComponent(projectId || ""), {
       toast: false,
@@ -183,6 +183,15 @@ import { wbcErrorText } from "./errors.jsx"
   function replaceChatGroups(input) {
     return apiJson("/api/workbench/chat-groups", {
       method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input || {}),
+      toast: false,
+    });
+  }
+
+  function migrateChatGroups(input) {
+    return apiJson("/api/workbench/chat-groups/migrate", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input || {}),
       toast: false,
@@ -488,6 +497,7 @@ import { wbcErrorText } from "./errors.jsx"
     generateChatGroupMetadata: generateChatGroupMetadata,
     listChatGroups: listChatGroups,
     replaceChatGroups: replaceChatGroups,
+    migrateChatGroups: migrateChatGroups,
     deleteChat: deleteChat,
     toTask: toTask,
     compactChat: compactChat,

@@ -493,11 +493,19 @@ process.stdout.write(JSON.stringify(result));
 
 def test_chat_rail_group_helpers_create_extend_and_normalize_groups():
     source = workbench_chat_source()
-    helper_source = "function wbcNormalizeChatGroups(" + source.split(
+    helper_source = 'var WBC_CHAT_GROUPS_PREFIX = "cyrene-workbench-chat-groups-v1:";\n'
+    helper_source += "function wbcNormalizeChatGroups(" + source.split(
         "function wbcNormalizeChatGroups(", 1
     )[1].split("function wbcConversationTrackRawStatus", 1)[0]
     script = f"""
 function wbcT(_key, fallback) {{ return fallback; }}
+const localStorage = {{
+  getItem: function (key) {{
+    return key === "cyrene-workbench-chat-groups-v1:project_1"
+      ? JSON.stringify([{{ id: "cached", title: "Cached", chatIds: ["alpha", "beta"] }}])
+      : null;
+  }}
+}};
 eval({json.dumps(helper_source)});
 const created = wbcCreateChatGroup([], "beta", "alpha", "group_one");
 const extended = wbcCreateChatGroup(created, "gamma", "alpha", "unused");
@@ -526,7 +534,8 @@ const normalized = wbcNormalizeChatGroups(
   ],
   ["alpha", "beta", "gamma"]
 );
-process.stdout.write(JSON.stringify({{ created, extended, moved, removedFromThree, dissolvedAtOne, normalized }}));
+const loaded = wbcLoadChatGroups("project_1", ["alpha", "beta"]);
+process.stdout.write(JSON.stringify({{ created, extended, moved, removedFromThree, dissolvedAtOne, normalized, loaded }}));
 """
     completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
     result = json.loads(completed.stdout)
@@ -561,6 +570,17 @@ process.stdout.write(JSON.stringify({{ created, extended, moved, removedFromThre
             "chatIds": ["alpha", "beta"],
         }
     ]
+    assert result["loaded"] == [
+        {
+            "id": "cached",
+            "title": "Cached",
+            "summary": "",
+            "titleLocked": False,
+            "metadataLang": "",
+            "metadataChatIds": "",
+            "chatIds": ["alpha", "beta"],
+        }
+    ]
 
 
 def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
@@ -572,6 +592,11 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     )[0]
     drop_controller = frontend_module_source("features/chat/rail-drop-controller.jsx")
     assert "WBC_CHAT_ORDER_PREFIX" in source
+    assert "WBC_CHAT_GROUPS_PREFIX" in source
+    assert "wbcLoadChatGroups(projectId, defaultOrder)" in rail
+    assert "WorkbenchChatModel.migrateChatGroups" in rail
+    assert "Keep the last-known browser cache for offline startup" in rail
+    assert "localStorage.setItem(" in rail
     assert "function wbcCreateChatGroup(" in source
     assert "function wbcRemoveChatFromGroups(" in source
     assert 'mode: "group"' in rail

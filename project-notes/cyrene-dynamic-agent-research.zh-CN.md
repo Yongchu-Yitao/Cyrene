@@ -696,7 +696,7 @@ outcome = updated | opened | replaced | suppressed | deferred | unavailable
 
 自动关闭也走 Broker：`run-end` 只关闭仍为 Agent 所有、未 pin、未 dirty、未被用户接管的 Surface；`idle` 在第一阶段只定义，不启用 timer；`never` 等同用户保留。
 
-Activity Normalizer 在阶段一只接受两种可信输入：服务端已带 `presentation.locations` 的标准 tool event，或 owning pack 发布且通过 catalog 校验的显式 `surface.intent`。它输出 broker intent，不直接调用 `setPaneLayoutsByChat`。阶段二再接入实际工具 event enrich；第一阶段用 synthetic event 验证 normalizer/broker/host 的组合。
+Activity Normalizer 在阶段一只接受两种可信输入：服务端已带 `presentation.locations` 的标准 tool event，或 owning pack 发布且通过 catalog 校验的显式 `surface.intent`。但 `presentation.locations` 只说明工具触及了哪些资源，本身不授予打开分屏的权力。自动产生的 tool event 和 `surface.intent` 都必须携带运行控制层生成的 `presentation.attention`，其中 `reason=explicit-user-resource-request`、`operation=edit`，并且经过工作区校验的 `resource_keys` 精确命中 location，Broker 才允许 `reveal`。没有授权时默认为 `observe`，不改变 Pane；`update` 也只能刷新已存在的同资源 Surface，不能新开卡片。用户在 Workbench 中手动点击打开资源走宿主的直接 intent，不受自动触发门控。语义判断由 Agent/运行控制层结合原始用户请求完成，前端不做关键词正则。`resource_effects` 不能声明 attention。阶段二再接入实际工具 event enrich 和每轮语义授权；第一阶段用 synthetic event 验证 normalizer/broker/host 的组合。
 
 ### 7. 文件级修改顺序
 
@@ -768,7 +768,8 @@ npm run build
 
 - 为 `core.Write`、`Grep` 和 `cyrene_code` 结构工具补 resource effect metadata。
 - 实现 `workspace.file_changed`、editor 实时刷新和 dirty-buffer 冲突处理。
-- 抽取 Rail/Pane 共用的文件树，并根据 scan/read activity 自动 reveal。
+- 在每轮运行开始时把“用户明确点名并要求编辑的资源”解析为 workspace-validated attention grant；普通 scan/read/write activity 不自动 reveal。
+- 抽取 Rail/Pane 共用的文件树；只有用户明确要求检查某个目录结构时才为该目录建立独立语义授权。
 - 将 `cyrene_control` plan 迁入 plugin session state，保留 `activePlan` public projection。
 - 注册 `cyrene.control.plan` Surface，支持批准、patch 进度、相关文件和恢复。
 

@@ -116,3 +116,76 @@ async def test_chat_group_metadata_normalizes_locale_and_localizes_errors(
 
     assert metadata["lang"] == "en"
     assert "Write both user-visible values in English" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_chat_group_metadata_retries_generic_titles_with_explicit_constraints(
+    monkeypatch,
+) -> None:
+    service = object.__new__(ChatService)
+    prompts: list[str] = []
+    responses = [
+        {"title": "New chat group", "summary": "A broad placeholder"},
+        {"title": "Release planning", "summary": "Coordinates release scope and readiness."},
+    ]
+
+    async def secondary_json(
+        prompt: str,
+        *,
+        max_tokens: int,
+        caller: str,
+    ) -> dict[str, Any]:
+        prompts.append(prompt)
+        assert max_tokens == 512
+        assert caller == "workbench_chat_group_metadata"
+        return responses[len(prompts) - 1]
+
+    monkeypatch.setattr(service, "_secondary_json", secondary_json)
+    metadata = await service.generate_chat_group_metadata(
+        [
+            {"title": "Release checklist", "preview": "Prepare the final checklist."},
+            {"title": "Launch readiness", "preview": "Review launch blockers."},
+        ],
+        lang="en",
+    )
+
+    assert len(prompts) == 2
+    assert "under 48 characters" in prompts[0]
+    assert "under 110 characters" in prompts[0]
+    assert "New chat group" in prompts[0]
+    assert "previous attempt returned" in prompts[1]
+    assert metadata == {
+        "title": "Release planning",
+        "summary": "Coordinates release scope and readiness.",
+        "lang": "en",
+    }
+
+
+@pytest.mark.asyncio
+async def test_chat_group_metadata_retries_empty_locked_summary_and_keeps_title_empty(
+    monkeypatch,
+) -> None:
+    service = object.__new__(ChatService)
+    prompts: list[str] = []
+
+    async def secondary_json(prompt: str, **_kwargs: Any) -> dict[str, Any]:
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return {"title": "Must be ignored", "summary": ""}
+        return {"title": "Must still be ignored", "summary": "共同处理发布准备。"}
+
+    monkeypatch.setattr(service, "_secondary_json", secondary_json)
+    metadata = await service.generate_chat_group_metadata(
+        [
+            {"title": "发布清单", "preview": "核对发布项。"},
+            {"title": "上线准备", "preview": "检查上线阻塞。"},
+        ],
+        lang="zh",
+        title_locked=True,
+        current_title="用户标题",
+    )
+
+    assert len(prompts) == 2
+    assert "标题不超过 18 个汉字" in prompts[0]
+    assert "summary 必须为非空字符串" in prompts[1]
+    assert metadata == {"title": "", "summary": "共同处理发布准备。", "lang": "zh"}

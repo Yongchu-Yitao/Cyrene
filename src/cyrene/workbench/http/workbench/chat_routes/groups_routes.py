@@ -65,6 +65,16 @@ def _register_group_write_routes(router: APIRouter, context: ChatRouteContext) -
     async def api_workbench_replace_chat_groups(body_model: api_models.ChatGroupsReplaceBody):
         return await _replace_chat_groups(context, api_models.body_dict(body_model))
 
+    @router.post("/api/workbench/chat-groups/migrate")
+    async def api_workbench_migrate_chat_groups(body_model: api_models.ChatGroupsReplaceBody):
+        """Idempotently import the browser-owned projection from older releases."""
+        body = api_models.body_dict(body_model)
+        project_id = str(body.get("projectId") or "").strip()
+        existing = await asyncio.to_thread(chat_groups.get_project_groups, project_id)
+        if not existing.get("migrationRequired"):
+            return existing
+        return await _replace_chat_groups(context, body)
+
 
 def _register_group_metadata_route(router: APIRouter, context: ChatRouteContext) -> None:
     @router.post("/api/workbench/chat-groups/metadata")

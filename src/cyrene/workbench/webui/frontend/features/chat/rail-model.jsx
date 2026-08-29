@@ -85,6 +85,7 @@ function WbcHoverMarquee({ text, className, auto }) {
 
 var WBC_CHAT_ORDER_PREFIX = "cyrene-workbench-chat-order-v1:";
 var WBC_TASK_ORDER_PREFIX = "cyrene-workbench-task-order-v1:";
+var WBC_CHAT_GROUPS_PREFIX = "cyrene-workbench-chat-groups-v1:";
 
 function wbcNormalizeChatOrder(defaultOrder, savedOrder) {
   var valid = Array.isArray(defaultOrder) ? defaultOrder.map(String) : [];
@@ -151,6 +152,15 @@ function wbcNormalizeChatGroups(groups, validChatIds) {
       chatIds: chatIds,
     };
   }).filter(function (group) { return group.chatIds.length >= 2; });
+}
+
+function wbcLoadChatGroups(projectId, validChatIds) {
+  try {
+    var saved = JSON.parse(localStorage.getItem(WBC_CHAT_GROUPS_PREFIX + String(projectId || "")) || "null");
+    return wbcNormalizeChatGroups(saved, validChatIds);
+  } catch (e) {
+    return [];
+  }
 }
 
 function wbcFindChatGroup(groups, chatId) {
@@ -488,4 +498,4 @@ function wbcProjectFileResource(projectId, entry) {
 }
 
 
-export { WBC_CHAT_ORDER_PREFIX, WBC_TASK_ORDER_PREFIX, WbcConversationStatusPreview, WbcHoverMarquee, wbcBuildChatRailItems, wbcConversationTrackIsCompleted, wbcConversationTrackIsRunning, wbcConversationTrackPositions, wbcConversationTrackState, wbcConversationTrackRuntimeText, wbcCreateChatGroup, wbcFindChatGroup, wbcLoadChatOrder, wbcMoveChatOrder, wbcMoveChatOrderBlock, wbcNormalizeChatGroups, wbcNormalizeChatOrder, wbcOrderChatsByPinned, wbcProjectFileResource, wbcProjectFileVisual, wbcRemoveChatFromGroups, wbcViewportChatIds }
+export { WBC_CHAT_GROUPS_PREFIX, WBC_CHAT_ORDER_PREFIX, WBC_TASK_ORDER_PREFIX, WbcConversationStatusPreview, WbcHoverMarquee, wbcBuildChatRailItems, wbcConversationTrackIsCompleted, wbcConversationTrackIsRunning, wbcConversationTrackPositions, wbcConversationTrackState, wbcConversationTrackRuntimeText, wbcCreateChatGroup, wbcFindChatGroup, wbcLoadChatGroups, wbcLoadChatOrder, wbcMoveChatOrder, wbcMoveChatOrderBlock, wbcNormalizeChatGroups, wbcNormalizeChatOrder, wbcOrderChatsByPinned, wbcProjectFileResource, wbcProjectFileVisual, wbcRemoveChatFromGroups, wbcViewportChatIds }

@@ -117,8 +117,8 @@ test("surface broker rejects absolute and escaping file locations", () => {
   assert.equal(wbcRevealSurface(base, intent("../secret"), { catalog }).outcome, "unavailable")
 })
 
-test("activity normalizer maps trusted presentation locations through the surface catalog", () => {
-  const intents = wbcSurfaceIntentsFromActivity({
+test("tool activity stays silent without an exact semantic reveal grant", () => {
+  const event = {
     type: "tool.started",
     runId: "run-2",
     payload: {
@@ -132,9 +132,68 @@ test("activity normalizer maps trusted presentation locations through the surfac
         }],
       },
     },
-  }, catalog)
+  }
+  const intents = wbcSurfaceIntentsFromActivity(event, catalog)
   assert.equal(intents.length, 1)
   assert.equal(intents[0].surfaceId, "sample/editor")
   assert.equal(intents[0].resourceKey, "project-1:file:src/activity.py")
   assert.equal(intents[0].runId, "run-2")
+  assert.equal(intents[0].attention, "observe")
+  const observed = wbcRevealSurface(
+    { left: [], right: [], leftRatio: 0.5, rightRatio: 0.5 },
+    intents[0],
+    { catalog },
+  )
+  assert.equal(observed.outcome, "observed")
+  assert.equal(observed.layout.left.length + observed.layout.right.length, 0)
+
+  event.payload.presentation.attention = {
+    mode: "reveal",
+    reason: "explicit-user-resource-request",
+    operation: "edit",
+    resource_keys: ["project-1:file:src/other.py"],
+  }
+  assert.equal(wbcSurfaceIntentsFromActivity(event, catalog)[0].attention, "observe")
+
+  event.payload.presentation.attention.resource_keys = ["project-1:file:src/activity.py"]
+  const granted = wbcSurfaceIntentsFromActivity(event, catalog)[0]
+  assert.equal(granted.attention, "reveal")
+  assert.equal(wbcRevealSurface(
+    { left: [], right: [], leftRatio: 0.5, rightRatio: 0.5 },
+    granted,
+    { catalog },
+  ).outcome, "opened")
+})
+
+test("update attention refreshes an existing surface but never opens one", () => {
+  const base = { left: [], right: [], leftRatio: 0.5, rightRatio: 0.5 }
+  const unopened = wbcRevealSurface(base, intent("src/app.py", { attention: "update" }), { catalog })
+  assert.equal(unopened.outcome, "observed")
+  assert.equal(unopened.reason, "update-only")
+  assert.equal(unopened.layout, base)
+
+  const opened = wbcRevealSurface(base, intent("src/app.py"), { catalog, now: 10 })
+  const updated = wbcRevealSurface(opened.layout, intent("src/app.py", {
+    attention: "update",
+    activity: "read",
+  }), { catalog, now: 20 })
+  assert.equal(updated.outcome, "updated")
+  assert.equal(updated.layout.right[0].payload.activity, "read")
+})
+
+test("automatic explicit surface events still require semantic authorization", () => {
+  const explicit = {
+    type: "surface.intent",
+    payload: { intent: intent("src/app.py") },
+  }
+  assert.equal(wbcSurfaceIntentsFromActivity(explicit, catalog)[0].attention, "observe")
+  explicit.payload.presentation = {
+    attention: {
+      mode: "reveal",
+      reason: "explicit-user-resource-request",
+      operation: "edit",
+      resource_keys: ["project-1:file:src/app.py"],
+    },
+  }
+  assert.equal(wbcSurfaceIntentsFromActivity(explicit, catalog)[0].attention, "reveal")
 })

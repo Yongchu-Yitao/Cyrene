@@ -16,17 +16,23 @@ import logging
 import re
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from cyrene.config import DATA_DIR
+from cyrene.runtime.io import read_json_safe
 from cyrene.workbench.projects import project_repository
 from cyrene.workbench.chat.chat_repository import ChatRepository
 from cyrene.workbench.persistence.store import read_document, write_document
 
 logger = logging.getLogger(__name__)
 
+_GROUPS_STORE = DATA_DIR / "workbench_chat_groups.json"
 _STORE_DB_PATH = ""
 _DOCUMENT_KEY = "chat_groups"
+_MIGRATION_VERSION = 1
+_LEGACY_IMPORT_VERSION = 1
 _STORE_MUTATION_LOCK = threading.RLock()
 _MAX_PEER_MESSAGE_CHARS = 20_000
 
@@ -63,9 +69,48 @@ def _read_store() -> dict[str, Any]:
         _DOCUMENT_KEY,
         _default_store,
     )
-    if isinstance(raw, dict) and isinstance(raw.get("projects"), list):
+    if not isinstance(raw, dict) or not isinstance(raw.get("projects"), list):
+        return _default_store()
+    if int(raw.get("legacyImportVersion") or 0) >= _LEGACY_IMPORT_VERSION:
         return raw
-    return _default_store()
+
+    # SQLite is authoritative now, but older installations stored this
+    # projection in workbench_chat_groups.json. Import missing project records
+    # exactly once and never overwrite a project already written to SQLite.
+    legacy_path = Path(_GROUPS_STORE)
+    legacy = read_json_safe(legacy_path)
+    imported = 0
+    if isinstance(legacy, dict) and isinstance(legacy.get("projects"), list):
+        existing_ids = {
+            str(item.get("id") or "")
+            for item in raw.get("projects", [])
+            if isinstance(item, dict)
+        }
+        for item in legacy.get("projects", []):
+            if not isinstance(item, dict):
+                continue
+            project_id = str(item.get("id") or "").strip()
+            if not project_id or project_id in existing_ids:
+                continue
+            imported_project = dict(item)
+            # Legacy server-owned records are already authoritative. An
+            # explicit version 0 is retained so the browser migration endpoint
+            # can still finish an interrupted pre-0.7.13 import.
+            if "migrationVersion" not in imported_project:
+                imported_project["migrationVersion"] = _MIGRATION_VERSION
+            raw.setdefault("projects", []).append(imported_project)
+            existing_ids.add(project_id)
+            imported += 1
+    raw["legacyImportVersion"] = _LEGACY_IMPORT_VERSION
+    merged = write_document(
+        _database(),
+        _DOCUMENT_KEY,
+        raw,
+        _default_store,
+    )
+    if imported:
+        logger.info("Imported %s legacy Workbench chat-group project record(s)", imported)
+    return merged if isinstance(merged, dict) else raw
 
 
 def _write_store(payload: dict[str, Any]) -> None:
@@ -114,12 +159,18 @@ def get_project_groups(project_id: str) -> dict[str, Any]:
             "projectId": str(project_id or ""),
             "revision": 0,
             "membershipRevision": 0,
+            "migrationRequired": True,
             "groups": [],
         }
+    migration_required = (
+        "migrationVersion" in project
+        and int(project.get("migrationVersion") or 0) < _MIGRATION_VERSION
+    )
     return {
         "projectId": str(project.get("id") or project_id),
         "revision": int(project.get("revision") or 0),
         "membershipRevision": int(project.get("membershipRevision") or 0),
+        "migrationRequired": migration_required,
         "groups": [_public_group(group) for group in project.get("groups", []) if isinstance(group, dict)],
     }
 
@@ -832,6 +883,7 @@ async def replace_project_groups(
     *,
     base_groups: list[Any] | None = None,
     mutation_intent: dict[str, Any] | None = None,
+    mark_migrated: bool = True,
 ) -> dict[str, Any]:
     """Replace one project's group projection and reconcile membership events."""
     project_id = str(project_id or "").strip()
@@ -869,8 +921,14 @@ async def replace_project_groups(
             data_changed = _group_data_signature(old_groups) != _group_data_signature(new_groups)
             if topology_changed:
                 project["membershipRevision"] = int(project.get("membershipRevision") or 0) + 1
-            if data_changed:
+            migration_changed = (
+                mark_migrated
+                and int(project.get("migrationVersion") or 0) < _MIGRATION_VERSION
+            )
+            if data_changed or migration_changed:
                 project["revision"] = int(project.get("revision") or 0) + 1
+            if mark_migrated:
+                project["migrationVersion"] = _MIGRATION_VERSION
             project["groups"] = new_groups
             if topology_changed:
                 project.setdefault("eventOutbox", []).extend(_outbox_jobs(

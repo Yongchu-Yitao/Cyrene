@@ -69557,7 +69557,7 @@ function generateChatGroupMetadata(input) {
 }
 function listChatGroups(projectId) {
   if (!String(projectId || "").trim()) {
-    return Promise.resolve({ groups: [] });
+    return Promise.resolve({ groups: [], migrationRequired: false });
   }
   return apiJson("/api/workbench/chat-groups?project=" + encodeURIComponent(projectId || ""), {
     toast: false
@@ -69566,6 +69566,14 @@ function listChatGroups(projectId) {
 function replaceChatGroups(input) {
   return apiJson("/api/workbench/chat-groups", {
     method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input || {}),
+    toast: false
+  });
+}
+function migrateChatGroups(input) {
+  return apiJson("/api/workbench/chat-groups/migrate", {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input || {}),
     toast: false
@@ -69840,6 +69848,7 @@ var WorkbenchChatModel = {
   generateChatGroupMetadata,
   listChatGroups,
   replaceChatGroups,
+  migrateChatGroups,
   deleteChat,
   toTask,
   compactChat,
@@ -79771,6 +79780,7 @@ function WbcHoverMarquee({ text: text2, className, auto }) {
 }
 var WBC_CHAT_ORDER_PREFIX = "cyrene-workbench-chat-order-v1:";
 var WBC_TASK_ORDER_PREFIX = "cyrene-workbench-task-order-v1:";
+var WBC_CHAT_GROUPS_PREFIX = "cyrene-workbench-chat-groups-v1:";
 function wbcNormalizeChatOrder(defaultOrder, savedOrder) {
   var valid = Array.isArray(defaultOrder) ? defaultOrder.map(String) : [];
   var allowed = new Set(valid);
@@ -79839,6 +79849,14 @@ function wbcNormalizeChatGroups(groups, validChatIds) {
   }).filter(function(group) {
     return group.chatIds.length >= 2;
   });
+}
+function wbcLoadChatGroups(projectId, validChatIds) {
+  try {
+    var saved = JSON.parse(localStorage.getItem(WBC_CHAT_GROUPS_PREFIX + String(projectId || "")) || "null");
+    return wbcNormalizeChatGroups(saved, validChatIds);
+  } catch (e) {
+    return [];
+  }
 }
 function wbcFindChatGroup(groups, chatId2) {
   chatId2 = String(chatId2 || "");
@@ -81010,9 +81028,13 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
   }
   useWbcEffect(function() {
     setOrder(wbcLoadChatOrder(projectId, defaultOrder));
-    setGroups([]);
+    var legacyGroups = wbcLoadChatGroups(projectId, defaultOrder);
+    setGroups(legacyGroups);
     setGroupBackendReady(false);
-    setCollapsedGroups({});
+    setCollapsedGroups(legacyGroups.reduce(function(state, group) {
+      state[group.id] = true;
+      return state;
+    }, {}));
     setGroupMetadataPending({});
     groupMetadataRequestRef.current.active = {};
     setDragState(null);
@@ -81025,6 +81047,15 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
     backendRef.chain = Promise.resolve();
     backendRef.baseGroups = [];
     var loadPromise = WorkbenchChatModel.listChatGroups(projectId).then(function(payload) {
+      if (groupBackendLoadRef.current !== loadToken) return null;
+      if (payload && payload.migrationRequired) {
+        return WorkbenchChatModel.migrateChatGroups({
+          projectId,
+          groups: legacyGroups
+        });
+      }
+      return payload;
+    }).then(function(payload) {
       if (!payload || groupBackendLoadRef.current !== loadToken) return;
       var authoritative = storeNormalizedGroups(payload.groups || []);
       backendRef.baseGroups = authoritative;
@@ -81059,7 +81090,15 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
     });
   }, [projectId, groupBackendReady, groupMetadataLang, groupMetadataRefreshKey]);
   function storeNormalizedGroups(nextGroups) {
-    return wbcNormalizeChatGroups(nextGroups, defaultOrder);
+    var normalized = wbcNormalizeChatGroups(nextGroups, defaultOrder);
+    try {
+      localStorage.setItem(
+        WBC_CHAT_GROUPS_PREFIX + String(projectId || ""),
+        JSON.stringify(normalized)
+      );
+    } catch (e) {
+    }
+    return normalized;
   }
   function commitGroups(nextGroups, intent) {
     var normalized = storeNormalizedGroups(nextGroups);
@@ -84086,12 +84125,18 @@ function WbcMapTab({ chatId: chatId2, focusItem }) {
 // frontend/features/chat/dynamic-surface-broker.mjs
 var SURFACE_SCHEMA_VERSION = 1;
 var SURFACE_OUTCOMES = Object.freeze({
+  OBSERVED: "observed",
   UPDATED: "updated",
   OPENED: "opened",
   REPLACED: "replaced",
   SUPPRESSED: "suppressed",
   DEFERRED: "deferred",
   UNAVAILABLE: "unavailable"
+});
+var SURFACE_ATTENTION = Object.freeze({
+  OBSERVE: "observe",
+  UPDATE: "update",
+  REVEAL: "reveal"
 });
 function surfaceCatalogValue(catalog, surfaceId) {
   if (typeof catalog === "function") return catalog(surfaceId);
@@ -84159,6 +84204,7 @@ function wbcNormalizeSurfaceIntent(rawIntent, catalog) {
     resource,
     resourceKey,
     activity: String(raw.activity || ""),
+    attention: ["observe", "update", "reveal"].indexOf(String(raw.attention || "")) >= 0 ? String(raw.attention) : SURFACE_ATTENTION.REVEAL,
     priority: String(raw.priority || surface.priority || "normal"),
     lifetime: String(raw.lifetime || surface.lifetime || "while-active"),
     preferredSide: String(raw.preferredSide || raw.preferred_side || surface.preferred_side || "either"),
@@ -84168,12 +84214,25 @@ function wbcNormalizeSurfaceIntent(rawIntent, catalog) {
     focus: false
   };
 }
+function activityAttention(presentation, resourceKey) {
+  const grant = presentation && presentation.attention;
+  if (!grant || typeof grant !== "object") return SURFACE_ATTENTION.OBSERVE;
+  const keys = Array.isArray(grant.resource_keys) ? grant.resource_keys.map(String) : [];
+  if (keys.indexOf(resourceKey) < 0) return SURFACE_ATTENTION.OBSERVE;
+  const mode = String(grant.mode || "");
+  if (mode === SURFACE_ATTENTION.UPDATE) return mode;
+  if (mode === SURFACE_ATTENTION.REVEAL && String(grant.reason || "") === "explicit-user-resource-request" && String(grant.operation || "") === "edit") return mode;
+  return SURFACE_ATTENTION.OBSERVE;
+}
 function wbcSurfaceIntentsFromActivity(rawEvent, catalog) {
   const event = rawEvent && typeof rawEvent === "object" ? rawEvent : {};
   const payload = event.payload && typeof event.payload === "object" ? event.payload : event;
   if (String(event.type || payload.type || "") === "surface.intent") {
     const explicit = payload.intent && typeof payload.intent === "object" ? payload.intent : payload;
-    const normalized = wbcNormalizeSurfaceIntent(explicit, catalog);
+    const presentation2 = payload.presentation && typeof payload.presentation === "object" ? payload.presentation : {};
+    const normalized = wbcNormalizeSurfaceIntent(Object.assign({}, explicit, {
+      attention: activityAttention(presentation2, wbcSurfaceResourceKey(explicit.resource))
+    }), catalog);
     return normalized ? [normalized] : [];
   }
   const presentation = payload.presentation && typeof payload.presentation === "object" ? payload.presentation : {};
@@ -84195,6 +84254,7 @@ function wbcSurfaceIntentsFromActivity(rawEvent, catalog) {
       surfaceId: surface.id,
       resource: location2,
       activity: access,
+      attention: activityAttention(presentation, wbcSurfaceResourceKey(location2)),
       chatId: event.chatId || event.chat_id || payload.chatId || payload.chat_id,
       runId: event.runId || event.run_id || payload.runId || payload.run_id,
       priority: surface.priority,
@@ -84269,6 +84329,9 @@ function wbcRevealSurface(layoutValue, rawIntent, options) {
   if (typeof opts.isSuppressed === "function" && opts.isSuppressed(intent.runId, intent.resourceKey)) {
     return { layout: layoutValue, outcome: SURFACE_OUTCOMES.SUPPRESSED, cardId: "", reason: "user-suppressed" };
   }
+  if (intent.attention === SURFACE_ATTENTION.OBSERVE) {
+    return { layout: layoutValue, outcome: SURFACE_OUTCOMES.OBSERVED, cardId: "", reason: "semantic-reveal-not-granted" };
+  }
   const now = Number(opts.now) || Date.now();
   const layout = copyLayout(layoutValue);
   const locations = allCards(layout);
@@ -84287,6 +84350,9 @@ function wbcRevealSurface(layoutValue, rawIntent, options) {
       meta: Object.assign({}, current.meta || {}, { lastIntentAt: now })
     });
     return { layout, outcome: SURFACE_OUTCOMES.UPDATED, cardId: current.id, reason: "same-resource" };
+  }
+  if (intent.attention !== SURFACE_ATTENTION.REVEAL) {
+    return { layout: layoutValue, outcome: SURFACE_OUTCOMES.OBSERVED, cardId: "", reason: "update-only" };
   }
   const card = surfaceCard(intent, now);
   const sides = preferredSides(intent, layout);

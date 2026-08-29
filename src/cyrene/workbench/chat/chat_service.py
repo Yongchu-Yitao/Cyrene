@@ -472,36 +472,101 @@ class ChatService:
                     language=target_lang,
                 )
             )
-        locked_instruction = (
+        language_rule = localized(
+            "Write both user-visible values in English. Keep the title under 48 "
+            "characters and the summary under 110 characters.",
+            "标题和摘要必须使用简体中文。标题不超过 18 个汉字，摘要不超过 45 个汉字。",
+            language=target_lang,
+        )
+        title_rule = (
             localized(
-                "Return an empty title because the title is locked by the user.",
-                "标题已由用户锁定，因此 title 必须返回空字符串。",
+                "The user manually locked the title. Return an empty title and only "
+                "update the summary.",
+                "用户已手动锁定标题。title 必须返回空字符串，只更新 summary。",
                 language=target_lang,
             )
             if title_locked
-            else ""
+            else localized(
+                "Generate a specific shared-topic title. Do not return generic "
+                "placeholders such as Chat group, New chat group, 对话组, or 新对话组。",
+                "生成具体的共同主题标题；禁止返回 Chat group、New chat group、对话组、"
+                "新对话组等通用占位标题。",
+                language=target_lang,
+            )
         )
-        prompt = localized(
-            "Infer the shared topic of these conversations. Return only one JSON "
-            "object with string fields title and summary. Write both user-visible "
-            "values in English. {locked}\nCurrent title: {title}\nMembers: {members}",
-            "推断这些对话的共同主题。只返回一个 JSON 对象，包含字符串字段 title "
-            "和 summary；两个用户可见字段均使用简体中文。{locked}\n当前标题：{title}"
-            "\n对话成员：{members}",
-            language=target_lang,
-            locked=locked_instruction,
-            title=current_title[:160],
-            members=json.dumps(cleaned, ensure_ascii=False),
-        )
-        parsed = await self._secondary_json(
-            prompt,
-            max_tokens=512,
-            caller="workbench_chat_group_metadata",
-        )
-        title = collapse((parsed or {}).get("title"), 60)
-        summary = collapse((parsed or {}).get("summary"), 160)
+        generic_titles = {"chatgroup", "newchatgroup", "对话组", "新对话组"}
+
+        def is_generic_title(value: str) -> bool:
+            normalized = re.sub(r"[\s\-_.,，。!！?？:：]+", "", value).casefold()
+            return normalized in generic_titles
+
+        title = ""
+        summary = ""
+        for attempt in range(2):
+            corrective = ""
+            if attempt:
+                corrective = localized(
+                    (
+                        "The previous attempt returned an empty or generic title, or an "
+                        "empty summary. Both fields are required as non-empty strings."
+                    ) if not title_locked else (
+                        "The previous attempt returned an invalid locked title or an empty "
+                        "summary. Return an empty title and a non-empty summary."
+                    ),
+                    (
+                        "上一次返回了空标题、通用占位标题或空摘要。title 和 summary "
+                        "都必须是非空字符串。"
+                    ) if not title_locked else (
+                        "上一次返回了无效的锁定标题或空摘要。title 必须为空字符串，"
+                        "summary 必须为非空字符串。"
+                    ),
+                    language=target_lang,
+                )
+            prompt = localized(
+                "You maintain metadata for a group of related AI conversations. Infer "
+                "their shared intent from the supplied titles and previews. Return only "
+                "one JSON object with string fields title and summary. The summary should "
+                "describe the combined subject rather than list every conversation.\n"
+                "{language_rule}\n{title_rule}\n{corrective}\nCurrent title: {title}\n"
+                "Members JSON:\n{members}",
+                "你负责维护一组相关 AI 对话的元数据。根据提供的标题和预览推断它们的"
+                "共同意图。只返回一个 JSON 对象，包含字符串字段 title 和 summary。"
+                "摘要应描述整体主题，不要逐条罗列对话。\n{language_rule}\n{title_rule}\n"
+                "{corrective}\n当前标题：{title}\n对话成员 JSON：\n{members}",
+                language=target_lang,
+                language_rule=language_rule,
+                title_rule=title_rule,
+                corrective=corrective,
+                title=current_title[:160],
+                members=json.dumps(cleaned, ensure_ascii=False),
+            )
+            parsed = await self._secondary_json(
+                prompt,
+                max_tokens=512,
+                caller="workbench_chat_group_metadata",
+            )
+            title = collapse((parsed or {}).get("title"), 60)
+            summary = collapse((parsed or {}).get("summary"), 160)
+            if is_generic_title(title):
+                title = ""
+            if (title_locked or title) and summary:
+                break
+            logger.warning(
+                "Chat group metadata attempt %s produced invalid fields "
+                "(title=%r, summary=%r)",
+                attempt + 1,
+                title,
+                summary,
+            )
         if not title_locked and not title:
-            title = next((item["title"] for item in cleaned if item["title"]), "")
+            title = next(
+                (
+                    item["title"]
+                    for item in cleaned
+                    if item["title"] and not is_generic_title(item["title"])
+                ),
+                "",
+            )
         if not summary:
             summary = next((item["preview"] for item in cleaned if item["preview"]), "")
         return {

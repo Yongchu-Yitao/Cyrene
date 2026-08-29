@@ -1,11 +1,18 @@
 const SURFACE_SCHEMA_VERSION = 1
 const SURFACE_OUTCOMES = Object.freeze({
+  OBSERVED: "observed",
   UPDATED: "updated",
   OPENED: "opened",
   REPLACED: "replaced",
   SUPPRESSED: "suppressed",
   DEFERRED: "deferred",
   UNAVAILABLE: "unavailable",
+})
+
+const SURFACE_ATTENTION = Object.freeze({
+  OBSERVE: "observe",
+  UPDATE: "update",
+  REVEAL: "reveal",
 })
 
 function surfaceCatalogValue(catalog, surfaceId) {
@@ -77,6 +84,8 @@ function wbcNormalizeSurfaceIntent(rawIntent, catalog) {
     resource: resource,
     resourceKey: resourceKey,
     activity: String(raw.activity || ""),
+    attention: ["observe", "update", "reveal"].indexOf(String(raw.attention || "")) >= 0
+      ? String(raw.attention) : SURFACE_ATTENTION.REVEAL,
     priority: String(raw.priority || surface.priority || "normal"),
     lifetime: String(raw.lifetime || surface.lifetime || "while-active"),
     preferredSide: String(raw.preferredSide || raw.preferred_side || surface.preferred_side || "either"),
@@ -87,12 +96,31 @@ function wbcNormalizeSurfaceIntent(rawIntent, catalog) {
   }
 }
 
+function activityAttention(presentation, resourceKey) {
+  const grant = presentation && presentation.attention
+  if (!grant || typeof grant !== "object") return SURFACE_ATTENTION.OBSERVE
+  const keys = Array.isArray(grant.resource_keys) ? grant.resource_keys.map(String) : []
+  if (keys.indexOf(resourceKey) < 0) return SURFACE_ATTENTION.OBSERVE
+  const mode = String(grant.mode || "")
+  if (mode === SURFACE_ATTENTION.UPDATE) return mode
+  if (
+    mode === SURFACE_ATTENTION.REVEAL
+    && String(grant.reason || "") === "explicit-user-resource-request"
+    && String(grant.operation || "") === "edit"
+  ) return mode
+  return SURFACE_ATTENTION.OBSERVE
+}
+
 function wbcSurfaceIntentsFromActivity(rawEvent, catalog) {
   const event = rawEvent && typeof rawEvent === "object" ? rawEvent : {}
   const payload = event.payload && typeof event.payload === "object" ? event.payload : event
   if (String(event.type || payload.type || "") === "surface.intent") {
     const explicit = payload.intent && typeof payload.intent === "object" ? payload.intent : payload
-    const normalized = wbcNormalizeSurfaceIntent(explicit, catalog)
+    const presentation = payload.presentation && typeof payload.presentation === "object"
+      ? payload.presentation : {}
+    const normalized = wbcNormalizeSurfaceIntent(Object.assign({}, explicit, {
+      attention: activityAttention(presentation, wbcSurfaceResourceKey(explicit.resource)),
+    }), catalog)
     return normalized ? [normalized] : []
   }
   const presentation = payload.presentation && typeof payload.presentation === "object"
@@ -116,6 +144,7 @@ function wbcSurfaceIntentsFromActivity(rawEvent, catalog) {
       surfaceId: surface.id,
       resource: location,
       activity: access,
+      attention: activityAttention(presentation, wbcSurfaceResourceKey(location)),
       chatId: event.chatId || event.chat_id || payload.chatId || payload.chat_id,
       runId: event.runId || event.run_id || payload.runId || payload.run_id,
       priority: surface.priority,
@@ -190,6 +219,9 @@ function wbcRevealSurface(layoutValue, rawIntent, options) {
   if (typeof opts.isSuppressed === "function" && opts.isSuppressed(intent.runId, intent.resourceKey)) {
     return { layout: layoutValue, outcome: SURFACE_OUTCOMES.SUPPRESSED, cardId: "", reason: "user-suppressed" }
   }
+  if (intent.attention === SURFACE_ATTENTION.OBSERVE) {
+    return { layout: layoutValue, outcome: SURFACE_OUTCOMES.OBSERVED, cardId: "", reason: "semantic-reveal-not-granted" }
+  }
   const now = Number(opts.now) || Date.now()
   const layout = copyLayout(layoutValue)
   const locations = allCards(layout)
@@ -210,6 +242,9 @@ function wbcRevealSurface(layoutValue, rawIntent, options) {
       meta: Object.assign({}, current.meta || {}, { lastIntentAt: now }),
     })
     return { layout: layout, outcome: SURFACE_OUTCOMES.UPDATED, cardId: current.id, reason: "same-resource" }
+  }
+  if (intent.attention !== SURFACE_ATTENTION.REVEAL) {
+    return { layout: layoutValue, outcome: SURFACE_OUTCOMES.OBSERVED, cardId: "", reason: "update-only" }
   }
   const card = surfaceCard(intent, now)
   const sides = preferredSides(intent, layout)
@@ -251,6 +286,7 @@ function wbcPinSurfaceCard(card, pinned) {
 }
 
 export {
+  SURFACE_ATTENTION,
   SURFACE_OUTCOMES,
   SURFACE_SCHEMA_VERSION,
   wbcClaimSurfaceCard,
