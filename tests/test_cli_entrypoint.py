@@ -39,6 +39,7 @@ def test_uv_console_script_and_electron_use_runtime_entrypoint():
     assert "'local_cli.py'" not in development_args
     assert "const DEVELOPMENT_APP_NAME = 'Cyrene-dev';" in source
     assert "app.setPath('userData', getCyreneUserDataDir())" in source
+    assert "migrateLegacyDevelopmentData" in source
     assert "process.env.ELECTRON_DEV === '1' ? DEVELOPMENT_APP_NAME : APP_NAME" in source
     assert source.count(
         "process.env.CYRENE_USER_DATA_DIR || getCyreneUserDataDir()"

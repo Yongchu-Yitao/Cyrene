@@ -152,6 +152,7 @@
     },
     "files": [
       "main.js",
+      "development-data-migration.js",
       "host-control.js",
       "browser-input.js",
       "browser-context-menu.js",

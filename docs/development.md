@@ -2,6 +2,17 @@
 
 [English](development.md) · [简体中文](development.zh-CN.md)
 
+## Development data directory
+
+Source and Electron development runs use the platform-specific `Cyrene-dev`
+data and cache directories, independently from an installed `Cyrene` build.
+On the first Electron development start after this split, Cyrene copies the
+former source-run `workspace/`, `store/`, `data/`, and `backups/` directories
+into the new data root. Existing state already created under `Cyrene-dev` is retained under
+`.legacy-development-data-backup-v1`, and the old source data remains in place.
+The legacy shared Electron profile contributes only missing settings and plugin
+files; caches and runtime directories from the installed build are excluded.
+
 ## Debugging
 
 ### Verbose Mode

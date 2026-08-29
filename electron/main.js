@@ -43,6 +43,7 @@ const { BROWSER_FIND_TARGET_SCRIPT } = require('./browser-target');
 const { HostControl } = require('./host-control');
 const { runTerminalLifecycleSoak } = require('./terminal-lifecycle-soak');
 const { RotatingFileLog } = require('./rotating-log');
+const { migrateLegacyDevelopmentData } = require('./development-data-migration');
 
 const APP_NAME = 'Cyrene';
 const DEVELOPMENT_APP_NAME = 'Cyrene-dev';
@@ -56,6 +57,10 @@ let _errorLog = null;
 function getCyreneUserDataDir() {
   if (process.env.CYRENE_USER_DATA_DIR) return process.env.CYRENE_USER_DATA_DIR;
   const storageName = process.env.ELECTRON_DEV === '1' ? DEVELOPMENT_APP_NAME : APP_NAME;
+  return getPlatformUserDataDir(storageName);
+}
+
+function getPlatformUserDataDir(storageName) {
   if (isMac) return path.join(os.homedir(), 'Library', 'Application Support', storageName);
   if (isWindows) return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), storageName);
   return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), storageName);
@@ -216,6 +221,20 @@ const isLinux = process.platform === 'linux';
 const supportsLoginItem = process.platform === 'darwin' || process.platform === 'win32';
 
 if (isDev) {
+  if (!process.env.CYRENE_USER_DATA_DIR && !process.env.CYRENE_BASE_DIR) {
+    try {
+      const migration = migrateLegacyDevelopmentData({
+        developmentUserDataDir: getCyreneUserDataDir(),
+        legacyUserDataDir: getPlatformUserDataDir(APP_NAME),
+        sourceRoot: path.resolve(__dirname, '..'),
+      });
+      if (migration.migrated) {
+        console.info('[electron] Migrated legacy development data:', migration);
+      }
+    } catch (err) {
+      console.error('[electron] Failed to migrate legacy development data:', err);
+    }
+  }
   app.setPath('userData', getCyreneUserDataDir());
 }
 

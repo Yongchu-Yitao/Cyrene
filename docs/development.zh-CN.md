@@ -2,6 +2,15 @@
 
 [English](development.md) · [简体中文](development.zh-CN.md)
 
+## 开发版数据目录
+
+源码运行与 Electron 开发版使用各平台独立的 `Cyrene-dev` 数据及缓存目录，
+不再与已安装的 `Cyrene` 共用。目录拆分后的首次 Electron 开发启动会把源码仓库
+中旧有的 `workspace/`、`store/`、`data/`、`backups/` 复制到新数据目录。新目录内已经产生的
+状态会保存在 `.legacy-development-data-backup-v1` 下，旧源码数据也会保留。
+原先共用的 Electron Profile 只补充缺失的设置和插件文件，不复制缓存，也不会把
+安装版的运行时目录混入开发版。
+
 ## 调试
 
 ### Verbose Mode
