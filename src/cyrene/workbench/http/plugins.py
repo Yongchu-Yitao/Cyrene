@@ -283,7 +283,7 @@ def plugin_registry_status(host: PluginApplicationHost) -> dict[str, Any]:
     ]
     plugins = [_plugin_value(host, item, seeded) for item in registered]
     failures = _failure_values(host)
-    frontend = host.frontend_contributions()
+    frontend = host.workbench_contributions()
     return {
         "ok": not failures,
         "directory": _directory_status(host),
@@ -298,6 +298,9 @@ def plugin_registry_status(host: PluginApplicationHost) -> dict[str, Any]:
         "application_restart_required": bool(host.restart_required_packs),
         "frontend_views": frontend["views"],
         "project_tools": frontend["project_tools"],
+        "workbench_surfaces": frontend["surfaces"],
+        "workspace_file_types": frontend["file_types"],
+        "workspace_actions": frontend["actions"],
     }
 
 

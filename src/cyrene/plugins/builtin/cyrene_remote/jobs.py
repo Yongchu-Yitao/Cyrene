@@ -13,6 +13,7 @@ from .common import (
     request_remote_command,
     resolve_selected_remote_device,
 )
+from .permission import authorize_remote
 from cyrene.plugins.native_runtime import json_result, run_context_value
 
 TOOL_NAME = "RemoteCyreneJobs"
@@ -67,6 +68,15 @@ async def handler(
         required = "remote_job:run" if operation == "start" else "remote_job:control" if operation in {"interrupt", "cancel"} else "remote_job:read"
         if required not in (device.get("received_capabilities") or []):
             raise PermissionError(f"remote device did not grant {required}")
+        permission, _destructive = await authorize_remote(
+            TOOL_NAME,
+            args,
+            context,
+            device_id=str(device["device_id"]),
+            project_id=project_id,
+        )
+        if permission is not None:
+            return json_result(permission)
         outside_workspace = bool(
             operation == "start"
             and (

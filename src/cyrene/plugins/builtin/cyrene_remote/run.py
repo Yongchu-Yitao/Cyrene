@@ -11,6 +11,7 @@ from .common import (
     request_remote_command,
     resolve_selected_remote_device,
 )
+from .permission import authorize_remote
 from cyrene.plugins.native_runtime import json_result, run_context_value
 
 TOOL_NAME = "RunRemoteCyrene"
@@ -112,6 +113,16 @@ async def handler(
             raise ValueError("message is required")
         if len(idempotency_key) < 8:
             raise ValueError("idempotency_key must contain at least 8 characters")
+
+        permission, _destructive = await authorize_remote(
+            TOOL_NAME,
+            args,
+            context,
+            device_id=str(device["device_id"]),
+            project_id=project_id,
+        )
+        if permission is not None:
+            return json_result(permission)
 
         controller_mode = str(
             run_context_value(context, "permission_mode", "default")

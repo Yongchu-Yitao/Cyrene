@@ -304,6 +304,14 @@ body.wbc-detached-pane-surface #root {
   z-index: 200;
 }
 
+/* Native titlebar hit testing on macOS can swallow an HTML resource drag
+   before it reaches the shelf's narrower no-drag island. Resource dragstart
+   applies this class only until drop/dragend, preserving the normal window
+   drag affordance at every other time. */
+html.wbc-resource-drag-active .workbench-topbar {
+  -webkit-app-region: no-drag;
+}
+
 /* On macOS, the first track also contains the inset traffic lights.  Keeping
    62px of additional track space gives the selector the same 8px optical gap
    to the lights on the left and the first session tab on the right. */

@@ -187,7 +187,13 @@ def _subagent_cards(state: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "name": str(agent_id),
                 "task": str(item.get("task") or ""),
                 "status": status,
+                "mode": str(item.get("mode") or "execution"),
+                "role": str(item.get("role") or ""),
+                "outcome": str(item.get("outcome") or ""),
+                "stopReason": str(item.get("stop_reason") or ""),
                 "result": str(item.get("result") or ""),
+                "metrics": dict(item.get("metrics") or {})
+                if isinstance(item.get("metrics"), Mapping) else {},
                 "roundId": str(item.get("round_id") or ""),
                 "createdAt": str(item.get("created_at") or ""),
                 "updatedAt": str(item.get("updated_at") or ""),

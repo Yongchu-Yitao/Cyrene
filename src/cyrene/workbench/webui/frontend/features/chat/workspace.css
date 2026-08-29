@@ -529,6 +529,68 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   letter-spacing: .02em;
 }
 
+/* Plugin launchers are pane-capable resources, so present them with the same
+   card shell, focus treatment and drag affordance as conversation rows. */
+.wbc-plugin-project-tools > .wbc-project-plugin-tool {
+  min-height: 44px;
+  cursor: grab;
+  touch-action: manipulation;
+}
+
+.wbc-project-tools.wbc-plugin-project-tools {
+  gap: 3px;
+}
+
+.wbc-plugin-project-tools > .wbc-project-plugin-tool:active {
+  cursor: grabbing;
+}
+
+.wbc-plugin-project-tools > .wbc-project-plugin-tool[aria-disabled="true"] {
+  opacity: .46;
+  cursor: default;
+}
+
+.wbc-plugin-project-tools .wbc-chat-card-top {
+  min-height: 44px;
+  grid-template-columns: 28px minmax(0, 1fr) 18px;
+}
+
+.wbc-plugin-project-tools .wbc-project-plugin-tool-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-muted) 10%, transparent);
+  color: var(--wb-muted);
+  font-size: calc(15px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+}
+
+.wbc-plugin-project-tools .wbc-chat-card-title {
+  align-items: flex-start;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+}
+
+.wbc-plugin-project-tools .wbc-project-plugin-tool-subtitle {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--wb-faint);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 520;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The lifted plugin uses the conversation card verbatim: one 44px row with
+   the shared drag elevation. Plugin-only secondary text stays on the source
+   card instead of changing the drag preview's height or text alignment. */
+.wbc-rail.wbc-native-chat-drag-image.wbc-plugin-tool-drag-image
+  .wbc-project-plugin-tool-subtitle {
+  display: none;
+}
+
 .wbc-project-tools.has-expanded-tool > header {
   position: sticky;
   z-index: 3;
@@ -1218,18 +1280,66 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   font-weight: 720;
 }
 .wbc-plugin-view-pane {
-  display: flex;
+  display: grid;
   min-width: 0;
   min-height: 0;
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: var(--wb-bg);
+  /* Plugin views use a transparent iframe by default. Inherit the owning
+     pane-card surface so custom light/dark/card backgrounds remain identical
+     to every other split without forcing Plugin authors to duplicate tokens. */
+  background: inherit;
+}
+
+.wbc-dynamic-surface-unavailable,
+.wbc-dynamic-surface-summary {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: var(--wb-surface);
 }
 
 .wbc-plugin-view-pane.detached {
   position: absolute;
   inset: 0;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* Shared split wrappers normally stay transparent over their card. Plugin
+   iframes need the card color as their explicit fallback canvas, so inherit
+   the exact computed surface in both docked and detached presentations. */
+.wbc-pane-card > .wbc-side-agent-split.wbc-plugin-view-pane {
+  /* The first row belongs to the host grip. Keeping it outside the iframe
+     prevents Plugins from rendering into or receiving input in that band. */
+  grid-template-rows: 34px minmax(0, 1fr);
+  padding-top: 0;
+  background: inherit;
+}
+
+.wbc-detached-pane-content > .wbc-side-agent-split.wbc-plugin-view-pane {
+  background: inherit;
+}
+
+.wbc-plugin-view-host-strip {
+  grid-row: 1;
+  min-width: 0;
+  min-height: 0;
+  pointer-events: none;
+}
+
+.wbc-plugin-view-content {
+  grid-row: 2;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wbc-plugin-view-pane.detached .wbc-plugin-view-content {
+  grid-row: 1;
 }
 
 .wbc-plugin-view-frame {
@@ -1239,6 +1349,13 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   border: 0;
   color-scheme: light dark;
   background: transparent;
+}
+
+/* Keep sandboxed Plugin iframes from taking ownership of the pointer stream
+   while their shared row/column separator is being dragged. */
+body.wbc-resizing-pane-row .wbc-plugin-view-frame,
+body.wbc-resizing-pane-column .wbc-plugin-view-frame {
+  pointer-events: none;
 }
 
 .wbc-plugin-view-state {

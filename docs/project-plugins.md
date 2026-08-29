@@ -127,6 +127,80 @@ tools remain discoverable through
 `toolbox.list → toolbox.describe → toolbox.invoke`. Both paths use the active
 plugin's `input_schema`, runtime validation, `PreToolUse`, and `PostToolUse`.
 
+## Calling Cyrene's configured models
+
+An executable plugin does not need its own provider client or API key. During a
+normal Agent or background invocation, the host exposes the existing model
+gateway as `PluginContext.services["model"]`. The gateway routes requests through
+Cyrene's enabled model Provider Plugins and the models configured by the user.
+
+```python
+from dataclasses import replace
+
+from cyrene.core.plugin import Plugin, PluginContext
+
+
+async def summarize(arguments: dict, context: PluginContext) -> dict:
+    gateway = context.services.get("model")
+    if gateway is None:
+        raise RuntimeError("Cyrene's configured model service is unavailable")
+
+    # An auxiliary model response is consumed by this plugin, so do not project
+    # its streaming deltas into the main assistant reply. Keep the remaining
+    # context so usage and runtime events stay attached to this invocation.
+    model_context = replace(
+        context,
+        services={
+            name: service
+            for name, service in context.services.items()
+            if name != "model_stream"
+        },
+    )
+    session_id = str(context.data.get("session_id") or context.tree_id or "")
+    response = await gateway.complete(
+        [
+            {
+                "role": "system",
+                "content": "Summarize the supplied text in one paragraph.",
+            },
+            {"role": "user", "content": str(arguments["text"])},
+        ],
+        route="secondary",
+        caller="plugin:example_summary",
+        session_id=session_id,
+        max_tokens=600,
+        temperature=0.2,
+        context=model_context,
+    )
+    return {
+        "summary": str(response.get("content") or ""),
+        "model": str(response.get("model") or ""),
+        "usage": dict(response.get("usage") or {}),
+    }
+
+
+plugin = Plugin(
+    name="ExampleSummary",
+    description="Summarize text with a model configured in Cyrene.",
+    input_schema={
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "required": ["text"],
+        "additionalProperties": False,
+    },
+    handler=summarize,
+)
+```
+
+Use `primary` to follow the model selected for the current conversation,
+`secondary` for Cyrene's configured auxiliary route, and `vision` for image-aware
+requests. Pass the current session ID so conversation-specific model selection
+continues to apply. The response contains normalized `content`, `reasoning`,
+`tool_calls`, `usage`, `model`, and `model_identity` fields. Supplying `tools`
+allows the model to return tool calls, but the gateway does not execute them for
+the plugin. Provider credentials remain inside the selected Provider Plugin and
+are not returned by the gateway.
+
 ## Contribution scopes
 
 `PluginPack` contributions have three explicit lifetimes:

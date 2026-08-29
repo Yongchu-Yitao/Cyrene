@@ -355,7 +355,76 @@ plugin_pack = PluginPack(
     with TestClient(host.app) as client:
         response = client.get("/reload-demo")
         assert response.status_code == 503
-        assert "requires an application restart" in response.json()["detail"]
+        assert "did not start" in response.json()["detail"]
+
+
+def test_live_definition_reload_keeps_running_application_services(
+    tmp_path,
+    monkeypatch,
+):
+    package = tmp_path / "plugin_impl" / "live-demo"
+    package.mkdir(parents=True)
+    initializer = package / "__init__.py"
+
+    def write_pack(value: str) -> None:
+        initializer.write_text(
+            f'''\
+from cyrene.core.plugin import Plugin, PluginPack
+
+def setup(context):
+    events = context.services["events"]
+    context.provide("live_service", "ready")
+    @context.router.get("/live-demo")
+    async def route():
+        return {{"ok": True}}
+    context.on_startup(lambda: events.append("startup"))
+    context.on_shutdown(lambda: events.append("shutdown"))
+
+plugin = Plugin(
+    name="LiveTool",
+    description="live tool",
+    input_schema={{"type": "object"}},
+    handler=lambda _arguments, _context: {value!r},
+)
+plugin_pack = PluginPack(
+    id="live-demo",
+    description="live demo",
+    plugins=(plugin,),
+    application_setup=setup,
+)
+''',
+            encoding="utf-8",
+        )
+
+    write_pack("before")
+    registry = PluginRegistry(include_core=False)
+    assert registry.load_directory(package.parent) == ()
+    host = _host(tmp_path, registry)
+    events: list[str] = []
+    host.services["events"] = events
+    router = APIRouter()
+    host.attach(router)
+    host.app.include_router(router)
+    monkeypatch.setattr(
+        "cyrene.plugins.application.seed_builtin_plugin_directory",
+        lambda _directory: object(),
+    )
+
+    asyncio.run(host.startup())
+    write_pack("after")
+    _seed, failures = asyncio.run(host.reload_user_plugins())
+
+    assert failures == ()
+    assert host.restart_required_packs == ("live-demo",)
+    assert host.pack_operational("live-demo") is True
+    assert host.service("live_service") == "ready"
+    assert events == ["startup"]
+    result = asyncio.run(
+        PluginRuntime(registry).call("LiveTool", {}, PluginContext())
+    )
+    assert result.value == "after"
+    with TestClient(host.app) as client:
+        assert client.get("/live-demo").status_code == 200
 
 
 def test_background_host_uses_authoritative_state_and_cancels_inflight_work(

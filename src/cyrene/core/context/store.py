@@ -507,6 +507,87 @@ class ContextTreeStore:
         )
         return node
 
+    def replace_subtree(
+        self,
+        node_id: str,
+        value: Any,
+        *,
+        expected_node_ids: tuple[str, ...] | None = None,
+    ) -> tuple[ContextNode, tuple[str, ...]]:
+        """Atomically replace one node and remove all of its descendants.
+
+        ``expected_node_ids`` is an optimistic-concurrency guard.  Reflection
+        captures a complete source subtree before doing asynchronous model
+        work; the commit is rejected when that subtree changed in the
+        meantime, so no newly-arrived context can be discarded accidentally.
+        """
+
+        node_id = str(node_id)
+        encoded = encode_value(value)
+        updated_at = self._now()
+        timestamp = updated_at.isoformat()
+        with self._lock:
+            self._ensure_available()
+            with transaction(self._connection):
+                existing = self._require_node_row(node_id)
+                subtree = self.get_subtree(node_id)
+                actual_ids = tuple(node.id for node in subtree)
+                if expected_node_ids is not None and actual_ids != tuple(
+                    str(item) for item in expected_node_ids
+                ):
+                    raise ContextError(
+                        f"context subtree changed before replacement: {node_id}"
+                    )
+                deleted_ids = actual_ids[1:]
+                if deleted_ids:
+                    delete_change = ContextChange(
+                        self._tree.id,
+                        deleted_ids[0],
+                        "delete",
+                        updated_at,
+                        deleted_node_ids=deleted_ids,
+                        parent_id=node_id,
+                    )
+                    self._enqueue_change(delete_change, report_usage=False)
+                    self._connection.execute(
+                        "DELETE FROM context_nodes WHERE parent_id = ?",
+                        (node_id,),
+                    )
+                self._connection.execute(
+                    "UPDATE context_nodes SET value_json = ?, updated_at = ? WHERE node_id = ?",
+                    (encoded, timestamp, node_id),
+                )
+                update_change = ContextChange(
+                    self._tree.id,
+                    node_id,
+                    "update",
+                    updated_at,
+                    parent_id=(
+                        str(existing["parent_id"])
+                        if existing["parent_id"] is not None
+                        else None
+                    ),
+                )
+                self._enqueue_change(update_change)
+        node = ContextNode(
+            node_id,
+            self._tree.id,
+            str(existing["parent_id"]) if existing["parent_id"] is not None else None,
+            decode_value(encoded),
+            datetime.fromisoformat(str(existing["created_at"])),
+            updated_at,
+        )
+        log_operation(
+            logger,
+            "context.store",
+            "replace_subtree",
+            phase="completed",
+            tree_id=self._tree.id,
+            node_id=node_id,
+            deleted_node_ids=deleted_ids,
+        )
+        return node, deleted_ids
+
     def get_node(self, node_id: str) -> ContextNode:
         normalized_id = str(node_id)
         with self._lock:

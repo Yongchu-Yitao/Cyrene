@@ -12,9 +12,9 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = (
         "function": {
             "name": "spawn_subagent",
             "description": (
-                "Main agent only. Create an independent AgentSession with a new "
-                "ContextTree, copy the main agent's initial root context, and append "
-                "the supplied task as its first instruction."
+                "Main agent only. Spawn an independent execution worker or a bounded "
+                "discussion participant. Workers have separate ContextTrees and share "
+                "only the session-scoped agent inbox."
             ),
             "parameters": {
                 "type": "object",
@@ -27,8 +27,71 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = (
                         "type": "string",
                         "description": "Instruction from the main agent.",
                     },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["execution", "discussion"],
+                        "description": "Worker mode; defaults to execution. Roles imply discussion.",
+                    },
+                    "success_criteria": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 20,
+                        "description": "Concrete conditions that prove completion.",
+                    },
+                    "max_messages": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "description": "Optional per-agent discussion message cap.",
+                    },
+                    "discussion_id": {
+                        "type": "string",
+                        "description": "Stable shared discussion identifier; defaults to parent round.",
+                    },
+                    "use_secondary": {
+                        "type": "boolean",
+                        "description": "Route simple work to the configured secondary model.",
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": ["moderator", "participant"],
+                        "description": "Optional bounded-discussion role.",
+                    },
                 },
                 "required": ["agent_id", "task"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "quit",
+            "description": (
+                "Subagent-only terminal protocol. First write the complete result in "
+                "normal assistant content, then call quit alone."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "completion_status": {
+                        "type": "string",
+                        "enum": ["completed", "partial", "blocked"],
+                    },
+                    "criteria_evidence": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "criterion": {"type": "string"},
+                                "evidence": {"type": "string"},
+                            },
+                            "required": ["criterion", "evidence"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["completion_status"],
                 "additionalProperties": False,
             },
         },

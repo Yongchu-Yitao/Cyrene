@@ -59,7 +59,6 @@ async def test_stream_status_projection_is_skipped_after_reply_and_nonfatal_afte
             capture_workspace_baseline=None,
             finalize_workspace_changes=None,
             schedule_workspace_finalize=None,
-            publish_live_segments=None,
             publish_chat_changed=publish_chat_changed,
             load_chat_summary=lambda chat_id: {"id": chat_id},
             public_message=lambda value: value,
@@ -84,16 +83,12 @@ async def test_stream_status_projection_is_skipped_after_reply_and_nonfatal_afte
         "kind": "reply",
         "payload": {"chatSummary": {"id": "chat_projection"}},
     }
-    stopped = asyncio.Event()
-    stopped.set()
-    live_task = asyncio.create_task(asyncio.sleep(0))
-    await service._settle_stream(request, reply_run, stopped, live_task)
+    await service._settle_stream(request, reply_run)
     assert settle_calls == []
 
     error_run = ChatRun("chat_projection", {"type": "ack"})
     error_run.outcome = {"kind": "error", "exc": RuntimeError("failed")}
-    live_task = asyncio.create_task(asyncio.sleep(0))
-    await service._settle_stream(request, error_run, stopped, live_task)
+    await service._settle_stream(request, error_run)
     assert settle_calls == ["called"]
     assert len(published) == 2
 
@@ -268,6 +263,144 @@ async def test_stream_deltas_are_batched_into_one_sqlite_transaction(
         *(["reply_delta"] * 32),
         "reply_done",
     ]
+
+
+async def test_visible_tool_start_seals_streamed_reply_before_tool_event():
+    from cyrene.workbench.chat.chat_runs import ChatRun
+
+    checkpointed = []
+    run = ChatRun(
+        "chat_ordered_preamble",
+        {"type": "ack", "chatId": "chat_ordered_preamble"},
+        persist_live_message=lambda chat_id, message: checkpointed.append(
+            (chat_id, dict(message))
+        ),
+    )
+
+    await run.publish({
+        "type": "reply_delta",
+        "delta": "好，我先",
+        "timestamp": "2026-08-29T06:00:00+00:00",
+    })
+    await run.publish({
+        "type": "reply_done",
+        "response": "好，我先检查代码。",
+        "timestamp": "2026-08-29T06:00:01+00:00",
+    })
+    await run.publish({
+        "type": "tool.started",
+        "timestamp": "2026-08-29T06:00:02+00:00",
+        "payload": {"toolCallId": "call-read", "name": "Read"},
+    })
+    await run.publish({
+        "type": "tool.started",
+        "timestamp": "2026-08-29T06:00:03+00:00",
+        "payload": {"toolCallId": "call-search", "name": "Search"},
+    })
+
+    assert [event["type"] for event in run.events] == [
+        "ack",
+        "reply_delta",
+        "reply_done",
+        "intermediate_message",
+        "tool.started",
+        "tool.started",
+    ]
+    intermediate = run.events[3]["message"]
+    assert intermediate["content"] == "好，我先检查代码。"
+    assert intermediate["createdAt"] == "2026-08-29T06:00:00+00:00"
+    assert intermediate["intermediate"] is True
+    assert intermediate["roundId"] == run.run_id
+    assert intermediate["opensActivity"] is True
+    assert run.events[3]["_seq"] < run.events[4]["_seq"]
+    assert checkpointed == [("chat_ordered_preamble", intermediate)]
+
+
+async def test_core_message_delta_uses_same_tool_boundary_order():
+    from cyrene.workbench.chat.chat_runs import ChatRun
+
+    run = ChatRun("chat_core_order", {"type": "ack"})
+    await run.publish({
+        "type": "message.delta",
+        "timestamp": "2026-08-29T06:10:00+00:00",
+        "payload": {"delta": "Let me inspect that."},
+    })
+    await run.publish({
+        "type": "message.completed",
+        "timestamp": "2026-08-29T06:10:01+00:00",
+        "payload": {"response": "Let me inspect that."},
+    })
+    await run.publish({
+        "type": "tool.started",
+        "timestamp": "2026-08-29T06:10:02+00:00",
+        "payload": {"toolCallId": "call-shell", "name": "Bash"},
+    })
+
+    assert [event["type"] for event in run.events[-2:]] == [
+        "intermediate_message",
+        "tool.started",
+    ]
+    assert run.events[-2]["message"]["content"] == "Let me inspect that."
+
+
+async def test_explicit_intermediate_message_consumes_matching_stream_buffer():
+    from cyrene.workbench.chat.chat_runs import ChatRun
+
+    run = ChatRun("chat_explicit_intermediate", {"type": "ack"})
+    await run.publish({"type": "reply_delta", "delta": "正在检查。"})
+    await run.publish({
+        "type": "tool.started",
+        "payload": {"toolCallId": "call-message", "name": "send_message"},
+    })
+    explicit = {
+        "id": "assistant_explicit",
+        "role": "assistant",
+        "content": "正在检查。",
+        "createdAt": "2026-08-29T06:20:00+00:00",
+        "intermediate": True,
+        "roundId": run.run_id,
+    }
+    await run.publish({"type": "intermediate_message", "message": explicit})
+    await run.publish({
+        "type": "tool.started",
+        "payload": {"toolCallId": "call-shell", "name": "Bash"},
+    })
+
+    intermediates = [
+        event for event in run.events if event["type"] == "intermediate_message"
+    ]
+    assert [event["message"]["id"] for event in intermediates] == [
+        "assistant_explicit"
+    ]
+    assert [event["type"] for event in run.events[-2:]] == [
+        "intermediate_message",
+        "tool.started",
+    ]
+
+
+async def test_terminal_timeline_uses_run_event_when_live_checkpoint_failed():
+    from cyrene.workbench.chat.chat_runs import ChatRun
+
+    def fail_checkpoint(_chat_id, _message):
+        raise OSError("chat store is temporarily unavailable")
+
+    run = ChatRun(
+        "chat_checkpoint_failure",
+        {"type": "ack"},
+        persist_live_message=fail_checkpoint,
+    )
+    message = {
+        "id": "assistant_still_durable_at_terminal",
+        "role": "assistant",
+        "content": "这条中间回复必须保留。",
+        "createdAt": "2026-08-29T06:30:00+00:00",
+        "intermediate": True,
+        "roundId": run.run_id,
+    }
+
+    await run.publish({"type": "intermediate_message", "message": message})
+
+    assert run.terminal_timeline_messages([]) == [message]
 
 
 async def test_durable_event_lock_cannot_block_or_fail_live_reply(monkeypatch, tmp_path):

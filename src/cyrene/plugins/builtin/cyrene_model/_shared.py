@@ -7,6 +7,7 @@ contract, model discovery, protocol conversion, and normalized result shape.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -511,28 +512,51 @@ async def _complete_stream_endpoint(
     from cyrene.model_runtime.protocol_adapters import handle_stream
 
     attempt_streamed = False
+    attempt_emitted = False
 
     async def publish_stream(event: dict[str, Any]) -> None:
-        nonlocal attempt_streamed
+        nonlocal attempt_emitted, attempt_streamed
+        attempt_emitted = True
         if str(event.get("type") or "").startswith("reply_"):
             attempt_streamed = True
         if stream_callback is not None:
             await stream_callback(event)
 
     timing: dict[str, float] = {}
-    try:
-        message = await handle_stream(
-            adapter,
-            client,
-            endpoint,
-            request,
-            publish_stream if stream_callback is not None else None,
-            timing,
-        )
-    except Exception:
-        if attempt_streamed and stream_callback is not None and has_fallback:
-            await stream_callback({"type": "reply_start", "reset": True})
-        raise
+    for attempt in range(5):
+        try:
+            message = await handle_stream(
+                adapter,
+                client,
+                endpoint,
+                request,
+                publish_stream if stream_callback is not None else None,
+                timing,
+            )
+            break
+        except Exception as exc:
+            transient = isinstance(
+                exc,
+                (httpx.TransportError, TimeoutError, OSError),
+            )
+            if attempt < 4 and transient and not attempt_emitted:
+                log_operation(
+                    logger,
+                    "model.provider",
+                    "stream_retry",
+                    phase="retrying",
+                    provider=provider.id,
+                    model=model,
+                    endpoint=endpoint,
+                    attempt=attempt + 1,
+                    error_type=type(exc).__name__,
+                    error=repr(exc),
+                )
+                await asyncio.sleep(min(0.25 * (2**attempt), 1.0))
+                continue
+            if attempt_streamed and stream_callback is not None and has_fallback:
+                await stream_callback({"type": "reply_start", "reset": True})
+            raise
     response_id = str(message.get("response_id") or "")
     returned_model = str(message.get("model") or model)
     log_operation(
@@ -683,7 +707,9 @@ async def complete_model(
                     has_fallback=endpoint_index + 1 < len(ordered_endpoints),
                 )
             except Exception as exc:
-                failures.append(f"{endpoint}: {exc}")
+                failures.append(
+                    f"{endpoint}: {type(exc).__name__}: {exc!r}"
+                )
 
     raise RuntimeError(
         f"{provider.name} failed on every endpoint: " + "; ".join(failures)

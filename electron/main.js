@@ -5978,6 +5978,16 @@ function detachedPaneContextForSender(sender) {
 function normalizeDetachedPaneDescriptor(value) {
   const source = value && typeof value === 'object' ? value : {};
   const kind = String(source.kind || '').trim();
+  const sourceMeta = source.meta && typeof source.meta === 'object' ? source.meta : null;
+  const meta = sourceMeta ? {
+    origin: sourceMeta.origin === 'agent' ? 'agent' : 'user',
+    claimedByUser: sourceMeta.claimedByUser === true,
+    pinned: sourceMeta.pinned === true,
+    autoClosePolicy: ['run-end', 'idle', 'never'].includes(String(sourceMeta.autoClosePolicy || ''))
+      ? String(sourceMeta.autoClosePolicy) : 'never',
+    createdAt: Math.max(0, Number(sourceMeta.createdAt) || 0),
+    lastIntentAt: Math.max(0, Number(sourceMeta.lastIntentAt) || 0),
+  } : null;
   // Pane transport is intentionally kind-agnostic. Built-ins and future
   // plugin cards share the same structured-clone boundary; the renderer owns
   // whether a registered card kind has UI for this window.
@@ -5985,6 +5995,7 @@ function normalizeDetachedPaneDescriptor(value) {
   const serialized = JSON.stringify({
     kind,
     payload: source.payload == null ? null : source.payload,
+    meta,
     ownerChatId: String(source.ownerChatId || ''),
     project: source.project && typeof source.project === 'object' ? source.project : null,
     title: String(source.title || '').slice(0, 300),

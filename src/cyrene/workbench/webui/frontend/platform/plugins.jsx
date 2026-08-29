@@ -14,6 +14,9 @@ function emptyPluginSnapshot() {
     standalonePlugins: [],
     frontendViews: [],
     projectTools: [],
+    workbenchSurfaces: [],
+    workspaceFileTypes: [],
+    workspaceActions: [],
     failures: [],
     attachedApplicationPacks: [],
     applicationRestartRequired: false,
@@ -35,6 +38,9 @@ function normalizePluginSnapshot(payload, pending) {
     standalonePlugins: Array.isArray(payload.standalone_plugins) ? payload.standalone_plugins : [],
     frontendViews: Array.isArray(payload.frontend_views) ? payload.frontend_views : [],
     projectTools: Array.isArray(payload.project_tools) ? payload.project_tools : [],
+    workbenchSurfaces: Array.isArray(payload.workbench_surfaces) ? payload.workbench_surfaces : [],
+    workspaceFileTypes: Array.isArray(payload.workspace_file_types) ? payload.workspace_file_types : [],
+    workspaceActions: Array.isArray(payload.workspace_actions) ? payload.workspace_actions : [],
     failures: Array.isArray(payload.failures) ? payload.failures : [],
     attachedApplicationPacks: Array.isArray(payload.attached_application_packs) ? payload.attached_application_packs : [],
     applicationRestartRequired: payload.application_restart_required === true,
@@ -52,15 +58,51 @@ function dispatchPluginChange() {
   } catch (error) {}
 }
 
+function pluginSnapshotSurface(snapshot, surfaceId) {
+  var id = String(surfaceId || "")
+  return (snapshot.workbenchSurfaces || []).find(function (item) {
+    return String(item && item.id || "") === id
+  }) || null
+}
+
+function pluginSnapshotFileTypeFor(snapshot, pathValue, mimeValue) {
+  var path = String(pathValue || "").toLowerCase()
+  var mime = String(mimeValue || "").toLowerCase()
+  var matches = (snapshot.workspaceFileTypes || []).filter(function (item) {
+    var extensions = Array.isArray(item && item.extensions) ? item.extensions : []
+    var mimeTypes = Array.isArray(item && item.mime_types) ? item.mime_types : []
+    return extensions.some(function (extension) { return path.endsWith(String(extension || "").toLowerCase()) })
+      || (!!mime && mimeTypes.some(function (candidate) { return String(candidate || "").toLowerCase() === mime }))
+  })
+  matches.sort(function (left, right) {
+    var leftLength = Math.max.apply(Math, [0].concat((left.extensions || []).map(function (item) { return String(item).length })))
+    var rightLength = Math.max.apply(Math, [0].concat((right.extensions || []).map(function (item) { return String(item).length })))
+    return rightLength - leftLength
+  })
+  return matches[0] || null
+}
+
+function pluginSnapshotActionsFor(snapshot, resource) {
+  var value = resource && typeof resource === "object" ? resource : {}
+  var path = String(value.path || value.name || "").toLowerCase()
+  var fileTypeId = String(value.fileTypeId || value.file_type_id || "")
+  return (snapshot.workspaceActions || []).filter(function (item) {
+    var applies = item && item.applies_to && typeof item.applies_to === "object" ? item.applies_to : {}
+    var fileTypes = Array.isArray(applies.file_type_ids) ? applies.file_type_ids.map(String) : []
+    var extensions = Array.isArray(applies.extensions) ? applies.extensions : []
+    if (!fileTypes.length && !extensions.length) return true
+    return (!!fileTypeId && fileTypes.indexOf(fileTypeId) >= 0)
+      || extensions.some(function (extension) { return path.endsWith(String(extension || "").toLowerCase()) })
+  })
+}
+
 var PluginFrontendService = (function () {
   var state = emptyPluginSnapshot()
   var listeners = []
   var refreshPromise = null
   var reloadPromise = null
 
-  function snapshot() {
-    return state
-  }
+  function snapshot() { return state }
 
   function notify() {
     listeners.slice().forEach(function (listener) {
@@ -69,11 +111,7 @@ var PluginFrontendService = (function () {
     dispatchPluginChange()
   }
 
-  function commit(next) {
-    state = next
-    notify()
-    return state
-  }
+  function commit(next) { state = next; notify(); return state }
 
   function refresh() {
     if (refreshPromise) return refreshPromise
@@ -148,6 +186,9 @@ var PluginFrontendService = (function () {
     deleteTool: function (canonicalId) { return mutateTool(canonicalId, null, true) },
     snapshot: snapshot,
     subscribe: subscribe,
+    surface: function (surfaceId) { return pluginSnapshotSurface(state, surfaceId) },
+    fileTypeFor: function (path, mime) { return pluginSnapshotFileTypeFor(state, path, mime) },
+    actionsFor: function (resource) { return pluginSnapshotActionsFor(state, resource) },
   }
 })()
 

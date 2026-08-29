@@ -27,9 +27,10 @@ _COMMAND_PROMPTS = {
         "claims against available sources, then synthesize an evidence-backed result."
     ),
     "deep-reflect": (
-        "Deep-reflection mode: inspect the conversation's goal, evidence, failed "
-        "approaches, assumptions, and remaining gaps. Correct the approach and "
-        "continue with the next useful action; do not merely announce reflection."
+        "Deep-reflection mode: call DeepReflect immediately as the only tool in "
+        "this tool-call turn. Let it rewrite the working conversation context, "
+        "then continue automatically with the next useful action; do not merely "
+        "announce reflection."
     ),
     "help-me-decide": (
         "Decision mode: identify the real options and criteria, investigate each "

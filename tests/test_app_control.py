@@ -14,6 +14,8 @@ def _plugin_context(
     client_request_id: str = "request-1",
     conversation_source: str = "desktop_local",
     ui_instance_id: str = "surface-main",
+    permission_user_request: str = "",
+    permission_service=None,
 ):
     from cyrene.core.plugin import PluginContext
 
@@ -27,8 +29,14 @@ def _plugin_context(
                 "session_id": session_id,
                 "conversation_source": conversation_source,
                 "ui_instance_id": ui_instance_id,
+                "permission_user_request": permission_user_request,
             }
         },
+        services=(
+            {"permission": permission_service}
+            if permission_service is not None
+            else {}
+        ),
     )
 
 
@@ -87,6 +95,90 @@ def test_background_business_controls_are_internal_only():
         for name, plugin in plugins.items()
         if plugin.metadata.get("model_visible") is False
     }
+
+
+@pytest.mark.asyncio
+async def test_explicit_r2_delegation_bypasses_duplicate_human_prompt(monkeypatch):
+    from cyrene.workbench.application.app_control import authorize
+
+    class PermissionService:
+        prompted = False
+
+        def explicit_delegation_status(self, **_kwargs):
+            return "missing"
+
+        def consume_explicit_delegation(self, *, approve_new=False, **_kwargs):
+            return 1 if approve_new else 0
+
+        def request_permission(self, **_kwargs):
+            self.prompted = True
+            return {"status": "awaiting_user"}
+
+    async def approve(**_kwargs):
+        return True, "明确授权。"
+
+    monkeypatch.setattr(
+        "cyrene.plugins.permission_review.review_user_delegation",
+        approve,
+    )
+    service = PermissionService()
+    context = _plugin_context(
+        permission_user_request="启用指定的扩展包",
+        permission_service=service,
+    )
+    with _bind_plugin_context(context):
+        result = await authorize(
+            "cyrene.settings.global",
+            {"enabled_plugin_packs": ["demo"]},
+            reason="启用用户指定的扩展包",
+            delegation_quote="启用指定的扩展包",
+        )
+
+    assert result is None
+    assert service.prompted is False
+
+
+@pytest.mark.asyncio
+async def test_rejected_r2_delegation_falls_back_to_exact_human_confirmation(monkeypatch):
+    from cyrene.workbench.application.app_control import authorize
+
+    class PermissionService:
+        def explicit_delegation_status(self, **_kwargs):
+            return "missing"
+
+        def consume_explicit_delegation(self, **_kwargs):
+            return 0
+
+        def request_permission(self, **kwargs):
+            request = kwargs["request"]
+            return {
+                "status": "awaiting_user",
+                "kind": request["kind"],
+                "permission": request,
+            }
+
+    async def reject(**_kwargs):
+        return False, "用户请求不够明确。"
+
+    monkeypatch.setattr(
+        "cyrene.plugins.permission_review.review_user_delegation",
+        reject,
+    )
+    context = _plugin_context(
+        permission_user_request="看看插件设置",
+        permission_service=PermissionService(),
+    )
+    with _bind_plugin_context(context):
+        result = await authorize(
+            "cyrene.settings.global",
+            {"enabled_plugin_packs": ["demo"]},
+            reason="更改插件设置",
+            delegation_quote="看看插件设置",
+        )
+
+    payload = json.loads(result)
+    assert payload["status"] == "awaiting_user"
+    assert payload["kind"] == "self_configuration_confirmation"
 
 
 def test_current_tree_exposes_project_switch_chat_search_and_shared_pip_maximize_handler():

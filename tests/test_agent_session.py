@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 
 from cyrene.core.session import AgentSession
@@ -17,6 +18,128 @@ from cyrene.core.plugin import Plugin, PluginContext, PluginPack, PluginRegistry
 
 def run(coroutine):
     return asyncio.run(coroutine)
+
+
+def test_workspace_file_boundary_matches_v0713_review_scope(tmp_path):
+    reviewed_requests = []
+
+    async def fake_model(arguments, _context):
+        reviewed_requests.append(json.loads(arguments["messages"][-1]["content"]))
+        return {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "decision",
+                    "name": "decide",
+                    "arguments": {"approve": True, "rationale": "approved"},
+                }
+            ],
+        }
+
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "model",
+            (Plugin("MiniMax", "fake", {"type": "object"}, fake_model, kind="model"),),
+        ),
+        source="test",
+    )
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    workspace = tmp_path / "workspace"
+    session = AgentSession(
+        tmp_path / "data",
+        workspace,
+        plugin_directory,
+        registry=registry,
+        permission_user_request="Create the requested report",
+        plugin_context_data={
+            "run_context": {"agent_id": "main", "permission_mode": "auto"}
+        },
+    )
+    context = PluginContext(
+        workspace=workspace,
+        tree=session.store,
+        tree_id=session.tree.id,
+        node_id=session.tree.root_id,
+        hooks=session.hooks,
+    )
+
+    inside = run(session.runtime.call(
+        "Write", {"path": "draft/report.txt", "content": "inside"}, context
+    ))
+    assert inside.success is True
+    assert reviewed_requests == []
+
+    outside_path = tmp_path / "outside.txt"
+    outside = run(session.runtime.call(
+        "Write", {"path": str(outside_path), "content": "outside"}, context
+    ))
+    assert outside.success is True
+    assert outside_path.read_text(encoding="utf-8") == "outside"
+    assert reviewed_requests[0]["user_request"] == "Create the requested report"
+    assert reviewed_requests[0]["tools"][0]["arguments"]["path"] == str(outside_path)
+    session.close()
+
+
+def test_default_permission_confirmation_grants_exact_retry(tmp_path):
+    model_calls = 0
+    outside_path = tmp_path / "outside.txt"
+
+    async def fake_model(arguments, _context):
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls <= 2:
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"write-{model_calls}",
+                        "name": "Write",
+                        "arguments": {
+                            "path": str(outside_path),
+                            "content": "approved",
+                        },
+                    }
+                ],
+            }
+        return {"content": "done", "tool_calls": []}
+
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "model",
+            (Plugin("MiniMax", "fake", {"type": "object"}, fake_model, kind="model"),),
+        ),
+        source="test",
+    )
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        registry=registry,
+        plugin_context_data={
+            "run_context": {"agent_id": "main", "permission_mode": "default"}
+        },
+    )
+
+    session.submit("Write the requested file", run_id="confirm-run")
+    run(session.drain())
+    pending = session.pending_output()
+    assert pending is not None
+    assert pending["kind"] == "write_permission_request"
+    assert not outside_path.exists()
+
+    session.answer(str(pending["id"]), "同意一次")
+    run(session.drain())
+
+    assert session.final_output("confirm-run")["content"] == "done"
+    assert outside_path.read_text(encoding="utf-8") == "approved"
+    session.close()
 
 
 def test_context_change_hook_mounts_turn_context_before_model(tmp_path):
@@ -356,6 +479,23 @@ def test_context_updates_drive_model_tool_model_without_agent_loop(tmp_path):
             "model_latency_ms": 0.0,
         }
     ]
+    permission_reviews = snapshot["nodes"][2]["value"]["permission_reviews"]
+    assert len(permission_reviews) == 1
+    assert permission_reviews[0]["approved"] is True
+    assert permission_reviews[0]["approved_count"] == 1
+    assert permission_reviews[0]["denied_count"] == 0
+    assert permission_reviews[0]["decisions"] == [{
+        "index": 0,
+        "tool": "Read",
+        "tool_call_id": "read-file",
+        "approved": True,
+        "rationale": "allowed",
+    }]
+    durable_event_types = [event.type for event in session.events()]
+    tool_calls_index = durable_event_types.index("assistant.tool_calls")
+    permission_index = durable_event_types.index("permission.reviewed")
+    tools_completed_index = durable_event_types.index("tools.completed")
+    assert tool_calls_index < permission_index < tools_completed_index
     assert snapshot["nodes"][-1]["value"]["usage"] == {"prompt_tokens": 16}
     assert assistant_change_seen is True
     assert agent_tool_sets == [
@@ -364,6 +504,76 @@ def test_context_updates_drive_model_tool_model_without_agent_loop(tmp_path):
     ]
     assert snapshot["status"] == "idle"
     assert snapshot["leaf_id"] == snapshot["nodes"][-1]["id"]
+    session.close()
+
+
+def test_default_session_allows_more_than_twelve_model_calls(tmp_path):
+    model_calls = 0
+
+    async def looping_model(_arguments, _context):
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls <= 12:
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"step-{model_calls}",
+                        "name": "step",
+                        "arguments": {"number": model_calls},
+                    }
+                ],
+            }
+        return {"content": "finished after thirteen calls", "tool_calls": []}
+
+    async def step(arguments, _context):
+        return arguments["number"]
+
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model-and-step",
+            "model and loop tool",
+            (
+                Plugin(
+                    "MiniMax",
+                    "fake model",
+                    {"type": "object"},
+                    looping_model,
+                    kind="model",
+                ),
+                Plugin(
+                    "step",
+                    "advance the test loop",
+                    {
+                        "type": "object",
+                        "properties": {"number": {"type": "integer"}},
+                        "required": ["number"],
+                    },
+                    step,
+                    metadata={"permission_review": False},
+                ),
+            ),
+        ),
+        source="test",
+    )
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        registry=registry,
+    )
+
+    session.submit("keep going", run_id="unlimited-model-calls")
+    run(session.drain())
+
+    assert model_calls == 13
+    final = session.final_output("unlimited-model-calls")
+    assert final is not None
+    assert final["content"] == "finished after thirteen calls"
+    assert session.snapshot()["status"] == "idle"
     session.close()
 
 

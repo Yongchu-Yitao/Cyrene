@@ -110,7 +110,7 @@ async def run_workbench_chat(
     conversation_source: str = "",
     plugin_directory: str | Path | None = None,
     data_directory: str | Path | None = None,
-    max_model_calls: int = 12,
+    max_model_calls: int | None = None,
 ) -> WorkbenchChatResult:
     """Run one ordinary built-in Workbench Chat turn on the Plugin kernel."""
 

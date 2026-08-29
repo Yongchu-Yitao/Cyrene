@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.core.plugin import PluginContext
-from cyrene.plugins.native_runtime import plugin_localized
+from cyrene.plugins.native_runtime import json_result, plugin_localized
 
 from .definitions import get_native_tool_def
 
@@ -25,6 +25,31 @@ async def _tool_send_message(args: dict[str, Any], context: PluginContext) -> st
     chat_id = context.data.get("chat_id")
     notify_state = context.data.get("notify_state")
     text = str(args.get("text", ""))
+    permission_service = context.services.get("permission")
+    request_permission = getattr(
+        permission_service,
+        "request_dynamic_permission",
+        None,
+    )
+    if not callable(request_permission):
+        return plugin_localized(
+            context,
+            "Message not sent: the permission service is unavailable.",
+            "消息未发送：权限服务不可用。",
+        )
+    permission_result = await request_permission(
+        tool_name=TOOL_NAME,
+        arguments=args,
+        request={
+            "kind": "external_delivery_request",
+            "operation": "外发 Telegram 消息",
+            "reason": f"消息内容：{text[:240]}",
+            "scope_hint": "外部通信/文件外发的 ",
+            "options": ["允许这次", "本次会话内总是允许", "拒绝"],
+        },
+    )
+    if permission_result is not None:
+        return json_result(permission_result)
     if bot is not None:
         await bot.send_message(chat_id=chat_id, text=text)
     if notify_state is not None:

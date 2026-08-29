@@ -17,6 +17,7 @@ from typing import Any, Literal, TypeAlias
 from uuid import uuid4
 
 from .validation import check_input_schema
+from .resource_effects import PluginResourceEffect, normalize_resource_effects
 from .extensions import (
     APPLICATION_SETUP,
     SESSION_SETUP,
@@ -109,6 +110,10 @@ PluginHandler: TypeAlias = Callable[
     [dict[str, Any], PluginContext],
     Any | Awaitable[Any],
 ]
+PermissionBoundaryProvider: TypeAlias = Callable[
+    [dict[str, Any], PluginContext],
+    Mapping[str, Any] | None | Awaitable[Mapping[str, Any] | None],
+]
 PluginSetupHandler: TypeAlias = Callable[[PluginSetupContext], None]
 PluginApplicationSetupHandler: TypeAlias = Callable[[Any], None]
 
@@ -125,6 +130,11 @@ class Plugin:
     allow_parallel: bool = False
     timeout_seconds: float | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    permission_boundary: PermissionBoundaryProvider | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         name = str(self.name).strip()
@@ -143,6 +153,8 @@ class Plugin:
                 raise TypeError("Plugin timeout_seconds must be a number or None")
             if float(self.timeout_seconds) <= 0:
                 raise ValueError("Plugin timeout_seconds must be greater than zero")
+        if self.permission_boundary is not None and not callable(self.permission_boundary):
+            raise TypeError("Plugin permission_boundary must be callable or None")
         schema = deepcopy(dict(self.input_schema))
         if not isinstance(self.metadata, Mapping):
             raise TypeError("Plugin metadata must be a mapping")
@@ -153,6 +165,13 @@ class Plugin:
         main_only = metadata.get("main_only", False)
         if not isinstance(main_only, bool):
             raise TypeError("Plugin metadata.main_only must be a boolean")
+        subagent_only = metadata.get("subagent_only", False)
+        if not isinstance(subagent_only, bool):
+            raise TypeError("Plugin metadata.subagent_only must be a boolean")
+        if main_only and subagent_only:
+            raise ValueError(
+                "Plugin metadata cannot be both main_only and subagent_only"
+            )
         required = metadata.get("required", False)
         if not isinstance(required, bool):
             raise TypeError("Plugin metadata.required must be a boolean")
@@ -170,6 +189,13 @@ class Plugin:
             not isinstance(value, Mapping) for value in translations.values()
         ):
             raise TypeError("Plugin metadata.i18n must map locales to objects")
+        resource_effects = normalize_resource_effects(
+            metadata.get("resource_effects", ())
+        )
+        if resource_effects or "resource_effects" in metadata:
+            metadata["resource_effects"] = tuple(
+                effect.as_metadata() for effect in resource_effects
+            )
         if schema.get("type", "object") != "object":
             raise ValueError("Plugin input_schema must describe an object")
         check_input_schema(schema)
@@ -193,6 +219,12 @@ class Plugin:
         return bool(self.metadata.get("main_only", False))
 
     @property
+    def subagent_only(self) -> bool:
+        """Whether only non-main Agents may discover or execute this Plugin."""
+
+        return bool(self.metadata.get("subagent_only", False))
+
+    @property
     def required(self) -> bool:
         """Whether the Plugin is a fixed capability while its pack is enabled."""
 
@@ -211,6 +243,12 @@ class Plugin:
         if not self.model_visible:
             return "hidden"
         return str(self.metadata.get("agent_exposure") or "discoverable")
+
+    @property
+    def resource_effects(self) -> tuple[PluginResourceEffect, ...]:
+        """Return validated, host-neutral resource presentation hints."""
+
+        return normalize_resource_effects(self.metadata.get("resource_effects", ()))
 
     def localized(self, locale: str) -> tuple[str, str]:
         """Return localized authored metadata with source text as fallback."""
@@ -401,6 +439,7 @@ __all__ = [
     "PluginContext",
     "PluginHandler",
     "PluginPack",
+    "PermissionBoundaryProvider",
     "PluginSetupContext",
     "PluginSetupHandler",
     "merge_plugin_pack_metadata",

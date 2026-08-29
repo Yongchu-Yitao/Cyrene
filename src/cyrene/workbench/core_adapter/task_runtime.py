@@ -396,7 +396,7 @@ class TaskAgentRuntime:
         db_path: str,
         plugin_directory: str | Path | None = None,
         data_directory: str | Path | None = None,
-        max_model_calls: int = 12,
+        max_model_calls: int | None = None,
     ) -> None:
         self.bot = bot
         self.db_path = str(db_path or "")
@@ -406,7 +406,9 @@ class TaskAgentRuntime:
         self.data_directory = workbench_agent_data_directory(
             self.db_path, data_directory
         )
-        self.max_model_calls = max(1, int(max_model_calls))
+        self.max_model_calls = (
+            None if max_model_calls is None else max(1, int(max_model_calls))
+        )
 
     @staticmethod
     def _workspace(project: Mapping[str, Any]) -> Path:

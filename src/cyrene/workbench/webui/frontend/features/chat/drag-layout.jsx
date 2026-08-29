@@ -6,6 +6,7 @@ function wbcWorkspaceDisplayName(path) {
 var WBC_RESOURCE_DRAG_MIME = "application/x-cyrene-work-resource+json";
 var WBC_CHAT_DRAG_MIME = "application/x-cyrene-chat+json";
 var WBC_TASK_DRAG_MIME = "application/x-cyrene-task+json";
+var WBC_PLUGIN_VIEW_DRAG_MIME = "application/x-cyrene-plugin-view+json";
 var WBC_CHAT_GROUP_DRAG_MIME = "application/x-cyrene-chat-group+json";
 var WBC_AGENT_CHAT_FLOW_EVENT = "cyrene:agent-chat-flow";
 var WBC_AGENT_CHAT_FLOW_TTLS = { created: 4200, typing: 3200 };
@@ -197,6 +198,52 @@ function wbcReadTaskDrag(event) {
   try {
     var payload = JSON.parse(transfer.getData(WBC_TASK_DRAG_MIME) || "null");
     return payload && payload.kind === "task" && payload.id ? payload : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function wbcSetPluginViewDrag(event, payload) {
+  var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
+  var pluginView = payload && typeof payload === "object" ? payload : null;
+  var packId = String(pluginView && (pluginView.packId || pluginView.pack_id) || "");
+  var viewId = String(pluginView && (pluginView.viewId || pluginView.view_id) || "");
+  if (!transfer || !pluginView || !packId || !viewId) return;
+  try {
+    // Match conversation cards: the rail owns the source while the workspace
+    // treats the same drag as a copy that creates a pane-card instance.
+    transfer.effectAllowed = "copyMove";
+    transfer.setData(WBC_PLUGIN_VIEW_DRAG_MIME, JSON.stringify({
+      kind: "plugin-view",
+      packId: packId,
+      viewId: viewId,
+      instanceId: String(pluginView.instanceId || pluginView.instance_id || "default"),
+      projectId: String(pluginView.projectId || pluginView.project_id || ""),
+      title: String(pluginView.title || viewId || packId),
+      subtitle: String(pluginView.subtitle || packId),
+      state: pluginView.state == null ? null : pluginView.state,
+    }));
+    transfer.setData("text/plain", String(pluginView.title || viewId || packId));
+  } catch (e) {}
+}
+
+function wbcHasPluginViewDrag(event) {
+  var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
+  if (!transfer) return false;
+  try {
+    return Array.prototype.slice.call(transfer.types || []).indexOf(WBC_PLUGIN_VIEW_DRAG_MIME) >= 0;
+  } catch (e) {
+    return false;
+  }
+}
+
+function wbcReadPluginViewDrag(event) {
+  var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
+  if (!transfer) return null;
+  try {
+    var payload = JSON.parse(transfer.getData(WBC_PLUGIN_VIEW_DRAG_MIME) || "null");
+    return payload && payload.kind === "plugin-view" && payload.packId && payload.viewId
+      ? payload : null;
   } catch (e) {
     return null;
   }
@@ -421,12 +468,33 @@ function wbcPaneCard(kind, payload, options) {
   var stableId = opts.freshInstance
     ? canonicalId + ":instance:" + crypto.randomUUID()
     : canonicalId;
-  return {
+  var card = {
     id: opts.id || stableId,
     kind: normalizedKind,
     payload: payload,
     ownerChatId: String(opts.ownerChatId || ""),
   };
+  if (opts.meta && typeof opts.meta === "object") card.meta = wbcNormalizePaneCardMeta(opts.meta);
+  return card;
+}
+
+function wbcNormalizePaneCardMeta(value) {
+  var raw = value && typeof value === "object" ? value : {};
+  var autoClosePolicy = ["run-end", "idle", "never"].indexOf(String(raw.autoClosePolicy || "")) >= 0
+    ? String(raw.autoClosePolicy) : "never";
+  return {
+    origin: raw.origin === "agent" ? "agent" : "user",
+    claimedByUser: raw.claimedByUser === true,
+    pinned: raw.pinned === true,
+    autoClosePolicy: autoClosePolicy,
+    createdAt: Math.max(0, Number(raw.createdAt) || 0),
+    lastIntentAt: Math.max(0, Number(raw.lastIntentAt) || 0),
+  };
+}
+
+function wbcNormalizePaneCard(card) {
+  if (!card || typeof card !== "object" || card.kind !== "surface") return card;
+  return Object.assign({}, card, { meta: wbcNormalizePaneCardMeta(card.meta) });
 }
 
 function wbcDefaultPaneLayout(chatId) {
@@ -447,8 +515,8 @@ function wbcDefaultPaneLayout(chatId) {
 
 function wbcNormalizePaneLayout(layout, chatId) {
   var base = layout && typeof layout === "object" ? layout : wbcDefaultPaneLayout(chatId);
-  var left = Array.isArray(base.left) ? base.left.filter(Boolean).slice(0, 2) : [];
-  var right = Array.isArray(base.right) ? base.right.filter(Boolean).slice(0, 2) : [];
+  var left = Array.isArray(base.left) ? base.left.filter(Boolean).slice(0, 2).map(wbcNormalizePaneCard) : [];
+  var right = Array.isArray(base.right) ? base.right.filter(Boolean).slice(0, 2).map(wbcNormalizePaneCard) : [];
   if (!left.length && !right.length && chatId) return wbcDefaultPaneLayout(chatId);
   return {
     left: left,
@@ -593,6 +661,23 @@ function wbcEscapeHtml(value) {
 function wbcSetResourceDrag(event, payload) {
   var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
   if (!transfer || !payload) return;
+  // The macOS Electron titlebar is a native app-region. Even though the
+  // resource shelf itself opts out with `no-drag`, Chromium can hand an
+  // in-flight HTML drag back to the window drag region before the shelf sees
+  // dragenter/dragover. DevTools happens to rebuild that native hit-test map,
+  // which is why the same file drag works only while DevTools is docked.
+  // Temporarily make the whole topbar a DOM interaction region for the life of
+  // this resource drag, then restore normal window dragging on every terminal
+  // drag event.
+  var root = document.documentElement;
+  root.classList.add("wbc-resource-drag-active");
+  function clearResourceDragRegion() {
+    root.classList.remove("wbc-resource-drag-active");
+    document.removeEventListener("dragend", clearResourceDragRegion, true);
+    document.removeEventListener("drop", clearResourceDragRegion, true);
+  }
+  document.addEventListener("dragend", clearResourceDragRegion, true);
+  document.addEventListener("drop", clearResourceDragRegion, true);
   try {
     transfer.effectAllowed = "copy";
     transfer.setData(WBC_RESOURCE_DRAG_MIME, JSON.stringify(payload));
@@ -702,4 +787,4 @@ window.CyreneUI.resources = window.CyreneUI.register("resources", {
 // core events are ignored safely (diagnostics only), and the same eventId is
 // processed at most once per stream so a reconnect cannot duplicate cards.
 
-export { wbcWorkspaceDisplayName, WBC_RESOURCE_DRAG_MIME, WBC_CHAT_DRAG_MIME, WBC_TASK_DRAG_MIME, WBC_CHAT_GROUP_DRAG_MIME, WBC_AGENT_CHAT_FLOW_EVENT, WBC_AGENT_CHAT_FLOW_TTLS, WBC_AGENT_CHAT_FLOW_STATE, WBC_EMPTY_DRAG_IMAGE, wbcHideNativeDragImage, wbcBuildRailCardDragPreview, wbcAgentChatFlowSnapshot, wbcNotifyAgentChatFlow, wbcSetChatDrag, wbcHasChatDrag, wbcSetChatGroupDrag, wbcHasChatGroupDrag, wbcHasChatRailDrag, wbcReadChatDrag, wbcSetTaskDrag, wbcHasTaskDrag, wbcReadTaskDrag, wbcChatSideZoneRect, wbcPinSplitMotionOpen, wbcReleasePinnedSplitMotion, wbcPinPageSplitLayout, wbcReleasePinnedPageSplitLayout, wbcClonePaneWithLiveState, wbcCaptureConversationViewport, wbcRestoreConversationViewport, wbcSplitSideForDraggedConversation, wbcChatSideDropZone, WBC_SPLIT_DRAG_MIME, wbcPaneIdentity, wbcPaneCard, wbcDefaultPaneLayout, wbcNormalizePaneLayout, wbcPaneCardLocation, wbcPlacePaneCard, wbcChatDropReplacesActiveConversation, wbcSetSplitDrag, wbcReadSplitDrag, wbcHasSplitDrag, wbcEscapeHtml, wbcSetResourceDrag, wbcReadResourceDrag, wbcHasResourceDrag, wbcFileDragPayload }
+export { wbcWorkspaceDisplayName, WBC_RESOURCE_DRAG_MIME, WBC_CHAT_DRAG_MIME, WBC_TASK_DRAG_MIME, WBC_PLUGIN_VIEW_DRAG_MIME, WBC_CHAT_GROUP_DRAG_MIME, WBC_AGENT_CHAT_FLOW_EVENT, WBC_AGENT_CHAT_FLOW_TTLS, WBC_AGENT_CHAT_FLOW_STATE, WBC_EMPTY_DRAG_IMAGE, wbcHideNativeDragImage, wbcBuildRailCardDragPreview, wbcAgentChatFlowSnapshot, wbcNotifyAgentChatFlow, wbcSetChatDrag, wbcHasChatDrag, wbcSetChatGroupDrag, wbcHasChatGroupDrag, wbcHasChatRailDrag, wbcReadChatDrag, wbcSetTaskDrag, wbcHasTaskDrag, wbcReadTaskDrag, wbcSetPluginViewDrag, wbcHasPluginViewDrag, wbcReadPluginViewDrag, wbcChatSideZoneRect, wbcPinSplitMotionOpen, wbcReleasePinnedSplitMotion, wbcPinPageSplitLayout, wbcReleasePinnedPageSplitLayout, wbcClonePaneWithLiveState, wbcCaptureConversationViewport, wbcRestoreConversationViewport, wbcSplitSideForDraggedConversation, wbcChatSideDropZone, WBC_SPLIT_DRAG_MIME, wbcPaneIdentity, wbcPaneCard, wbcDefaultPaneLayout, wbcNormalizePaneLayout, wbcPaneCardLocation, wbcPlacePaneCard, wbcChatDropReplacesActiveConversation, wbcSetSplitDrag, wbcReadSplitDrag, wbcHasSplitDrag, wbcEscapeHtml, wbcSetResourceDrag, wbcReadResourceDrag, wbcHasResourceDrag, wbcFileDragPayload }

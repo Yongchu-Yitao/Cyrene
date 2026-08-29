@@ -98,8 +98,13 @@ class _ToolboxHandler:
             )
         return registered
 
-    def _list(self, *, agent_id: str) -> tuple[list[str], list[str]]:
+    def _list(
+        self,
+        *,
+        agent_id: str,
+    ) -> tuple[list[str], list[dict[str, str]], list[str]]:
         packs: list[str] = []
+        pack_descriptions: list[dict[str, str]] = []
         for pack in self._registry.list_packs():
             if self._registry.pack_source(pack.id) == "core":
                 continue
@@ -114,6 +119,12 @@ class _ToolboxHandler:
                 for plugin in pack.plugins
             ):
                 packs.append(pack.id)
+                pack_descriptions.append(
+                    {
+                        "name": pack.id,
+                        "description": pack.description,
+                    }
+                )
 
         standalone_tools: list[str] = []
         for registered in self._registry.list_plugins():
@@ -131,7 +142,7 @@ class _ToolboxHandler:
             ):
                 continue
             standalone_tools.append(plugin.name)
-        return packs, standalone_tools
+        return packs, pack_descriptions, standalone_tools
 
     def _pack_plugins(self, name: str, *, agent_id: str) -> tuple[Plugin, ...]:
         for pack in self._registry.list_packs():
@@ -217,10 +228,13 @@ class _ToolboxHandler:
         agent_id = self._agent_id(context)
 
         if operation == "list":
-            packs, standalone_tools = self._list(agent_id=agent_id)
+            packs, pack_descriptions, standalone_tools = self._list(
+                agent_id=agent_id
+            )
             result: dict[str, Any] = {
                 "operation": "list",
                 "packs": packs,
+                "pack_descriptions": pack_descriptions,
                 "standalone_tools": standalone_tools,
             }
         elif operation == "describe":

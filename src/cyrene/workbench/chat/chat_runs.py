@@ -31,6 +31,8 @@ SQLite, so accepted guidance remains session-isolated and idempotent.
 from __future__ import annotations
 
 import asyncio
+import copy
+import hashlib
 import json
 import logging
 import sqlite3
@@ -95,6 +97,16 @@ _BATCHABLE_DURABLE_EVENT_TYPES = frozenset({
 # Event types that suppress the synthesized reply (the agent already streamed a
 # real reply). Mirrors the legacy generator's ``startswith("reply_")`` check.
 _REPLY_EVENT_PREFIX = "reply_"
+
+# Control-plane tools do not create user-visible activity rows.  They therefore
+# cannot be used as a causal boundary between streamed prose and the next
+# visible activity.  Keep this list aligned with the Web UI's tool filter.
+_NON_VISIBLE_TOOL_NAMES = frozenset({
+    "use_tools",
+    "quit",
+    "send_message",
+    "update_plan_progress",
+})
 
 # A runner is the per-send coroutine supplied by the route layer. It runs the
 # agent, finalizes, and publishes terminal events via ``run.publish``.
@@ -481,7 +493,10 @@ class ChatRun:
         db_path: str = "",
         persist_live_message: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
-        from cyrene.workbench.application.inbox import WorkbenchAgentInbox
+        from cyrene.workbench.application.inbox import (
+            WorkbenchAgentInbox,
+            WorkbenchGuidanceChannel,
+        )
 
         self.chat_id = str(chat_id)
         self.run_id = f"run_{uuid4().hex}"
@@ -490,10 +505,12 @@ class ChatRun:
         self._event_store_pending: list[dict[str, Any]] = []
         self._event_store_flush_lock = asyncio.Lock()
         self._event_store_flush_task: asyncio.Task[None] | None = None
+        self._publish_lock = asyncio.Lock()
         self._persist_live_message = persist_live_message
         self.inbox = WorkbenchAgentInbox(
             self.chat_id, db_path=db_path, run_id=self.run_id
         )
+        self.guidance_channel = WorkbenchGuidanceChannel(self.inbox)
         self.max_buffer = int(max_buffer)
         self.seq = 1
         # Event 1 is always the ack so a fresh attach (cursor 0) replays the
@@ -506,6 +523,13 @@ class ChatRun:
         self.ready = asyncio.Event()
         self.task: asyncio.Task[Any] | None = None
         self.saw_reply_events = False
+        # The final reply is streamed separately at the bottom of the Web UI.
+        # If a real tool starts after visible text, that text is no longer the
+        # final reply: it is a causal, intermediate message and must be inserted
+        # into the append-only event log before the tool event itself.
+        self._open_reply_text = ""
+        self._open_reply_created_at = ""
+        self._intermediate_reply_seq = 0
         self.status = "running"
         self.termination_reason = ""
         # Result for non-streaming callers, set by the runner:
@@ -538,8 +562,10 @@ class ChatRun:
         run._event_store_pending = []
         run._event_store_flush_lock = asyncio.Lock()
         run._event_store_flush_task = None
+        run._publish_lock = asyncio.Lock()
         run._persist_live_message = None
         run.inbox = None
+        run.guidance_channel = None
         run.max_buffer = max(_MAX_BUFFER_EVENTS, len(events))
         run.seq = int(last_seq)
         run.events = list(events)
@@ -554,6 +580,9 @@ class ChatRun:
             str(event.get("type") or "").startswith(_REPLY_EVENT_PREFIX)
             for event in events
         )
+        run._open_reply_text = ""
+        run._open_reply_created_at = ""
+        run._intermediate_reply_seq = 0
         run.status = str(status)
         run.termination_reason = str(termination_reason)
         run.outcome = {"kind": str(outcome_kind)} if outcome_kind else None
@@ -635,8 +664,242 @@ class ChatRun:
             self._event_store_flush_task = None
         await self._flush_event_store_now()
 
-    async def publish(self, event: dict[str, Any]) -> None:
-        """Append an event to the buffer and fan it out to attached clients.
+    @staticmethod
+    def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
+        payload = event.get("payload")
+        return payload if isinstance(payload, dict) else event
+
+    @classmethod
+    def _visible_reply_delta(cls, event: dict[str, Any]) -> str:
+        event_type = str(event.get("type") or "")
+        payload = cls._event_payload(event)
+        if event_type in {"reply_delta", "message.delta"}:
+            return str(
+                payload.get("delta")
+                if payload.get("delta") is not None
+                else payload.get("text") or payload.get("content") or ""
+            )
+        return ""
+
+    @classmethod
+    def _completed_reply_text(cls, event: dict[str, Any]) -> str | None:
+        event_type = str(event.get("type") or "")
+        if event_type not in {"reply_done", "message.completed"}:
+            return None
+        payload = cls._event_payload(event)
+        return str(
+            payload.get("response")
+            if payload.get("response") is not None
+            else payload.get("text")
+            if payload.get("text") is not None
+            else payload.get("content") or ""
+        )
+
+    @classmethod
+    def _is_visible_tool_start(cls, event: dict[str, Any]) -> bool:
+        if str(event.get("type") or "") not in {"tool.started", "tool_call_started"}:
+            return False
+        payload = cls._event_payload(event)
+        name = str(
+            payload.get("name")
+            or payload.get("tool")
+            or payload.get("title")
+            or ""
+        ).strip()
+        return bool(name) and name not in _NON_VISIBLE_TOOL_NAMES
+
+    @staticmethod
+    def _normalized_reply_text(value: Any) -> str:
+        return " ".join(str(value or "").split())
+
+    def _reset_open_reply(self) -> None:
+        self._open_reply_text = ""
+        self._open_reply_created_at = ""
+
+    @staticmethod
+    def _timeline_message_time(message: dict[str, Any]) -> datetime | None:
+        raw = str(message.get("createdAt") or message.get("created_at") or "").strip()
+        if not raw:
+            return None
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    @classmethod
+    def _event_tool_call_id(cls, event: dict[str, Any]) -> str:
+        payload = cls._event_payload(event)
+        return str(
+            payload.get("toolCallId")
+            or payload.get("tool_call_id")
+            or payload.get("call_id")
+            or ""
+        ).strip()
+
+    def terminal_timeline_messages(
+        self,
+        activity_messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Fold this run's ordered events into its durable terminal timeline.
+
+        Live intermediate replies belong to the append-only run event log, not
+        to the browser runtime projection.  Rebuild them from that log at the
+        terminal boundary and interleave durable activity cards at the first
+        matching tool event.  This makes the ``saved`` payload a complete
+        replacement for the live projection even when an earlier best-effort
+        chat checkpoint failed.
+        """
+
+        activities = [
+            copy.deepcopy(dict(message))
+            for message in activity_messages
+            if isinstance(message, dict)
+        ]
+        activity_indexes_by_call: dict[str, list[int]] = {}
+        for index, activity in enumerate(activities):
+            for trace in activity.get("trace") or ():
+                if not isinstance(trace, dict):
+                    continue
+                call_id = str(
+                    trace.get("toolCallId")
+                    or trace.get("tool_call_id")
+                    or trace.get("callId")
+                    or ""
+                ).strip()
+                if call_id:
+                    activity_indexes_by_call.setdefault(call_id, []).append(index)
+
+        timeline: list[dict[str, Any]] = []
+        emitted_activities: set[int] = set()
+        intermediate_indexes: dict[str, int] = {}
+
+        def append_intermediate(raw: dict[str, Any]) -> None:
+            message = copy.deepcopy(dict(raw))
+            message["intermediate"] = True
+            message.setdefault("roundId", self.run_id)
+            # These fields only help the live projection split activities. The
+            # terminal activity cards below are the durable execution history.
+            message.pop("opensActivity", None)
+            message.pop("trace", None)
+            identity = str(message.get("id") or "").strip()
+            semantic = str(message.get("liveDedupeKey") or "").strip()
+            key = identity or semantic
+            existing_index = intermediate_indexes.get(key, -1) if key else -1
+            if existing_index < 0 and semantic:
+                existing_index = intermediate_indexes.get(semantic, -1)
+            if existing_index >= 0:
+                existing = timeline[existing_index]
+                timeline[existing_index] = {
+                    **existing,
+                    **message,
+                    "id": existing.get("id") or message.get("id"),
+                }
+                return
+            index = len(timeline)
+            timeline.append(message)
+            if identity:
+                intermediate_indexes[identity] = index
+            if semantic:
+                intermediate_indexes[semantic] = index
+
+        for event in sorted(
+            (item for item in self.events if isinstance(item, dict)),
+            key=lambda item: int(item.get("_seq") or 0),
+        ):
+            if str(event.get("type") or "") == "intermediate_message":
+                message = event.get("message")
+                if isinstance(message, dict):
+                    append_intermediate(message)
+                continue
+            call_id = self._event_tool_call_id(event)
+            if not call_id:
+                continue
+            for activity_index in activity_indexes_by_call.get(call_id, ()):
+                if activity_index in emitted_activities:
+                    continue
+                emitted_activities.add(activity_index)
+                timeline.append(activities[activity_index])
+
+        # Reasoning-only cards and adapters without tool-call ids have no event
+        # anchor. Insert those by their durable timestamps without disturbing
+        # the causal order already recovered above.
+        for index, activity in enumerate(activities):
+            if index in emitted_activities:
+                continue
+            activity_time = self._timeline_message_time(activity)
+            insert_at = len(timeline)
+            if activity_time is not None:
+                for current_index, current in enumerate(timeline):
+                    current_time = self._timeline_message_time(current)
+                    if current_time is not None and current_time > activity_time:
+                        insert_at = current_index
+                        break
+            timeline.insert(insert_at, activity)
+            intermediate_indexes = {
+                key: value + 1 if value >= insert_at else value
+                for key, value in intermediate_indexes.items()
+            }
+        return timeline
+
+    def _observe_reply_event(self, event: dict[str, Any]) -> None:
+        delta = self._visible_reply_delta(event)
+        if delta:
+            if not self._open_reply_text:
+                self._open_reply_created_at = str(
+                    event.get("timestamp")
+                    or event.get("created_at")
+                    or event.get("createdAt")
+                    or utc_now_iso()
+                )
+            self._open_reply_text += delta
+            return
+        completed = self._completed_reply_text(event)
+        if completed is not None:
+            if completed and not self._open_reply_created_at:
+                self._open_reply_created_at = str(
+                    event.get("timestamp")
+                    or event.get("created_at")
+                    or event.get("createdAt")
+                    or utc_now_iso()
+                )
+            # Completion events carry the authoritative full text.  Replacing
+            # the accumulated deltas also prevents the bridge's completion
+            # projection from duplicating streamed content.
+            if completed:
+                self._open_reply_text = completed
+
+    async def _seal_open_reply(self, *, opens_activity: bool) -> None:
+        content = self._open_reply_text
+        if not content.strip():
+            self._reset_open_reply()
+            return
+        self._intermediate_reply_seq += 1
+        normalized = self._normalized_reply_text(content)
+        semantic_digest = hashlib.sha1(
+            f"{self.run_id}\0{normalized}".encode("utf-8")
+        ).hexdigest()[:16]
+        identity_digest = hashlib.sha1(
+            f"{self.run_id}\0{self._intermediate_reply_seq}\0{content}".encode("utf-8")
+        ).hexdigest()[:16]
+        message = {
+            "id": f"assistant_{identity_digest}",
+            "role": "assistant",
+            "content": content,
+            "createdAt": self._open_reply_created_at or utc_now_iso(),
+            "intermediate": True,
+            "roundId": self.run_id,
+            "liveDedupeKey": f"msg_sem_{semantic_digest}",
+        }
+        if opens_activity:
+            message["opensActivity"] = True
+        self._reset_open_reply()
+        await self._publish_one({"type": "intermediate_message", "message": message})
+
+    async def _publish_one(self, event: dict[str, Any]) -> None:
+        """Append one already-ordered event and fan it out to attached clients.
 
         Used both as the agent's ``_reply_stream_writer`` (so the agent's own
         ``reply_*`` / ``intermediate_message`` events are captured) and directly
@@ -689,6 +952,41 @@ class ChatRun:
                 queue.put_nowait(stored)
             except Exception:
                 pass
+
+    async def publish(self, event: dict[str, Any]) -> None:
+        """Publish one event while preserving its causal UI order.
+
+        A visible tool start is the authoritative signal that any reply text
+        streamed immediately before it was a tool preamble, not the final
+        answer.  Materialize that text as an ``intermediate_message`` first so
+        live delivery, replay, persistence, and folding all consume one ordered
+        event log.  No session-file polling or renderer-side fallback is used.
+        """
+
+        value = dict(event)
+        async with self._publish_lock:
+            event_type = str(value.get("type") or "")
+            if event_type == "intermediate_message":
+                message = value.get("message")
+                incoming = (
+                    str(message.get("content") or message.get("text") or "")
+                    if isinstance(message, dict)
+                    else ""
+                )
+                if self._open_reply_text:
+                    if self._normalized_reply_text(incoming) == self._normalized_reply_text(
+                        self._open_reply_text
+                    ):
+                        self._reset_open_reply()
+                    else:
+                        await self._seal_open_reply(opens_activity=False)
+            elif event_type == "guidance_received":
+                await self._seal_open_reply(opens_activity=False)
+            elif self._is_visible_tool_start(value):
+                await self._seal_open_reply(opens_activity=True)
+
+            self._observe_reply_event(value)
+            await self._publish_one(value)
 
 
 class ChatRunManager:
@@ -967,6 +1265,7 @@ class ChatRunManager:
         return run, True
 
     async def _drive(self, run: ChatRun, runner: Runner) -> None:
+        run.guidance_channel.bind_owner_loop(asyncio.get_running_loop())
         run_span = trace_span(
             "run",
             "workbench_chat",
@@ -988,6 +1287,8 @@ class ChatRunManager:
                     )
             if self._db_path:
                 await asyncio.to_thread(run.inbox.configure_storage, self._db_path)
+                if run.inbox.has_guidance_nowait():
+                    run.guidance_channel.notify()
             run.ready.set()
             await runner(run)
         except asyncio.CancelledError:
@@ -1044,6 +1345,7 @@ class ChatRunManager:
                 else:
                     run.termination_reason = "completed"
             try:
+                run.guidance_channel.close()
                 await run.inbox.close(termination_reason=run.termination_reason)
             except Exception:
                 # Cleanup must never prevent ``done`` from waking streams and

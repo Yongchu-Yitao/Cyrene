@@ -80,7 +80,7 @@ Hook 属于 ContextTree，并在恢复后保留 Plugin Binding。Session 打开�
 | `TurnStart` | 构建本轮动态 Context 后缀，并为重试冻结结果。 |
 | `ContextChange` | 响应已提交的 Tree 变化，让依赖上下文的 Session 工作继续推进，无需轮询另一份状态。 |
 | `ContextUsed` | 接收真实 Model Path 中每个 Block 的 Token 贡献与使用比例，供 Memory 和 Compaction 计量。 |
-| `PreToolUse` | 审核已解析的调用，可归一化参数、允许或阻止；固定 Permission Reviewer 最后看到最终参数。 |
+| `PreToolUse` | 对每个已解析调用运行确定性参数护栏。Plugin 可声明 `permission_boundary`，也可在解析真实目标后通过 Session Permission Service 报告动态边界；只有实际边界才进入固定 Permission Reviewer，由它基于最终参数允许、阻止或暂停并请求一次精确用户确认。 |
 | `PostToolUse` | 只观察一次已完成结果，让插件持久化 Learning、Activity 或 Integration State。 |
 | `SessionEnd` | Run 已有持久结果后，完成插件拥有的收尾工作。 |
 | `Stop` | 用户停止 Run 或 Session 关闭时，取消或关闭插件拥有的工作。 |

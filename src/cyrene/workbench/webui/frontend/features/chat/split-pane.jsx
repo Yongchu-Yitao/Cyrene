@@ -5,7 +5,7 @@ import { wbcProjectFileResource } from "./rail.jsx"
 import { WorkbenchChatRuntimes, wbcCanOpenExternally, wbcChatUsedMap, wbcDownloadLink, wbcStartFileDrag } from "./file-resources.jsx"
 import { WbcMapTab, WbcViewerTab } from "./viewer.jsx"
 import { WbcThreadItem, wbcIsLiveAgentRequest } from "./conversation.jsx"
-import { WbcAgentNotification, WbcAssistantMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRuntimeTranscript, WbcUserMessage } from "./messages.jsx"
+import { WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRuntimeTranscript, WbcUserMessage, wbcGroupConsecutiveActivityMessages } from "./messages.jsx"
 import { WbcArtifactsTab, WbcContextTab, WbcOverviewTab, useWbcLiveChatMetrics, useWbcLiveContextBlocks, useWbcLiveInbox } from "./context-panel.jsx"
 import { WBC_PROJECT_FILE_DRAFTS, WbcArtifactSplit, WbcArtifactSplitHost, WbcBrowserList, WbcBrowserSplit, WbcBrowserSplitHost, WbcChangeSplit, WbcChangeSplitHost, WbcMapList, WbcMapPaneContent, WbcMapSplitHost, WbcResourceSplitHost, WbcViewerList, useWbcMapData, wbcArtifactFileKey, wbcCanEditProjectTextFile, wbcChatArtifactFiles, wbcChatDeliveredArtifacts, wbcDiscardProjectFileDraft, wbcEditableChatFileResource, wbcMapItemKey, wbcMapItemLabel, wbcProjectFileDraftKey, wbcProjectFileEditUrl, wbcViewerFileFromItems } from "./resource-splits.jsx"
 
@@ -398,6 +398,7 @@ function WbcChatSplit({ chatId, project, runtimeEngine, onOpenContent, browserAc
     chat && Array.isArray(chat.messages) ? chat.messages : [],
     streamRuntime && streamRuntime.userMessages
   );
+  var displayMessages = wbcGroupConsecutiveActivityMessages(messages, streamRuntime);
   var errorText = error;
   return (
     <aside ref={splitRef} className="wbc-side-agent-split wbc-chat-split wbc-conversation-split" data-tour="chat_split_pane" aria-label={wbcT("workbenchChat.chatSplitLabel", "Chat")}>
@@ -472,7 +473,10 @@ function WbcChatSplit({ chatId, project, runtimeEngine, onOpenContent, browserAc
           <div className="wbc-chat-split-state">{wbcT("workbenchChat.noMessages", "No messages yet")}</div>
         )}
         {errorText && <div className="wbc-side-agent-error" role="alert">{errorText}</div>}
-        {messages.map(function (message) {
+        {displayMessages.map(function (message) {
+          if (message.activityGroup) {
+            return <WbcThreadItem key={message.id}><WbcActivityGroup group={message} /></WbcThreadItem>;
+          }
           var isActiveQuestion = !!(
             message.questionPrompt
             && displayChat.pendingQuestion
@@ -628,7 +632,7 @@ function WbcPaneFiveWayDropSurface({ card, dropKey, replaceConversation, dropTar
   );
 }
 
-function WbcPaneCardFrame({ card, dropKey, children, grip, dropEnabled, replaceOnly, axisEnabled, replaceConversation, dropTarget, onDropOver, onDrop, onDropLeave }) {
+function WbcPaneCardFrame({ card, semanticNodeId, dropKey, children, grip, dropEnabled, replaceOnly, axisEnabled, replaceConversation, dropTarget, onDropOver, onDrop, onDropLeave }) {
   var activeEdge = dropTarget && String(dropTarget.dropKey || "") === String(dropKey || "")
     ? dropTarget.edge
     : "";
@@ -639,6 +643,7 @@ function WbcPaneCardFrame({ card, dropKey, children, grip, dropEnabled, replaceO
     <article
       className={"wbc-pane-card wbc-pane-card-" + String(card && card.kind || "content")}
       data-pane-card-id={card && card.id || ""}
+      data-pane-semantic-node-id={semanticNodeId || ""}
       data-pane-drop-key={dropKey || card.id}
     >
       {grip ? <div className="wbc-pane-card-grip">{grip}</div> : null}
@@ -689,7 +694,8 @@ function WbcPaneCardFrame({ card, dropKey, children, grip, dropEnabled, replaceO
   );
 }
 
-function WbcPaneRowResizer({ ratio, onResize }) {
+function WbcPaneRowResizer({ active, side, ratio, onResize }) {
+  var handleRef = useWbcRef(null);
   var safeRatio = Math.max(0.2, Math.min(0.8, Number(ratio) || 0.5));
   // Grid gaps do not participate in fr sizing. Position the separator at the
   // exact centre of the 12px gap instead of at a percentage of the full
@@ -700,33 +706,93 @@ function WbcPaneRowResizer({ ratio, onResize }) {
   function startResize(event) {
     if (event.button !== 0 || !onResize) return;
     event.preventDefault();
+    var handle = event.currentTarget;
+    var pointerId = event.pointerId;
     var column = event.currentTarget && event.currentTarget.closest
       ? event.currentTarget.closest(".wbc-pane-column")
       : null;
     if (!column) return;
     var rect = column.getBoundingClientRect();
+    var finished = false;
     function move(moveEvent) {
+      if (moveEvent.pointerId !== pointerId) return;
+      // Plugin panes are sandboxed iframes. If a platform drops pointerup while
+      // crossing that boundary, the next renderer move still exposes that the
+      // primary button is no longer held; finish instead of resizing on hover.
+      if (moveEvent.pointerType === "mouse" && !(moveEvent.buttons & 1)) {
+        stop(moveEvent);
+        return;
+      }
       var trackHeight = Math.max(1, rect.height - 12);
       onResize(Math.max(0.2, Math.min(0.8, (moveEvent.clientY - rect.top - 6) / trackHeight)));
     }
-    function stop() {
+    function stop(stopEvent) {
+      if (finished) return;
+      if (stopEvent && Number.isFinite(stopEvent.pointerId) && stopEvent.pointerId !== pointerId) return;
+      finished = true;
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
       window.removeEventListener("pointercancel", stop);
+      window.removeEventListener("blur", stop);
+      if (handle) handle.removeEventListener("lostpointercapture", stop);
+      if (handle && handle.releasePointerCapture && handle.hasPointerCapture && handle.hasPointerCapture(pointerId)) {
+        try { handle.releasePointerCapture(pointerId); } catch (error) {}
+      }
       document.body.classList.remove("wbc-resizing-pane-row");
+    }
+    if (handle && handle.setPointerCapture) {
+      try { handle.setPointerCapture(pointerId); } catch (error) {}
+      handle.addEventListener("lostpointercapture", stop, { once: true });
     }
     document.body.classList.add("wbc-resizing-pane-row");
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop, { once: true });
     window.addEventListener("pointercancel", stop, { once: true });
+    window.addEventListener("blur", stop, { once: true });
   }
   function keyboardResize(event) {
     if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
     event.preventDefault();
     onResize((Number(ratio) || 0.5) + (event.key === "ArrowUp" ? -0.04 : 0.04));
   }
+  function semanticResize(input) {
+    var next;
+    if (input && Number.isFinite(Number(input.value_ratio))) {
+      next = 0.2 + (Math.max(0, Math.min(1, Number(input.value_ratio))) * 0.6);
+    } else {
+      var delta = Number(input && input.delta_ratio);
+      if (!Number.isFinite(delta)) throw new Error("delta_ratio or value_ratio is required");
+      next = safeRatio + (Math.max(-1, Math.min(1, delta)) * 0.6);
+    }
+    next = Math.max(0.2, Math.min(0.8, next));
+    onResize(next);
+    return { ratio: next, side: side === "left" ? "left" : "right" };
+  }
+  useWbcEffect(function () {
+    if (active === false || !window.CyreneUI.has("uiSurface")) return undefined;
+    var normalizedSide = side === "left" ? "left" : "right";
+    return workbenchServices.uiSurface().register({
+      node_id: "pane_row_separator_" + normalizedSide,
+      parent_id: "pane_workspace",
+      scope: "main",
+      order: normalizedSide === "left" ? 330 : 340,
+      get_element: function () { return handleRef.current; },
+      get_node: function () { return handleRef.current && handleRef.current.isConnected ? {
+        role: "separator",
+        name: wbcT("workbenchChat.resizePaneHeight", "Resize split height"),
+        value_summary: String(Math.round(safeRatio * 100)),
+        state: { orientation: "horizontal", side: normalizedSide, ratio: safeRatio },
+      } : null; },
+      actions: [
+        { action_id: "adjust", kind: "adjust", risk: "R1", gesture_aliases: ["pointer_resize", "arrow_key"], input_schema: { delta_ratio: "-1..1" } },
+        { action_id: "set_value", kind: "adjust", risk: "R1", gesture_aliases: ["pointer_resize"], input_schema: { value_ratio: "0..1" } },
+      ],
+      handlers: { adjust: semanticResize, set_value: semanticResize },
+    });
+  }, [active, side, ratio, onResize]);
   return (
     <div
+      ref={handleRef}
       className="wbc-pane-row-resizer"
       role="separator"
       aria-orientation="horizontal"
@@ -740,7 +806,8 @@ function WbcPaneRowResizer({ ratio, onResize }) {
   );
 }
 
-function WbcPaneColumnResizer({ width, onResize }) {
+function WbcPaneColumnResizer({ active, width, onResize }) {
+  var handleRef = useWbcRef(null);
   function boundsFor(layout) {
     var rect = layout.getBoundingClientRect();
     // 24px outer padding + 12px card gap. Both tracks receive the exact same
@@ -759,26 +826,47 @@ function WbcPaneColumnResizer({ width, onResize }) {
   function startResize(event) {
     if (event.button !== 0 || !onResize) return;
     event.preventDefault();
+    var handle = event.currentTarget;
+    var pointerId = event.pointerId;
     var layout = event.currentTarget && event.currentTarget.closest
       ? event.currentTarget.closest(".wbc-pane-layout")
       : null;
     if (!layout) return;
     var startX = event.clientX;
     var startWidth = clampFor(layout, width);
+    var finished = false;
     function move(moveEvent) {
+      if (moveEvent.pointerId !== pointerId) return;
+      if (moveEvent.pointerType === "mouse" && !(moveEvent.buttons & 1)) {
+        stop(moveEvent);
+        return;
+      }
       var next = startWidth + (startX - moveEvent.clientX);
       onResize(clampFor(layout, next));
     }
-    function stop() {
+    function stop(stopEvent) {
+      if (finished) return;
+      if (stopEvent && Number.isFinite(stopEvent.pointerId) && stopEvent.pointerId !== pointerId) return;
+      finished = true;
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
       window.removeEventListener("pointercancel", stop);
+      window.removeEventListener("blur", stop);
+      if (handle) handle.removeEventListener("lostpointercapture", stop);
+      if (handle && handle.releasePointerCapture && handle.hasPointerCapture && handle.hasPointerCapture(pointerId)) {
+        try { handle.releasePointerCapture(pointerId); } catch (error) {}
+      }
       document.body.classList.remove("wbc-resizing-pane-column");
+    }
+    if (handle && handle.setPointerCapture) {
+      try { handle.setPointerCapture(pointerId); } catch (error) {}
+      handle.addEventListener("lostpointercapture", stop, { once: true });
     }
     document.body.classList.add("wbc-resizing-pane-column");
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop, { once: true });
     window.addEventListener("pointercancel", stop, { once: true });
+    window.addEventListener("blur", stop, { once: true });
   }
   function keyboardResize(event) {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
@@ -789,8 +877,49 @@ function WbcPaneColumnResizer({ width, onResize }) {
     var next = (Number(width) || 520) + (event.key === "ArrowLeft" ? 16 : -16);
     onResize(layout ? clampFor(layout, next) : next);
   }
+  function semanticResize(input) {
+    var handle = handleRef.current;
+    var layout = handle && handle.closest ? handle.closest(".wbc-pane-layout") : null;
+    if (!layout) throw new Error("pane column separator is not available");
+    var bounds = boundsFor(layout);
+    var current = clampFor(layout, width);
+    var next;
+    if (input && Number.isFinite(Number(input.value_ratio))) {
+      var ratio = Math.max(0, Math.min(1, Number(input.value_ratio)));
+      next = bounds.minimum + ((bounds.maximum - bounds.minimum) * ratio);
+    } else {
+      var delta = Number(input && input.delta_ratio);
+      if (!Number.isFinite(delta)) throw new Error("delta_ratio or value_ratio is required");
+      next = current + ((bounds.maximum - bounds.minimum) * Math.max(-1, Math.min(1, delta)));
+    }
+    next = Math.round(clampFor(layout, next));
+    onResize(next);
+    return { width: next, minimum: bounds.minimum, maximum: bounds.maximum };
+  }
+  useWbcEffect(function () {
+    if (active === false || !window.CyreneUI.has("uiSurface")) return undefined;
+    return workbenchServices.uiSurface().register({
+      node_id: "pane_column_separator",
+      parent_id: "pane_workspace",
+      scope: "main",
+      order: 320,
+      get_element: function () { return handleRef.current; },
+      get_node: function () { return handleRef.current && handleRef.current.isConnected ? {
+        role: "separator",
+        name: wbcT("workbenchChat.detailPanel.resize", "Resize detail panel"),
+        value_summary: String(Math.round(Number(width) || 520)),
+        state: { orientation: "vertical", width: Math.round(Number(width) || 520) },
+      } : null; },
+      actions: [
+        { action_id: "adjust", kind: "adjust", risk: "R1", gesture_aliases: ["pointer_resize", "arrow_key"], input_schema: { delta_ratio: "-1..1" } },
+        { action_id: "set_value", kind: "adjust", risk: "R1", gesture_aliases: ["pointer_resize"], input_schema: { value_ratio: "0..1" } },
+      ],
+      handlers: { adjust: semanticResize, set_value: semanticResize },
+    });
+  }, [active, width, onResize]);
   return (
     <div
+      ref={handleRef}
       className="wbc-pane-column-resizer"
       role="separator"
       aria-orientation="vertical"
@@ -809,7 +938,7 @@ function WbcPaneColumnResizer({ width, onResize }) {
 // conversation panel or a new conversation, swap the side/vertical order, or
 // close). Every card exposes one grip; detached chat cards keep their existing
 // internal grip while the shared card frame supplies it for all other kinds.
-function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConversationPanel, openPanelLabel, onNewConversation, menuType, onSplitPointerDown, onSplitDragStart, onSplitDragEnd, menuDisabled }) {
+function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConversationPanel, openPanelLabel, onNewConversation, menuType, onTogglePin, pinned, onSplitPointerDown, onSplitDragStart, onSplitDragEnd, menuDisabled }) {
   var [menuOpen, setMenuOpen] = useWbcState(false);
   var rootRef = useWbcRef(null);
   var pointerDragRef = useWbcRef(null);
@@ -952,6 +1081,19 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
             <span aria-hidden="true">{WBC_ICONS.chevronLeft}{WBC_ICONS.chevronRight}</span>
             <span>{swapLabel}</span>
           </button>
+          {onTogglePin ? (
+            <button
+              type="button"
+              role="menuitem"
+              aria-pressed={pinned ? "true" : "false"}
+              onClick={function () { setMenuOpen(false); onTogglePin(!pinned); }}
+            >
+              <span aria-hidden="true">{WBC_ICONS.pin}</span>
+              <span>{pinned
+                ? wbcT("workbenchChat.surfaceUnpin", "Unpin automatic surface")
+                : wbcT("workbenchChat.surfacePin", "Pin automatic surface")}</span>
+            </button>
+          ) : null}
           {onClose ? (
             <button
               type="button"

@@ -246,7 +246,12 @@ class MemoryService:
         if not include_anchor and path and path[-1].id == node_id:
             path = path[:-1]
         current_user = next(
-            (node for node in reversed(path) if isinstance(node.value, Mapping) and node.value.get("role") == "user"),
+            (
+                node
+                for node in reversed(path)
+                if isinstance(node.value, Mapping)
+                and node.value.get("role") in {"user", "context_reflection"}
+            ),
             None,
         )
         current_run_id = str(current_user.value.get("run_id") if current_user is not None and isinstance(current_user.value, Mapping) else "")
@@ -254,6 +259,13 @@ class MemoryService:
         for node in path:
             value = node.value if isinstance(node.value, Mapping) else {}
             role = str(value.get("role") or "")
+            if role == "context_reflection":
+                reflected = value.get("messages")
+                if isinstance(reflected, list) and all(
+                    isinstance(message, Mapping) for message in reflected
+                ):
+                    messages = [copy.deepcopy(dict(message)) for message in reflected]
+                continue
             if role in {"system", "user"}:
                 messages.append({"role": role, "content": str(value.get("content") or "")})
             elif role == "context":
@@ -545,7 +557,11 @@ class MemoryService:
             (node for node in reversed(path[:-1]) if isinstance(node.value, Mapping) and node.value.get("role") == "user" and str(node.value.get("run_id") or "") == run_id),
             None,
         )
-        tree_user_text = str(tree_user.value.get("content") if tree_user is not None and isinstance(tree_user.value, Mapping) else "").strip()
+        tree_user_text = str(
+            tree_user.value.get("content")
+            if tree_user is not None and isinstance(tree_user.value, Mapping)
+            else public_user
+        ).strip()
         tree_assistant_text = str(anchor_value.get("content") or "").strip()
         if not learning_enabled or not self.is_main or command or retry or not self.project_id or anchor is None or not tree_user_text:
             return

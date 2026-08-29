@@ -8695,6 +8695,9 @@ function emptyPluginSnapshot() {
     standalonePlugins: [],
     frontendViews: [],
     projectTools: [],
+    workbenchSurfaces: [],
+    workspaceFileTypes: [],
+    workspaceActions: [],
     failures: [],
     attachedApplicationPacks: [],
     applicationRestartRequired: false,
@@ -8715,6 +8718,9 @@ function normalizePluginSnapshot(payload, pending) {
     standalonePlugins: Array.isArray(payload.standalone_plugins) ? payload.standalone_plugins : [],
     frontendViews: Array.isArray(payload.frontend_views) ? payload.frontend_views : [],
     projectTools: Array.isArray(payload.project_tools) ? payload.project_tools : [],
+    workbenchSurfaces: Array.isArray(payload.workbench_surfaces) ? payload.workbench_surfaces : [],
+    workspaceFileTypes: Array.isArray(payload.workspace_file_types) ? payload.workspace_file_types : [],
+    workspaceActions: Array.isArray(payload.workspace_actions) ? payload.workspace_actions : [],
     failures: Array.isArray(payload.failures) ? payload.failures : [],
     attachedApplicationPacks: Array.isArray(payload.attached_application_packs) ? payload.attached_application_packs : [],
     applicationRestartRequired: payload.application_restart_required === true,
@@ -8730,6 +8736,49 @@ function dispatchPluginChange() {
     }));
   } catch (error) {
   }
+}
+function pluginSnapshotSurface(snapshot3, surfaceId) {
+  var id2 = String(surfaceId || "");
+  return (snapshot3.workbenchSurfaces || []).find(function(item) {
+    return String(item && item.id || "") === id2;
+  }) || null;
+}
+function pluginSnapshotFileTypeFor(snapshot3, pathValue, mimeValue) {
+  var path = String(pathValue || "").toLowerCase();
+  var mime = String(mimeValue || "").toLowerCase();
+  var matches = (snapshot3.workspaceFileTypes || []).filter(function(item) {
+    var extensions = Array.isArray(item && item.extensions) ? item.extensions : [];
+    var mimeTypes = Array.isArray(item && item.mime_types) ? item.mime_types : [];
+    return extensions.some(function(extension) {
+      return path.endsWith(String(extension || "").toLowerCase());
+    }) || !!mime && mimeTypes.some(function(candidate) {
+      return String(candidate || "").toLowerCase() === mime;
+    });
+  });
+  matches.sort(function(left, right) {
+    var leftLength = Math.max.apply(Math, [0].concat((left.extensions || []).map(function(item) {
+      return String(item).length;
+    })));
+    var rightLength = Math.max.apply(Math, [0].concat((right.extensions || []).map(function(item) {
+      return String(item).length;
+    })));
+    return rightLength - leftLength;
+  });
+  return matches[0] || null;
+}
+function pluginSnapshotActionsFor(snapshot3, resource) {
+  var value = resource && typeof resource === "object" ? resource : {};
+  var path = String(value.path || value.name || "").toLowerCase();
+  var fileTypeId = String(value.fileTypeId || value.file_type_id || "");
+  return (snapshot3.workspaceActions || []).filter(function(item) {
+    var applies = item && item.applies_to && typeof item.applies_to === "object" ? item.applies_to : {};
+    var fileTypes = Array.isArray(applies.file_type_ids) ? applies.file_type_ids.map(String) : [];
+    var extensions = Array.isArray(applies.extensions) ? applies.extensions : [];
+    if (!fileTypes.length && !extensions.length) return true;
+    return !!fileTypeId && fileTypes.indexOf(fileTypeId) >= 0 || extensions.some(function(extension) {
+      return path.endsWith(String(extension || "").toLowerCase());
+    });
+  });
 }
 var PluginFrontendService = (function() {
   var state = emptyPluginSnapshot();
@@ -8828,7 +8877,16 @@ var PluginFrontendService = (function() {
       return mutateTool(canonicalId, null, true);
     },
     snapshot: snapshot3,
-    subscribe: subscribe3
+    subscribe: subscribe3,
+    surface: function(surfaceId) {
+      return pluginSnapshotSurface(state, surfaceId);
+    },
+    fileTypeFor: function(path, mime) {
+      return pluginSnapshotFileTypeFor(state, path, mime);
+    },
+    actionsFor: function(resource) {
+      return pluginSnapshotActionsFor(state, resource);
+    }
   };
 })();
 function pluginLocalizedField(item, field) {
@@ -12670,15 +12728,19 @@ var WORKBENCH_TRANSLATIONS_EN = {
   "workbenchChat.dropFileSplitLeft": "Release to open the file on the left",
   "workbenchChat.dropFileSplitRight": "Release to open the file on the right",
   "workbenchChat.dragChat": "Drag to reorder, overlap another chat to group, or drop in the conversation area to open {title}.",
+  "workbenchChat.dragPluginView": "Drag to open {title} in a split view.",
   "workbenchChat.dragGroup": "Drag to move {title}.",
   "workbenchChat.groupMoved": "{title} moved.",
   "workbenchChat.chatMoved": "{title} moved to position {position} of {total}.",
   "workbenchChat.dropToOpen": "Release to open this conversation",
   "workbenchChat.dropToOpenSide": "Release to open this conversation in the side panel",
   "workbenchChat.dropTaskToOpenSide": "Release to open this task in the side panel",
+  "workbenchChat.dropPluginViewToOpenSide": "Release to open this plugin in the side panel",
   "workbenchChat.detachedReturn": "Release to merge back into the main window",
   "workbenchChat.openInMain": "Open in the main conversation",
   "workbenchChat.splitMoveOtherSide": "Move split to the other side",
+  "workbenchChat.surfacePin": "Pin automatic surface",
+  "workbenchChat.surfaceUnpin": "Unpin automatic surface",
   "workbenchChat.newGroup": "New chat group",
   "workbenchChat.groupCount": "{count} chats",
   "workbenchChat.releaseToGroup": "Release to create a chat group",
@@ -16901,15 +16963,19 @@ var WORKBENCH_TRANSLATIONS_ZH = {
   "workbenchChat.dropFileSplitLeft": "\u5728\u5DE6\u4FA7\u5206\u5C4F\u4E2D\u6253\u5F00\u8FD9\u4E2A\u6587\u4EF6",
   "workbenchChat.dropFileSplitRight": "\u5728\u53F3\u4FA7\u5206\u5C4F\u4E2D\u6253\u5F00\u8FD9\u4E2A\u6587\u4EF6",
   "workbenchChat.dragChat": "\u62D6\u52A8\u8C03\u6574\u201C{title}\u201D\u7684\u4F4D\u7F6E\uFF0C\u4E0E\u53E6\u4E00\u5BF9\u8BDD\u91CD\u53E0\u53EF\u521B\u5EFA\u7EC4\uFF0C\u6216\u62D6\u5230\u5BF9\u8BDD\u533A\u57DF\u76F4\u63A5\u6253\u5F00\u3002",
+  "workbenchChat.dragPluginView": "\u62D6\u52A8\u201C{title}\u201D\u4EE5\u5728\u5206\u5C4F\u4E2D\u6253\u5F00\u3002",
   "workbenchChat.dragGroup": "\u62D6\u52A8\u8C03\u6574\u201C{title}\u201D\u5BF9\u8BDD\u7EC4\u7684\u4F4D\u7F6E\u3002",
   "workbenchChat.groupMoved": "\u201C{title}\u201D\u5BF9\u8BDD\u7EC4\u5DF2\u79FB\u52A8\u3002",
   "workbenchChat.chatMoved": "\u201C{title}\u201D\u5DF2\u79FB\u52A8\u5230\u7B2C {position} \u4F4D\uFF0C\u5171 {total} \u4E2A\u5BF9\u8BDD\u3002",
   "workbenchChat.dropToOpen": "\u91CA\u653E\u4EE5\u6253\u5F00\u8FD9\u4E2A\u5BF9\u8BDD",
   "workbenchChat.dropToOpenSide": "\u5728\u53F3\u4FA7\u5206\u5C4F\u4E2D\u6253\u5F00\u8FD9\u4E2A\u5BF9\u8BDD",
   "workbenchChat.dropTaskToOpenSide": "\u5728\u53F3\u4FA7\u5206\u5C4F\u4E2D\u6253\u5F00\u8FD9\u4E2A\u4EFB\u52A1",
+  "workbenchChat.dropPluginViewToOpenSide": "\u5728\u53F3\u4FA7\u5206\u5C4F\u4E2D\u6253\u5F00\u8FD9\u4E2A\u63D2\u4EF6",
   "workbenchChat.detachedReturn": "\u677E\u624B\u5408\u5E76\u56DE\u4E3B\u7A97\u53E3",
   "workbenchChat.openInMain": "\u5728\u4E3B\u5BF9\u8BDD\u4E2D\u6253\u5F00",
   "workbenchChat.splitMoveOtherSide": "\u628A\u5206\u5C4F\u79FB\u52A8\u5230\u53E6\u4E00\u4FA7",
+  "workbenchChat.surfacePin": "\u56FA\u5B9A\u81EA\u52A8\u5206\u5C4F",
+  "workbenchChat.surfaceUnpin": "\u53D6\u6D88\u56FA\u5B9A\u81EA\u52A8\u5206\u5C4F",
   "workbenchChat.newGroup": "\u65B0\u5BF9\u8BDD\u7EC4",
   "workbenchChat.groupCount": "{count} \u4E2A\u5BF9\u8BDD",
   "workbenchChat.releaseToGroup": "\u677E\u624B\u521B\u5EFA\u5BF9\u8BDD\u7EC4",
@@ -19703,8 +19769,8 @@ if (typeof window !== "undefined" && window.CyreneUI) {
   "use strict";
   var platform = root2.CyreneUI;
   if (!platform) throw new Error("CyreneUI platform registry must load first");
-  var useState4 = React.useState;
-  var useEffect6 = React.useEffect;
+  var useState5 = React.useState;
+  var useEffect7 = React.useEffect;
   function text2(key, fallback) {
     if (platform.i18n && typeof platform.i18n.t === "function") {
       var translated = platform.i18n.t(key, null, fallback);
@@ -19850,9 +19916,9 @@ if (typeof window !== "undefined" && window.CyreneUI) {
     return /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", width: "18", height: "18", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("circle", { cx: "12", cy: "12", r: "9" }), /* @__PURE__ */ React.createElement("path", { d: "M12 11v5M12 7.5v.01" }));
   }
   function FeedbackHost() {
-    var state = useState4(0);
+    var state = useState5(0);
     var setTick = state[1];
-    useEffect6(function() {
+    useEffect7(function() {
       return subscribe3(function() {
         setTick(function(value) {
           return (value + 1) % 1e6;
@@ -19862,7 +19928,7 @@ if (typeof window !== "undefined" && window.CyreneUI) {
     var snapshot3 = service.snapshot();
     var active = snapshot3.confirms.length ? snapshot3.confirms[0] : null;
     var toastOverlayActive = snapshot3.toasts.length > 0;
-    useEffect6(function() {
+    useEffect7(function() {
       if (!toastOverlayActive) return void 0;
       var overlays;
       try {
@@ -19875,7 +19941,7 @@ if (typeof window !== "undefined" && window.CyreneUI) {
         overlays.adjust(-1);
       };
     }, [toastOverlayActive]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!active) return void 0;
       var overlays;
       try {
@@ -19888,7 +19954,7 @@ if (typeof window !== "undefined" && window.CyreneUI) {
         overlays.adjust(-1);
       };
     }, [active ? active.id : 0]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!active) return void 0;
       function onKey(event) {
         if (event.key === "Escape") {
@@ -24313,7 +24379,7 @@ window.CyreneUI.search = window.CyreneUI.register("search", {
 // frontend/shared/tour/spotlight.jsx
 (function(root2) {
   "use strict";
-  const { useState: useState4, useEffect: useEffect6, useRef: useRef2 } = React;
+  const { useState: useState5, useEffect: useEffect7, useRef: useRef2 } = React;
   var RETRY_MS = 200;
   var RETRY_LIMIT = 50;
   var EPSILON = 0.5;
@@ -24363,13 +24429,13 @@ window.CyreneUI.search = window.CyreneUI.register("search", {
   }
   function SpotlightOverlay({ guide, step, index, total, onNext, onPrev, onStop, onFinish, onSkipStep }) {
     var { t: t2 } = root2.CyreneUI.require("i18n").use();
-    var [rect, setRect] = useState4(null);
-    var [missing, setMissing] = useState4(false);
-    var [bubbleSize, setBubbleSize] = useState4(null);
-    var [bubbleLayout, setBubbleLayout] = useState4(null);
+    var [rect, setRect] = useState5(null);
+    var [missing, setMissing] = useState5(false);
+    var [bubbleSize, setBubbleSize] = useState5(null);
+    var [bubbleLayout, setBubbleLayout] = useState5(null);
     var bubbleRef = useRef2(null);
     var hasTarget = !!(step && step.target);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!hasTarget) {
         setRect(null);
         setMissing(false);
@@ -24420,7 +24486,7 @@ window.CyreneUI.search = window.CyreneUI.register("search", {
         clearTimeout(timer);
       };
     }, [hasTarget, step && step.target]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!hasTarget || !step || step.interact !== "click") return void 0;
       function onDocumentClick(event) {
         var el = resolveTarget(step.target);
@@ -24435,7 +24501,7 @@ window.CyreneUI.search = window.CyreneUI.register("search", {
         document.removeEventListener("click", onDocumentClick, true);
       };
     }, [hasTarget, step && step.target, step && step.interact]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!rect || !bubbleSize) {
         setBubbleLayout(null);
         return;
@@ -24445,7 +24511,7 @@ window.CyreneUI.search = window.CyreneUI.register("search", {
         h: window.innerHeight
       }));
     }, [rect, bubbleSize]);
-    useEffect6(function() {
+    useEffect7(function() {
       var el = bubbleRef.current;
       if (!el) return;
       var w2 = el.offsetWidth;
@@ -24584,7 +24650,7 @@ window.CyreneUI.search = window.CyreneUI.register("search", {
 // frontend/shared/tour/center.jsx
 (function(root2) {
   "use strict";
-  const { useState: useState4, useEffect: useEffect6, useRef: useRef2 } = React;
+  const { useState: useState5, useEffect: useEffect7, useRef: useRef2 } = React;
   var tour = function() {
     return root2.CyreneUI.require("tour");
   };
@@ -24594,16 +24660,16 @@ window.CyreneUI.search = window.CyreneUI.register("search", {
   function TutorialCenter({ onClose, onStart, initialGuideId }) {
     var { t: t2 } = root2.CyreneUI.require("i18n").use();
     var catalog = tour().catalog();
-    var [selectedId, setSelectedId] = useState4(initialGuideId || null);
+    var [selectedId, setSelectedId] = useState5(initialGuideId || null);
     var panelRef = useRef2(null);
-    useEffect6(function() {
+    useEffect7(function() {
       var prevActive = document.activeElement;
       if (panelRef.current) panelRef.current.focus();
       return function() {
         if (prevActive && typeof prevActive.focus === "function") prevActive.focus();
       };
     }, []);
-    useEffect6(function() {
+    useEffect7(function() {
       function onKey(e) {
         if (e.key === "Escape") onClose();
       }
@@ -24619,7 +24685,7 @@ window.CyreneUI.search = window.CyreneUI.register("search", {
         break;
       }
     }
-    useEffect6(function() {
+    useEffect7(function() {
       if (!selectedId && firstGuideId) setSelectedId(firstGuideId);
     }, [selectedId, firstGuideId]);
     var selected = null;
@@ -24855,20 +24921,20 @@ window.CyreneUI.search = window.CyreneUI.register("search", {
 // frontend/shared/tour/host.jsx
 (function(root2) {
   "use strict";
-  const { useState: useState4, useEffect: useEffect6, useRef: useRef2 } = React;
+  const { useState: useState5, useEffect: useEffect7, useRef: useRef2 } = React;
   var tour = function() {
     return root2.CyreneUI.require("tour");
   };
   function TourHost({ setOverlayObscured, onOpenPage, onOpenSettings }) {
-    var [snapshot3, setSnapshot] = useState4(tour().snapshot());
+    var [snapshot3, setSnapshot] = useState5(tour().snapshot());
     var stepNavRef = useRef2("");
-    useEffect6(function() {
+    useEffect7(function() {
       return tour().subscribe(function() {
         setSnapshot(tour().snapshot());
       });
     }, []);
     var overlayActive = snapshot3.phase === "center" || snapshot3.phase === "running";
-    useEffect6(function() {
+    useEffect7(function() {
       if (!overlayActive) return void 0;
       if (typeof setOverlayObscured === "function") setOverlayObscured(1);
       return function() {
@@ -24876,7 +24942,7 @@ window.CyreneUI.search = window.CyreneUI.register("search", {
       };
     }, [overlayActive]);
     var navKey = snapshot3.phase === "running" && snapshot3.step ? String(snapshot3.stepIndex) + ":" + (snapshot3.step.navigate && snapshot3.step.navigate.page || "") + ":" + (snapshot3.step.openSettings || "") : "";
-    useEffect6(function() {
+    useEffect7(function() {
       if (snapshot3.phase !== "running" || !snapshot3.step) return;
       if (snapshot3.step.navigate && typeof onOpenPage === "function") {
         onOpenPage(snapshot3.step.navigate.page);
@@ -24885,7 +24951,7 @@ window.CyreneUI.search = window.CyreneUI.register("search", {
         onOpenSettings(snapshot3.step.openSettings);
       }
     }, [navKey]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (snapshot3.phase !== "running") return void 0;
       function onKey(e) {
         if (e.key === "Escape") {
@@ -25157,8 +25223,8 @@ window.CyreneUI.search = window.CyreneUI.register("search", {
 (function() {
   if (typeof window === "undefined") return;
   if (typeof React === "undefined") return;
-  var useState4 = React.useState;
-  var useEffect6 = React.useEffect;
+  var useState5 = React.useState;
+  var useEffect7 = React.useEffect;
   var createElement = React.createElement;
   function diffT(key, fallback, vars) {
     return workbenchServices2.i18n().t(key, vars, fallback);
@@ -25218,9 +25284,9 @@ window.CyreneUI.search = window.CyreneUI.register("search", {
     dataStore.useVersion();
     var pluginModules = Array.isArray(dataStore.state.pluginModules) ? dataStore.state.pluginModules : [];
     var codeAvailable = pluginModules.indexOf("code") >= 0;
-    var [diffText, setDiffText] = useState4(props.diff || "");
-    var [loading, setLoading] = useState4(false);
-    useEffect6(function() {
+    var [diffText, setDiffText] = useState5(props.diff || "");
+    var [loading, setLoading] = useState5(false);
+    useEffect7(function() {
       if (!codeAvailable) {
         setLoading(false);
         return;
@@ -56200,7 +56266,7 @@ function gfm(turndownService) {
 // frontend/code/editor.jsx
 (function(root2) {
   "use strict";
-  var useEffect6 = React.useEffect;
+  var useEffect7 = React.useEffect;
   var useRef2 = React.useRef;
   function languageName(file) {
     var name2 = String(file && (file.name || file.path) || "").toLowerCase();
@@ -56282,7 +56348,7 @@ function gfm(turndownService) {
     var applyingExternalRef = useRef2(false);
     onChangeRef.current = props.onChange;
     onSaveRef.current = props.onSave;
-    useEffect6(function() {
+    useEffect7(function() {
       if (!codeAvailable || !hostRef.current) return void 0;
       var themeCompartment = new Compartment();
       var languageCompartment = new Compartment();
@@ -56349,7 +56415,7 @@ function gfm(turndownService) {
         if (viewRef.current === view) viewRef.current = null;
       };
     }, [codeAvailable]);
-    useEffect6(function() {
+    useEffect7(function() {
       var view = viewRef.current;
       var next2 = String(props.value == null ? "" : props.value);
       valueRef.current = next2;
@@ -56360,7 +56426,7 @@ function gfm(turndownService) {
       view.dispatch({ changes: { from: 0, to: current.length, insert: next2 } });
       applyingExternalRef.current = false;
     }, [props.value]);
-    useEffect6(function() {
+    useEffect7(function() {
       var view = viewRef.current;
       var compartment = languageCompartmentRef.current;
       if (!view || !compartment) return;
@@ -59132,9 +59198,9 @@ function usePendingKnowledgeSelection(options) {
 // frontend/workbench-library.jsx
 (function() {
   var h = React.createElement;
-  var useState4 = React.useState;
-  var useEffect6 = React.useEffect;
-  var useMemo2 = React.useMemo;
+  var useState5 = React.useState;
+  var useEffect7 = React.useEffect;
+  var useMemo3 = React.useMemo;
   var useRef2 = React.useRef;
   function L(key, fallback, params) {
     return workbenchServices2.i18n().t(key, params || null, fallback);
@@ -59543,7 +59609,7 @@ function usePendingKnowledgeSelection(options) {
   }
   function LibrarySidebar(props) {
     var stats = props.stats || {};
-    var collapsedState = useState4({ library: false, collections: false, tags: false });
+    var collapsedState = useState5({ library: false, collections: false, tags: false });
     var collapsed = collapsedState[0];
     var setCollapsed = collapsedState[1];
     function toggleSection(id2) {
@@ -59800,10 +59866,10 @@ function usePendingKnowledgeSelection(options) {
     var attachment = Array.isArray(item.attachments) && item.attachments[0];
     var notes = Array.isArray(item.notes) ? item.notes : [];
     var statusOptions = [{ id: "unread", label: L("library.status.unread", "Unread") }, { id: "reading", label: L("library.status.reading", "Reading") }, { id: "read", label: L("library.status.read", "Read") }];
-    var editingState = useState4(false);
+    var editingState = useState5(false);
     var editing = editingState[0];
     var setEditing = editingState[1];
-    var savingState = useState4(false);
+    var savingState = useState5(false);
     var saving = savingState[0];
     var setSaving = savingState[1];
     function draftFromItem(value) {
@@ -59822,10 +59888,10 @@ function usePendingKnowledgeSelection(options) {
         language: value.language || ""
       };
     }
-    var formState = useState4(draftFromItem(item));
+    var formState = useState5(draftFromItem(item));
     var form = formState[0];
     var setForm = formState[1];
-    useEffect6(function() {
+    useEffect7(function() {
       setEditing(false);
       setForm(draftFromItem(item));
     }, [item.id]);
@@ -59964,10 +60030,10 @@ function usePendingKnowledgeSelection(options) {
   }
   function NotesWorkspace(props) {
     var notes = Array.isArray(props.item.notes) ? props.item.notes : [];
-    var state = useState4("");
+    var state = useState5("");
     var value = state[0];
     var setValue = state[1];
-    var busyState = useState4(false);
+    var busyState = useState5(false);
     var busy = busyState[0];
     var setBusy = busyState[1];
     function submit() {
@@ -59993,7 +60059,7 @@ function usePendingKnowledgeSelection(options) {
     );
   }
   function TagsWorkspace(props) {
-    var valueState = useState4("");
+    var valueState = useState5("");
     var value = valueState[0];
     var setValue = valueState[1];
     var tags3 = itemTags(props.item);
@@ -60051,7 +60117,7 @@ function usePendingKnowledgeSelection(options) {
     }) : h(StatePanel, { title: L("library.noAttachment", "No attachment"), body: L("library.noAttachmentHint", "Import a PDF from the toolbar or sync attachments from Zotero.") }));
   }
   function CitationCopyControl(props) {
-    var openState = useState4(false);
+    var openState = useState5(false);
     var open = openState[0];
     var setOpen = openState[1];
     var disabled = !props.citation && !props.bibtex;
@@ -60093,7 +60159,7 @@ function usePendingKnowledgeSelection(options) {
     );
   }
   function ItemWorkspace(props) {
-    var heightState = useState4(function() {
+    var heightState = useState5(function() {
       try {
         var saved = Number(window.localStorage.getItem("cyrene.library.workspaceHeight") || 0);
         return saved > 0 ? saved : null;
@@ -60189,7 +60255,7 @@ function usePendingKnowledgeSelection(options) {
       rememberHeight(next2);
       return { height: next2, minimum: bounds.min, maximum: bounds.max };
     }
-    useEffect6(function() {
+    useEffect7(function() {
       if (!window.CyreneUI.has("uiSurface")) return void 0;
       var uiSurface = workbenchServices2.uiSurface();
       return uiSurface.register({
@@ -60286,13 +60352,13 @@ function usePendingKnowledgeSelection(options) {
         tags: itemTags(item).join("; ")
       };
     }
-    var formState = useState4(draftFromItem(props.item));
+    var formState = useState5(draftFromItem(props.item));
     var form = formState[0];
     var setForm = formState[1];
-    var savingState = useState4(false);
+    var savingState = useState5(false);
     var saving = savingState[0];
     var setSaving = savingState[1];
-    useEffect6(function() {
+    useEffect7(function() {
       setForm(draftFromItem(props.item));
       setSaving(false);
     }, [props.item.id]);
@@ -60453,14 +60519,14 @@ function usePendingKnowledgeSelection(options) {
     );
   }
   function RightPanel(props) {
-    var editingState = useState4(false);
+    var editingState = useState5(false);
     var editing = editingState[0];
     var setEditing = editingState[1];
     var scrollRef = useRef2(null);
-    useEffect6(function() {
+    useEffect7(function() {
       setEditing(false);
     }, [props.item && props.item.id]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (scrollRef.current) scrollRef.current.scrollTop = 0;
     }, [props.item && props.item.id, props.tab]);
     if (!props.item) return h(
@@ -60590,16 +60656,16 @@ function usePendingKnowledgeSelection(options) {
     var pdf = workbenchServices2.pdf();
     var containerRef = useRef2(null);
     var viewerRef = useRef2(null);
-    var loadingState = useState4(true);
+    var loadingState = useState5(true);
     var loading = loadingState[0];
     var setLoading = loadingState[1];
-    var errorState = useState4("");
+    var errorState = useState5("");
     var error = errorState[0];
     var setError = errorState[1];
-    var pageState = useState4({ current: 1, total: 0 });
+    var pageState = useState5({ current: 1, total: 0 });
     var page = pageState[0];
     var setPage = pageState[1];
-    useEffect6(function() {
+    useEffect7(function() {
       var container = containerRef.current;
       if (!container || !props.url) {
         setError(L("library.pdfUrlUnavailable", "No PDF URL is available."));
@@ -60788,10 +60854,10 @@ function usePendingKnowledgeSelection(options) {
   }
   function ManualItemModal(props) {
     var initial = { title: "", authors: "", year: "", venue: "", url: "", doi: "", item_type: "document" };
-    var formState = useState4(initial);
+    var formState = useState5(initial);
     var form = formState[0];
     var setForm = formState[1];
-    var busyState = useState4(false);
+    var busyState = useState5(false);
     var busy = busyState[0];
     var setBusy = busyState[1];
     function field(name2, value) {
@@ -60849,10 +60915,10 @@ function usePendingKnowledgeSelection(options) {
     ));
   }
   function CollectionModal(props) {
-    var nameState = useState4("");
+    var nameState = useState5("");
     var name2 = nameState[0];
     var setName = nameState[1];
-    var busyState = useState4(false);
+    var busyState = useState5(false);
     var busy = busyState[0];
     var setBusy = busyState[1];
     function submit(event) {
@@ -60890,28 +60956,28 @@ function usePendingKnowledgeSelection(options) {
   function WorkbenchLibraryPage(props) {
     workbenchServices2.i18n().use();
     var workspace = props.project && props.project.id ? String(props.project.id) : "";
-    var client = useMemo2(function() {
+    var client = useMemo3(function() {
       return workspace ? libraryApi(workspace) : null;
     }, [workspace]);
-    var scopeState = useState4({ type: "all" });
+    var scopeState = useState5({ type: "all" });
     var scope = scopeState[0];
     var setScope = scopeState[1];
-    var queryState = useState4("");
+    var queryState = useState5("");
     var query = queryState[0];
     var setQuery = queryState[1];
-    var debouncedState = useState4("");
+    var debouncedState = useState5("");
     var debouncedQuery = debouncedState[0];
     var setDebouncedQuery = debouncedState[1];
-    var sortState = useState4("updated_at");
+    var sortState = useState5("updated_at");
     var sort = sortState[0];
     var setSort = sortState[1];
-    var orderState = useState4("desc");
+    var orderState = useState5("desc");
     var order = orderState[0];
     var setOrder = orderState[1];
-    var filterState = useState4({ file_type: "", item_type: "", status: "", year: "" });
+    var filterState = useState5({ file_type: "", item_type: "", status: "", year: "" });
     var filters = filterState[0];
     var setFilters = filterState[1];
-    var viewState = useState4(function() {
+    var viewState = useState5(function() {
       try {
         var savedView = window.localStorage.getItem("cyrene.library.viewMode");
         return savedView === "grid" || savedView === "table" ? savedView : "table";
@@ -60921,37 +60987,37 @@ function usePendingKnowledgeSelection(options) {
     });
     var view = viewState[0];
     var setView = viewState[1];
-    var dataState = useState4({ items: [], total: 0, stats: {}, collections: [], tags: [] });
+    var dataState = useState5({ items: [], total: 0, stats: {}, collections: [], tags: [] });
     var data2 = dataState[0];
     var setData = dataState[1];
-    var loadingState = useState4(false);
+    var loadingState = useState5(false);
     var loading = loadingState[0];
     var setLoading = loadingState[1];
-    var loadingMoreState = useState4(false);
+    var loadingMoreState = useState5(false);
     var loadingMore = loadingMoreState[0];
     var setLoadingMore = loadingMoreState[1];
-    var errorState = useState4("");
+    var errorState = useState5("");
     var error = errorState[0];
     var setError = errorState[1];
-    var selectedState = useState4("");
+    var selectedState = useState5("");
     var selectedId = selectedState[0];
     var setSelectedId = selectedState[1];
-    var detailState = useState4(null);
+    var detailState = useState5(null);
     var detail = detailState[0];
     var setDetail = detailState[1];
-    var detailLoadingState = useState4(false);
+    var detailLoadingState = useState5(false);
     var detailLoading = detailLoadingState[0];
     var setDetailLoading = detailLoadingState[1];
-    var checkedState = useState4([]);
+    var checkedState = useState5([]);
     var checked = checkedState[0];
     var setChecked = checkedState[1];
-    var batchDeletingState = useState4(false);
+    var batchDeletingState = useState5(false);
     var batchDeleting = batchDeletingState[0];
     var setBatchDeleting = batchDeletingState[1];
-    var menuState = useState4("");
+    var menuState = useState5("");
     var menu = menuState[0];
     var setMenu = menuState[1];
-    var contextMenuState = useState4(null);
+    var contextMenuState = useState5(null);
     var contextMenu = contextMenuState[0];
     var setContextMenu = contextMenuState[1];
     var columns = useLibraryColumns({ t: L, icon, closeMenus: function() {
@@ -60959,25 +61025,25 @@ function usePendingKnowledgeSelection(options) {
       setContextMenu(null);
     } });
     var visibleColumns = columns.visible;
-    var rightTabState = useState4("detail");
+    var rightTabState = useState5("detail");
     var rightTab = rightTabState[0];
     var setRightTab = rightTabState[1];
-    var rightOpenState = useState4(true);
+    var rightOpenState = useState5(true);
     var rightOpen = rightOpenState[0];
     var setRightOpen = rightOpenState[1];
-    var manualState = useState4(false);
+    var manualState = useState5(false);
     var manualOpen = manualState[0];
     var setManualOpen = manualState[1];
-    var collectionModalState = useState4(false);
+    var collectionModalState = useState5(false);
     var collectionModalOpen = collectionModalState[0];
     var setCollectionModalOpen = collectionModalState[1];
-    var uploadingState = useState4(false);
+    var uploadingState = useState5(false);
     var uploading = uploadingState[0];
     var setUploading = uploadingState[1];
-    var embeddingState = useState4({ configured: false, pending_vectors: 0, compatible_vectors: 0, total_chunks: 0, reembed: { running: false } });
+    var embeddingState = useState5({ configured: false, pending_vectors: 0, compatible_vectors: 0, total_chunks: 0, reembed: { running: false } });
     var embedding = embeddingState[0];
     var setEmbedding = embeddingState[1];
-    var citationState = useState4({ style: "ieee", text: "", bibtex: "", citekey: "", loading: false, error: "" });
+    var citationState = useState5({ style: "ieee", text: "", bibtex: "", citekey: "", loading: false, error: "" });
     var citation = citationState[0];
     var setCitation = citationState[1];
     var fileRef = useRef2(null);
@@ -61012,7 +61078,7 @@ function usePendingKnowledgeSelection(options) {
         Toast(String(err.message || err), "error");
       });
     }
-    useEffect6(function() {
+    useEffect7(function() {
       var timer = setTimeout(function() {
         setDebouncedQuery(query.trim());
       }, 240);
@@ -61020,13 +61086,13 @@ function usePendingKnowledgeSelection(options) {
         clearTimeout(timer);
       };
     }, [query]);
-    useEffect6(function() {
+    useEffect7(function() {
       try {
         window.localStorage.setItem("cyrene.library.viewMode", view);
       } catch (_2) {
       }
     }, [view]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!contextMenu) return void 0;
       function closeContextMenu() {
         setContextMenu(null);
@@ -61043,10 +61109,10 @@ function usePendingKnowledgeSelection(options) {
         document.removeEventListener("keydown", closeContextMenuOnEscape);
       };
     }, [!!contextMenu]);
-    useEffect6(function() {
+    useEffect7(function() {
       loadEmbeddingStatus();
     }, [client]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!(embedding.reembed && embedding.reembed.running)) return void 0;
       var timer = setInterval(function() {
         loadEmbeddingStatus().then(function(next2) {
@@ -61151,7 +61217,7 @@ function usePendingKnowledgeSelection(options) {
         Toast(String(err.message || err), "error");
       });
     }
-    useEffect6(function() {
+    useEffect7(function() {
       pendingKnowledge.clear();
       setScope({ type: "all" });
       setSelectedId("");
@@ -61159,10 +61225,10 @@ function usePendingKnowledgeSelection(options) {
       setChecked([]);
       setData({ items: [], total: 0, stats: {}, collections: [], tags: [] });
     }, [workspace]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (props.active !== false) reload();
     }, [client, workspace, debouncedQuery, scope.type, scope.value, sort, order, filters.file_type, filters.item_type, filters.status, filters.year, props.active]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!client || !workspace || props.active === false || autoSyncChecked[workspace]) return;
       autoSyncChecked[workspace] = true;
       var alive = true;
@@ -61187,7 +61253,7 @@ function usePendingKnowledgeSelection(options) {
         alive = false;
       };
     }, [client, workspace, props.active]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!client || !selectedId) {
         setDetail(null);
         return;
@@ -61207,7 +61273,7 @@ function usePendingKnowledgeSelection(options) {
         }
       });
     }, [client, selectedId]);
-    var listItem = useMemo2(function() {
+    var listItem = useMemo3(function() {
       return data2.items.find(function(item) {
         return String(item.id) === String(selectedId);
       }) || null;
@@ -61265,7 +61331,7 @@ function usePendingKnowledgeSelection(options) {
         delete readMarksRef.current[viewedId];
       });
     }
-    useEffect6(function() {
+    useEffect7(function() {
       if (rightOpen && rightTab === "content" && selectedId) markSelectedRead(selectedId);
     }, [rightOpen, rightTab, selectedId]);
     function toggleStar(item) {
@@ -61497,11 +61563,11 @@ function usePendingKnowledgeSelection(options) {
         setCitation({ style: nextStyle, text: "", bibtex: "", citekey: "", loading: false, error: String(err.message || err) });
       });
     }
-    useEffect6(function() {
+    useEffect7(function() {
       setCitation({ style: "ieee", text: "", bibtex: "", citekey: "", loading: false, error: "" });
       if (client && selectedId) loadCitation("ieee");
     }, [client, selectedId]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (rightTab === "citation" && selectedId && !citation.text && !citation.loading && !citation.error) loadCitation(citation.style);
     }, [rightTab]);
     function copyCitation(format) {
@@ -63078,9 +63144,9 @@ function wbIsPermissionQuestionKind(kind) {
 
 // frontend/workbench-schedule.jsx
 (function() {
-  var useState4 = React.useState;
-  var useEffect6 = React.useEffect;
-  var useMemo2 = React.useMemo;
+  var useState5 = React.useState;
+  var useEffect7 = React.useEffect;
+  var useMemo3 = React.useMemo;
   var useRef2 = React.useRef;
   var schedulePageCache = { ranges: {}, pending: {} };
   function fetchScheduleRange(key, API, startISO, endISO) {
@@ -63599,7 +63665,7 @@ function wbIsPermissionQuestionKind(kind) {
     });
     layoutDayEvents(timed);
     var scrollRef = useRef2(null);
-    useEffect6(function() {
+    useEffect7(function() {
       if (scrollRef.current) scrollRef.current.scrollTop = 7 * HOUR_PX;
     }, []);
     return React.createElement(
@@ -63664,7 +63730,7 @@ function wbIsPermissionQuestionKind(kind) {
     for (var i2 = 0; i2 < 7; i2++) days.push(addDays(weekStart, i2));
     var today = /* @__PURE__ */ new Date();
     var scrollRef = useRef2(null);
-    useEffect6(function() {
+    useEffect7(function() {
       if (scrollRef.current) scrollRef.current.scrollTop = 7 * HOUR_PX;
     }, []);
     var allDayByCol = days.map(function() {
@@ -64052,40 +64118,40 @@ function wbIsPermissionQuestionKind(kind) {
   }
   function ScheduleForm(props) {
     var scheduleTimezone = props.task && props.task.schedule_timezone || localScheduleTimezone();
-    var initial = useMemo2(function() {
+    var initial = useMemo3(function() {
       if (props.task) return parseSchedule(props.task);
       var s = new Date(props.defaultDate || /* @__PURE__ */ new Date());
       s.setMinutes(0, 0, 0);
       s.setHours(s.getHours() + 1);
       return { repeat: "none", start: s, cronText: "", intervalValue: 1, intervalUnit: "h" };
     }, [props.task, props.defaultDate]);
-    var formKindState = useState4(props.task ? "task" : props.entity ? "entity" : "entity");
+    var formKindState = useState5(props.task ? "task" : props.entity ? "entity" : "entity");
     var formKind = formKindState[0], setFormKind = formKindState[1];
-    var actionTypeState = useState4(props.task && props.task.action_type || "agent_task");
+    var actionTypeState = useState5(props.task && props.task.action_type || "agent_task");
     var actionType = actionTypeState[0], setActionType = actionTypeState[1];
-    var promptState = useState4(props.task ? props.task.prompt : props.entity ? props.entity.title || "" : "");
+    var promptState = useState5(props.task ? props.task.prompt : props.entity ? props.entity.title || "" : "");
     var prompt = promptState[0], setPrompt = promptState[1];
-    var noteState = useState4(props.entity ? props.entity.content || "" : "");
+    var noteState = useState5(props.entity ? props.entity.content || "" : "");
     var note = noteState[0], setNote = noteState[1];
-    var entityDateState = useState4(toDateInputValue(props.entity && props.entity.due_date));
+    var entityDateState = useState5(toDateInputValue(props.entity && props.entity.due_date));
     var entityDate = entityDateState[0], setEntityDate = entityDateState[1];
-    var entityStatusState = useState4(props.entity ? props.entity.status || "active" : "active");
+    var entityStatusState = useState5(props.entity ? props.entity.status || "active" : "active");
     var entityStatus = entityStatusState[0], setEntityStatus = entityStatusState[1];
-    var entityPriorityState = useState4(props.entity ? props.entity.priority || "medium" : "medium");
+    var entityPriorityState = useState5(props.entity ? props.entity.priority || "medium" : "medium");
     var entityPriority = entityPriorityState[0], setEntityPriority = entityPriorityState[1];
-    var startState = useState4(toTimezoneInputValue(initial.start, scheduleTimezone));
+    var startState = useState5(toTimezoneInputValue(initial.start, scheduleTimezone));
     var startVal = startState[0], setStartVal = startState[1];
-    var repeatState = useState4(initial.repeat);
+    var repeatState = useState5(initial.repeat);
     var repeat2 = repeatState[0], setRepeat = repeatState[1];
-    var cronState = useState4(initial.cronText);
+    var cronState = useState5(initial.cronText);
     var cronText = cronState[0], setCronText = cronState[1];
-    var ivState = useState4(initial.intervalValue);
+    var ivState = useState5(initial.intervalValue);
     var ivVal = ivState[0], setIvVal = ivState[1];
-    var iuState = useState4(initial.intervalUnit);
+    var iuState = useState5(initial.intervalUnit);
     var ivUnit = iuState[0], setIvUnit = iuState[1];
-    var savingState = useState4(false);
+    var savingState = useState5(false);
     var saving = savingState[0], setSaving = savingState[1];
-    var errState = useState4("");
+    var errState = useState5("");
     var err = errState[0], setErr = errState[1];
     var REPEATS = [
       { id: "none", labelKey: "schedule.repeat.none" },
@@ -64371,43 +64437,43 @@ function wbIsPermissionQuestionKind(kind) {
     var project = props && props.project;
     var active = !props || props.active !== false;
     var workspace = project && (project.id || project.dataKey) || "default";
-    var API = useMemo2(function() {
+    var API = useMemo3(function() {
       return scheduleApi(workspace);
     }, [workspace]);
     var today = startOfDay(/* @__PURE__ */ new Date());
-    var viewState = useState4("day");
+    var viewState = useState5("day");
     var viewMode = viewState[0], setViewMode = viewState[1];
-    var anchorState = useState4(today);
+    var anchorState = useState5(today);
     var anchorDate = anchorState[0], setAnchorDate = anchorState[1];
-    var miniState = useState4(/* @__PURE__ */ new Date());
+    var miniState = useState5(/* @__PURE__ */ new Date());
     var viewMonth = miniState[0], setViewMonth = miniState[1];
-    var rawState = useState4([]);
+    var rawState = useState5([]);
     var rawEvents = rawState[0], setRawEvents = rawState[1];
-    var loadState = useState4(true);
+    var loadState = useState5(true);
     var loading = loadState[0], setLoading = loadState[1];
-    var errState = useState4("");
+    var errState = useState5("");
     var error = errState[0], setError = errState[1];
-    var visState = useState4({ task_recurring: true, task_once: true, entity_due: true });
+    var visState = useState5({ task_recurring: true, task_once: true, entity_due: true });
     var visible = visState[0], setVisible = visState[1];
-    var selState = useState4(null);
+    var selState = useState5(null);
     var selectedId = selState[0], setSelectedId = selState[1];
-    var detailTabState = useState4("detail");
+    var detailTabState = useState5("detail");
     var detailTab = detailTabState[0], setDetailTab = detailTabState[1];
-    var runsState = useState4([]);
+    var runsState = useState5([]);
     var runs = runsState[0], setRuns = runsState[1];
-    var runsLoadState = useState4(false);
+    var runsLoadState = useState5(false);
     var runsLoading = runsLoadState[0], setRunsLoading = runsLoadState[1];
-    var entityDetailState = useState4(null);
+    var entityDetailState = useState5(null);
     var entityDetail = entityDetailState[0], setEntityDetail = entityDetailState[1];
-    var formState = useState4(null);
+    var formState = useState5(null);
     var formMode = formState[0], setFormMode = formState[1];
-    var contextState = useState4(null);
+    var contextState = useState5(null);
     var contextMenu = contextState[0], setContextMenu = contextState[1];
     var pendingTaskIdRef = useRef2("");
     var pendingEntityIdRef = useRef2("");
     var pendingDateAppliedRef = useRef2(false);
     var detailRequestSeqRef = useRef2(0);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!contextMenu) return void 0;
       function close() {
         setContextMenu(null);
@@ -64424,7 +64490,7 @@ function wbIsPermissionQuestionKind(kind) {
         document.removeEventListener("keydown", onKeyDown);
       };
     }, [!!contextMenu]);
-    var windowRange = useMemo2(function() {
+    var windowRange = useMemo3(function() {
       if (viewMode === "day") return { start: startOfDay(anchorDate), end: addDays(startOfDay(anchorDate), 1) };
       if (viewMode === "week") {
         var ws = startOfWeekMon(anchorDate);
@@ -64504,7 +64570,7 @@ function wbIsPermissionQuestionKind(kind) {
         setViewMonth(new Date(d.getFullYear(), d.getMonth(), 1));
       }
     }
-    useEffect6(function() {
+    useEffect7(function() {
       var cached = schedulePageCache.ranges[requestKey];
       if (cached) {
         setRawEvents(cached.value);
@@ -64524,7 +64590,7 @@ function wbIsPermissionQuestionKind(kind) {
       if (!active) return;
       load({ background: !!cached });
     }, [requestKey, active]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!active) return void 0;
       var refreshTimer = null;
       function refreshSoon() {
@@ -64552,10 +64618,10 @@ function wbIsPermissionQuestionKind(kind) {
         unsubscribe();
       };
     }, [requestKey, active]);
-    useEffect6(function() {
+    useEffect7(function() {
       applyPendingScheduleSelection();
     }, [rawEvents]);
-    useEffect6(function() {
+    useEffect7(function() {
       function onNavigate(event) {
         var detail = event && event.detail;
         if (!detail || detail.type !== "schedule") return;
@@ -64569,12 +64635,12 @@ function wbIsPermissionQuestionKind(kind) {
         window.removeEventListener("cyrene:workbench-navigate", onNavigate);
       };
     }, [rawEvents]);
-    var events = useMemo2(function() {
+    var events = useMemo3(function() {
       return decorate(rawEvents).filter(function(ev) {
         return visible[ev.category];
       });
     }, [rawEvents, visible]);
-    var markedDays = useMemo2(function() {
+    var markedDays = useMemo3(function() {
       var m = {};
       events.forEach(function(ev) {
         var d = ev._start;
@@ -64582,14 +64648,14 @@ function wbIsPermissionQuestionKind(kind) {
       });
       return m;
     }, [events]);
-    var counts = useMemo2(function() {
+    var counts = useMemo3(function() {
       var c = { task_recurring: 0, task_once: 0, entity_due: 0 };
       decorate(rawEvents).forEach(function(ev) {
         if (c[ev.category] != null) c[ev.category]++;
       });
       return c;
     }, [rawEvents]);
-    var selectedEvent = useMemo2(function() {
+    var selectedEvent = useMemo3(function() {
       if (!selectedId) return null;
       var base2 = events.find(function(ev) {
         return ev.id === selectedId;
@@ -64901,9 +64967,9 @@ function wbIsPermissionQuestionKind(kind) {
 
 // frontend/workbench-memory.jsx
 (function() {
-  var useState4 = React.useState;
-  var useEffect6 = React.useEffect;
-  var useMemo2 = React.useMemo;
+  var useState5 = React.useState;
+  var useEffect7 = React.useEffect;
+  var useMemo3 = React.useMemo;
   var useRef2 = React.useRef;
   var h = React.createElement;
   var memoryPageCache = {
@@ -65128,24 +65194,24 @@ function wbIsPermissionQuestionKind(kind) {
     var hookT = useMemoryT();
     var t2 = props.t || hookT;
     var init = props.draft || {};
-    var contentState = useState4(init.content || "");
+    var contentState = useState5(init.content || "");
     var content2 = contentState[0];
     var setContent = contentState[1];
-    var catState = useState4(init.category || "fact");
+    var catState = useState5(init.category || "fact");
     var category = catState[0];
     var setCategory = catState[1];
-    var srcState = useState4(init.source || "manual");
+    var srcState = useState5(init.source || "manual");
     var source = srcState[0];
     var setSource = srcState[1];
-    var confState = useState4(init.confidence || "");
+    var confState = useState5(init.confidence || "");
     var confidence = confState[0];
     var setConfidence = confState[1];
-    var tagsState = useState4((init.tags || []).join(", "));
+    var tagsState = useState5((init.tags || []).join(", "));
     var tags3 = tagsState[0];
     var setTags = tagsState[1];
     var ref = useRef2(null);
     var titleId = "wb-memory-modal-title";
-    useEffect6(function() {
+    useEffect7(function() {
       if (ref.current) ref.current.focus();
     }, []);
     function submit() {
@@ -65258,10 +65324,10 @@ function wbIsPermissionQuestionKind(kind) {
     var hookT = useMemoryT();
     var t2 = props.t || hookT;
     var m = props.memory;
-    var tabState = useState4("detail");
+    var tabState = useState5("detail");
     var tab2 = tabState[0];
     var setTab = tabState[1];
-    useEffect6(function() {
+    useEffect7(function() {
       setTab("detail");
     }, [m ? m.id : ""]);
     if (!m) {
@@ -65693,13 +65759,13 @@ function wbIsPermissionQuestionKind(kind) {
   }
   function SkillLearningPanel(props) {
     var t2 = useMemoryT();
-    var shotState = useState4(0);
+    var shotState = useState5(0);
     var shotIndex = shotState[0];
     var setShotIndex = shotState[1];
-    var imgErrorState = useState4(false);
+    var imgErrorState = useState5(false);
     var imgError = imgErrorState[0];
     var setImgError = imgErrorState[1];
-    var detailOpenState = useState4(true);
+    var detailOpenState = useState5(true);
     var detailOpen = detailOpenState[0];
     var setDetailOpen = detailOpenState[1];
     var learning = props.learning;
@@ -65717,7 +65783,7 @@ function wbIsPermissionQuestionKind(kind) {
     var files = detailFiles(chain);
     var similarity = summary.total_steps ? Math.round((summary.success_steps || 0) / summary.total_steps * 100) : 0;
     var hasChains = learning.data && learning.data.tool_chains && learning.data.tool_chains.length > 0;
-    useEffect6(function() {
+    useEffect7(function() {
       setShotIndex(0);
       setImgError(false);
     }, [chain && chain.id]);
@@ -66363,73 +66429,73 @@ function wbIsPermissionQuestionKind(kind) {
     dataStore.useVersion();
     var pluginModules = Array.isArray(dataStore.state.pluginModules) ? dataStore.state.pluginModules : [];
     var skillsEnabled = pluginModules.indexOf("skills") >= 0;
-    var payloadState = useState4(null);
+    var payloadState = useState5(null);
     var payload = payloadState[0];
     var setPayload = payloadState[1];
-    var loadState = useState4(true);
+    var loadState = useState5(true);
     var loading = loadState[0];
     var setLoading = loadState[1];
-    var errState = useState4("");
+    var errState = useState5("");
     var error = errState[0];
     var setError = errState[1];
-    var queryState = useState4("");
+    var queryState = useState5("");
     var query = queryState[0];
     var setQuery = queryState[1];
-    var catState = useState4("all");
+    var catState = useState5("all");
     var activeCat = catState[0];
     var setActiveCat = catState[1];
-    var srcState = useState4("");
+    var srcState = useState5("");
     var sourceFilter = srcState[0];
     var setSourceFilter = srcState[1];
-    var sortState = useState4("updated");
+    var sortState = useState5("updated");
     var sortKey = sortState[0];
     var setSortKey = sortState[1];
-    var selState = useState4("");
+    var selState = useState5("");
     var selectedId = selState[0];
     var setSelectedId = selState[1];
-    var panelState = useState4("");
+    var panelState = useState5("");
     var activePanel = panelState[0];
     var setActivePanel = panelState[1];
-    var menuState = useState4("");
+    var menuState = useState5("");
     var menu = menuState[0];
     var setMenu = menuState[1];
-    var contextState = useState4(null);
+    var contextState = useState5(null);
     var contextMenu = contextState[0];
     var setContextMenu = contextState[1];
-    var modalState = useState4(null);
+    var modalState = useState5(null);
     var modal = modalState[0];
     var setModal = modalState[1];
-    var busyState = useState4(false);
+    var busyState = useState5(false);
     var busy = busyState[0];
     var setBusy = busyState[1];
-    var learningDataState = useState4(null);
+    var learningDataState = useState5(null);
     var learningData = learningDataState[0];
     var setLearningData = learningDataState[1];
-    var learningLoadState = useState4(false);
+    var learningLoadState = useState5(false);
     var learningLoading = learningLoadState[0];
     var setLearningLoading = learningLoadState[1];
-    var learningBusyState = useState4("");
+    var learningBusyState = useState5("");
     var learningBusy = learningBusyState[0];
     var setLearningBusy = learningBusyState[1];
-    var learningErrState = useState4("");
+    var learningErrState = useState5("");
     var learningError = learningErrState[0];
     var setLearningError = learningErrState[1];
-    var learningNoteState = useState4("");
+    var learningNoteState = useState5("");
     var learningNote = learningNoteState[0];
     var setLearningNote = learningNoteState[1];
-    var learningDetailKindState = useState4("chain");
+    var learningDetailKindState = useState5("chain");
     var selectedLearningDetailKind = learningDetailKindState[0];
     var setSelectedLearningDetailKind = learningDetailKindState[1];
-    var learningSelState = useState4("");
+    var learningSelState = useState5("");
     var selectedLearningSkillId = learningSelState[0];
     var setSelectedLearningSkillId = learningSelState[1];
-    var learningCandidateSelState = useState4("");
+    var learningCandidateSelState = useState5("");
     var selectedLearningCandidateId = learningCandidateSelState[0];
     var setSelectedLearningCandidateId = learningCandidateSelState[1];
-    var learningChainSelState = useState4("");
+    var learningChainSelState = useState5("");
     var selectedLearningChainId = learningChainSelState[0];
     var setSelectedLearningChainId = learningChainSelState[1];
-    var learningSessionSelState = useState4("");
+    var learningSessionSelState = useState5("");
     var selectedLearningSessionId = learningSessionSelState[0];
     var setSelectedLearningSessionId = learningSessionSelState[1];
     var workspaceRef = useRef2(workspace);
@@ -66443,10 +66509,10 @@ function wbIsPermissionQuestionKind(kind) {
     });
     var pendingMemorySelection = pendingMemorySelectionRef.current;
     var learningActive = skillsEnabled && activePanel === "learning";
-    var client = useMemo2(function() {
+    var client = useMemo3(function() {
       return api(workspace);
     }, [workspace]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!contextMenu) return void 0;
       function close() {
         setContextMenu(null);
@@ -66576,7 +66642,7 @@ function wbIsPermissionQuestionKind(kind) {
     function applyPendingMemorySelection() {
       pendingMemorySelection.apply();
     }
-    useEffect6(function() {
+    useEffect7(function() {
       var cachedPayload = memoryPageCache.payloads[workspace];
       var cachedLearning = memoryPageCache.learningPayloads[learningProject];
       setPayload(cachedPayload ? cachedPayload.value : null);
@@ -66594,13 +66660,13 @@ function wbIsPermissionQuestionKind(kind) {
       setActiveCat("all");
       setSourceFilter("");
     }, [workspace, learningProject]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!active) return;
       var cached = memoryPageCache.payloads[workspace];
       pendingMemorySelection.capture();
       load({ background: !!cached }).then(applyPendingMemorySelection);
     }, [workspace, active]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!active) return void 0;
       var refreshTimer = null;
       function refreshSoon() {
@@ -66628,7 +66694,7 @@ function wbIsPermissionQuestionKind(kind) {
         unsubscribe();
       };
     }, [workspace, active]);
-    useEffect6(function() {
+    useEffect7(function() {
       function onNavigate(event) {
         var detail = event && event.detail;
         if (!detail || detail.type !== "memory") return;
@@ -66639,10 +66705,10 @@ function wbIsPermissionQuestionKind(kind) {
         window.removeEventListener("cyrene:workbench-navigate", onNavigate);
       };
     }, []);
-    useEffect6(function() {
+    useEffect7(function() {
       if (learningActive && !learningData && !learningLoading) loadLearning();
     }, [learningActive]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!learningActive) return void 0;
       var stopped = false;
       function refresh2() {
@@ -66672,7 +66738,7 @@ function wbIsPermissionQuestionKind(kind) {
         window.removeEventListener("cyrene:wbc-refresh-chats", onChatCreated);
       };
     }, [learningActive, workspace, learningProject, learningBusy, learningLoading]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (skillsEnabled) return;
       if (activePanel === "learning") setActivePanel("");
       setLearningData(null);
@@ -66697,7 +66763,7 @@ function wbIsPermissionQuestionKind(kind) {
     var selectedLearningCandidate = learningSnap.candidates.find(function(candidate) {
       return candidate.id === selectedLearningCandidateId;
     }) || null;
-    useEffect6(function() {
+    useEffect7(function() {
       if (!learningData) return;
       var skills = learningData.learned_skills || [];
       var candidates = learningData.skill_candidates || [];
@@ -66739,7 +66805,7 @@ function wbIsPermissionQuestionKind(kind) {
         setSelectedLearningSkillId(skills[0].id);
       }
     }, [learningData, selectedLearningDetailKind, selectedLearningSkillId, selectedLearningCandidateId, selectedLearningChainId, selectedLearningSessionId]);
-    var visible = useMemo2(function() {
+    var visible = useMemo3(function() {
       var q = query.trim().toLowerCase();
       var list = memories.filter(function(m) {
         if (activeCat !== "all" && m.category !== activeCat) return false;
@@ -66757,7 +66823,7 @@ function wbIsPermissionQuestionKind(kind) {
     var selected = selectedId ? memories.find(function(m) {
       return m.id === selectedId;
     }) || null : null;
-    var related = useMemo2(function() {
+    var related = useMemo3(function() {
       if (!selected) return [];
       var selTags = (selected.tags || []).map(function(t3) {
         return String(t3).toLowerCase();
@@ -67208,8 +67274,8 @@ function wbIsPermissionQuestionKind(kind) {
 
 // frontend/workbench-create.jsx
 (function() {
-  var useState4 = React.useState;
-  var useEffect6 = React.useEffect;
+  var useState5 = React.useState;
+  var useEffect7 = React.useEffect;
   var useRef2 = React.useRef;
   function T(key, params, fallback) {
     return workbenchServices2.i18n().t(key, params, fallback);
@@ -67300,15 +67366,15 @@ function wbIsPermissionQuestionKind(kind) {
   }
   function WorkbenchNewProjectModal(props) {
     workbenchServices2.i18n().use();
-    var [step, setStep] = useState4(0);
-    var [name2, setName] = useState4("");
-    var [description, setDescription] = useState4("");
-    var [icon, setIcon] = useState4("spark");
-    var [color, setColor] = useState4(PROJECT_COLORS[0]);
-    var [template, setTemplate] = useState4("blank");
-    var [workspacePath, setWorkspacePath] = useState4(props.defaultWorkspacePath || "");
-    var [busy, setBusy] = useState4(false);
-    var [error, setError] = useState4("");
+    var [step, setStep] = useState5(0);
+    var [name2, setName] = useState5("");
+    var [description, setDescription] = useState5("");
+    var [icon, setIcon] = useState5("spark");
+    var [color, setColor] = useState5(PROJECT_COLORS[0]);
+    var [template, setTemplate] = useState5("blank");
+    var [workspacePath, setWorkspacePath] = useState5(props.defaultWorkspacePath || "");
+    var [busy, setBusy] = useState5(false);
+    var [error, setError] = useState5("");
     var customColorRef = useRef2(null);
     var trimmedName = name2.trim();
     var stepDots = [
@@ -67441,11 +67507,11 @@ function wbIsPermissionQuestionKind(kind) {
   var PRIORITIES = [{ id: "high", labelKey: "priority.high" }, { id: "medium", labelKey: "priority.medium" }, { id: "low", labelKey: "priority.low" }];
   function WorkbenchNewTaskModal(props) {
     workbenchServices2.i18n().use();
-    var [title, setTitle] = useState4("");
-    var [goal, setGoal] = useState4("");
-    var [priority, setPriority] = useState4("medium");
-    var [busy, setBusy] = useState4(false);
-    var [error, setError] = useState4("");
+    var [title, setTitle] = useState5("");
+    var [goal, setGoal] = useState5("");
+    var [priority, setPriority] = useState5("medium");
+    var [busy, setBusy] = useState5(false);
+    var [error, setError] = useState5("");
     var trimmed = title.trim();
     function create() {
       if (!trimmed) {
@@ -67544,7 +67610,7 @@ function wbIsPermissionQuestionKind(kind) {
   var INIT_PRIORITY_LIST = [{ id: "high", key: "priority.high" }, { id: "medium", key: "priority.medium" }, { id: "low", key: "priority.low" }];
   function InitTaskPlan(props) {
     var tasks = Array.isArray(props.tasks) ? props.tasks : [];
-    var [expandedId, setExpandedId] = useState4(null);
+    var [expandedId, setExpandedId] = useState5(null);
     function updateTask(index, patch) {
       props.onChange(tasks.map(function(task, i2) {
         return i2 === index ? Object.assign({}, task, patch) : task;
@@ -67666,17 +67732,17 @@ function wbIsPermissionQuestionKind(kind) {
     var init = session && session.init || {};
     var sections = Array.isArray(init.sections) ? init.sections : [];
     var completed = !!init.completed;
-    var [answers, setAnswers] = useState4(init.answers || {});
-    var [taskPlan, setTaskPlan] = useState4(Array.isArray(init.taskPlan) ? init.taskPlan : []);
-    var [feedback, setFeedback] = useState4("");
-    var [expanded, setExpanded] = useState4(sections[0] ? sections[0].id : "");
-    var [busy, setBusy] = useState4(false);
-    var [generating, setGenerating] = useState4(false);
-    var [planning, setPlanning] = useState4(false);
+    var [answers, setAnswers] = useState5(init.answers || {});
+    var [taskPlan, setTaskPlan] = useState5(Array.isArray(init.taskPlan) ? init.taskPlan : []);
+    var [feedback, setFeedback] = useState5("");
+    var [expanded, setExpanded] = useState5(sections[0] ? sections[0].id : "");
+    var [busy, setBusy] = useState5(false);
+    var [generating, setGenerating] = useState5(false);
+    var [planning, setPlanning] = useState5(false);
     var genRef = useRef2({});
     var saveTimer = useRef2(null);
     var answersRef = useRef2(init.answers || {});
-    useEffect6(function() {
+    useEffect7(function() {
       var nextInit = session && session.init || {};
       var nextAnswers = nextInit.answers || {};
       answersRef.current = nextAnswers;
@@ -67689,10 +67755,10 @@ function wbIsPermissionQuestionKind(kind) {
         return secs[0] ? secs[0].id : "";
       });
     }, [sid, init.sections]);
-    useEffect6(function() {
+    useEffect7(function() {
       setTaskPlan(Array.isArray(init.taskPlan) ? init.taskPlan : []);
     }, [sid, init.taskPlan]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!project || !session || completed) return;
       if (init.generated || genRef.current[sid]) return;
       genRef.current[sid] = true;
@@ -67876,7 +67942,7 @@ function wbIsPermissionQuestionKind(kind) {
 
 // frontend/workbench-welcome.jsx
 (function() {
-  var useState4 = React.useState;
+  var useState5 = React.useState;
   function T(key, params, fallback) {
     return workbenchServices2.i18n().t(key, params, fallback);
   }
@@ -67912,16 +67978,16 @@ function wbIsPermissionQuestionKind(kind) {
     var preferredEndpoint = endpointOptions.find(function(item) {
       return item.providerId === llm.provider;
     }) || endpointOptions[0] || {};
-    var [apiKey, setApiKey] = useState4("");
-    var [baseUrl, setBaseUrl] = useState4(llm.baseUrl || preferredEndpoint.url || "");
-    var [providerId, setProviderId] = useState4(llm.provider || preferredEndpoint.providerId || "");
-    var [model, setModel] = useState4(llm.model || preferredEndpoint.defaultModel || "");
-    var [mode, setMode] = useState4(persona.mode || "name");
-    var [pName, setPName] = useState4(persona.label || "");
-    var [soul, setSoul] = useState4(persona.currentContent || "");
-    var [busy, setBusy] = useState4(false);
-    var [error, setError] = useState4("");
-    var [notice, setNotice] = useState4("");
+    var [apiKey, setApiKey] = useState5("");
+    var [baseUrl, setBaseUrl] = useState5(llm.baseUrl || preferredEndpoint.url || "");
+    var [providerId, setProviderId] = useState5(llm.provider || preferredEndpoint.providerId || "");
+    var [model, setModel] = useState5(llm.model || preferredEndpoint.defaultModel || "");
+    var [mode, setMode] = useState5(persona.mode || "name");
+    var [pName, setPName] = useState5(persona.label || "");
+    var [soul, setSoul] = useState5(persona.currentContent || "");
+    var [busy, setBusy] = useState5(false);
+    var [error, setError] = useState5("");
+    var [notice, setNotice] = useState5("");
     function applyResponse(payload) {
       if (payload && payload.onboarding) {
         try {
@@ -68023,8 +68089,8 @@ function wbIsPermissionQuestionKind(kind) {
 
 // frontend/workbench-profile.jsx
 (function() {
-  var useState4 = React.useState;
-  var useEffect6 = React.useEffect;
+  var useState5 = React.useState;
+  var useEffect7 = React.useEffect;
   var useRef2 = React.useRef;
   var WBP_COLORS = ["#1D9E75", "#378ADD", "#D4537E", "#BA7517", "#7F77DD", "#D85A30"];
   var WBP_EMOJI = ["\u{1F600}", "\u{1F431}", "\u{1F680}", "\u{1F31F}", "\u{1F98A}", "\u{1F43C}", "\u{1F33F}", "\u{1F525}"];
@@ -68146,28 +68212,28 @@ function wbIsPermissionQuestionKind(kind) {
         if (v > hmMax) hmMax = v;
       });
     });
-    var editState = useState4(false);
+    var editState = useState5(false);
     var editing = editState[0];
     var setEditing = editState[1];
-    var nameState = useState4(user.name || "");
+    var nameState = useState5(user.name || "");
     var name2 = nameState[0];
     var setName = nameState[1];
-    var bioState = useState4(user.bio || "");
+    var bioState = useState5(user.bio || "");
     var bio = bioState[0];
     var setBio = bioState[1];
-    var modeState = useState4(user.avatar ? "image" : user.avatar_emoji ? "emoji" : "letter");
+    var modeState = useState5(user.avatar ? "image" : user.avatar_emoji ? "emoji" : "letter");
     var avatarMode = modeState[0];
     var setAvatarMode = modeState[1];
-    var dataState = useState4(user.avatar || "");
+    var dataState = useState5(user.avatar || "");
     var avatarData = dataState[0];
     var setAvatarData = dataState[1];
-    var emojiState = useState4(user.avatar_emoji || "");
+    var emojiState = useState5(user.avatar_emoji || "");
     var emoji = emojiState[0];
     var setEmoji = emojiState[1];
-    var colorState = useState4(user.avatar_color || WBP_COLORS[0]);
+    var colorState = useState5(user.avatar_color || WBP_COLORS[0]);
     var color = colorState[0];
     var setColor = colorState[1];
-    var savingState = useState4(false);
+    var savingState = useState5(false);
     var saving = savingState[0];
     var setSaving = savingState[1];
     var fileRef = useRef2(null);
@@ -68346,6 +68412,7 @@ function wbcWorkspaceDisplayName(path) {
 var WBC_RESOURCE_DRAG_MIME = "application/x-cyrene-work-resource+json";
 var WBC_CHAT_DRAG_MIME = "application/x-cyrene-chat+json";
 var WBC_TASK_DRAG_MIME = "application/x-cyrene-task+json";
+var WBC_PLUGIN_VIEW_DRAG_MIME = "application/x-cyrene-plugin-view+json";
 var WBC_CHAT_GROUP_DRAG_MIME = "application/x-cyrene-chat-group+json";
 var WBC_AGENT_CHAT_FLOW_EVENT = "cyrene:agent-chat-flow";
 var WBC_AGENT_CHAT_FLOW_TTLS = { created: 4200, typing: 3200 };
@@ -68524,6 +68591,47 @@ function wbcReadTaskDrag(event) {
     return null;
   }
 }
+function wbcSetPluginViewDrag(event, payload) {
+  var transfer = event && (event.dataTransfer || event.nativeEvent && event.nativeEvent.dataTransfer);
+  var pluginView = payload && typeof payload === "object" ? payload : null;
+  var packId = String(pluginView && (pluginView.packId || pluginView.pack_id) || "");
+  var viewId = String(pluginView && (pluginView.viewId || pluginView.view_id) || "");
+  if (!transfer || !pluginView || !packId || !viewId) return;
+  try {
+    transfer.effectAllowed = "copyMove";
+    transfer.setData(WBC_PLUGIN_VIEW_DRAG_MIME, JSON.stringify({
+      kind: "plugin-view",
+      packId,
+      viewId,
+      instanceId: String(pluginView.instanceId || pluginView.instance_id || "default"),
+      projectId: String(pluginView.projectId || pluginView.project_id || ""),
+      title: String(pluginView.title || viewId || packId),
+      subtitle: String(pluginView.subtitle || packId),
+      state: pluginView.state == null ? null : pluginView.state
+    }));
+    transfer.setData("text/plain", String(pluginView.title || viewId || packId));
+  } catch (e) {
+  }
+}
+function wbcHasPluginViewDrag(event) {
+  var transfer = event && (event.dataTransfer || event.nativeEvent && event.nativeEvent.dataTransfer);
+  if (!transfer) return false;
+  try {
+    return Array.prototype.slice.call(transfer.types || []).indexOf(WBC_PLUGIN_VIEW_DRAG_MIME) >= 0;
+  } catch (e) {
+    return false;
+  }
+}
+function wbcReadPluginViewDrag(event) {
+  var transfer = event && (event.dataTransfer || event.nativeEvent && event.nativeEvent.dataTransfer);
+  if (!transfer) return null;
+  try {
+    var payload = JSON.parse(transfer.getData(WBC_PLUGIN_VIEW_DRAG_MIME) || "null");
+    return payload && payload.kind === "plugin-view" && payload.packId && payload.viewId ? payload : null;
+  } catch (e) {
+    return null;
+  }
+}
 function wbcChatSideZoneRect() {
   var page = document.querySelector(".wbc-page");
   if (!page) return null;
@@ -68682,12 +68790,30 @@ function wbcPaneCard(kind, payload, options) {
   var opts = options || {};
   var canonicalId = normalizedKind === "chat" && payload ? "chat:" + String(payload) : normalizedKind === "terminal" && payload ? "terminal:" + String(payload) : normalizedKind === "task" && payload ? "task:" + String(payload) : wbcPaneIdentity(normalizedKind, payload);
   var stableId = opts.freshInstance ? canonicalId + ":instance:" + crypto.randomUUID() : canonicalId;
-  return {
+  var card = {
     id: opts.id || stableId,
     kind: normalizedKind,
     payload,
     ownerChatId: String(opts.ownerChatId || "")
   };
+  if (opts.meta && typeof opts.meta === "object") card.meta = wbcNormalizePaneCardMeta(opts.meta);
+  return card;
+}
+function wbcNormalizePaneCardMeta(value) {
+  var raw = value && typeof value === "object" ? value : {};
+  var autoClosePolicy = ["run-end", "idle", "never"].indexOf(String(raw.autoClosePolicy || "")) >= 0 ? String(raw.autoClosePolicy) : "never";
+  return {
+    origin: raw.origin === "agent" ? "agent" : "user",
+    claimedByUser: raw.claimedByUser === true,
+    pinned: raw.pinned === true,
+    autoClosePolicy,
+    createdAt: Math.max(0, Number(raw.createdAt) || 0),
+    lastIntentAt: Math.max(0, Number(raw.lastIntentAt) || 0)
+  };
+}
+function wbcNormalizePaneCard(card) {
+  if (!card || typeof card !== "object" || card.kind !== "surface") return card;
+  return Object.assign({}, card, { meta: wbcNormalizePaneCardMeta(card.meta) });
 }
 function wbcDefaultPaneLayout(chatId2) {
   var id2 = String(chatId2 || "");
@@ -68707,8 +68833,8 @@ function wbcDefaultPaneLayout(chatId2) {
 }
 function wbcNormalizePaneLayout(layout, chatId2) {
   var base2 = layout && typeof layout === "object" ? layout : wbcDefaultPaneLayout(chatId2);
-  var left = Array.isArray(base2.left) ? base2.left.filter(Boolean).slice(0, 2) : [];
-  var right = Array.isArray(base2.right) ? base2.right.filter(Boolean).slice(0, 2) : [];
+  var left = Array.isArray(base2.left) ? base2.left.filter(Boolean).slice(0, 2).map(wbcNormalizePaneCard) : [];
+  var right = Array.isArray(base2.right) ? base2.right.filter(Boolean).slice(0, 2).map(wbcNormalizePaneCard) : [];
   if (!left.length && !right.length && chatId2) return wbcDefaultPaneLayout(chatId2);
   return {
     left,
@@ -68831,6 +68957,15 @@ function wbcEscapeHtml(value) {
 function wbcSetResourceDrag(event, payload) {
   var transfer = event && (event.dataTransfer || event.nativeEvent && event.nativeEvent.dataTransfer);
   if (!transfer || !payload) return;
+  var root2 = document.documentElement;
+  root2.classList.add("wbc-resource-drag-active");
+  function clearResourceDragRegion() {
+    root2.classList.remove("wbc-resource-drag-active");
+    document.removeEventListener("dragend", clearResourceDragRegion, true);
+    document.removeEventListener("drop", clearResourceDragRegion, true);
+  }
+  document.addEventListener("dragend", clearResourceDragRegion, true);
+  document.addEventListener("drop", clearResourceDragRegion, true);
   try {
     transfer.effectAllowed = "copy";
     transfer.setData(WBC_RESOURCE_DRAG_MIME, JSON.stringify(payload));
@@ -69004,6 +69139,28 @@ function wbcAgentPermissionPayload(event) {
     meta: payload.meta && typeof payload.meta === "object" ? payload.meta : {}
   };
 }
+function wbcAgentPermissionReviewPayload(event) {
+  var payload = wbcAgentEventPayload(event);
+  var timestamp = String(event && event.timestamp || payload.createdAt || payload.created_at || "");
+  var parsedAt = timestamp ? Date.parse(timestamp) : NaN;
+  var approved = payload.approved === true;
+  var decisions = Array.isArray(payload.decisions) ? payload.decisions : [];
+  var preview = decisions.map(function(decision) {
+    if (!decision || typeof decision !== "object") return "";
+    return [String(decision.tool || ""), String(decision.rationale || "")].filter(Boolean).join(" \xB7 ");
+  }).filter(Boolean).join("; ").slice(0, 240);
+  return {
+    id: String(payload.id || event && (event.eventId || event.event_id) || ""),
+    kind: "permission",
+    text: approved ? wbcT("workbenchChat.permissionApproved", "Permission review approved") : wbcT("workbenchChat.permissionDenied", "Permission review denied"),
+    preview,
+    status: approved ? "completed" : "failed",
+    failed: !approved,
+    approved,
+    decisions,
+    createdAt: Number.isFinite(parsedAt) ? parsedAt : Date.now()
+  };
+}
 function wbcAgentElicitationPayload(event) {
   var payload = wbcAgentEventPayload(event);
   return {
@@ -69113,6 +69270,7 @@ var AGENT_EVENT_ROUTER = {
   "tool.started": { handler: "onToolStarted", normalize: wbcAgentToolPayload },
   "tool.updated": { handler: "onToolUpdated", normalize: wbcAgentToolPayload },
   "tool.completed": { handler: "onToolCompleted", normalize: wbcAgentToolPayload },
+  "permission.reviewed": { handler: "onPermissionReviewed", normalize: wbcAgentPermissionReviewPayload },
   "permission.requested": { handler: "onAwaitingUser", normalize: wbcAgentPermissionPayload },
   "permission.resolved": { handler: "onPermissionResolved" },
   "elicitation.requested": { handler: "onAwaitingUser", normalize: wbcAgentElicitationPayload },
@@ -70255,6 +70413,34 @@ function wbcPersistDurableTrace(chatId2, payload) {
 }
 
 // frontend/features/chat/behavior.mjs
+var CONTEXT_BLOCK_COLOR_BY_ID = Object.freeze({
+  "system.identity": 0,
+  "context.memory": 1,
+  "system.behavior": 2,
+  "system.tools": 3,
+  "context.learned_skills": 4,
+  "context.persona": 5,
+  "system.workspace": 6,
+  "system.message_overhead": 7
+});
+var CONTEXT_BLOCK_COLOR_BY_TYPE = Object.freeze({
+  identity: 0,
+  memory: 1,
+  instructions: 2,
+  tools: 3,
+  workspace: 6,
+  runtime: 5,
+  system: 6,
+  overhead: 7
+});
+function contextBlockColorIndex(block) {
+  const id2 = String(block?.id || "");
+  if (Object.prototype.hasOwnProperty.call(CONTEXT_BLOCK_COLOR_BY_ID, id2)) {
+    return CONTEXT_BLOCK_COLOR_BY_ID[id2];
+  }
+  const type = String(block?.type || "");
+  return Object.prototype.hasOwnProperty.call(CONTEXT_BLOCK_COLOR_BY_TYPE, type) ? CONTEXT_BLOCK_COLOR_BY_TYPE[type] : 7;
+}
 function toolPresentationKind(entry) {
   const raw = String(entry?.presentation?.kind || "").trim().toLowerCase();
   return ["terminal", "file", "diff", "browser", "error", "event"].includes(raw) ? raw : "generic";
@@ -72440,6 +72626,120 @@ function wbcStartFileDrag(event, file) {
     page && page.getAttribute("data-project-id")
   ));
 }
+function wbcUsesFilePointerDrag() {
+  return !!(window.cyrene && document.documentElement.getAttribute("data-platform") === "darwin");
+}
+function wbcCopyFileDragAppearance(sourceNode, cloneNode) {
+  if (!sourceNode || !cloneNode || !window.getComputedStyle) return;
+  var computed = window.getComputedStyle(sourceNode);
+  for (var index = 0; index < computed.length; index += 1) {
+    var property = computed[index];
+    cloneNode.style.setProperty(
+      property,
+      computed.getPropertyValue(property),
+      computed.getPropertyPriority(property)
+    );
+  }
+  var sourceChildren = sourceNode.children || [];
+  var cloneChildren = cloneNode.children || [];
+  for (var childIndex = 0; childIndex < sourceChildren.length; childIndex += 1) {
+    wbcCopyFileDragAppearance(sourceChildren[childIndex], cloneChildren[childIndex]);
+  }
+}
+function wbcStartFilePointerDrag(event, file) {
+  if (!event || event.button !== 0 || !wbcUsesFilePointerDrag()) return;
+  var source = event.currentTarget;
+  var interactive = event.target && event.target.closest ? event.target.closest("button, a, input, textarea, select, [contenteditable='true']") : null;
+  if (!source || interactive) return;
+  event.preventDefault();
+  var page = source.closest && source.closest(".wbc-page");
+  var payload = wbcFileDragPayload(
+    file,
+    page && page.getAttribute("data-active-chat-id"),
+    page && page.getAttribute("data-project-id")
+  );
+  var pointerId = event.pointerId;
+  var startX = event.clientX;
+  var startY = event.clientY;
+  var started = false;
+  var finished = false;
+  var overShelf = false;
+  var ghost = null;
+  function updateTarget(clientX, clientY) {
+    var next2 = wbcPointInsideResourceShelf(clientX, clientY);
+    if (next2 !== overShelf) {
+      overShelf = next2;
+      wbcNotifyResourceShelfPointerDrag(overShelf);
+    }
+  }
+  function beginPointerDrag() {
+    started = true;
+    ghost = source.cloneNode(true);
+    var rect = source.getBoundingClientRect();
+    wbcCopyFileDragAppearance(source, ghost);
+    ghost.classList.add("wbc-file-pointer-drag-ghost");
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.style.position = "fixed";
+    ghost.style.zIndex = "2147483647";
+    ghost.style.margin = "0";
+    ghost.style.pointerEvents = "none";
+    ghost.style.left = rect.left + "px";
+    ghost.style.top = rect.top + "px";
+    ghost.style.width = rect.width + "px";
+    ghost.style.height = rect.height + "px";
+    source.classList.add("wbc-file-pointer-drag-source");
+    document.body.appendChild(ghost);
+  }
+  function movePointerDrag(moveEvent) {
+    if (moveEvent.pointerId !== pointerId) return;
+    var dx = moveEvent.clientX - startX;
+    var dy = moveEvent.clientY - startY;
+    if (!started) {
+      if (dx * dx + dy * dy < 16) return;
+      beginPointerDrag();
+    }
+    updateTarget(moveEvent.clientX, moveEvent.clientY);
+    if (ghost) ghost.style.transform = "translate3d(" + dx + "px," + dy + "px,0)";
+  }
+  function clearPointerDrag() {
+    if (finished) return;
+    finished = true;
+    window.removeEventListener("pointermove", movePointerDrag);
+    window.removeEventListener("pointerup", finishPointerDrag);
+    window.removeEventListener("pointercancel", finishPointerDrag);
+    source.removeEventListener("lostpointercapture", finishPointerDrag);
+    if (source.releasePointerCapture) {
+      try {
+        source.releasePointerCapture(pointerId);
+      } catch (e) {
+      }
+    }
+    source.classList.remove("wbc-file-pointer-drag-source");
+    if (ghost && ghost.parentNode) ghost.parentNode.removeChild(ghost);
+    wbcNotifyResourceShelfPointerDrag(false);
+  }
+  function finishPointerDrag(finishEvent) {
+    if (finished) return;
+    if (finishEvent && finishEvent.pointerId != null && finishEvent.pointerId !== pointerId) return;
+    if (finishEvent && finishEvent.type === "pointerup" && started) {
+      updateTarget(finishEvent.clientX, finishEvent.clientY);
+      if (overShelf) {
+        window.dispatchEvent(new CustomEvent("cyrene:pin-topbar-resource", { detail: payload }));
+      }
+    }
+    clearPointerDrag();
+  }
+  if (source.setPointerCapture) {
+    try {
+      source.setPointerCapture(pointerId);
+    } catch (e) {
+    }
+    source.addEventListener("lostpointercapture", finishPointerDrag);
+  }
+  window.addEventListener("pointermove", movePointerDrag);
+  window.addEventListener("pointerup", finishPointerDrag);
+  window.addEventListener("pointercancel", finishPointerDrag);
+}
 function wbcDownloadLink(file, overrides2) {
   var url = file && file.url;
   if (!url) return null;
@@ -73037,6 +73337,52 @@ var WorkbenchChatRuntimes = (function() {
       };
     });
   }
+  function applyPermissionReviewEvent(chatId2, event) {
+    if (!chatId2 || !event) return;
+    var reviewId = String(event.id || "");
+    var eventAt = Number(event.createdAt);
+    if (!Number.isFinite(eventAt)) eventAt = Date.now();
+    var entry = {
+      kind: "permission",
+      permissionReviewId: reviewId,
+      text: String(event.text || ""),
+      preview: String(event.preview || ""),
+      status: String(event.status || (event.failed ? "failed" : "completed")),
+      failed: !!event.failed,
+      decisions: Array.isArray(event.decisions) ? event.decisions : []
+    };
+    update(chatId2, function(latest) {
+      if (!latest) return null;
+      if (reviewId) {
+        var alreadyPresent = (Array.isArray(latest.activities) ? latest.activities : []).some(function(activity) {
+          return (Array.isArray(activity && activity.progress) ? activity.progress : []).some(function(item) {
+            return String(item && item.permissionReviewId || "") === reviewId;
+          });
+        });
+        if (alreadyPresent) return latest;
+      }
+      var latestActivities = Array.isArray(latest.activities) ? latest.activities : [];
+      var latestActivity = latestActivities.length ? latestActivities[latestActivities.length - 1] : null;
+      var activityHasReasoning = !!String(latestActivity && latestActivity.reasoning || "").trim();
+      var activityHasTools = !!(latestActivity && Array.isArray(latestActivity.progress) && latestActivity.progress.length);
+      var activityBase = latestActivity && (latestActivity.timelineClosed || activityHasReasoning && !activityHasTools) ? appendActivity(closeActivityTimeline(latest), { createdAt: eventAt }) : latest;
+      var appendedEntry = { ...entry, startedAt: eventAt };
+      var next2 = updateLastActivity(activityBase, function(activity) {
+        var activityProgress = Array.isArray(activity.progress) ? activity.progress : [];
+        appendedEntry = {
+          ...appendedEntry,
+          reasoningOffset: String(activity && activity.reasoning || "").length
+        };
+        return { ...activity, progress: activityProgress.concat([appendedEntry]).slice(-40) };
+      });
+      var latestProgress = Array.isArray(latest.progress) ? latest.progress : [];
+      return {
+        ...next2,
+        lastEventAt: Date.now(),
+        progress: latestProgress.concat([appendedEntry]).slice(-40)
+      };
+    });
+  }
   function applyAgentArtifactEvent(chatId2, event) {
     if (!chatId2 || !event) return;
     var payload = wbcAgentEventPayload(event);
@@ -73275,6 +73621,9 @@ var WorkbenchChatRuntimes = (function() {
       },
       onToolCompleted: function(event) {
         applyStreamToolEvent(chatId2, event, true);
+      },
+      onPermissionReviewed: function(event) {
+        applyPermissionReviewEvent(chatId2, event);
       },
       onArtifactEvent: function(event) {
         applyAgentArtifactEvent(chatId2, event);
@@ -76647,9 +76996,12 @@ function WbcAgentFiles({ files, onOpenFile }) {
       {
         className: "wbc-agent-file",
         key: file.id || file.url || i2,
-        draggable: "true",
+        draggable: wbcUsesFilePointerDrag() ? void 0 : "true",
         onDragStart: function(event) {
           wbcStartFileDrag(event, file);
+        },
+        onPointerDown: function(event) {
+          wbcStartFilePointerDrag(event, file);
         }
       },
       /* @__PURE__ */ React.createElement("span", { className: "wbc-file-icon" }, WBC_ICONS.file),
@@ -80173,7 +80525,7 @@ function wbcWriteProjectToolView(projectId, value) {
   } catch (error) {
   }
 }
-function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminals, terminalsLoading, activeTerminalId, railMode, workRailMode, pinnedChatIds, pinnedTaskIds, activeChatId, activeTaskId, loading, runningChatIds, runtimeEngine, onSelect, onSelectTask, onAnswer, onCreate, onCreateTask, onRename, onRenameTask, onDelete, onDeleteTask, onToTask, toTaskBusy, onTogglePinned, onTogglePinnedTask, onOpenFile, onOpenTerminal, onCreateTerminal, onRenameTerminal, onDeleteTerminal, onUpdateTerminalLayout, onOpenPluginView, onRailModeChange, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
+function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminals, terminalsLoading, activeTerminalId, railMode, workRailMode, pinnedChatIds, pinnedTaskIds, activeChatId, activeTaskId, loading, runningChatIds, runtimeEngine, onSelect, onSelectTask, onAnswer, onCreate, onCreateTask, onRename, onRenameTask, onDelete, onDeleteTask, onToTask, toTaskBusy, onTogglePinned, onTogglePinnedTask, onOpenFile, onOpenTerminal, onCreateTerminal, onRenameTerminal, onDeleteTerminal, onUpdateTerminalLayout, onOpenPluginView, onOpenSplit, onRailModeChange, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
   var [query, setQuery] = useWbcState("");
   var [projectToolView, setProjectToolViewState] = useWbcState(function() {
     return wbcReadProjectToolView(projectId);
@@ -80208,6 +80560,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
     wbcWriteProjectToolView(projectId, "terminal");
   }, [projectId, activeTerminalId, terminals]);
   var [pluginTools, setPluginTools] = useWbcState([]);
+  var [pluginDragId, setPluginDragId] = useWbcState("");
   useWbcEffect(function() {
     return workbenchServices2.plugins().subscribe(function(snapshot3) {
       setPluginTools(Array.isArray(snapshot3 && snapshot3.projectTools) ? snapshot3.projectTools : []);
@@ -80407,6 +80760,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
   var dragOriginOrderRef = useWbcRef([]);
   var dropCommittedRef = useWbcRef(false);
   var suppressClickRef = useWbcRef("");
+  var pluginSuppressClickRef = useWbcRef("");
   var suppressGroupClickRef = useWbcRef("");
   var groupMetadataRequestRef = useWbcRef({ sequence: 0, active: {} });
   var agentFlowTimersRef = useWbcRef({});
@@ -80925,6 +81279,9 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
     if (!builtPreview) return;
     var rect = builtPreview.rect;
     var host = builtPreview.host;
+    if (root2.classList.contains("wbc-project-plugin-tool")) {
+      host.classList.add("wbc-plugin-tool-drag-image");
+    }
     host.style.position = "fixed";
     host.style.left = rect.left + "px";
     host.style.top = rect.top + "px";
@@ -81692,7 +82049,9 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
         actions: [
           { action_id: "open", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"] },
           { action_id: "open_menu", kind: "open_menu", risk: "R1", gesture_aliases: ["context_menu", "more_button"] }
-        ],
+        ].concat(onOpenSplit ? [
+          { action_id: "open_split", kind: "move", risk: "R1", gesture_aliases: ["drag_to_split"], input_schema: { side: "text<=5" } }
+        ] : []),
         handlers: {
           open: function() {
             setMenuId("");
@@ -81700,6 +82059,11 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
           },
           open_menu: function() {
             setMenuId(chatId2);
+          },
+          open_split: function(input) {
+            var side = String(input && input.side || "right");
+            if (side !== "left" && side !== "right") throw new Error("pane side must be left or right");
+            return onOpenSplit(chatId2, { side });
           }
         }
       }));
@@ -81788,7 +82152,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
         remove3();
       });
     };
-  }, [projectId, defaultOrderKey, filtered, query, collapsed, groups, menuId, activeChatId, pinnedChatIds, onSelect, onCreate, onDelete, onToTask, toTaskBusy, onTogglePinned, showAllRecent, recentOverflowCount, uiViewportRevision]);
+  }, [projectId, defaultOrderKey, filtered, query, collapsed, groups, menuId, activeChatId, pinnedChatIds, onSelect, onOpenSplit, onCreate, onDelete, onToTask, toTaskBusy, onTogglePinned, showAllRecent, recentOverflowCount, uiViewportRevision]);
   var terminalMap = new Map((Array.isArray(terminals) ? terminals : []).map(function(terminal) {
     return [String(terminal.id), terminal];
   }));
@@ -82301,35 +82665,85 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
       },
       /* @__PURE__ */ React.createElement("div", { className: "wbc-project-tool-expand-inner wbc-project-terminal-expand-inner" }, /* @__PURE__ */ React.createElement("div", { className: "wbc-project-terminal-list" + (terminalsLoading ? " is-loading" : "") + (menuId ? " menu-active" : "") }, terminalsLoading && !orderedTerminals.length ? /* @__PURE__ */ React.createElement("div", { className: "workbench-muted wbc-rail-loading", role: "status" }, wbcT("terminal.loading", "Loading terminals...")) : null, !terminalsLoading && !orderedTerminals.length ? /* @__PURE__ */ React.createElement("div", { className: "workbench-muted wbc-rail-empty" }, query ? wbcT("terminal.noMatches", "No matching terminals.") : wbcT("terminal.empty", "No terminals yet.")) : null, renderTerminalSection("pinned", wbcT("workbenchChat.pinnedSection", "Pinned"), pinnedTerminals), renderTerminalSection("recent", wbcT("workbenchChat.recent", "Recent"), recentTerminals)))
     )
-  ) : null, pluginTools.length && (railMode === "chat" || railMode === "task") && !collapsed ? /* @__PURE__ */ React.createElement("section", { className: "wbc-project-tools wbc-plugin-project-tools", "aria-label": wbcT("rail.pluginTools", "Plugin tools") }, /* @__PURE__ */ React.createElement("header", null, /* @__PURE__ */ React.createElement("span", null, wbcT("rail.pluginTools", "Plugin tools"))), pluginTools.map(function(tool) {
-    var packId = String(tool && tool.pack_id || "");
-    var viewId = String(tool && tool.view || "");
-    var title = pluginLocalizedField(tool, "title") || tool.id || packId;
-    var subtitle = pluginLocalizedField(tool, "subtitle") || packId;
-    var glyph = String(tool && (tool.icon_text || tool.iconText || tool.icon) || "").trim().slice(0, 2) || "\u25C7";
-    return /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        type: "button",
-        key: packId + ":" + String(tool && tool.id || viewId),
-        className: "wbc-project-plugin-tool",
-        disabled: !packId || !viewId || !onOpenPluginView,
-        onClick: function() {
-          if (!packId || !viewId || !onOpenPluginView) return;
-          onOpenPluginView({
-            packId,
-            viewId,
-            instanceId: String(tool && (tool.instance_id || tool.instanceId) || "default"),
-            title,
-            state: !tool || tool.state == null ? null : tool.state
-          });
-        }
+  ) : null, pluginTools.length && (railMode === "chat" || railMode === "task") && !collapsed ? /* @__PURE__ */ React.createElement(
+    "section",
+    {
+      className: "wbc-project-tools wbc-plugin-project-tools",
+      "aria-label": wbcT("rail.pluginTools", "Plugin tools"),
+      onDragOver: function(event) {
+        if (!pluginDragId || !wbcHasPluginViewDrag(event)) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
       },
-      /* @__PURE__ */ React.createElement("span", { className: "wbc-project-tool-icon wbc-project-plugin-tool-icon", "aria-hidden": "true" }, glyph),
-      /* @__PURE__ */ React.createElement("span", { className: "wbc-project-tool-copy" }, /* @__PURE__ */ React.createElement("b", null, title), /* @__PURE__ */ React.createElement("small", null, subtitle)),
-      /* @__PURE__ */ React.createElement("span", { className: "wbc-project-tool-chevron", "aria-hidden": "true" }, WBC_ICONS.chevronRight)
-    );
-  })) : null, moduleDock, /* @__PURE__ */ React.createElement(
+      onDrop: function(event) {
+        if (!pluginDragId || !wbcHasPluginViewDrag(event)) return;
+        event.preventDefault();
+        setPluginDragId("");
+      }
+    },
+    /* @__PURE__ */ React.createElement("header", null, /* @__PURE__ */ React.createElement("span", null, wbcT("rail.pluginTools", "Plugin tools"))),
+    pluginTools.map(function(tool) {
+      var packId = String(tool && tool.pack_id || "");
+      var viewId = String(tool && tool.view || "");
+      var title = pluginLocalizedField(tool, "title") || tool.id || packId;
+      var subtitle = pluginLocalizedField(tool, "subtitle") || packId;
+      var glyph = String(tool && (tool.icon_text || tool.iconText || tool.icon) || "").trim().slice(0, 2) || "\u25C7";
+      var toolKey = packId + ":" + String(tool && tool.id || viewId);
+      var disabled = !packId || !viewId || !onOpenPluginView;
+      var payload = {
+        packId,
+        viewId,
+        instanceId: String(tool && (tool.instance_id || tool.instanceId) || "default"),
+        projectId: String(projectId || ""),
+        title,
+        subtitle,
+        state: !tool || tool.state == null ? null : tool.state
+      };
+      return /* @__PURE__ */ React.createElement(
+        "div",
+        {
+          key: toolKey,
+          "data-plugin-tool-id": toolKey,
+          role: "button",
+          tabIndex: disabled ? -1 : 0,
+          draggable: disabled ? void 0 : "true",
+          "aria-disabled": disabled || void 0,
+          "aria-label": title,
+          title: wbcT("workbenchChat.dragPluginView", "Drag to open {title} in a split view.", { title }),
+          className: "wbc-chat-card wbc-project-plugin-tool" + (pluginDragId === toolKey ? " dragging" : ""),
+          onClick: function() {
+            if (disabled || pluginSuppressClickRef.current === toolKey) return;
+            onOpenPluginView(payload);
+          },
+          onKeyDown: function(event) {
+            if (disabled || event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            onOpenPluginView(payload);
+          },
+          onDragStart: function(event) {
+            if (disabled) {
+              event.preventDefault();
+              return;
+            }
+            pluginSuppressClickRef.current = toolKey;
+            setPluginDragId(toolKey);
+            wbcSetPluginViewDrag(event, payload);
+            if (event.dataTransfer) {
+              prepareRailDragImage(event.currentTarget, event.dataTransfer, event.clientX, event.clientY);
+            }
+          },
+          onDragEnd: function() {
+            clearRailDragImage();
+            setPluginDragId("");
+            window.setTimeout(function() {
+              if (pluginSuppressClickRef.current === toolKey) pluginSuppressClickRef.current = "";
+            }, 0);
+          }
+        },
+        /* @__PURE__ */ React.createElement("span", { className: "wbc-chat-card-top" }, /* @__PURE__ */ React.createElement("span", { className: "wbc-chat-row-icon wbc-project-plugin-tool-icon", "aria-hidden": "true" }, glyph), /* @__PURE__ */ React.createElement("span", { className: "wbc-chat-card-title" }, /* @__PURE__ */ React.createElement("b", null, /* @__PURE__ */ React.createElement(WbcHoverMarquee, { text: title })), /* @__PURE__ */ React.createElement("small", { className: "wbc-project-plugin-tool-subtitle" }, subtitle)), /* @__PURE__ */ React.createElement("span", { className: "wbc-project-tool-chevron", "aria-hidden": "true" }, WBC_ICONS.chevronRight))
+      );
+    })
+  ) : null, moduleDock, /* @__PURE__ */ React.createElement(
     WbcRenameDialog,
     {
       chat: renameChat2,
@@ -83669,6 +84083,335 @@ function WbcMapTab({ chatId: chatId2, focusItem }) {
   return /* @__PURE__ */ React.createElement("div", { className: "wbc-map" }, /* @__PURE__ */ React.createElement("div", { className: "wbc-map-holder", ref: holderRef }), empty2 && /* @__PURE__ */ React.createElement("div", { className: "wbc-map-empty" }, wbcT("workbenchChat.mapEmpty", "No map pins in this chat yet.")));
 }
 
+// frontend/features/chat/dynamic-surface-broker.mjs
+var SURFACE_SCHEMA_VERSION = 1;
+var SURFACE_OUTCOMES = Object.freeze({
+  UPDATED: "updated",
+  OPENED: "opened",
+  REPLACED: "replaced",
+  SUPPRESSED: "suppressed",
+  DEFERRED: "deferred",
+  UNAVAILABLE: "unavailable"
+});
+function surfaceCatalogValue(catalog, surfaceId) {
+  if (typeof catalog === "function") return catalog(surfaceId);
+  return (Array.isArray(catalog) ? catalog : []).find(function(item) {
+    return String(item && item.id || "") === String(surfaceId || "");
+  }) || null;
+}
+function stableHash(value) {
+  const source = String(value || "");
+  let hash3 = 2166136261;
+  for (let index = 0; index < source.length; index += 1) {
+    hash3 ^= source.charCodeAt(index);
+    hash3 = Math.imul(hash3, 16777619);
+  }
+  return (hash3 >>> 0).toString(36);
+}
+function safeRelativePath(value) {
+  const normalized = String(value || "").replace(/\\/g, "/").replace(/^\.\//, "");
+  if (!normalized || normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) return "";
+  const parts = normalized.split("/");
+  if (parts.some(function(part) {
+    return !part || part === "..";
+  })) return "";
+  return parts.join("/");
+}
+function wbcSurfaceResourceKey(resource) {
+  const value = resource && typeof resource === "object" ? resource : {};
+  const kind = String(value.kind || "");
+  const projectId = String(value.projectId || value.project_id || "");
+  if (kind === "file" || kind === "directory") {
+    const path = safeRelativePath(value.path);
+    return projectId && path ? projectId + ":" + kind + ":" + path : "";
+  }
+  const identity = String(value.id || value.executionId || value.execution_id || value.url || "");
+  return kind && identity ? projectId + ":" + kind + ":" + identity : "";
+}
+function normalizedResource(resource) {
+  const value = resource && typeof resource === "object" ? resource : {};
+  const kind = String(value.kind || "");
+  if (!kind) return null;
+  const next2 = Object.assign({}, value, {
+    kind,
+    projectId: String(value.projectId || value.project_id || "")
+  });
+  delete next2.project_id;
+  if (kind === "file" || kind === "directory") {
+    next2.path = safeRelativePath(value.path);
+    if (!next2.projectId || !next2.path) return null;
+  }
+  return next2;
+}
+function wbcNormalizeSurfaceIntent(rawIntent, catalog) {
+  const raw = rawIntent && typeof rawIntent === "object" ? rawIntent : {};
+  const surfaceId = String(raw.surfaceId || raw.surface_id || raw.surface || "");
+  const surface = surfaceCatalogValue(catalog, surfaceId);
+  if (!surface) return null;
+  const resource = normalizedResource(raw.resource);
+  if (!resource) return null;
+  const resourceKey = String(raw.resourceKey || raw.resource_key || wbcSurfaceResourceKey(resource));
+  if (!resourceKey) return null;
+  return {
+    schemaVersion: SURFACE_SCHEMA_VERSION,
+    surfaceId,
+    packId: String(surface.pack_id || raw.packId || raw.pack_id || ""),
+    resource,
+    resourceKey,
+    activity: String(raw.activity || ""),
+    priority: String(raw.priority || surface.priority || "normal"),
+    lifetime: String(raw.lifetime || surface.lifetime || "while-active"),
+    preferredSide: String(raw.preferredSide || raw.preferred_side || surface.preferred_side || "either"),
+    chatId: String(raw.chatId || raw.chat_id || ""),
+    runId: String(raw.runId || raw.run_id || ""),
+    state: raw.state == null ? null : raw.state,
+    focus: false
+  };
+}
+function wbcSurfaceIntentsFromActivity(rawEvent, catalog) {
+  const event = rawEvent && typeof rawEvent === "object" ? rawEvent : {};
+  const payload = event.payload && typeof event.payload === "object" ? event.payload : event;
+  if (String(event.type || payload.type || "") === "surface.intent") {
+    const explicit = payload.intent && typeof payload.intent === "object" ? payload.intent : payload;
+    const normalized = wbcNormalizeSurfaceIntent(explicit, catalog);
+    return normalized ? [normalized] : [];
+  }
+  const presentation = payload.presentation && typeof payload.presentation === "object" ? payload.presentation : {};
+  const locations = Array.isArray(presentation.locations) ? presentation.locations : [];
+  const surfaces = Array.isArray(catalog) ? catalog : [];
+  const activity = String(payload.activity || payload.access || "");
+  const intents = [];
+  for (const location2 of locations) {
+    if (!location2 || typeof location2 !== "object") continue;
+    const kind = String(location2.kind || "");
+    const access = String(location2.access || activity || "");
+    const surface = surfaces.find(function(candidate) {
+      const kinds = Array.isArray(candidate && candidate.resource_kinds) ? candidate.resource_kinds : [];
+      const activities = Array.isArray(candidate && candidate.accepted_activities) ? candidate.accepted_activities : [];
+      return (!kinds.length || kinds.indexOf(kind) >= 0) && (!activities.length || activities.indexOf(access) >= 0);
+    });
+    if (!surface) continue;
+    const normalized = wbcNormalizeSurfaceIntent({
+      surfaceId: surface.id,
+      resource: location2,
+      activity: access,
+      chatId: event.chatId || event.chat_id || payload.chatId || payload.chat_id,
+      runId: event.runId || event.run_id || payload.runId || payload.run_id,
+      priority: surface.priority,
+      lifetime: surface.lifetime
+    }, surfaces);
+    if (normalized) intents.push(normalized);
+  }
+  return intents;
+}
+function copyLayout(layout) {
+  const source = layout && typeof layout === "object" ? layout : {};
+  return {
+    left: Array.isArray(source.left) ? source.left.slice(0, 2) : [],
+    right: Array.isArray(source.right) ? source.right.slice(0, 2) : [],
+    leftRatio: Number(source.leftRatio) || 0.5,
+    rightRatio: Number(source.rightRatio) || 0.5
+  };
+}
+function surfaceCard(intent, now) {
+  return {
+    id: "surface:" + stableHash(intent.surfaceId + "\n" + intent.resourceKey),
+    kind: "surface",
+    payload: {
+      schemaVersion: SURFACE_SCHEMA_VERSION,
+      surfaceId: intent.surfaceId,
+      packId: intent.packId,
+      resource: intent.resource,
+      resourceKey: intent.resourceKey,
+      activity: intent.activity,
+      state: intent.state,
+      runId: intent.runId
+    },
+    ownerChatId: intent.chatId,
+    meta: {
+      origin: "agent",
+      claimedByUser: false,
+      pinned: false,
+      autoClosePolicy: intent.lifetime === "run" ? "run-end" : "never",
+      createdAt: now,
+      lastIntentAt: now
+    }
+  };
+}
+function allCards(layout) {
+  return ["left", "right"].flatMap(function(side) {
+    return layout[side].map(function(card, index) {
+      return { side, index, card };
+    });
+  });
+}
+function preferredSides(intent, layout) {
+  if (intent.preferredSide === "left") return ["left", "right"];
+  if (intent.preferredSide === "right") return ["right", "left"];
+  if (!layout.right.length) return ["right", "left"];
+  return layout.left.length <= layout.right.length ? ["left", "right"] : ["right", "left"];
+}
+function replaceable(location2, canReplace) {
+  const card = location2.card || {};
+  const meta2 = card.meta && typeof card.meta === "object" ? card.meta : {};
+  if (card.kind !== "surface" || meta2.origin !== "agent") return false;
+  if (meta2.claimedByUser === true || meta2.pinned === true) return false;
+  try {
+    return typeof canReplace !== "function" || canReplace(card) !== false;
+  } catch (error) {
+    return false;
+  }
+}
+function wbcRevealSurface(layoutValue, rawIntent, options) {
+  const opts = options || {};
+  const intent = wbcNormalizeSurfaceIntent(rawIntent, opts.catalog);
+  if (!intent) return { layout: layoutValue, outcome: SURFACE_OUTCOMES.UNAVAILABLE, cardId: "", reason: "surface-unavailable" };
+  if (typeof opts.isSuppressed === "function" && opts.isSuppressed(intent.runId, intent.resourceKey)) {
+    return { layout: layoutValue, outcome: SURFACE_OUTCOMES.SUPPRESSED, cardId: "", reason: "user-suppressed" };
+  }
+  const now = Number(opts.now) || Date.now();
+  const layout = copyLayout(layoutValue);
+  const locations = allCards(layout);
+  const existing = locations.find(function(location2) {
+    const payload = location2.card && location2.card.payload || {};
+    return location2.card.kind === "surface" && String(payload.surfaceId || "") === intent.surfaceId && String(payload.resourceKey || "") === intent.resourceKey;
+  });
+  if (existing) {
+    const current = existing.card;
+    layout[existing.side][existing.index] = Object.assign({}, current, {
+      payload: Object.assign({}, current.payload || {}, {
+        activity: intent.activity,
+        state: intent.state,
+        runId: intent.runId
+      }),
+      meta: Object.assign({}, current.meta || {}, { lastIntentAt: now })
+    });
+    return { layout, outcome: SURFACE_OUTCOMES.UPDATED, cardId: current.id, reason: "same-resource" };
+  }
+  const card = surfaceCard(intent, now);
+  const sides = preferredSides(intent, layout);
+  for (const side of sides) {
+    if (layout[side].length < 2) {
+      layout[side].push(card);
+      return { layout, outcome: SURFACE_OUTCOMES.OPENED, cardId: card.id, reason: "empty-slot" };
+    }
+  }
+  const candidates = locations.filter(function(location2) {
+    return replaceable(location2, opts.canReplace);
+  }).sort(function(left, right) {
+    return Number(left.card.meta && left.card.meta.lastIntentAt || 0) - Number(right.card.meta && right.card.meta.lastIntentAt || 0);
+  });
+  if (!candidates.length) {
+    return { layout: layoutValue, outcome: SURFACE_OUTCOMES.DEFERRED, cardId: "", reason: "layout-protected" };
+  }
+  const target = candidates[0];
+  layout[target.side][target.index] = card;
+  return { layout, outcome: SURFACE_OUTCOMES.REPLACED, cardId: card.id, reason: "agent-lru" };
+}
+function wbcClaimSurfaceCard(card) {
+  if (!card || card.kind !== "surface") return card;
+  return Object.assign({}, card, {
+    meta: Object.assign({}, card.meta || {}, { claimedByUser: true })
+  });
+}
+function wbcPinSurfaceCard(card, pinned) {
+  if (!card || card.kind !== "surface") return card;
+  return Object.assign({}, card, {
+    meta: Object.assign({}, card.meta || {}, {
+      pinned: pinned !== false,
+      claimedByUser: pinned !== false || !!(card.meta && card.meta.claimedByUser)
+    })
+  });
+}
+
+// frontend/features/chat/dynamic-surfaces.jsx
+var { useEffect: useEffect2, useMemo: useMemo2, useState: useState2 } = React;
+var WBC_SURFACE_INTENT_EVENT = "cyrene:surface-intent";
+function normalizeSurfaceDescriptor(value) {
+  var raw = value && typeof value === "object" ? value : {};
+  if (Number(raw.schemaVersion || 0) !== 1) return null;
+  var surfaceId = String(raw.surfaceId || raw.surface_id || "");
+  var packId = String(raw.packId || raw.pack_id || "");
+  var resource = raw.resource && typeof raw.resource === "object" ? raw.resource : null;
+  var resourceKey = String(raw.resourceKey || raw.resource_key || wbcSurfaceResourceKey(resource));
+  if (!surfaceId || !packId || !resource || !resourceKey) return null;
+  return Object.assign({}, raw, {
+    schemaVersion: 1,
+    surfaceId,
+    packId,
+    resource,
+    resourceKey
+  });
+}
+function WbcResourceSummarySurface({ descriptor, title }) {
+  var resource = descriptor && descriptor.resource || {};
+  return /* @__PURE__ */ React.createElement("section", { className: "wbc-side-agent-split wbc-dynamic-surface-summary" }, /* @__PURE__ */ React.createElement("div", { className: "wbc-plugin-view-state" }, /* @__PURE__ */ React.createElement("strong", null, title || descriptor.surfaceId), /* @__PURE__ */ React.createElement("span", null, String(resource.path || resource.url || resource.id || descriptor.resourceKey))));
+}
+var NATIVE_SURFACE_RENDERERS = Object.freeze({
+  "resource-summary": WbcResourceSummarySurface
+});
+function WbcUnavailableSurface({ descriptor, title }) {
+  return /* @__PURE__ */ React.createElement("section", { className: "wbc-side-agent-split wbc-dynamic-surface-unavailable", role: "status" }, /* @__PURE__ */ React.createElement("div", { className: "wbc-plugin-view-state" }, /* @__PURE__ */ React.createElement("strong", null, title || descriptor && descriptor.surfaceId || "Surface"), /* @__PURE__ */ React.createElement("span", null, pluginLocalizedField({
+    title: "This Plugin surface is disabled or unavailable.",
+    i18n: { zh: { title: "\u8BE5\u63D2\u4EF6\u5206\u5C4F\u5DF2\u7981\u7528\u6216\u4E0D\u53EF\u7528\u3002" } }
+  }, "title"))));
+}
+function WbcSurfaceHost(props) {
+  var descriptor = normalizeSurfaceDescriptor(props.descriptor || props.payload);
+  var [snapshot3, setSnapshot] = useState2(function() {
+    return PluginFrontendService.snapshot();
+  });
+  useEffect2(function() {
+    return PluginFrontendService.subscribe(setSnapshot);
+  }, []);
+  var surface = useMemo2(function() {
+    if (!descriptor) return null;
+    return (snapshot3.workbenchSurfaces || []).find(function(item) {
+      return String(item && item.id || "") === descriptor.surfaceId && String(item && item.pack_id || "") === descriptor.packId;
+    }) || null;
+  }, [snapshot3, descriptor && descriptor.surfaceId, descriptor && descriptor.packId]);
+  if (!descriptor || !surface) {
+    return /* @__PURE__ */ React.createElement(WbcUnavailableSurface, { descriptor: descriptor || props.descriptor, title: props.title });
+  }
+  var renderer = surface.renderer && typeof surface.renderer === "object" ? surface.renderer : {};
+  if (renderer.kind === "plugin_view") {
+    var pluginPayload = {
+      packId: descriptor.packId,
+      viewId: String(renderer.id || ""),
+      projectId: props.projectId || descriptor.resource && descriptor.resource.projectId || "",
+      instanceId: descriptor.resourceKey,
+      title: props.title || pluginLocalizedField(surface, "title"),
+      state: descriptor.state,
+      resource: descriptor.resource
+    };
+    return /* @__PURE__ */ React.createElement("section", { className: "wbc-side-agent-split wbc-plugin-view-pane wbc-dynamic-surface-pane" }, /* @__PURE__ */ React.createElement("div", { className: "wbc-plugin-view-host-strip", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement("div", { className: "wbc-plugin-view-content" }, /* @__PURE__ */ React.createElement(PluginView, { projectId: pluginPayload.projectId, payload: pluginPayload })));
+  }
+  var NativeRenderer = renderer.kind === "native" ? NATIVE_SURFACE_RENDERERS[String(renderer.id || "")] : null;
+  if (!NativeRenderer) {
+    return /* @__PURE__ */ React.createElement(WbcUnavailableSurface, { descriptor, title: props.title || pluginLocalizedField(surface, "title") });
+  }
+  return /* @__PURE__ */ React.createElement(NativeRenderer, { ...props, descriptor, surface, title: props.title || pluginLocalizedField(surface, "title") });
+}
+var DynamicSurfaceService = Object.freeze({
+  request: function(intent) {
+    if (typeof window.CustomEvent !== "function") return false;
+    window.dispatchEvent(new window.CustomEvent(WBC_SURFACE_INTENT_EVENT, { detail: intent }));
+    return true;
+  },
+  requestActivity: function(event) {
+    var intents = wbcSurfaceIntentsFromActivity(
+      event,
+      PluginFrontendService.snapshot().workbenchSurfaces
+    );
+    intents.forEach(function(intent) {
+      window.dispatchEvent(new window.CustomEvent(WBC_SURFACE_INTENT_EVENT, { detail: intent }));
+    });
+    return intents.length;
+  },
+  eventName: WBC_SURFACE_INTENT_EVENT
+});
+window.CyreneUI.dynamicSurfaces = window.CyreneUI.register("dynamicSurfaces", DynamicSurfaceService);
+
 // frontend/features/chat/context-panel.jsx
 var WBC_CTX_SEG_ORDER = ["compacted", "system", "user", "assistant", "tool"];
 var WBC_CTX_SEG_LABEL = {
@@ -84057,25 +84800,12 @@ function WbcContextBlockList({ data: data2, compact }) {
   }, 0);
   var total = Number(data2.contextUsed);
   if (!Number.isFinite(total) || total < 0) total = barTotal;
-  var SYS_SHADE_MAP = {
-    identity: 0,
-    instructions: 2,
-    tools: 3,
-    workspace: 4,
-    memory: 1,
-    runtime: 5,
-    system: 6
-  };
-  function sysShadeForBlock(b) {
-    var t2 = b.type || "";
-    return SYS_SHADE_MAP[t2] != null ? SYS_SHADE_MAP[t2] : 7;
-  }
   function msgSubClass(b) {
     var key = b.type || "";
     return "sub msg-sub seg-" + key;
   }
   function sysSubClass(b) {
-    var shade = sysShadeForBlock(b);
+    var shade = contextBlockColorIndex(b);
     return "sub sys-sub sys-sub-" + shade;
   }
   var LAYER_ORDER = ["system_prefix", "ephemeral", "messages"];
@@ -84504,6 +85234,14 @@ function WbcDetachedPaneApp() {
         var draftKey = wbcProjectFileDraftKey(descriptor.payload);
         if (draftKey) WBC_PROJECT_FILE_DRAFTS[draftKey] = descriptor.draft;
       }
+      if (descriptor.kind === "surface" && descriptor.draft) {
+        var surfaceResource = descriptor.payload && descriptor.payload.resource;
+        var surfaceDraftKey = wbcProjectFileDraftKey(Object.assign({}, surfaceResource || {}, {
+          source: "project",
+          projectId: surfaceResource && (surfaceResource.projectId || surfaceResource.project_id) || descriptor.project && descriptor.project.id || ""
+        }));
+        if (surfaceDraftKey) WBC_PROJECT_FILE_DRAFTS[surfaceDraftKey] = descriptor.draft;
+      }
       setContext(descriptor);
       if (typeof bridge.ready === "function") {
         window.requestAnimationFrame(function() {
@@ -84668,14 +85406,38 @@ function WbcDetachedPaneApp() {
       var TerminalPane2 = workbenchServices2.terminal().Pane;
       return /* @__PURE__ */ React.createElement(TerminalPane2, { terminalId: String(context.payload || "") });
     }
+    if (kind === "surface") {
+      return /* @__PURE__ */ React.createElement(
+        WbcSurfaceHost,
+        {
+          descriptor: context.payload,
+          projectId: String(context.project && context.project.id || context.payload && context.payload.resource && context.payload.resource.projectId || ""),
+          items: context.items,
+          onSelect: function(resource) {
+            if (!resource || !context.payload) return;
+            var selectedResource = Object.assign({}, resource, {
+              kind: resource.kind || context.payload.resource && context.payload.resource.kind || "file"
+            });
+            updateDescriptor({
+              payload: Object.assign({}, context.payload, {
+                resource: selectedResource,
+                resourceKey: wbcSurfaceResourceKey(selectedResource)
+              }),
+              title: resource.name || resource.path || context.title
+            });
+          },
+          onClose: closeWindow
+        }
+      );
+    }
     if (kind === "plugin-view") {
-      return /* @__PURE__ */ React.createElement("section", { className: "wbc-plugin-view-pane detached" }, /* @__PURE__ */ React.createElement(
+      return /* @__PURE__ */ React.createElement("section", { className: "wbc-side-agent-split wbc-plugin-view-pane detached" }, /* @__PURE__ */ React.createElement("div", { className: "wbc-plugin-view-content" }, /* @__PURE__ */ React.createElement(
         PluginView,
         {
           projectId: String(context.payload && (context.payload.projectId || context.payload.project_id) || context.project && context.project.id || ""),
           payload: context.payload
         }
-      ));
+      )));
     }
     if (kind === "side-agent") {
       var agents = Array.isArray(context.agents) ? context.agents : [];
@@ -85629,6 +86391,7 @@ function WbcChatSplit({ chatId: chatId2, project, runtimeEngine, onOpenContent, 
     chat && Array.isArray(chat.messages) ? chat.messages : [],
     streamRuntime && streamRuntime.userMessages
   );
+  var displayMessages = wbcGroupConsecutiveActivityMessages(messages, streamRuntime);
   var errorText2 = error;
   return /* @__PURE__ */ React.createElement("aside", { ref: splitRef, className: "wbc-side-agent-split wbc-chat-split wbc-conversation-split", "data-tour": "chat_split_pane", "aria-label": wbcT("workbenchChat.chatSplitLabel", "Chat") }, /* @__PURE__ */ React.createElement("div", { className: "wbc-split-panel-grip" }, /* @__PURE__ */ React.createElement(
     WbcSplitGripBar,
@@ -85716,7 +86479,10 @@ function WbcChatSplit({ chatId: chatId2, project, runtimeEngine, onOpenContent, 
         setSplitPanelOpen(false);
       }
     }
-  )), /* @__PURE__ */ React.createElement("div", { className: "wbc-thread-stage wbc-chat-split-stage" }, /* @__PURE__ */ React.createElement("div", { className: "wbc-thread", "data-cyrene-revision-volatile": "true", ref: scrollRef }, loading && !messages.length && /* @__PURE__ */ React.createElement("div", { className: "wbc-chat-split-state", role: "status" }, /* @__PURE__ */ React.createElement("span", { className: "wbc-spinner", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement("span", null, wbcT("workbenchChat.loading", "Loading chats..."))), !loading && !messages.length && !errorText2 && /* @__PURE__ */ React.createElement("div", { className: "wbc-chat-split-state" }, wbcT("workbenchChat.noMessages", "No messages yet")), errorText2 && /* @__PURE__ */ React.createElement("div", { className: "wbc-side-agent-error", role: "alert" }, errorText2), messages.map(function(message) {
+  )), /* @__PURE__ */ React.createElement("div", { className: "wbc-thread-stage wbc-chat-split-stage" }, /* @__PURE__ */ React.createElement("div", { className: "wbc-thread", "data-cyrene-revision-volatile": "true", ref: scrollRef }, loading && !messages.length && /* @__PURE__ */ React.createElement("div", { className: "wbc-chat-split-state", role: "status" }, /* @__PURE__ */ React.createElement("span", { className: "wbc-spinner", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement("span", null, wbcT("workbenchChat.loading", "Loading chats..."))), !loading && !messages.length && !errorText2 && /* @__PURE__ */ React.createElement("div", { className: "wbc-chat-split-state" }, wbcT("workbenchChat.noMessages", "No messages yet")), errorText2 && /* @__PURE__ */ React.createElement("div", { className: "wbc-side-agent-error", role: "alert" }, errorText2), displayMessages.map(function(message) {
+    if (message.activityGroup) {
+      return /* @__PURE__ */ React.createElement(WbcThreadItem, { key: message.id }, /* @__PURE__ */ React.createElement(WbcActivityGroup, { group: message }));
+    }
     var isActiveQuestion = !!(message.questionPrompt && displayChat.pendingQuestion && String(displayChat.pendingQuestion.id || "") === String(message.questionId || ""));
     if (isActiveQuestion) {
       return /* @__PURE__ */ React.createElement(WbcThreadItem, { key: message.id || message.createdAt }, /* @__PURE__ */ React.createElement(WbcQuestionPrompt, { pending: displayChat.pendingQuestion, onAnswer: answerPendingQuestion, busy: running && !wbcIsLiveAgentRequest(displayChat.pendingQuestion), trace: message.trace }));
@@ -85889,7 +86655,7 @@ function WbcPaneFiveWayDropSurface({ card, dropKey, replaceConversation, dropTar
     }
   ), activeEdge ? /* @__PURE__ */ React.createElement("div", { className: "wbc-pane-card-drop-zone axis-preview " + activeEdge + " active" }, /* @__PURE__ */ React.createElement("span", null, axisLabel)) : null);
 }
-function WbcPaneCardFrame({ card, dropKey, children, grip, dropEnabled, replaceOnly, axisEnabled, replaceConversation, dropTarget, onDropOver, onDrop, onDropLeave }) {
+function WbcPaneCardFrame({ card, semanticNodeId, dropKey, children, grip, dropEnabled, replaceOnly, axisEnabled, replaceConversation, dropTarget, onDropOver, onDrop, onDropLeave }) {
   var activeEdge = dropTarget && String(dropTarget.dropKey || "") === String(dropKey || "") ? dropTarget.edge : "";
   var replaceLabel = replaceConversation ? wbcT("workbenchChat.dropConversationReplace", "Release to replace the current conversation") : wbcT("workbenchChat.dropPaneReplace", "Release to replace this split");
   return /* @__PURE__ */ React.createElement(
@@ -85897,6 +86663,7 @@ function WbcPaneCardFrame({ card, dropKey, children, grip, dropEnabled, replaceO
     {
       className: "wbc-pane-card wbc-pane-card-" + String(card && card.kind || "content"),
       "data-pane-card-id": card && card.id || "",
+      "data-pane-semantic-node-id": semanticNodeId || "",
       "data-pane-drop-key": dropKey || card.id
     },
     grip ? /* @__PURE__ */ React.createElement("div", { className: "wbc-pane-card-grip" }, grip) : null,
@@ -85974,39 +86741,107 @@ function WbcPaneCardFrame({ card, dropKey, children, grip, dropEnabled, replaceO
     ))) : null
   );
 }
-function WbcPaneRowResizer({ ratio, onResize }) {
+function WbcPaneRowResizer({ active, side, ratio, onResize }) {
+  var handleRef = useWbcRef(null);
   var safeRatio = Math.max(0.2, Math.min(0.8, Number(ratio) || 0.5));
   var seamOffset = 6 - safeRatio * 12;
   var seamTop = "calc(" + safeRatio * 100 + "% " + (seamOffset < 0 ? "- " : "+ ") + Math.abs(seamOffset) + "px)";
   function startResize(event) {
     if (event.button !== 0 || !onResize) return;
     event.preventDefault();
+    var handle = event.currentTarget;
+    var pointerId = event.pointerId;
     var column = event.currentTarget && event.currentTarget.closest ? event.currentTarget.closest(".wbc-pane-column") : null;
     if (!column) return;
     var rect = column.getBoundingClientRect();
+    var finished = false;
     function move(moveEvent) {
+      if (moveEvent.pointerId !== pointerId) return;
+      if (moveEvent.pointerType === "mouse" && !(moveEvent.buttons & 1)) {
+        stop2(moveEvent);
+        return;
+      }
       var trackHeight = Math.max(1, rect.height - 12);
       onResize(Math.max(0.2, Math.min(0.8, (moveEvent.clientY - rect.top - 6) / trackHeight)));
     }
-    function stop2() {
+    function stop2(stopEvent) {
+      if (finished) return;
+      if (stopEvent && Number.isFinite(stopEvent.pointerId) && stopEvent.pointerId !== pointerId) return;
+      finished = true;
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop2);
       window.removeEventListener("pointercancel", stop2);
+      window.removeEventListener("blur", stop2);
+      if (handle) handle.removeEventListener("lostpointercapture", stop2);
+      if (handle && handle.releasePointerCapture && handle.hasPointerCapture && handle.hasPointerCapture(pointerId)) {
+        try {
+          handle.releasePointerCapture(pointerId);
+        } catch (error) {
+        }
+      }
       document.body.classList.remove("wbc-resizing-pane-row");
+    }
+    if (handle && handle.setPointerCapture) {
+      try {
+        handle.setPointerCapture(pointerId);
+      } catch (error) {
+      }
+      handle.addEventListener("lostpointercapture", stop2, { once: true });
     }
     document.body.classList.add("wbc-resizing-pane-row");
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop2, { once: true });
     window.addEventListener("pointercancel", stop2, { once: true });
+    window.addEventListener("blur", stop2, { once: true });
   }
   function keyboardResize(event) {
     if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
     event.preventDefault();
     onResize((Number(ratio) || 0.5) + (event.key === "ArrowUp" ? -0.04 : 0.04));
   }
+  function semanticResize(input) {
+    var next2;
+    if (input && Number.isFinite(Number(input.value_ratio))) {
+      next2 = 0.2 + Math.max(0, Math.min(1, Number(input.value_ratio))) * 0.6;
+    } else {
+      var delta = Number(input && input.delta_ratio);
+      if (!Number.isFinite(delta)) throw new Error("delta_ratio or value_ratio is required");
+      next2 = safeRatio + Math.max(-1, Math.min(1, delta)) * 0.6;
+    }
+    next2 = Math.max(0.2, Math.min(0.8, next2));
+    onResize(next2);
+    return { ratio: next2, side: side === "left" ? "left" : "right" };
+  }
+  useWbcEffect(function() {
+    if (active === false || !window.CyreneUI.has("uiSurface")) return void 0;
+    var normalizedSide = side === "left" ? "left" : "right";
+    return workbenchServices2.uiSurface().register({
+      node_id: "pane_row_separator_" + normalizedSide,
+      parent_id: "pane_workspace",
+      scope: "main",
+      order: normalizedSide === "left" ? 330 : 340,
+      get_element: function() {
+        return handleRef.current;
+      },
+      get_node: function() {
+        return handleRef.current && handleRef.current.isConnected ? {
+          role: "separator",
+          name: wbcT("workbenchChat.resizePaneHeight", "Resize split height"),
+          value_summary: String(Math.round(safeRatio * 100)),
+          state: { orientation: "horizontal", side: normalizedSide, ratio: safeRatio }
+        } : null;
+      },
+      actions: [
+        { action_id: "adjust", kind: "adjust", risk: "R1", gesture_aliases: ["pointer_resize", "arrow_key"], input_schema: { delta_ratio: "-1..1" } },
+        { action_id: "set_value", kind: "adjust", risk: "R1", gesture_aliases: ["pointer_resize"], input_schema: { value_ratio: "0..1" } }
+      ],
+      handlers: { adjust: semanticResize, set_value: semanticResize }
+    });
+  }, [active, side, ratio, onResize]);
   return /* @__PURE__ */ React.createElement(
     "div",
     {
+      ref: handleRef,
       className: "wbc-pane-row-resizer",
       role: "separator",
       "aria-orientation": "horizontal",
@@ -86019,7 +86854,8 @@ function WbcPaneRowResizer({ ratio, onResize }) {
     }
   );
 }
-function WbcPaneColumnResizer({ width, onResize }) {
+function WbcPaneColumnResizer({ active, width, onResize }) {
+  var handleRef = useWbcRef(null);
   function boundsFor(layout) {
     var rect = layout.getBoundingClientRect();
     var trackWidth = Math.max(0, rect.width - 36);
@@ -86036,24 +86872,51 @@ function WbcPaneColumnResizer({ width, onResize }) {
   function startResize(event) {
     if (event.button !== 0 || !onResize) return;
     event.preventDefault();
+    var handle = event.currentTarget;
+    var pointerId = event.pointerId;
     var layout = event.currentTarget && event.currentTarget.closest ? event.currentTarget.closest(".wbc-pane-layout") : null;
     if (!layout) return;
     var startX = event.clientX;
     var startWidth = clampFor(layout, width);
+    var finished = false;
     function move(moveEvent) {
+      if (moveEvent.pointerId !== pointerId) return;
+      if (moveEvent.pointerType === "mouse" && !(moveEvent.buttons & 1)) {
+        stop2(moveEvent);
+        return;
+      }
       var next2 = startWidth + (startX - moveEvent.clientX);
       onResize(clampFor(layout, next2));
     }
-    function stop2() {
+    function stop2(stopEvent) {
+      if (finished) return;
+      if (stopEvent && Number.isFinite(stopEvent.pointerId) && stopEvent.pointerId !== pointerId) return;
+      finished = true;
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop2);
       window.removeEventListener("pointercancel", stop2);
+      window.removeEventListener("blur", stop2);
+      if (handle) handle.removeEventListener("lostpointercapture", stop2);
+      if (handle && handle.releasePointerCapture && handle.hasPointerCapture && handle.hasPointerCapture(pointerId)) {
+        try {
+          handle.releasePointerCapture(pointerId);
+        } catch (error) {
+        }
+      }
       document.body.classList.remove("wbc-resizing-pane-column");
+    }
+    if (handle && handle.setPointerCapture) {
+      try {
+        handle.setPointerCapture(pointerId);
+      } catch (error) {
+      }
+      handle.addEventListener("lostpointercapture", stop2, { once: true });
     }
     document.body.classList.add("wbc-resizing-pane-column");
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop2, { once: true });
     window.addEventListener("pointercancel", stop2, { once: true });
+    window.addEventListener("blur", stop2, { once: true });
   }
   function keyboardResize(event) {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
@@ -86062,9 +86925,54 @@ function WbcPaneColumnResizer({ width, onResize }) {
     var next2 = (Number(width) || 520) + (event.key === "ArrowLeft" ? 16 : -16);
     onResize(layout ? clampFor(layout, next2) : next2);
   }
+  function semanticResize(input) {
+    var handle = handleRef.current;
+    var layout = handle && handle.closest ? handle.closest(".wbc-pane-layout") : null;
+    if (!layout) throw new Error("pane column separator is not available");
+    var bounds = boundsFor(layout);
+    var current = clampFor(layout, width);
+    var next2;
+    if (input && Number.isFinite(Number(input.value_ratio))) {
+      var ratio = Math.max(0, Math.min(1, Number(input.value_ratio)));
+      next2 = bounds.minimum + (bounds.maximum - bounds.minimum) * ratio;
+    } else {
+      var delta = Number(input && input.delta_ratio);
+      if (!Number.isFinite(delta)) throw new Error("delta_ratio or value_ratio is required");
+      next2 = current + (bounds.maximum - bounds.minimum) * Math.max(-1, Math.min(1, delta));
+    }
+    next2 = Math.round(clampFor(layout, next2));
+    onResize(next2);
+    return { width: next2, minimum: bounds.minimum, maximum: bounds.maximum };
+  }
+  useWbcEffect(function() {
+    if (active === false || !window.CyreneUI.has("uiSurface")) return void 0;
+    return workbenchServices2.uiSurface().register({
+      node_id: "pane_column_separator",
+      parent_id: "pane_workspace",
+      scope: "main",
+      order: 320,
+      get_element: function() {
+        return handleRef.current;
+      },
+      get_node: function() {
+        return handleRef.current && handleRef.current.isConnected ? {
+          role: "separator",
+          name: wbcT("workbenchChat.detailPanel.resize", "Resize detail panel"),
+          value_summary: String(Math.round(Number(width) || 520)),
+          state: { orientation: "vertical", width: Math.round(Number(width) || 520) }
+        } : null;
+      },
+      actions: [
+        { action_id: "adjust", kind: "adjust", risk: "R1", gesture_aliases: ["pointer_resize", "arrow_key"], input_schema: { delta_ratio: "-1..1" } },
+        { action_id: "set_value", kind: "adjust", risk: "R1", gesture_aliases: ["pointer_resize"], input_schema: { value_ratio: "0..1" } }
+      ],
+      handlers: { adjust: semanticResize, set_value: semanticResize }
+    });
+  }, [active, width, onResize]);
   return /* @__PURE__ */ React.createElement(
     "div",
     {
+      ref: handleRef,
       className: "wbc-pane-column-resizer",
       role: "separator",
       "aria-orientation": "vertical",
@@ -86076,7 +86984,7 @@ function WbcPaneColumnResizer({ width, onResize }) {
     }
   );
 }
-function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConversationPanel, openPanelLabel, onNewConversation, menuType, onSplitPointerDown, onSplitDragStart, onSplitDragEnd, menuDisabled }) {
+function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConversationPanel, openPanelLabel, onNewConversation, menuType, onTogglePin, pinned, onSplitPointerDown, onSplitDragStart, onSplitDragEnd, menuDisabled }) {
   var [menuOpen, setMenuOpen] = useWbcState(false);
   var rootRef = useWbcRef(null);
   var pointerDragRef = useWbcRef(null);
@@ -86223,7 +87131,20 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
     },
     /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true" }, WBC_ICONS.chevronLeft, WBC_ICONS.chevronRight),
     /* @__PURE__ */ React.createElement("span", null, swapLabel)
-  ), onClose ? /* @__PURE__ */ React.createElement(
+  ), onTogglePin ? /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      role: "menuitem",
+      "aria-pressed": pinned ? "true" : "false",
+      onClick: function() {
+        setMenuOpen(false);
+        onTogglePin(!pinned);
+      }
+    },
+    /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true" }, WBC_ICONS.pin),
+    /* @__PURE__ */ React.createElement("span", null, pinned ? wbcT("workbenchChat.surfaceUnpin", "Unpin automatic surface") : wbcT("workbenchChat.surfacePin", "Pin automatic surface"))
+  ) : null, onClose ? /* @__PURE__ */ React.createElement(
     "button",
     {
       type: "button",
@@ -87751,7 +88672,8 @@ function wbcRestoreReturnedDetachedPane(context, info) {
   if (!descriptor || !descriptor.kind || !cardId) return;
   var restoredCard = wbcPaneCard(descriptor.kind, descriptor.payload, {
     id: cardId,
-    ownerChatId: descriptor.ownerChatId || ownerChatId
+    ownerChatId: descriptor.ownerChatId || ownerChatId,
+    meta: descriptor.meta
   });
   var side = returned.sourceSide === "right" ? "right" : "left";
   var index = Math.max(0, Math.min(1, Number(returned.sourceIndex) || 0));
@@ -87998,6 +88920,7 @@ function wbcPaneCardDetachDescriptor(context, cardId, paneOverride) {
   var descriptor = {
     kind: pane.kind,
     payload: pane.payload,
+    meta: pane.meta && typeof pane.meta === "object" ? pane.meta : null,
     ownerChatId: pane.ownerChatId || context.activeChatIdRef.current || "",
     project: context.project || null,
     title: "",
@@ -88049,6 +88972,18 @@ function wbcPaneCardDetachDescriptor(context, cardId, paneOverride) {
     descriptor.title = String(
       pane.payload && (pane.payload.title || pane.payload.viewId || pane.payload.view_id) || "Plugin"
     );
+  } else if (pane.kind === "surface") {
+    descriptor.title = String(
+      pane.payload && (pane.payload.title || pane.payload.surfaceId) || "Surface"
+    );
+    var surfaceResource = pane.payload && pane.payload.resource;
+    if (surfaceResource && surfaceResource.kind === "file") {
+      var surfaceDraftKey = wbcProjectFileDraftKey(Object.assign({}, surfaceResource, {
+        source: "project",
+        projectId: surfaceResource.projectId || surfaceResource.project_id || context.project && context.project.id || ""
+      }));
+      descriptor.draft = surfaceDraftKey && WBC_PROJECT_FILE_DRAFTS[surfaceDraftKey] ? WBC_PROJECT_FILE_DRAFTS[surfaceDraftKey] : null;
+    }
   }
   return descriptor;
 }
@@ -88491,6 +89426,22 @@ function wbcDroppedPaneCard(context, event, layout, target, targetCardId, effect
       });
       if (context.onSelectTask) context.onSelectTask(taskId2);
     }
+  } else if (wbcHasPluginViewDrag(event)) {
+    var pluginPayload = wbcReadPluginViewDrag(event);
+    if (pluginPayload) {
+      var pluginCard = context.paneContentCard(
+        "plugin-view",
+        Object.assign({ projectId: context.projectId }, pluginPayload),
+        context.activeChatIdRef.current
+      );
+      var existingPlugin = wbcPaneCardLocation(layout, pluginCard.id);
+      var replacingPlugin = existingPlugin && String(existingPlugin.card && existingPlugin.card.id || "") === String(targetCardId || "") && effectiveEdge === "replace";
+      sourceCardId = replacingPlugin ? pluginCard.id : "";
+      card = replacingPlugin ? existingPlugin.card : existingPlugin ? wbcPaneCard("plugin-view", pluginCard.payload, {
+        ownerChatId: pluginCard.ownerChatId,
+        freshInstance: true
+      }) : pluginCard;
+    }
   } else if (wbcHasResourceDrag(event)) {
     var resource = wbcReadResourceDrag(event);
     if (resource && resource.kind === "file") {
@@ -88506,7 +89457,7 @@ function wbcDroppedPaneCard(context, event, layout, target, targetCardId, effect
   return { card, sourceCardId, droppedChatSelection };
 }
 function wbcHandlePaneDrop(context, event, targetCardId, edge) {
-  if (!wbcHasSplitDrag(event) && !wbcHasChatDrag(event) && !wbcHasTaskDrag(event) && !wbcHasResourceDrag(event)) return;
+  if (!wbcHasSplitDrag(event) && !wbcHasChatDrag(event) && !wbcHasTaskDrag(event) && !wbcHasPluginViewDrag(event) && !wbcHasResourceDrag(event)) return;
   event.preventDefault();
   event.stopPropagation();
   var layout = context.paneLayoutFor();
@@ -88571,6 +89522,183 @@ function wbcPlaceExistingPaneCard(context, sourceCardId, targetCardId, edge) {
   });
   context.setPaneCardDragId("");
   context.setPaneDropTarget(null);
+}
+
+// frontend/features/chat/pane-semantic-controller.jsx
+function wbcPaneSemanticNodeId(cardId) {
+  return "pane_card_" + String(cardId || "pane").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
+}
+function wbcPaneSemanticName(card, catalogs) {
+  var kind = String(card && card.kind || "pane");
+  var payload = card && card.payload;
+  var items = catalogs || {};
+  var match;
+  if (kind === "chat") {
+    match = (items.chats || []).find(function(item) {
+      return String(item && item.id || "") === String(payload || "");
+    });
+    return match && match.title || wbcT("workbenchChat.chatSplitLabel", "Chat");
+  }
+  if (kind === "task") {
+    match = (items.tasks || []).find(function(item) {
+      return String(item && item.id || "") === String(payload || "");
+    });
+    return match && match.title || wbcT("workbench.page.task", "Task");
+  }
+  if (kind === "terminal") {
+    match = (items.terminals || []).find(function(item) {
+      return String(item && item.id || "") === String(payload || "");
+    });
+    return match && (match.displayTitle || match.title) || wbcT("terminal.title", "Terminal");
+  }
+  if (kind === "file" || kind === "viewer") {
+    return String(payload && (payload.name || payload.path) || wbcT("workbenchChat.viewer", "Viewer"));
+  }
+  if (kind === "plugin-view") return String(payload && (payload.title || payload.viewId || payload.view_id) || "Plugin");
+  if (kind === "subagents") return wbcT("workbenchChat.subagents", "Subagents");
+  if (kind === "side-agent") return wbcT("workbenchChat.sideAgent.tab", "Side questions");
+  if (kind === "browser") return wbcT("chat.side.browser", "Browser");
+  if (kind === "change") return String(payload && payload.path || wbcT("workbenchChat.changes", "Changes"));
+  if (kind === "map") return wbcT("chat.side.map", "Map");
+  return kind;
+}
+function WbcPaneSemanticController({ active, layout, rootRef, chats, tasks, terminals, onOpenPane, onMovePane, onSwapPanes, onClosePane }) {
+  useWbcEffect(function() {
+    if (!active || !window.CyreneUI.has("uiSurface")) return void 0;
+    var uiSurface = workbenchServices2.uiSurface();
+    var unregister = [];
+    var cards = (layout.left || []).concat(layout.right || []);
+    var catalogs = { chats: chats || [], tasks: tasks || [], terminals: terminals || [] };
+    function paneElement(nodeId) {
+      var root2 = rootRef && rootRef.current;
+      return root2 && root2.querySelector('[data-pane-semantic-node-id="' + nodeId + '"]');
+    }
+    function normalizeSide(input) {
+      var side = String(input && input.side || "right");
+      if (side !== "left" && side !== "right") throw new Error("pane side must be left or right");
+      return side;
+    }
+    function ensureCatalogItem(kind, value) {
+      var id2 = String(value || "");
+      var source = kind === "chat" ? catalogs.chats : kind === "task" ? catalogs.tasks : catalogs.terminals;
+      if (!id2 || !source.some(function(item) {
+        return String(item && item.id || "") === id2;
+      })) {
+        throw new Error(kind + " is not available in the current project");
+      }
+      return id2;
+    }
+    var workspaceActions = [
+      { action_id: "open_chat", kind: "move", risk: "R1", gesture_aliases: ["drag_to_split"], input_schema: { chat_id: "text<=160", side: "text<=5" } }
+    ];
+    if (catalogs.tasks.length) workspaceActions.push(
+      { action_id: "open_task", kind: "move", risk: "R1", gesture_aliases: ["drag_to_split"], input_schema: { task_id: "text<=160", side: "text<=5" } }
+    );
+    if (catalogs.terminals.length) workspaceActions.push(
+      { action_id: "open_terminal", kind: "move", risk: "R1", gesture_aliases: ["drag_to_split"], input_schema: { terminal_id: "text<=160", side: "text<=5" } }
+    );
+    unregister.push(uiSurface.register({
+      node_id: "pane_workspace",
+      parent_id: "root",
+      scope: "main",
+      order: 200,
+      get_element: function() {
+        var root2 = rootRef && rootRef.current;
+        return root2 && root2.querySelector(".wbc-pane-layout");
+      },
+      get_node: function() {
+        return {
+          role: "group",
+          name: wbcT("tour.chat-deep.split.title", "Split view"),
+          value_summary: cards.length + " pane" + (cards.length === 1 ? "" : "s"),
+          state: {
+            card_count: cards.length,
+            left_card_ids: (layout.left || []).map(function(card) {
+              return String(card.id || "");
+            }),
+            right_card_ids: (layout.right || []).map(function(card) {
+              return String(card.id || "");
+            })
+          }
+        };
+      },
+      actions: workspaceActions,
+      handlers: {
+        open_chat: function(input) {
+          var id2 = ensureCatalogItem("chat", input && input.chat_id);
+          onOpenPane("chat", id2, { side: normalizeSide(input) });
+          return { kind: "chat", id: id2, side: normalizeSide(input) };
+        },
+        open_task: function(input) {
+          var id2 = ensureCatalogItem("task", input && input.task_id);
+          onOpenPane("task", id2, { side: normalizeSide(input) });
+          return { kind: "task", id: id2, side: normalizeSide(input) };
+        },
+        open_terminal: function(input) {
+          var id2 = ensureCatalogItem("terminal", input && input.terminal_id);
+          onOpenPane("terminal", id2, { side: normalizeSide(input) });
+          return { kind: "terminal", id: id2, side: normalizeSide(input) };
+        }
+      }
+    }));
+    cards.forEach(function(card, order) {
+      var nodeId = wbcPaneSemanticNodeId(card.id);
+      var location2 = (layout.left || []).indexOf(card) >= 0 ? { side: "left", index: (layout.left || []).indexOf(card) } : { side: "right", index: (layout.right || []).indexOf(card) };
+      var actions = cards.length > 1 ? [
+        { action_id: "move", kind: "move", risk: "R1", gesture_aliases: ["drag_to_split"], input_schema: { side: "text<=5", position: "text<=6" } },
+        { action_id: "swap", kind: "move", risk: "R1", gesture_aliases: ["drag_to_split"], input_schema: { target_node_id: "text<=160" } },
+        { action_id: "close", kind: "invoke", risk: "R1", gesture_aliases: ["close_button"] }
+      ] : [];
+      unregister.push(uiSurface.register({
+        node_id: nodeId,
+        parent_id: "pane_workspace",
+        scope: "main",
+        order: 210 + order,
+        get_element: function() {
+          return paneElement(nodeId);
+        },
+        get_node: function() {
+          return {
+            role: "region",
+            name: wbcPaneSemanticName(card, catalogs),
+            value_summary: String(card.kind || "pane"),
+            state: {
+              card_id: String(card.id || ""),
+              content_kind: String(card.kind || ""),
+              content_id: typeof card.payload === "string" ? card.payload : "",
+              side: location2.side,
+              position: location2.index === 0 ? "top" : "bottom"
+            }
+          };
+        },
+        actions,
+        handlers: {
+          move: function(input) {
+            return onMovePane(card.id, input || {});
+          },
+          swap: function(input) {
+            var targetNodeId = String(input && input.target_node_id || "");
+            var targetCard = cards.find(function(candidate) {
+              return wbcPaneSemanticNodeId(candidate.id) === targetNodeId;
+            });
+            if (!targetCard || String(targetCard.id || "") === String(card.id || "")) {
+              throw new Error("a different visible pane card target is required");
+            }
+            return onSwapPanes(card.id, targetCard.id);
+          },
+          close: function() {
+            return onClosePane(card);
+          }
+        }
+      }));
+    });
+    return function() {
+      unregister.forEach(function(remove3) {
+        remove3();
+      });
+    };
+  }, [active, layout, chats, tasks, terminals, onOpenPane, onMovePane, onSwapPanes, onClosePane]);
+  return null;
 }
 
 // frontend/features/chat/task-pane-controller.jsx
@@ -89019,9 +90147,11 @@ function wbcOpenPaneContent(context, type, payload, options) {
     payload = wbcEditableChatFileResource({ projectId: context.projectId }, payload);
   }
   var canonicalId = ["chat", "terminal", "task"].indexOf(normalizedType) >= 0 && payload ? normalizedType + ":" + String(payload) : "";
-  var existing = canonicalId ? wbcPaneCardLocation(wbcPaneLayoutFor(context, ownerChatId), canonicalId) : null;
+  var baseCard = wbcPaneContentCard(context, normalizedType, payload, ownerId);
+  var reusableId = canonicalId || (normalizedType === "plugin-view" ? baseCard.id : "");
+  var existing = reusableId ? wbcPaneCardLocation(wbcPaneLayoutFor(context, ownerChatId), reusableId) : null;
   if (normalizedType === "terminal" && existing && !opts.replaceWorkspace) return existing.card;
-  var card = existing ? wbcPaneCard(normalizedType, payload, { ownerChatId: ownerId, freshInstance: true }) : wbcPaneContentCard(context, normalizedType, payload, ownerId);
+  var card = existing ? wbcPaneCard(normalizedType, payload, { ownerChatId: ownerId, freshInstance: true }) : baseCard;
   wbcUpdatePaneLayout(context, function(layout) {
     var source = opts.sourceCardId ? wbcPaneCardLocation(layout, opts.sourceCardId) : null;
     var targetSide = opts.side === "left" || opts.side === "right" ? opts.side : source && source.side === "right" ? "left" : "right";
@@ -89207,6 +90337,65 @@ function wbcMovePaneCardOtherSide(context, cardId) {
     }
     return next2;
   });
+}
+function wbcMovePaneCardLayout(layout, cardId, options) {
+  var opts = options || {};
+  var targetSide = String(opts.side || "");
+  if (targetSide !== "left" && targetSide !== "right") {
+    throw new Error("pane side must be left or right");
+  }
+  var source = wbcPaneCardLocation(layout, cardId);
+  if (!source) throw new Error("pane card is not available");
+  var position = String(opts.position || "");
+  if (!position) position = source.side === targetSide && source.index === 0 ? "top" : "bottom";
+  if (position !== "top" && position !== "bottom") {
+    throw new Error("pane position must be top or bottom");
+  }
+  if (source.side !== targetSide && (layout[targetSide] || []).length >= 2) {
+    throw new Error("target pane column is full");
+  }
+  var next2 = {
+    left: layout.left.slice(),
+    right: layout.right.slice(),
+    leftRatio: layout.leftRatio,
+    rightRatio: layout.rightRatio
+  };
+  var moving = next2[source.side].splice(source.index, 1)[0];
+  var target = next2[targetSide];
+  if (position === "top") target.unshift(moving);
+  else target.push(moving);
+  return next2;
+}
+function wbcMovePaneCard(context, cardId, options) {
+  var layout = wbcPaneLayoutFor(context);
+  var next2 = wbcMovePaneCardLayout(layout, cardId, options);
+  var location2 = wbcPaneCardLocation(next2, cardId);
+  wbcUpdatePaneLayout(context, next2);
+  return {
+    card_id: String(cardId || ""),
+    side: location2 && location2.side || "",
+    position: location2 && location2.index === 0 ? "top" : "bottom"
+  };
+}
+function wbcSwapPaneCardsLayout(layout, firstCardId, secondCardId) {
+  var first = wbcPaneCardLocation(layout, firstCardId);
+  var second = wbcPaneCardLocation(layout, secondCardId);
+  if (!first || !second) throw new Error("both pane cards must be available");
+  if (String(firstCardId || "") === String(secondCardId || "")) return layout;
+  var next2 = {
+    left: layout.left.slice(),
+    right: layout.right.slice(),
+    leftRatio: layout.leftRatio,
+    rightRatio: layout.rightRatio
+  };
+  next2[first.side][first.index] = second.card;
+  next2[second.side][second.index] = first.card;
+  return next2;
+}
+function wbcSwapPaneCards(context, firstCardId, secondCardId) {
+  var next2 = wbcSwapPaneCardsLayout(wbcPaneLayoutFor(context), firstCardId, secondCardId);
+  wbcUpdatePaneLayout(context, next2);
+  return { first_card_id: String(firstCardId || ""), second_card_id: String(secondCardId || "") };
 }
 function wbcCreatePaneConversation(context, cardId) {
   var layout = wbcPaneLayoutFor(context);
@@ -90161,6 +91350,51 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     });
   }
   var [paneLayoutsByChat, setPaneLayoutsByChat] = useWbcState({});
+  var surfaceSuppressionRef = useWbcRef(/* @__PURE__ */ new Map());
+  useWbcEffect(function() {
+    function onSurfaceIntent(event) {
+      var intent = event && event.detail && typeof event.detail === "object" ? event.detail : {};
+      var ownerChatId = String(intent.chatId || intent.chat_id || activeChatIdRef.current || "");
+      var ownerId = ownerChatId || (projectId ? "project:" + String(projectId) : "");
+      if (!ownerId) return;
+      var result = null;
+      setPaneLayoutsByChat(function(current) {
+        var previous = wbcNormalizePaneLayout(current[ownerId], ownerChatId);
+        result = wbcRevealSurface(previous, Object.assign({}, intent, {
+          chatId: ownerChatId
+        }), {
+          catalog: PluginFrontendService.snapshot().workbenchSurfaces,
+          isSuppressed: function(runId, resourceKey) {
+            return surfaceSuppressionRef.current.has(String(runId || "") + "\n" + String(resourceKey || ""));
+          },
+          canReplace: function(card) {
+            var resource = card && card.payload && card.payload.resource || {};
+            if (resource.kind !== "file") return true;
+            var draftKey = wbcProjectFileDraftKey({
+              source: "project",
+              projectId: resource.projectId || resource.project_id || projectId,
+              path: resource.path
+            });
+            return !(draftKey && WBC_PROJECT_FILE_DRAFTS[draftKey]);
+          }
+        });
+        if (!result || result.layout === previous) return current;
+        return Object.assign({}, current, { [ownerId]: result.layout });
+      });
+      window.setTimeout(function() {
+        window.dispatchEvent(new CustomEvent("cyrene:surface-result", {
+          detail: Object.assign({}, result || { outcome: "unavailable" }, {
+            surfaceId: String(intent.surfaceId || intent.surface_id || intent.surface || ""),
+            resourceKey: String(intent.resourceKey || intent.resource_key || "")
+          })
+        }));
+      }, 0);
+    }
+    window.addEventListener(WBC_SURFACE_INTENT_EVENT, onSurfaceIntent);
+    return function() {
+      window.removeEventListener(WBC_SURFACE_INTENT_EVENT, onSurfaceIntent);
+    };
+  }, [projectId]);
   useWbcEffect(function() {
     var bridge = {
       current: function() {
@@ -90335,6 +91569,12 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   }
   function resizePaneRow(side, ratio) {
     return wbcResizePaneRow(paneLayoutContext(), side, ratio);
+  }
+  function movePaneCard(cardId, options) {
+    return wbcMovePaneCard(paneLayoutContext(), cardId, options);
+  }
+  function swapPaneCards(firstCardId, secondCardId) {
+    return wbcSwapPaneCards(paneLayoutContext(), firstCardId, secondCardId);
   }
   var splitOverlayCleanupRef = useWbcRef(null);
   function handleSplitDragStart(event, dragSource) {
@@ -91366,10 +92606,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     function onDocumentDragStart(event) {
       if (wbcHasTaskDrag(event)) setChatDragKind("task");
       else if (wbcHasChatDrag(event)) setChatDragKind("chat");
+      else if (wbcHasPluginViewDrag(event)) setChatDragKind("plugin-view");
       if (wbcHasResourceDrag(event)) setResourceDragSession(true);
     }
     function onDocumentChatDragOver(event) {
-      if (!wbcHasChatDrag(event) && !wbcHasTaskDrag(event)) return;
+      if (!wbcHasChatDrag(event) && !wbcHasTaskDrag(event) && !wbcHasPluginViewDrag(event)) return;
       var inside = wbcChatSideDropZone(event);
       setChatSideDropActive(function(current) {
         return current === inside ? current : inside;
@@ -91422,7 +92663,12 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     handlePaneCardDragStart(event, cardId, paneOverride);
   }
   function handlePaneCardDragStart(event, cardId, paneOverride) {
-    return wbcStartPaneCardDrag(paneCardDragContext(), event, cardId, paneOverride);
+    var pane = paneOverride;
+    if (pane && pane.kind === "surface") {
+      pane = wbcClaimSurfaceCard(pane);
+      updatePaneCard(cardId, pane);
+    }
+    return wbcStartPaneCardDrag(paneCardDragContext(), event, cardId, pane);
   }
   function handlePaneCardDragEnd(_event, options) {
     return wbcFinishPaneCardDrag(paneCardDragContext(), options);
@@ -91431,7 +92677,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     return wbcPlaceExistingPaneCard(paneDropContext(), sourceCardId, targetCardId, edge);
   }
   function handlePaneDropOver(event, cardId, edge, dropKey) {
-    if (!wbcHasSplitDrag(event) && !wbcHasChatDrag(event) && !wbcHasTaskDrag(event) && !wbcHasResourceDrag(event)) return;
+    if (!wbcHasSplitDrag(event) && !wbcHasChatDrag(event) && !wbcHasTaskDrag(event) && !wbcHasPluginViewDrag(event) && !wbcHasResourceDrag(event)) return;
     event.preventDefault();
     event.stopPropagation();
     if (chatSideDropActive) setChatSideDropActive(false);
@@ -91468,14 +92714,14 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     return wbcHandlePaneDrop(paneDropContext(), event, targetCardId, edge);
   }
   function handleSideLayerDragOver(event) {
-    if (!wbcHasChatDrag(event) && !wbcHasTaskDrag(event)) return;
+    if (!wbcHasChatDrag(event) && !wbcHasTaskDrag(event) && !wbcHasPluginViewDrag(event)) return;
     event.preventDefault();
     event.stopPropagation();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
     setChatSideDropActive(true);
   }
   function handleSideLayerDrop(event) {
-    if (!wbcHasChatDrag(event) && !wbcHasTaskDrag(event)) return;
+    if (!wbcHasChatDrag(event) && !wbcHasTaskDrag(event) && !wbcHasPluginViewDrag(event)) return;
     event.preventDefault();
     event.stopPropagation();
     setChatSideDropActive(false);
@@ -91485,6 +92731,13 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
       if (taskPayload && taskPayload.id) {
         if (onSelectTask) onSelectTask(String(taskPayload.id));
         openPaneContent("task", String(taskPayload.id), { side: "right" });
+      }
+      return;
+    }
+    if (wbcHasPluginViewDrag(event)) {
+      var pluginPayload = wbcReadPluginViewDrag(event);
+      if (pluginPayload) {
+        openPaneContent("plugin-view", Object.assign({ projectId }, pluginPayload), { side: "right" });
       }
       return;
     }
@@ -92096,6 +93349,42 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     }
     setFloatingConversationPanelOpen(true);
   }
+  function closePaneCardWithConfirmation(card) {
+    var surfaceResource = card.kind === "surface" && card.payload && card.payload.resource || null;
+    var draftKey = card.kind === "file" || card.kind === "viewer" ? wbcProjectFileDraftKey(card.payload) : surfaceResource && surfaceResource.kind === "file" ? wbcProjectFileDraftKey({
+      source: "project",
+      projectId: surfaceResource.projectId || surfaceResource.project_id || projectId,
+      path: surfaceResource.path
+    }) : "";
+    function suppressAutomaticSurface() {
+      if (card.kind !== "surface" || !card.meta || card.meta.origin !== "agent") return;
+      var payload = card.payload || {};
+      surfaceSuppressionRef.current.set(
+        String(payload.runId || "") + "\n" + String(payload.resourceKey || ""),
+        true
+      );
+    }
+    if (!draftKey || !WBC_PROJECT_FILE_DRAFTS[draftKey]) {
+      suppressAutomaticSurface();
+      closePaneCard(card.id);
+      return Promise.resolve({ closed: true, card_id: String(card.id || "") });
+    }
+    var feedback = workbenchServices2.feedback();
+    var request4 = feedback.confirmModal ? feedback.confirmModal({
+      title: wbcT("workbenchChat.editorUnsavedTitle", "Unsaved changes"),
+      body: wbcT("workbenchChat.editorUnsavedBody", "Discard the changes made to this file?"),
+      confirmLabel: wbcT("workbenchChat.editorDiscard", "Discard changes"),
+      danger: true
+    }) : Promise.resolve(window.confirm(wbcT("workbenchChat.editorUnsavedBody", "Discard the changes made to this file?")));
+    return Promise.resolve(request4).then(function(confirmed) {
+      if (!confirmed) return { closed: false, cancelled: true, card_id: String(card.id || "") };
+      if (surfaceResource) delete WBC_PROJECT_FILE_DRAFTS[draftKey];
+      else wbcDiscardProjectFileDraft(card.payload);
+      suppressAutomaticSurface();
+      closePaneCard(card.id);
+      return { closed: true, discarded_draft: true, card_id: String(card.id || "") };
+    });
+  }
   function renderPaneCard(card, side, columnLength, dropKey) {
     var isNewConversation = card.kind === "chat" && !activeChatId && String(card.id || "") === "new-conversation";
     var isActiveConversation = isNewConversation || card.kind === "chat" && String(card.payload || "") === String(activeChatId || "");
@@ -92103,23 +93392,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     var content2 = null;
     var grip = null;
     var close = function() {
-      var draftKey = card.kind === "file" || card.kind === "viewer" ? wbcProjectFileDraftKey(card.payload) : "";
-      if (!draftKey || !WBC_PROJECT_FILE_DRAFTS[draftKey]) {
-        closePaneCard(card.id);
-        return;
-      }
-      var feedback = workbenchServices2.feedback();
-      var request4 = feedback.confirmModal ? feedback.confirmModal({
-        title: wbcT("workbenchChat.editorUnsavedTitle", "Unsaved changes"),
-        body: wbcT("workbenchChat.editorUnsavedBody", "Discard the changes made to this file?"),
-        confirmLabel: wbcT("workbenchChat.editorDiscard", "Discard changes"),
-        danger: true
-      }) : Promise.resolve(window.confirm(wbcT("workbenchChat.editorUnsavedBody", "Discard the changes made to this file?")));
-      Promise.resolve(request4).then(function(confirmed) {
-        if (!confirmed) return;
-        wbcDiscardProjectFileDraft(card.payload);
-        closePaneCard(card.id);
-      });
+      return closePaneCardWithConfirmation(card);
     };
     var move = function() {
       movePaneCardOtherSide(card.id);
@@ -92243,6 +93516,53 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
           onClose: close
         }
       ) : null;
+    } else if (card.kind === "surface") {
+      grip = /* @__PURE__ */ React.createElement(
+        WbcSplitGripBar,
+        {
+          dragSource: card.id,
+          menuDisabled: singlePane,
+          menuType: "content",
+          pinned: !!(card.meta && card.meta.pinned),
+          onTogglePin: function(pinned) {
+            updatePaneCard(card.id, function(current) {
+              return wbcPinSurfaceCard(current, pinned);
+            });
+          },
+          onToggleSide: move,
+          onClose: close,
+          onNewConversation: columnLength === 1 ? function() {
+            createPaneConversation(card.id);
+          } : null,
+          onSplitPointerDown: pointerDown,
+          onSplitDragStart: dragStart,
+          onSplitDragEnd: handlePaneCardDragEnd
+        }
+      );
+      content2 = /* @__PURE__ */ React.createElement(
+        WbcSurfaceHost,
+        {
+          descriptor: card.payload,
+          projectId,
+          items: artifactItems,
+          onSelect: function(resource) {
+            var selectedResource = Object.assign({}, resource || {}, {
+              kind: resource && resource.kind || card.payload && card.payload.resource && card.payload.resource.kind || "file"
+            });
+            updatePaneCard(card.id, function(current) {
+              return Object.assign({}, current, {
+                payload: Object.assign({}, current.payload || {}, {
+                  resource: selectedResource,
+                  resourceKey: wbcSurfaceResourceKey(selectedResource)
+                }),
+                meta: Object.assign({}, current.meta || {}, { claimedByUser: true })
+              });
+            });
+          },
+          onClose: close,
+          onViewed: markViewerFileRead
+        }
+      );
     } else if (card.kind === "plugin-view") {
       grip = /* @__PURE__ */ React.createElement(
         WbcSplitGripBar,
@@ -92260,7 +93580,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
           onSplitDragEnd: handlePaneCardDragEnd
         }
       );
-      content2 = /* @__PURE__ */ React.createElement("section", { className: "wbc-plugin-view-pane", "aria-label": String(card.payload && card.payload.title || "Plugin") }, /* @__PURE__ */ React.createElement(PluginView, { projectId, payload: card.payload }));
+      content2 = /* @__PURE__ */ React.createElement("section", { className: "wbc-side-agent-split wbc-plugin-view-pane", "aria-label": String(card.payload && card.payload.title || "Plugin") }, /* @__PURE__ */ React.createElement("div", { className: "wbc-plugin-view-host-strip", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement("div", { className: "wbc-plugin-view-content" }, /* @__PURE__ */ React.createElement(PluginView, { projectId, payload: card.payload })));
     } else {
       grip = /* @__PURE__ */ React.createElement(
         WbcSplitGripBar,
@@ -92362,6 +93682,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
       {
         key: card.id,
         card,
+        semanticNodeId: wbcPaneSemanticNodeId(card.id),
         dropKey: dropKey || card.id,
         replaceConversation: paneCardCount === 1 && card.kind === "chat",
         grip,
@@ -92392,7 +93713,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
       cards.map(function(card, index) {
         return renderPaneCard(card, side, cards.length, side + ":" + index);
       }),
-      cards.length === 2 ? /* @__PURE__ */ React.createElement(WbcPaneRowResizer, { ratio, onResize: function(next2) {
+      cards.length === 2 ? /* @__PURE__ */ React.createElement(WbcPaneRowResizer, { active: isActive, side, ratio, onResize: function(next2) {
         resizePaneRow(side, next2);
       } }) : null
     );
@@ -92460,7 +93781,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
           onDragOver: handleSideLayerDragOver,
           onDrop: handleSideLayerDrop
         },
-        /* @__PURE__ */ React.createElement("span", { className: "wbc-chat-side-drop-hint", role: "status" }, chatDragKind === "task" ? wbcT("workbenchChat.dropTaskToOpenSide", "Release to open this task in the side panel") : wbcT("workbenchChat.dropToOpenSide", "Release to open this conversation in the side panel"))
+        /* @__PURE__ */ React.createElement("span", { className: "wbc-chat-side-drop-hint", role: "status" }, chatDragKind === "task" ? wbcT("workbenchChat.dropTaskToOpenSide", "Release to open this task in the side panel") : chatDragKind === "plugin-view" ? wbcT("workbenchChat.dropPluginViewToOpenSide", "Release to open this plugin in the side panel") : wbcT("workbenchChat.dropToOpenSide", "Release to open this conversation in the side panel"))
       );
     })(),
     singlePaneContextDropActive ? /* @__PURE__ */ React.createElement("div", { className: "wbc-pane-context-drop-host", role: "presentation" }, /* @__PURE__ */ React.createElement(
@@ -92526,6 +93847,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         onOpenPluginView: function(payload) {
           openPaneContent("plugin-view", Object.assign({ projectId }, payload || {}));
         },
+        onOpenSplit: function(chatId2, options) {
+          return openPaneContent("chat", String(chatId2 || ""), options || { side: "right" });
+        },
         onRailModeChange: function(mode) {
           if (mode === "chat" || mode === "task") {
             lastWorkRailModeRef.current = mode;
@@ -92545,8 +93869,27 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         className: "wbc-pane-layout" + (paneHasTwoColumns ? " split" : " single"),
         style: paneHasTwoColumns ? { "--wbc-pane-right-width": paneColumnWidth + "px" } : void 0
       },
+      /* @__PURE__ */ React.createElement(
+        WbcPaneSemanticController,
+        {
+          active: isActive,
+          layout: paneLayout,
+          rootRef: pageRef,
+          chats,
+          tasks,
+          terminals,
+          onOpenPane: function(kind, id2, options) {
+            if (kind === "terminal") return openTerminal(id2, options && options.side);
+            if (kind === "task" && onSelectTask) onSelectTask(id2);
+            return openPaneContent(kind, id2, options);
+          },
+          onMovePane: movePaneCard,
+          onSwapPanes: swapPaneCards,
+          onClosePane: closePaneCardWithConfirmation
+        }
+      ),
       paneAxisDropAvailable ? /* @__PURE__ */ React.createElement("div", { className: "wbc-pane-axis-drop-layer", role: "presentation" }, /* @__PURE__ */ React.createElement("div", { className: "wbc-pane-axis-drop-zone left" + (paneDropTarget && paneDropTarget.edge === "left" ? " active" : "") }, /* @__PURE__ */ React.createElement("span", null, wbcT("workbenchChat.dropPaneLeft", "Release to open on the left"))), /* @__PURE__ */ React.createElement("div", { className: "wbc-pane-axis-drop-zone right" + (paneDropTarget && paneDropTarget.edge === "right" ? " active" : "") }, /* @__PURE__ */ React.createElement("span", null, wbcT("workbenchChat.dropPaneRight", "Release to open on the right")))) : null,
-      showNewConversationWorkspace ? /* @__PURE__ */ React.createElement("section", { className: "wbc-pane-column left wbc-new-conversation-column" }, renderPaneCard({ id: "new-conversation", kind: "chat", payload: "", ownerChatId: "" }, "left", 1)) : /* @__PURE__ */ React.createElement(React.Fragment, null, renderPaneColumn("left", paneLayout.left), renderPaneColumn("right", paneLayout.right), paneHasTwoColumns ? /* @__PURE__ */ React.createElement(WbcPaneColumnResizer, { width: paneColumnWidth, onResize: resizePaneColumn }) : null)
+      showNewConversationWorkspace ? /* @__PURE__ */ React.createElement("section", { className: "wbc-pane-column left wbc-new-conversation-column" }, renderPaneCard({ id: "new-conversation", kind: "chat", payload: "", ownerChatId: "" }, "left", 1)) : /* @__PURE__ */ React.createElement(React.Fragment, null, renderPaneColumn("left", paneLayout.left), renderPaneColumn("right", paneLayout.right), paneHasTwoColumns ? /* @__PURE__ */ React.createElement(WbcPaneColumnResizer, { active: isActive, width: paneColumnWidth, onResize: resizePaneColumn }) : null)
     ),
     projectTaskPanelCard && TaskContextPanelComponent ? /* @__PURE__ */ React.createElement(
       TaskContextPanelComponent,
@@ -92972,8 +94315,8 @@ function renderModelDetailPane(v) {
 (function() {
   "use strict";
   var h = React.createElement;
-  var useState4 = React.useState;
-  var useEffect6 = React.useEffect;
+  var useState5 = React.useState;
+  var useEffect7 = React.useEffect;
   var useRef2 = React.useRef;
   function label(props, key, fallback, values2) {
     if (props && typeof props.t === "function") {
@@ -93320,12 +94663,12 @@ function renderModelDetailPane(v) {
     return payload;
   }
   function useModelConfiguration(props) {
-    var [config2, setConfig] = useState4(function() {
+    var [config2, setConfig] = useState5(function() {
       return props && props.initialConfig ? normalizeConfig(props.initialConfig) : null;
     });
-    var [loading, setLoading] = useState4(!(props && props.initialConfig));
-    var [error, setError] = useState4("");
-    var [saveState, setSaveState] = useState4("idle");
+    var [loading, setLoading] = useState5(!(props && props.initialConfig));
+    var [error, setError] = useState5("");
+    var [saveState, setSaveState] = useState5("idle");
     var mounted = useRef2(true);
     function operationIsCurrent(options) {
       if (!mounted.current) return false;
@@ -93357,7 +94700,7 @@ function renderModelDetailPane(v) {
         throw loadError;
       });
     }
-    useEffect6(function() {
+    useEffect7(function() {
       mounted.current = true;
       if (!(props && props.initialConfig)) load().catch(function() {
       });
@@ -93577,8 +94920,8 @@ function renderModelDetailPane(v) {
     var cliNeedsDownload = !!(cli && (!cli.installed || cli.broken));
     var cliDownloading = !!(cliNeedsDownload && (props.cliBusy || cli.downloading));
     var cliPercent = downloadPercent(cli);
-    var [selectedModelId, setSelectedModelId] = useState4("");
-    useEffect6(function() {
+    var [selectedModelId, setSelectedModelId] = useState5("");
+    useEffect7(function() {
       if (!models.length) {
         setSelectedModelId("");
         return;
@@ -93752,9 +95095,9 @@ function renderModelDetailPane(v) {
     var options = listFrom(props.options);
     var rootRef = useRef2(null);
     var inputRef = useRef2(null);
-    var [open, setOpen] = useState4(false);
-    var [filter, setFilter] = useState4("");
-    var [activeIndex, setActiveIndex] = useState4(0);
+    var [open, setOpen] = useState5(false);
+    var [filter, setFilter] = useState5("");
+    var [activeIndex, setActiveIndex] = useState5(0);
     var needle = String(filter || "").trim().toLowerCase();
     var filtered = options.filter(function(item) {
       if (!needle) return true;
@@ -93887,7 +95230,7 @@ function renderModelDetailPane(v) {
     var displayName2 = profile.name || profile.model || label(props, "settings.unnamedModel", "Unnamed model");
     var capabilities = normalizedCapabilities(profile.capabilities);
     var capabilityOptions = ["chat", "vision", "embedding"];
-    var [expanded, setExpanded] = useState4(
+    var [expanded, setExpanded] = useState5(
       !String(profile.model || "").trim() || profile.name === "\u65B0\u6A21\u578B" && profile.model === "\u65B0\u6A21\u578B"
     );
     var detailsId = "wb-mcfg-profile-details-" + String(profile.id || "model").replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -94012,10 +95355,10 @@ function renderModelDetailPane(v) {
     props = props || {};
     var store = useModelConfiguration(props);
     var config2 = store.config;
-    var [selectedId, setSelectedId] = useState4("");
-    var [query, setQuery] = useState4("");
-    var [dirty, setDirty] = useState4(false);
-    var [saveError, setSaveError] = useState4("");
+    var [selectedId, setSelectedId] = useState5("");
+    var [query, setQuery] = useState5("");
+    var [dirty, setDirty] = useState5(false);
+    var [saveError, setSaveError] = useState5("");
     var editVersion = useRef2(0);
     var dirtyRef = useRef2(false);
     var queuedSnapshot = useRef2(null);
@@ -94025,38 +95368,38 @@ function renderModelDetailPane(v) {
     var saveQueueInFlight = useRef2(false);
     var saveQueueBlockedVersion = useRef2(-1);
     var saveQueueMounted = useRef2(true);
-    var [busy, setBusy] = useState4("");
-    var [connectionMenu, setConnectionMenu] = useState4(null);
+    var [busy, setBusy] = useState5("");
+    var [connectionMenu, setConnectionMenu] = useState5(null);
     var connectionMenuRef = useRef2(null);
     var connectionMenuReturnFocus = useRef2(null);
-    var [oauth, setOauth] = useState4({ checking: false, connected: false, models: [] });
-    var [oauthBusy, setOauthBusy] = useState4("");
+    var [oauth, setOauth] = useState5({ checking: false, connected: false, models: [] });
+    var [oauthBusy, setOauthBusy] = useState5("");
     var oauthPoll = useRef2(null);
     var oauthCliPoll = useRef2(null);
     var oauthCliStartedAt = useRef2(0);
-    var [localModels, setLocalModels] = useState4([]);
-    var [localRuntime, setLocalRuntime] = useState4(null);
-    var [localError, setLocalError] = useState4("");
-    var [localBusy, setLocalBusy] = useState4("");
-    var [proxyMasterEnabled, setProxyMasterEnabled] = useState4(false);
-    var [modelDiscovery, setModelDiscovery] = useState4({});
+    var [localModels, setLocalModels] = useState5([]);
+    var [localRuntime, setLocalRuntime] = useState5(null);
+    var [localError, setLocalError] = useState5("");
+    var [localBusy, setLocalBusy] = useState5("");
+    var [proxyMasterEnabled, setProxyMasterEnabled] = useState5(false);
+    var [modelDiscovery, setModelDiscovery] = useState5({});
     var discoveryRequestVersions = useRef2({});
     var selected = config2 && (config2.connections || []).find(function(item) {
       return item.id === selectedId;
     });
-    useEffect6(function() {
+    useEffect7(function() {
       if (!config2 || !(config2.connections || []).length) return;
       if (!(config2.connections || []).some(function(item) {
         return item.id === selectedId;
       })) setSelectedId(config2.connections[0].id);
     }, [config2 && config2.connections && config2.connections.length, selectedId]);
-    useEffect6(function() {
+    useEffect7(function() {
       return function() {
         if (oauthPoll.current) clearInterval(oauthPoll.current);
         if (oauthCliPoll.current) clearInterval(oauthCliPoll.current);
       };
     }, []);
-    useEffect6(function() {
+    useEffect7(function() {
       saveQueueMounted.current = true;
       return function() {
         saveQueueMounted.current = false;
@@ -94064,12 +95407,12 @@ function renderModelDetailPane(v) {
         saveQueueTimer.current = null;
       };
     }, []);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!config2 || dirtyRef.current) return;
       queuedSnapshot.current = config2;
       if (Number.isInteger(config2.revision)) knownRevision.current = config2.revision;
     }, [config2]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!connectionMenu) return;
       function restoreTriggerFocus() {
         var trigger = connectionMenuReturnFocus.current;
@@ -94692,11 +96035,11 @@ function renderModelDetailPane(v) {
         setLocalBusy("");
       });
     }
-    useEffect6(function() {
+    useEffect7(function() {
       if (!selected || !isCodexConnection(selected)) return;
       refreshOauth();
     }, [selectedId, selected && selected.adapter]);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!selected || isCodexConnection(selected) || isLocalConnection(selected)) return;
       var adapter = (config2.adapters || []).find(function(item) {
         return item.id === selected.adapter;
@@ -94719,10 +96062,10 @@ function renderModelDetailPane(v) {
       selected && selected.secret_configured,
       selected && selected.use_proxy
     ]);
-    useEffect6(function() {
+    useEffect7(function() {
       refreshLocalModels();
     }, []);
-    useEffect6(function() {
+    useEffect7(function() {
       var active = true;
       requestJson("/api/settings/config").then(function(payload) {
         if (active) setProxyMasterEnabled(payload.external_agent_proxy_enabled === true);
@@ -94732,7 +96075,7 @@ function renderModelDetailPane(v) {
         active = false;
       };
     }, []);
-    useEffect6(function() {
+    useEffect7(function() {
       if (!selected || !isLocalConnection(selected) || !localModels.some(function(model) {
         return model.downloading;
       })) return;
@@ -94989,9 +96332,9 @@ function renderModelDetailPane(v) {
     props = props || {};
     var store = useModelConfiguration(props);
     var config2 = store.config;
-    var [dirty, setDirty] = useState4(false);
+    var [dirty, setDirty] = useState5(false);
     var usageMounted = useRef2(true);
-    useEffect6(function() {
+    useEffect7(function() {
       usageMounted.current = true;
       return function() {
         usageMounted.current = false;
@@ -97254,7 +98597,7 @@ function wbNotificationNavigationTarget(item) {
 }
 
 // frontend/features/shell/module-presentation.jsx
-var { useEffect: useEffect2 } = React;
+var { useEffect: useEffect3 } = React;
 function workbenchSessionTabsPresentation(store, recentChatsByProject, sessionKeys, chatRuntimes, sessionActivityLive, dataState, activeSessionKey, t2) {
   var candidates = wbRecentSessionTabs(
     store.projects,
@@ -97300,7 +98643,7 @@ function useWorkbenchModulePresentation(fullPage, setFullPage, taskView, mounted
   var isSettings = fullPage === "settings";
   var isModulePage = isKnowledge || isSchedule || isMemory || isChat || isSettings;
   var fullPageConfig = fullPage && !isModulePage ? workbenchFullPageConfig(fullPage, setFullPage, store) : null;
-  useEffect2(function() {
+  useEffect3(function() {
     if (!isModulePage || !fullPage) return;
     setMountedPages(function(previous) {
       if (previous[fullPage]) return previous;
@@ -97342,7 +98685,7 @@ function useWorkbenchModulePresentation(fullPage, setFullPage, taskView, mounted
 }
 
 // frontend/features/shell/navigation-controller.jsx
-var { useEffect: useEffect3 } = React;
+var { useEffect: useEffect4 } = React;
 function createWorkbenchNavigationActions(fullPage, taskView, setFullPage, setTaskView, setSettingsTab, setSettingsScrollTo, setRailCollapsed, sidebarModuleWheelRef, activeDestination, enabledModules) {
   var moduleOrder = Array.isArray(enabledModules) && enabledModules.length ? enabledModules.slice() : ["schedule", "board", "work", "knowledge", "memory"];
   function openPage(page) {
@@ -97403,7 +98746,7 @@ function createWorkbenchNavigationActions(fullPage, taskView, setFullPage, setTa
   return { openPage, toggleSidebar, onModuleWheel };
 }
 function useWorkbenchBoardNavigation(setTaskView, setFullPage) {
-  useEffect3(function() {
+  useEffect4(function() {
     function openBoard() {
       setTaskView("board");
       setFullPage(null);
@@ -97415,7 +98758,7 @@ function useWorkbenchBoardNavigation(setTaskView, setFullPage) {
   }, []);
 }
 function useWorkbenchNavigationSurface(fullPage, taskView, settingsTab, railCollapsed, t2, openPage, toggleSidebar, setSearchOpen, setSettingsTab, setSettingsScrollTo, setFullPage, enabledModules) {
-  useEffect3(function() {
+  useEffect4(function() {
     if (!window.CyreneUI.has("uiSurface")) return void 0;
     var uiSurface = workbenchServices2.uiSurface();
     var settingsActive = fullPage === "settings";
@@ -103495,16 +104838,16 @@ function dispatchWorkbenchGlobalShortcut(event, shortcuts, state, actions) {
 }
 
 // frontend/features/shell/app-lifecycle.jsx
-var { useEffect: useEffect4 } = React;
+var { useEffect: useEffect5 } = React;
 function useWorkbenchStartupLifecycle(fullPage, reloadWorkbench, reloadNotifications) {
-  useEffect4(function() {
+  useEffect5(function() {
     try {
       if (fullPage) localStorage.setItem("wb-active-page", fullPage);
       else localStorage.removeItem("wb-active-page");
     } catch (e) {
     }
   }, [fullPage]);
-  useEffect4(function() {
+  useEffect5(function() {
     reloadWorkbench();
     reloadNotifications();
   }, []);
@@ -103538,10 +104881,10 @@ function useWorkbenchRecentChatLifecycle(projects, reloadRecentChats, refreshTas
   var recentProjectIds = (projects || []).map(function(project) {
     return String(project && project.id || "");
   }).filter(Boolean).sort().join("|");
-  useEffect4(function() {
+  useEffect5(function() {
     reloadRecentChats(projects || []);
   }, [recentProjectIds]);
-  useEffect4(function() {
+  useEffect5(function() {
     function onChatsChanged() {
       reloadRecentChats(projects || []);
     }
@@ -103550,7 +104893,7 @@ function useWorkbenchRecentChatLifecycle(projects, reloadRecentChats, refreshTas
       window.removeEventListener("cyrene:wbc-refresh-chats", onChatsChanged);
     };
   }, [recentProjectIds]);
-  useEffect4(function() {
+  useEffect5(function() {
     var timer = null;
     function refreshTopbarSessions() {
       if (timer) clearTimeout(timer);
@@ -103577,7 +104920,7 @@ function useWorkbenchRecentChatLifecycle(projects, reloadRecentChats, refreshTas
   }, [recentProjectIds]);
 }
 function useWorkbenchLaunchOverlayLifecycle(loading, launchReadyRef, dataStore, searchOpen) {
-  useEffect4(function() {
+  useEffect5(function() {
     if (loading || launchReadyRef.current) return void 0;
     launchReadyRef.current = true;
     Promise.resolve(dataStore.ready).catch(function() {
@@ -103586,10 +104929,10 @@ function useWorkbenchLaunchOverlayLifecycle(loading, launchReadyRef, dataStore, 
     });
     return void 0;
   }, [loading]);
-  useEffect4(function() {
+  useEffect5(function() {
     wbResetBrowserOverlayObscured();
   }, []);
-  useEffect4(function() {
+  useEffect5(function() {
     if (searchOpen) {
       wbSetBrowserOverlayObscured(1);
       return function() {
@@ -103597,7 +104940,7 @@ function useWorkbenchLaunchOverlayLifecycle(loading, launchReadyRef, dataStore, 
       };
     }
   }, [searchOpen]);
-  useEffect4(function() {
+  useEffect5(function() {
     function onBeforeUnload() {
       var bridge = window.cyrene && window.cyrene.browser;
       if (bridge && typeof bridge.setObscured === "function") {
@@ -103613,7 +104956,7 @@ function useWorkbenchLaunchOverlayLifecycle(loading, launchReadyRef, dataStore, 
   }, []);
 }
 function useWorkbenchNativeMenuLifecycle(menuActionsRef, createProject, createSession, createChat2, onToggleTheme, setSettingsTab, setSettingsScrollTo, setFullPage, toggleWorkspaceSidebar) {
-  useEffect4(function() {
+  useEffect5(function() {
     menuActionsRef.current = {
       createProject,
       createSession,
@@ -103621,7 +104964,7 @@ function useWorkbenchNativeMenuLifecycle(menuActionsRef, createProject, createSe
       onToggleTheme
     };
   });
-  useEffect4(function() {
+  useEffect5(function() {
     var bridge = window.cyrene;
     if (!bridge || typeof bridge.onMenuAction !== "function") return void 0;
     return bridge.onMenuAction(function(action) {
@@ -103659,7 +105002,7 @@ function useWorkbenchNativeMenuLifecycle(menuActionsRef, createProject, createSe
   }, []);
 }
 function useWorkbenchNotificationLifecycle(reloadNotifications, activeViewRef, fullPage, taskView, activeChatId, activeSessionId, rememberOpenedSession) {
-  useEffect4(function() {
+  useEffect5(function() {
     var timer = null;
     function scheduleReload() {
       if (timer) clearTimeout(timer);
@@ -103685,7 +105028,7 @@ function useWorkbenchNotificationLifecycle(reloadNotifications, activeViewRef, f
       window.removeEventListener("focus", scheduleReload);
     };
   }, []);
-  useEffect4(function() {
+  useEffect5(function() {
     activeViewRef.current = {
       page: fullPage || null,
       taskView,
@@ -103693,7 +105036,7 @@ function useWorkbenchNotificationLifecycle(reloadNotifications, activeViewRef, f
       sessionId: activeSessionId || ""
     };
   }, [fullPage, taskView, activeChatId, activeSessionId]);
-  useEffect4(function() {
+  useEffect5(function() {
     if (fullPage === "chat" && activeChatId) {
       rememberOpenedSession("chat", activeChatId);
     } else if (taskView === "detail" && activeSessionId && (!fullPage || fullPage === "chat" && !activeChatId)) {
@@ -103702,7 +105045,7 @@ function useWorkbenchNotificationLifecycle(reloadNotifications, activeViewRef, f
   }, [fullPage, taskView, activeChatId, activeSessionId]);
 }
 function useWorkbenchGlobalShortcuts(searchOpen, newProjectOpen, newTaskOpen, store, setSearchOpen, createChat2, setNewTaskOpen, setSettingsTab, setSettingsScrollTo, setFullPage, toggleWorkspaceSidebar, selectProject) {
-  useEffect4(function() {
+  useEffect5(function() {
     function onKey(event) {
       var sc = workbenchServices2.shortcuts();
       dispatchWorkbenchGlobalShortcut(event, sc, {
@@ -103736,7 +105079,7 @@ function useWorkbenchGlobalShortcuts(searchOpen, newProjectOpen, newTaskOpen, st
   }, [searchOpen, newProjectOpen, newTaskOpen, store && store.activeProject, store && store.projects]);
 }
 function useWorkbenchTaskRuntimeLifecycle(fullPage, taskView, refreshTaskBoard, activeViewRef, setStore, fetchAndMergeSession) {
-  useEffect4(function() {
+  useEffect5(function() {
     if (fullPage || taskView !== "board") return void 0;
     var trailing = null;
     var inFlight = false;
@@ -103770,7 +105113,7 @@ function useWorkbenchTaskRuntimeLifecycle(fullPage, taskView, refreshTaskBoard, 
       unsubscribe();
     };
   }, [fullPage, taskView]);
-  useEffect4(function() {
+  useEffect5(function() {
     var goalLoopReloadTimer = null;
     function handleRuntimeEvent(data2) {
       if (!data2) return;
@@ -104030,12 +105373,12 @@ function createWorkbenchSelectionActions(store, setStore, setExpandedStepId, set
 }
 
 // frontend/features/session/live-activity.jsx
-var { useState: useState2, useEffect: useEffect5 } = React;
+var { useState: useState3, useEffect: useEffect6 } = React;
 function useWorkbenchLiveActivityState(chatRuntimeEngine) {
-  var [chatRuntimes, setChatRuntimes] = useState2(function() {
+  var [chatRuntimes, setChatRuntimes] = useState3(function() {
     return chatRuntimeEngine && chatRuntimeEngine.snapshot ? chatRuntimeEngine.snapshot() : {};
   });
-  var [sessionActivityLive, setSessionActivityLive] = useState2({});
+  var [sessionActivityLive, setSessionActivityLive] = useState3({});
   return {
     chatRuntimes,
     setChatRuntimes,
@@ -104044,7 +105387,7 @@ function useWorkbenchLiveActivityState(chatRuntimeEngine) {
   };
 }
 function useWorkbenchLiveActivitySubscriptions(chatRuntimeEngine, setChatRuntimes, setSessionActivityLive) {
-  useEffect5(function() {
+  useEffect6(function() {
     if (!chatRuntimeEngine || typeof chatRuntimeEngine.subscribe !== "function") return void 0;
     setChatRuntimes(chatRuntimeEngine.snapshot());
     var subscribe3 = typeof chatRuntimeEngine.subscribeSummary === "function" ? chatRuntimeEngine.subscribeSummary : chatRuntimeEngine.subscribe;
@@ -104052,7 +105395,7 @@ function useWorkbenchLiveActivitySubscriptions(chatRuntimeEngine, setChatRuntime
       setChatRuntimes(snapshot3);
     });
   }, [chatRuntimeEngine]);
-  useEffect5(function() {
+  useEffect6(function() {
     function onActivityEvent(data2) {
       if (!data2) return;
       var sessionId = String(data2.session_id || data2.chatId || data2.chat_id || "").trim();
@@ -104088,7 +105431,7 @@ function useWorkbenchLiveActivitySubscriptions(chatRuntimeEngine, setChatRuntime
 }
 
 // frontend/features/session/tabs-controller.jsx
-var { useState: useState3 } = React;
+var { useState: useState4 } = React;
 function readSessionKeys(storageKey, pattern, limit) {
   try {
     var stored = JSON.parse(localStorage.getItem(storageKey) || "[]");
@@ -104106,13 +105449,13 @@ function writeSessionKeys(storageKey, values2) {
   }
 }
 function useWorkbenchSessionTabs(projects, recentChatsByProject) {
-  var [recentOpenedSessionKeys, setRecentOpenedSessionKeys] = useState3(function() {
+  var [recentOpenedSessionKeys, setRecentOpenedSessionKeys] = useState4(function() {
     return readSessionKeys("wb-recent-opened-sessions", /^(task|chat):.+/, 20);
   });
-  var [pinnedSessionKeys, setPinnedSessionKeys] = useState3(function() {
+  var [pinnedSessionKeys, setPinnedSessionKeys] = useState4(function() {
     return readSessionKeys("wb-pinned-sessions", /^(task|chat):.+/, 20);
   });
-  var [hiddenSessionKeys, setHiddenSessionKeys] = useState3(function() {
+  var [hiddenSessionKeys, setHiddenSessionKeys] = useState4(function() {
     return readSessionKeys("wb-hidden-session-tabs", /^(task|chat):.+/, 100);
   });
   function rememberOpenedSession(kind, sessionId) {

@@ -17,9 +17,10 @@ Bash, Read, Write, and toolbox are always exposed directly. WebSearch and
 send_message are also exposed directly when their Plugins are enabled, and
 user-selected tools may be exposed directly. For tools not present in the current
 tool list, use toolbox.list to discover them, toolbox.describe to read their current
-input schema, then toolbox.invoke to call them. toolbox.list returns only
-discoverable Plugin pack names and standalone Plugin names; describe the relevant
-pack or standalone Plugin before invoking a Plugin. Return the result without
+input schema, then toolbox.invoke to call them. toolbox.list returns discoverable
+Plugin pack names, a one-sentence purpose for each pack, and standalone Plugin
+names. Use those short descriptions to choose the relevant pack, then describe
+that pack or standalone Plugin before invoking a Plugin. Return the result without
 asking the user to choose a tool. After receiving tool results, explain the result
 to the user instead of repeating the same call.
 """

@@ -8,6 +8,7 @@ function wbcPaneCardDetachDescriptor(context, cardId, paneOverride) {
   if (!pane) return null;
   var descriptor = {
     kind: pane.kind, payload: pane.payload,
+    meta: pane.meta && typeof pane.meta === "object" ? pane.meta : null,
     ownerChatId: pane.ownerChatId || context.activeChatIdRef.current || "",
     project: context.project || null, title: "", items: [], agent: null, agents: [], draft: null,
   };
@@ -58,6 +59,20 @@ function wbcPaneCardDetachDescriptor(context, cardId, paneOverride) {
       pane.payload && (pane.payload.title || pane.payload.viewId || pane.payload.view_id)
       || "Plugin"
     );
+  } else if (pane.kind === "surface") {
+    descriptor.title = String(
+      pane.payload && (pane.payload.title || pane.payload.surfaceId)
+      || "Surface"
+    );
+    var surfaceResource = pane.payload && pane.payload.resource;
+    if (surfaceResource && surfaceResource.kind === "file") {
+      var surfaceDraftKey = wbcProjectFileDraftKey(Object.assign({}, surfaceResource, {
+        source: "project",
+        projectId: surfaceResource.projectId || surfaceResource.project_id || context.project && context.project.id || "",
+      }));
+      descriptor.draft = surfaceDraftKey && WBC_PROJECT_FILE_DRAFTS[surfaceDraftKey]
+        ? WBC_PROJECT_FILE_DRAFTS[surfaceDraftKey] : null;
+    }
   }
   return descriptor;
 }

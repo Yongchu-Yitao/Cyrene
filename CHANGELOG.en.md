@@ -2180,9 +2180,6 @@ remain unchanged.
 
 #### Agent tool protocols, gateway repair, and continuous execution
 
-- **The fixed tool-round ceiling is gone** — runtime no longer reads or applies
-  `MAX_TOOL_ROUNDS`. Migration purges old values, restore drops the field, and
-  settings reject attempts to reintroduce it.
 - **Runs end on explicit outcomes** — the Agent loop keeps processing tool
   results, guidance, and model turns until a normal final reply/`quit`, user
   cancellation, or an unrecoverable error, rather than an arbitrary counter.

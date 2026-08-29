@@ -100,6 +100,33 @@ function wbcAgentPermissionPayload(event) {
   };
 }
 
+function wbcAgentPermissionReviewPayload(event) {
+  var payload = wbcAgentEventPayload(event);
+  var timestamp = String(event && event.timestamp || payload.createdAt || payload.created_at || "");
+  var parsedAt = timestamp ? Date.parse(timestamp) : NaN;
+  var approved = payload.approved === true;
+  var decisions = Array.isArray(payload.decisions) ? payload.decisions : [];
+  var preview = decisions.map(function (decision) {
+    if (!decision || typeof decision !== "object") return "";
+    return [String(decision.tool || ""), String(decision.rationale || "")]
+      .filter(Boolean)
+      .join(" · ");
+  }).filter(Boolean).join("; ").slice(0, 240);
+  return {
+    id: String(payload.id || event && (event.eventId || event.event_id) || ""),
+    kind: "permission",
+    text: approved
+      ? wbcT("workbenchChat.permissionApproved", "Permission review approved")
+      : wbcT("workbenchChat.permissionDenied", "Permission review denied"),
+    preview: preview,
+    status: approved ? "completed" : "failed",
+    failed: !approved,
+    approved: approved,
+    decisions: decisions,
+    createdAt: Number.isFinite(parsedAt) ? parsedAt : Date.now(),
+  };
+}
+
 function wbcAgentElicitationPayload(event) {
   var payload = wbcAgentEventPayload(event);
   return {
@@ -213,6 +240,7 @@ var AGENT_EVENT_ROUTER = {
   "tool.started": { handler: "onToolStarted", normalize: wbcAgentToolPayload },
   "tool.updated": { handler: "onToolUpdated", normalize: wbcAgentToolPayload },
   "tool.completed": { handler: "onToolCompleted", normalize: wbcAgentToolPayload },
+  "permission.reviewed": { handler: "onPermissionReviewed", normalize: wbcAgentPermissionReviewPayload },
   "permission.requested": { handler: "onAwaitingUser", normalize: wbcAgentPermissionPayload },
   "permission.resolved": { handler: "onPermissionResolved" },
   "elicitation.requested": { handler: "onAwaitingUser", normalize: wbcAgentElicitationPayload },
@@ -249,4 +277,4 @@ function wbcRouteAgentEvent(type, event, handlers) {
 // Data access
 // ---------------------------------------------------------------------------
 
-export { wbcAgentEventPayload, wbcAgentDeltaPayload, wbcAgentDonePayload, wbcAgentReasoningDelta, wbcAgentReasoningDone, wbcAgentPhasePayload, wbcAgentToolPayload, wbcAgentPermissionPayload, wbcAgentElicitationPayload, wbcStructuredEventSummary, wbcAgentSessionPayload, wbcAgentAwaitingPayload, wbcAgentRunFailedError, wbcAgentNotificationPayload, AGENT_EVENT_ROUTER, wbcRouteAgentEvent }
+export { wbcAgentEventPayload, wbcAgentDeltaPayload, wbcAgentDonePayload, wbcAgentReasoningDelta, wbcAgentReasoningDone, wbcAgentPhasePayload, wbcAgentToolPayload, wbcAgentPermissionPayload, wbcAgentPermissionReviewPayload, wbcAgentElicitationPayload, wbcStructuredEventSummary, wbcAgentSessionPayload, wbcAgentAwaitingPayload, wbcAgentRunFailedError, wbcAgentNotificationPayload, AGENT_EVENT_ROUTER, wbcRouteAgentEvent }

@@ -18,6 +18,7 @@ from .common import (
     request_remote_command,
     resolve_selected_remote_device,
 )
+from .permission import authorize_remote
 from cyrene.core.plugin.execution import publish_plugin_progress as publish_tool_progress
 from cyrene.plugins.native_runtime import (
     json_result,
@@ -171,6 +172,16 @@ async def handler(
             raise ValueError("unsupported remote file operation")
         if required not in (device.get("received_capabilities") or []):
             raise PermissionError(f"remote device did not grant {required}")
+
+        permission, _destructive = await authorize_remote(
+            TOOL_NAME,
+            args,
+            context,
+            device_id=str(device["device_id"]),
+            project_id=project_id,
+        )
+        if permission is not None:
+            return json_result(permission)
 
         remote_outside = _operation_uses_absolute_path(args)
         if operation == "upload":

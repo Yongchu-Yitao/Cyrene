@@ -976,7 +976,7 @@ class ContextTreeTranscript:
                 for node in nodes
                 if isinstance(node.value, Mapping)
                 and node.value.get("role")
-                in {"system", "user", "context", "context_compaction", "assistant", "tool_results"}
+                in {"system", "user", "context", "context_compaction", "context_reflection", "assistant", "tool_results"}
             ]
             if not dialogue:
                 return []
@@ -985,6 +985,26 @@ class ContextTreeTranscript:
             result: list[dict[str, Any]] = []
             for node in path:
                 value = node.value if isinstance(node.value, Mapping) else {}
+                if value.get("role") == "context_reflection":
+                    public_nodes = value.get("public_nodes")
+                    for raw in public_nodes if isinstance(public_nodes, list) else ():
+                        if not isinstance(raw, Mapping):
+                            continue
+                        public_value = raw.get("value")
+                        if not isinstance(public_value, Mapping) or public_value.get(
+                            "role"
+                        ) not in {"user", "assistant", "tool_results"}:
+                            continue
+                        public_id = str(raw.get("id") or "")
+                        result.append(
+                            {
+                                "message_id": public_id,
+                                "id": public_id,
+                                "created_at": str(raw.get("created_at") or ""),
+                                **copy.deepcopy(dict(public_value)),
+                            }
+                        )
+                    continue
                 if value.get("role") not in {"user", "assistant", "tool_results"}:
                     continue
                 result.append(
@@ -1024,10 +1044,7 @@ def _collect_attachments(value: Any, output: list[dict[str, Any]]) -> None:
 def extract_exchange_timeline(
     state_messages: list[dict[str, Any]],
     state_ids_before: set[str],
-    *,
-    include_open_tool_preamble: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
-    del include_open_tool_preamble
     fresh = [
         message
         for message in state_messages

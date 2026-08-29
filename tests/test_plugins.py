@@ -25,7 +25,7 @@ from cyrene.core.plugin import (
     PluginRegistryError,
     PluginUnavailableError,
 )
-from cyrene.core.plugin.core_impl import PermissionReviewPlugin
+from cyrene.core.plugin.core_impl import PermissionRequirement, PermissionReviewPlugin
 from cyrene.plugins import ensure_model_router
 
 
@@ -69,6 +69,12 @@ def test_tool_customization_keeps_stable_identity_and_controls_discovery():
         runtime = PluginRuntime(registry)
         listing = await runtime.call("toolbox", {"operation": "list"})
         assert listing.value["packs"] == ["weather"]
+        assert listing.value["pack_descriptions"] == [
+            {
+                "name": "weather",
+                "description": "Weather tools",
+            }
+        ]
 
         updated = registry.customize_tool(
             "WeatherNow",
@@ -801,17 +807,22 @@ plugin_pack = PluginPack(
 def test_runtime_uses_tree_permission_and_post_tool_hooks(tmp_path):
     async def scenario():
         reviewed = []
+        observed_reviews = []
         executed = []
         posted = []
 
         async def permission_model(_system, request):
             reviewed.append(request)
-            allowed = request["tool"]["arguments"].get("value") != "blocked"
+            allowed = request["tools"][0]["arguments"].get("value") != "blocked"
             return {"approve": allowed, "rationale": "allowed" if allowed else "denied"}
+
+        async def observe_review(events, decisions):
+            observed_reviews.append((events, decisions))
 
         reviewer = PermissionReviewPlugin(
             permission_model,
             user_request=lambda _event: "Run the echo tool",
+            on_review=observe_review,
         )
         store = ContextStoreRouter(tmp_path / "context")
         tree = store.create_tree(
@@ -858,13 +869,170 @@ def test_runtime_uses_tree_permission_and_post_tool_hooks(tmp_path):
         assert blocked.success is False
         assert blocked.error == "denied"
         assert executed == ["allowed"]
-        assert [item["tool"]["arguments"]["value"] for item in reviewed] == [
+        assert [item["tools"][0]["arguments"]["value"] for item in reviewed] == [
             "allowed",
             "blocked",
         ]
         assert all(item["user_request"] == "Run the echo tool" for item in reviewed)
+        assert [items[1][0].approve for items in observed_reviews] == [True, False]
+        assert [items[1][0].rationale for items in observed_reviews] == [
+            "allowed",
+            "denied",
+        ]
         assert len(posted) == 1
         assert posted[0]["result"]["value"] == "allowed"
+        store.close()
+
+    run(scenario())
+
+
+def test_runtime_skips_permission_review_for_explicitly_exempt_tool(tmp_path):
+    async def scenario():
+        reviewed = []
+
+        async def permission_model(_system, request):
+            reviewed.append(request)
+            return {"approve": True, "rationale": "allowed"}
+
+        reviewer = PermissionReviewPlugin(permission_model)
+        store = ContextStoreRouter(tmp_path / "context")
+        tree = store.create_tree(
+            tree_id="tree",
+            root_id="root",
+            initial_hooks=(reviewer.registration(),),
+        )
+        registry = PluginRegistry(include_core=False)
+        registry.register_plugin(
+            Plugin(
+                "Progress",
+                "Publish progress",
+                {"type": "object"},
+                lambda _arguments, _context: "sent",
+                metadata={"permission_review": False},
+            ),
+            source="test",
+        )
+
+        result = await PluginRuntime(registry).call(
+            "Progress",
+            {},
+            PluginContext(hooks=store.hooks_for(tree.id)),
+        )
+
+        assert result.success is True
+        assert result.value == "sent"
+        assert reviewed == []
+        store.close()
+
+    run(scenario())
+
+
+def test_permission_plugin_reviews_only_declared_boundaries(tmp_path):
+    async def scenario():
+        reviewed = []
+
+        async def permission_model(_system, request):
+            reviewed.append(request)
+            return {"approve": True, "rationale": "approved elevation"}
+
+        def policy(event):
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            if payload.get("permission") is None:
+                return PermissionRequirement("allow", "inside workspace")
+            return PermissionRequirement("review")
+
+        reviewer = PermissionReviewPlugin(permission_model, policy=policy)
+        store = ContextStoreRouter(tmp_path / "context")
+        tree = store.create_tree(
+            tree_id="tree",
+            root_id="root",
+            initial_hooks=(reviewer.registration(),),
+        )
+        registry = PluginRegistry(include_core=False)
+        registry.register_plugin(
+            Plugin(
+                "ScopedWrite",
+                "write",
+                {"type": "object"},
+                lambda arguments, _context: arguments["path"],
+                permission_boundary=lambda arguments, _context: (
+                    None
+                    if arguments["path"] == "inside.txt"
+                    else {
+                        "kind": "write_permission_request",
+                        "path_hint": arguments["path"],
+                    }
+                ),
+            ),
+            source="test",
+        )
+        context = PluginContext(hooks=store.hooks_for(tree.id))
+
+        inside = await PluginRuntime(registry).call(
+            "ScopedWrite", {"path": "inside.txt"}, context
+        )
+        outside = await PluginRuntime(registry).call(
+            "ScopedWrite", {"path": "/outside.txt"}, context
+        )
+
+        assert inside.success is True
+        assert outside.success is True
+        assert [item["tools"][0]["arguments"]["path"] for item in reviewed] == [
+            "/outside.txt"
+        ]
+        store.close()
+
+    run(scenario())
+
+
+def test_permission_confirmation_becomes_durable_pending_tool_result(tmp_path):
+    async def scenario():
+        async def permission_model(_system, _request):
+            raise AssertionError("human-only boundary must not call the reviewer")
+
+        question = {
+            "status": "awaiting_user",
+            "question_id": "permission_exact",
+            "kind": "destructive_confirmation",
+            "text": "Allow deletion?",
+            "options": ["允许这次", "拒绝"],
+            "allow_custom": False,
+            "permission": {"fingerprint": "exact"},
+        }
+        reviewer = PermissionReviewPlugin(
+            permission_model,
+            policy=lambda _event: PermissionRequirement(
+                "confirm", "human required", question
+            ),
+        )
+        store = ContextStoreRouter(tmp_path / "context")
+        tree = store.create_tree(
+            tree_id="tree",
+            root_id="root",
+            initial_hooks=(reviewer.registration(),),
+        )
+        registry = PluginRegistry(include_core=False)
+        registry.register_plugin(
+            Plugin(
+                "Delete",
+                "delete",
+                {"type": "object"},
+                lambda _arguments, _context: "deleted",
+                permission_boundary=lambda _arguments, _context: {
+                    "kind": "destructive_confirmation"
+                },
+            ),
+            source="test",
+        )
+
+        result = await PluginRuntime(registry).call(
+            "Delete",
+            {},
+            PluginContext(hooks=store.hooks_for(tree.id)),
+        )
+
+        assert result.success is True
+        assert result.value == question
         store.close()
 
     run(scenario())
@@ -921,7 +1089,7 @@ def test_toolbox_dispatches_hooks_once_for_the_actual_target(tmp_path):
 
         assert result.success is True
         assert result.value["result"] == "hello"
-        assert [item["tool"]["name"] for item in reviewed] == ["DeferredEcho"]
+        assert [item["tools"][0]["name"] for item in reviewed] == ["DeferredEcho"]
         assert [item["tool"]["name"] for item in posted] == ["DeferredEcho"]
         store.close()
 
@@ -975,22 +1143,28 @@ def test_batch_runs_concurrently_but_returns_model_call_order():
     run(scenario())
 
 
-def test_batch_finishes_all_parallel_reviews_before_tool_execution(tmp_path):
+def test_batch_reviews_all_tools_in_one_permission_model_call(tmp_path):
     async def scenario():
         review_finished = []
         executed = []
-        active_reviews = 0
-        peak_reviews = 0
+        model_calls = 0
 
         async def permission_model(_system, request):
-            nonlocal active_reviews, peak_reviews
-            active_reviews += 1
-            peak_reviews = max(peak_reviews, active_reviews)
+            nonlocal model_calls
+            model_calls += 1
             await asyncio.sleep(0.01)
-            value = request["tool"]["arguments"]["value"]
-            review_finished.append(value)
-            active_reviews -= 1
-            return {"approve": value != "b", "rationale": "reviewed"}
+            values = [tool["arguments"]["value"] for tool in request["tools"]]
+            review_finished.extend(values)
+            return {
+                "decisions": [
+                    {
+                        "index": index,
+                        "approve": value != "b",
+                        "rationale": "reviewed",
+                    }
+                    for index, value in enumerate(values)
+                ]
+            }
 
         async def echo(arguments, _context):
             assert sorted(review_finished) == ["a", "b", "c"]
@@ -1031,13 +1205,27 @@ def test_batch_finishes_all_parallel_reviews_before_tool_execution(tmp_path):
             PluginContext(hooks=store.hooks_for(tree.id)),
         )
 
-        assert peak_reviews == 3
+        assert model_calls == 1
+        assert review_finished == ["a", "b", "c"]
         assert sorted(executed) == ["a", "c"]
         assert [result.success for result in results] == [True, False, True]
         assert results[1].error == "reviewed"
         store.close()
 
     run(scenario())
+
+
+def test_batch_permission_decisions_require_each_index_exactly_once():
+    with pytest.raises(ValueError, match="invalid index"):
+        PermissionReviewPlugin._parse_batch(
+            {
+                "decisions": [
+                    {"index": 0, "approve": True, "rationale": "ok"},
+                    {"index": 0, "approve": False, "rationale": "duplicate"},
+                ]
+            },
+            expected=2,
+        )
 
 
 def test_batch_limits_parallel_tools_to_eight_and_serial_plugins_are_barriers():
@@ -1455,5 +1643,64 @@ def test_minimax_model_pack_uses_openai_tool_call_shape(tmp_path, monkeypatch):
         assert requests[-1]["url"] == "https://custom-provider.test/v1/models"
         assert requests[-1]["authorization"] == ""
         store.close()
+
+    run(scenario())
+
+
+def test_model_provider_retries_mixed_transport_failures_before_streaming():
+    async def scenario():
+        from cyrene.plugins.builtin.cyrene_model._shared import (
+            ModelProvider,
+            complete_model,
+        )
+
+        attempts = 0
+
+        async def respond(request: httpx.Request) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise httpx.ConnectError("temporary disconnect", request=request)
+            if attempts < 5:
+                raise httpx.RemoteProtocolError(
+                    "server disconnected before responding",
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "id": "response-retried",
+                    "model": "MiniMax-M3",
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 1},
+                    "choices": [{
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "ok"},
+                    }],
+                },
+            )
+
+        result = await complete_model(
+            {
+                "messages": [{"role": "user", "content": "hello"}],
+                "model": "MiniMax-M3",
+            },
+            PluginContext(data={
+                "http_transport": httpx.MockTransport(respond),
+                "model_connection": {
+                    "base_url": "https://minimax.test/v1",
+                    "api_key": "test-key",
+                },
+            }),
+            ModelProvider(
+                id="minimax",
+                name="MiniMax",
+                plugin_name="MiniMax",
+                adapter="openai",
+                default_base_url="https://minimax.test/v1",
+            ),
+        )
+
+        assert attempts == 5
+        assert result["content"] == "ok"
 
     run(scenario())

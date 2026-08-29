@@ -667,6 +667,47 @@ class ContextStoreRouter:
         )
         return node
 
+    def replace_subtree(
+        self,
+        tree_id: str,
+        node_id: str,
+        value: Any,
+        *,
+        expected_node_ids: tuple[str, ...] | None = None,
+    ) -> tuple[ContextNode, tuple[str, ...]]:
+        """Atomically replace one active subtree behind an optimistic guard."""
+
+        hooks = self.hooks_for(tree_id)
+        with self._lease(tree_id) as store:
+            node, deleted_ids = store.replace_subtree(
+                node_id,
+                value,
+                expected_node_ids=expected_node_ids,
+            )
+        if deleted_ids:
+            self._publish_change(
+                ContextChange(
+                    node.tree_id,
+                    deleted_ids[0],
+                    "delete",
+                    node.updated_at,
+                    deleted_node_ids=deleted_ids,
+                    parent_id=node.id,
+                ),
+                hooks,
+            )
+        self._publish_change(
+            ContextChange(
+                node.tree_id,
+                node.id,
+                "update",
+                node.updated_at,
+                parent_id=node.parent_id,
+            ),
+            hooks,
+        )
+        return node, deleted_ids
+
     def get_node(self, tree_id: str, node_id: str) -> ContextNode:
         with self._lease(tree_id) as store:
             return store.get_node(node_id)

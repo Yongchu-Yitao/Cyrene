@@ -9,7 +9,7 @@ import logging
 import queue
 import threading
 import weakref
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, InvalidStateError
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -17,7 +17,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..observability import log_operation, operation
-from .errors import HookBlocked, HookError
+from .errors import HookAwaitingUser, HookBlocked, HookError
 from .hook import (
     CONTEXT_CHANGE,
     CONTEXT_USED,
@@ -151,13 +151,16 @@ class _DispatchRequest:
 class _PreToolRequest:
     name: str
     arguments: dict[str, Any]
+    permission: dict[str, Any] | None
     time: datetime
     future: Future[dict[str, Any]]
 
 
 @dataclass(slots=True)
 class _PreToolBatchRequest:
-    calls: tuple[tuple[str, dict[str, Any], datetime], ...]
+    calls: tuple[
+        tuple[str, dict[str, Any], datetime, dict[str, Any] | None], ...
+    ]
     future: Future[tuple[dict[str, Any] | BaseException, ...]]
 
 
@@ -492,6 +495,24 @@ class HookSet:
             ))
         return selected
 
+    def _plugin_for_hook(self, hook: Hook) -> HookPlugin:
+        plugin = None
+        action_provider = _hook_action_provider
+        if action_provider is not None:
+            try:
+                plugin = action_provider(hook)
+            except Exception:
+                logger.warning(
+                    "Ignoring invalid configured action for Hook %s",
+                    hook.id,
+                    exc_info=True,
+                )
+        if plugin is None:
+            plugin = self._plugins.resolve(hook.plugin_id)
+        if plugin is None:
+            raise HookError(f"Plugin is not registered: {hook.plugin_id}")
+        return plugin
+
     async def _call(self, hook: Hook, event: HookEvent) -> Any:
         with operation(
             logger,
@@ -506,26 +527,46 @@ class HookSet:
             payload=event.payload,
             failure_policy=hook.failure_policy,
         ) as op:
-            plugin = None
-            action_provider = _hook_action_provider
-            if action_provider is not None:
-                try:
-                    plugin = action_provider(hook)
-                except Exception:
-                    logger.warning(
-                        "Ignoring invalid configured action for Hook %s",
-                        hook.id,
-                        exc_info=True,
-                    )
-            if plugin is None:
-                plugin = self._plugins.resolve(hook.plugin_id)
-            if plugin is None:
-                raise HookError(f"Plugin is not registered: {hook.plugin_id}")
+            plugin = self._plugin_for_hook(hook)
             value = plugin(event)
             if inspect.isawaitable(value):
                 value = await value
             op.finish(result=value)
             return value
+
+    async def _call_batch(
+        self,
+        hook: Hook,
+        events: Sequence[HookEvent],
+    ) -> tuple[Any, ...]:
+        normalized = tuple(events)
+        plugin = self._plugin_for_hook(hook)
+        batch = getattr(plugin, "review_batch", None)
+        if not callable(batch):
+            return tuple([await self._call(hook, event) for event in normalized])
+        with operation(
+            logger,
+            "hook.set",
+            "invoke_batch",
+            tree_id=self.tree_id,
+            hook_id=hook.id,
+            plugin_id=hook.plugin_id,
+            event=PRE_TOOL_USE,
+            count=len(normalized),
+            failure_policy=hook.failure_policy,
+        ) as op:
+            values = batch(normalized)
+            if inspect.isawaitable(values):
+                values = await values
+            if (
+                not isinstance(values, Sequence)
+                or isinstance(values, (str, bytes, bytearray))
+                or len(values) != len(normalized)
+            ):
+                raise HookError("Batch Hook must return one result per event")
+            result = tuple(values)
+            op.finish(result=result)
+            return result
 
     async def _dispatch_snapshot(
         self,
@@ -588,6 +629,9 @@ class HookSet:
         name: str,
         arguments: dict[str, Any],
         time: datetime,
+        *,
+        permission: Mapping[str, Any] | None = None,
+        skip_plugin_ids: frozenset[str] = frozenset(),
     ) -> dict[str, Any]:
         await self._prepare_dispatch()
         with operation(
@@ -600,25 +644,40 @@ class HookSet:
             event_time=time,
         ) as op:
             current = dict(arguments)
+            event_payload = {
+                "tool": {"name": name, "arguments": dict(current)},
+                "permission": dict(permission) if permission is not None else None,
+            }
             probe = HookEvent(
                 PRE_TOOL_USE,
                 self.tree_id,
                 time,
-                payload={"tool": {"name": name, "arguments": dict(current)}},
+                payload=event_payload,
             )
-            hooks = self._snapshot(probe)
+            hooks = tuple(
+                hook
+                for hook in self._snapshot(probe)
+                if hook.plugin_id not in skip_plugin_ids
+            )
             decisions: list[dict[str, Any]] = []
             for hook in hooks:
                 event = HookEvent(
                     PRE_TOOL_USE,
                     self.tree_id,
                     time,
-                    payload={"tool": {"name": name, "arguments": dict(current)}},
+                    payload={
+                        "tool": {"name": name, "arguments": dict(current)},
+                        "permission": (
+                            dict(permission) if permission is not None else None
+                        ),
+                    },
                 )
                 try:
                     raw = await self._call(hook, event)
                     output = raw if isinstance(raw, Mapping) else {}
                     decision = str(output.get("decision") or "allow").strip().lower()
+                    if decision == "ask":
+                        raise HookAwaitingUser(output.get("question") or {})
                     if decision == "block":
                         raise HookBlocked(
                             str(output.get("reason") or hook.id or "tool call blocked")
@@ -638,7 +697,7 @@ class HookSet:
                             "arguments": dict(current),
                         }
                     )
-                except HookBlocked as exc:
+                except (HookAwaitingUser, HookBlocked) as exc:
                     log_operation(
                         logger,
                         "hook.set",
@@ -697,40 +756,173 @@ class HookSet:
 
     async def _run_pre_tool_batch(
         self,
-        calls: tuple[tuple[str, dict[str, Any], datetime], ...],
+        calls: tuple[
+            tuple[str, dict[str, Any], datetime, dict[str, Any] | None], ...
+        ],
     ) -> tuple[dict[str, Any] | BaseException, ...]:
-        """Review one model-produced batch concurrently inside one queue slot."""
-
-        async def review(
-            name: str,
-            arguments: dict[str, Any],
-            time: datetime,
-        ) -> dict[str, Any] | BaseException:
-            try:
-                return await self._run_pre_tool(name, arguments, time)
-            except asyncio.CancelledError:
-                raise
-            except BaseException as exc:
-                return exc
+        """Run ordinary Hooks per call, then review all calls in one model batch."""
 
         with operation(
             logger,
             "hook.set",
             "pre_tool_use_batch",
             tree_id=self.tree_id,
-            calls=[{"tool": name, "arguments": arguments} for name, arguments, _ in calls],
+            calls=[
+                {"tool": name, "arguments": arguments, "permission": permission}
+                for name, arguments, _time, permission in calls
+            ],
         ) as op:
-            results = tuple(
-                await asyncio.gather(
-                    *(review(name, arguments, time) for name, arguments, time in calls)
+            results: list[dict[str, Any] | BaseException] = []
+            for name, arguments, time, permission in calls:
+                try:
+                    results.append(await self._run_pre_tool(
+                        name,
+                        arguments,
+                        time,
+                        permission=permission,
+                        skip_plugin_ids=frozenset({"core.permission"}),
+                    ))
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as exc:
+                    results.append(exc)
+
+            grouped: dict[str, tuple[Hook, list[int]]] = {}
+            for index, ((name, _arguments, time, permission), current) in enumerate(
+                zip(calls, results)
+            ):
+                if isinstance(current, BaseException):
+                    continue
+                probe = HookEvent(
+                    PRE_TOOL_USE,
+                    self.tree_id,
+                    time,
+                    payload={
+                        "tool": {"name": name, "arguments": dict(current)},
+                        "permission": (
+                            dict(permission) if permission is not None else None
+                        ),
+                    },
                 )
-            )
+                for hook in self._snapshot(probe):
+                    if hook.plugin_id != "core.permission":
+                        continue
+                    group = grouped.get(hook.id)
+                    if group is None:
+                        grouped[hook.id] = (hook, [index])
+                    else:
+                        group[1].append(index)
+
+            for hook, indices in grouped.values():
+                events = tuple(
+                    HookEvent(
+                        PRE_TOOL_USE,
+                        self.tree_id,
+                        calls[index][2],
+                        payload={
+                            "tool": {
+                                "name": calls[index][0],
+                                "arguments": dict(results[index]),
+                            },
+                            "permission": (
+                                dict(calls[index][3])
+                                if calls[index][3] is not None
+                                else None
+                            ),
+                        },
+                    )
+                    for index in indices
+                    if not isinstance(results[index], BaseException)
+                )
+                try:
+                    outputs = await self._call_batch(hook, events)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    for index in indices:
+                        if hook.failure_policy == "block":
+                            results[index] = HookBlocked(f"{hook.id}: {exc}")
+                    log_operation(
+                        logger,
+                        "hook.set",
+                        "pre_tool_batch_decision",
+                        phase="failed_closed" if hook.failure_policy == "block" else "failed_open",
+                        level=logging.ERROR,
+                        exc_info=True,
+                        tree_id=self.tree_id,
+                        hook_id=hook.id,
+                        plugin_id=hook.plugin_id,
+                        error=exc,
+                    )
+                    continue
+
+                for index, raw in zip(indices, outputs):
+                    current = results[index]
+                    if isinstance(current, BaseException):
+                        continue
+                    try:
+                        output = raw if isinstance(raw, Mapping) else {}
+                        decision = str(output.get("decision") or "allow").strip().lower()
+                        if decision == "ask":
+                            raise HookAwaitingUser(output.get("question") or {})
+                        if decision == "block":
+                            raise HookBlocked(
+                                str(output.get("reason") or hook.id or "tool call blocked")
+                            )
+                        if decision not in {"allow", "modify"}:
+                            raise HookError(
+                                "PreToolUse decision must be allow, modify, or block"
+                            )
+                        if "arguments" in output:
+                            modified = output.get("arguments")
+                            if not isinstance(modified, Mapping):
+                                raise HookError("PreToolUse arguments must be an object")
+                            results[index] = dict(modified)
+                    except (HookAwaitingUser, HookBlocked) as exc:
+                        results[index] = exc
+                        log_operation(
+                            logger,
+                            "hook.set",
+                            "pre_tool_batch_decision",
+                            phase="blocked",
+                            level=logging.WARNING,
+                            tree_id=self.tree_id,
+                            hook_id=hook.id,
+                            plugin_id=hook.plugin_id,
+                            tool=calls[index][0],
+                            reason=exc,
+                        )
+                    except Exception as exc:
+                        if hook.failure_policy == "block":
+                            results[index] = HookBlocked(f"{hook.id}: {exc}")
+                        log_operation(
+                            logger,
+                            "hook.set",
+                            "pre_tool_batch_decision",
+                            phase=(
+                                "failed_closed"
+                                if hook.failure_policy == "block"
+                                else "failed_open"
+                            ),
+                            level=logging.ERROR,
+                            exc_info=True,
+                            tree_id=self.tree_id,
+                            hook_id=hook.id,
+                            plugin_id=hook.plugin_id,
+                            tool=calls[index][0],
+                            error=exc,
+                        )
+
+            normalized_results = tuple(results)
             op.finish(
-                result_count=len(results),
-                rejected=sum(isinstance(result, BaseException) for result in results),
-                results=results,
+                result_count=len(normalized_results),
+                rejected=sum(
+                    isinstance(result, BaseException)
+                    for result in normalized_results
+                ),
+                results=normalized_results,
             )
-            return results
+            return normalized_results
 
     async def _drain_persisted(self) -> None:
         await self._prepare_dispatch()
@@ -862,7 +1054,12 @@ class HookSet:
                 elif isinstance(item, _PreToolRequest):
                     try:
                         result = loop.run_until_complete(
-                            self._run_pre_tool(item.name, item.arguments, item.time)
+                            self._run_pre_tool(
+                                item.name,
+                                item.arguments,
+                                item.time,
+                                permission=item.permission,
+                            )
                         )
                     except BaseException as exc:
                         _settle_future(item.future, error=exc)
@@ -1047,6 +1244,7 @@ class HookSet:
         name: str,
         arguments: Mapping[str, Any],
         *,
+        permission: Mapping[str, Any] | None = None,
         time: datetime | None = None,
     ) -> dict[str, Any]:
         if self._in_worker_thread():
@@ -1054,13 +1252,20 @@ class HookSet:
                 str(name),
                 dict(arguments),
                 time or _utc_now(),
+                permission=permission,
             )
         future: Future[dict[str, Any]] = Future()
         with self._lock:
             self._ensure_open()
             self._ensure_worker_locked()
             self._work.put(
-                _PreToolRequest(str(name), dict(arguments), time or _utc_now(), future)
+                _PreToolRequest(
+                    str(name),
+                    dict(arguments),
+                    dict(permission) if permission is not None else None,
+                    time or _utc_now(),
+                    future,
+                )
             )
         return await asyncio.wrap_future(future)
 
@@ -1068,13 +1273,23 @@ class HookSet:
         self,
         calls: tuple[tuple[str, Mapping[str, Any]], ...],
         *,
+        permissions: Sequence[Mapping[str, Any] | None] | None = None,
         time: datetime | None = None,
     ) -> tuple[dict[str, Any] | BaseException, ...]:
         """Queue one batch, then run its independent reviews concurrently."""
 
         reviewed_at = time or _utc_now()
+        permission_values = tuple(permissions or (None for _call in calls))
+        if len(permission_values) != len(calls):
+            raise ValueError("permissions must match the tool call count")
         normalized = tuple(
-            (str(name), dict(arguments), reviewed_at) for name, arguments in calls
+            (
+                str(name),
+                dict(arguments),
+                reviewed_at,
+                dict(permission) if permission is not None else None,
+            )
+            for (name, arguments), permission in zip(calls, permission_values)
         )
         if self._in_worker_thread():
             return await self._run_pre_tool_batch(normalized)

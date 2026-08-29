@@ -349,6 +349,48 @@ async def _tool_browser_upload_files(
         )
 
     fingerprint = _upload_fingerprint(target, files)
+    permission_service = context.services.get("permission")
+    request_permission = getattr(permission_service, "request_permission", None)
+    if not callable(request_permission):
+        return plugin_localized(
+            context,
+            "Browser upload failed: the permission service is unavailable.",
+            "浏览器上传失败：权限服务不可用。",
+        )
+    permission_result = request_permission(
+        tool_name=TOOL_NAME,
+        arguments=args,
+        request={
+            "kind": "external_upload_confirmation",
+            "operation": f"向 {target.get('origin') or '外部网页'} 上传本地文件",
+            "path_hint": ", ".join(item["name"] for item in files),
+            "reason": (
+                f"接收站点：{target.get('origin') or target.get('frameUrl') or ''}\n"
+                f"页面：{target.get('topUrl') or ''}\n"
+                f"文件："
+                + ", ".join(
+                    f"{item['name']} ({item['size']} bytes, SHA-256 {item['sha256']})"
+                    for item in files
+                )
+                + "\n注意：设置文件后，网页可能立即开始上传，无需再次点击提交。"
+                + (f"\nAgent 说明：{str(args.get('reason') or '')[:500]}" if args.get("reason") else "")
+            ),
+            "fingerprint": fingerprint,
+            "requires_human": True,
+            "single_use": True,
+            "scope_hint": "本地数据外发的 ",
+            "options": ["允许这次上传", "拒绝"],
+            "target": {
+                "origin": str(target.get("origin") or ""),
+                "top_url": str(target.get("topUrl") or ""),
+                "frame_url": str(target.get("frameUrl") or ""),
+                "target_id": str(target.get("id") or ""),
+            },
+            "files": _public_files(files),
+        },
+    )
+    if permission_result is not None:
+        return json.dumps(permission_result, ensure_ascii=False, default=str)
     # Re-resolve the browser node and re-hash every file immediately before the
     # side effect. Any changed page, origin, path, size, or content cancels the
     # action rather than silently widening the centrally reviewed call.

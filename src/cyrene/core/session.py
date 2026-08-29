@@ -8,7 +8,7 @@ import json
 import logging
 import queue
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -38,6 +38,7 @@ from .context.projection import (
 )
 from .hook import (
     CONTEXT_CHANGE,
+    PRE_TOOL_USE,
     SESSION_START,
     TURN_START,
     HookEvent,
@@ -58,8 +59,11 @@ from .plugin import (
     with_plugin_session_state,
 )
 from .plugin.core_impl import (
+    PERMISSION_BATCH_DECIDE_TOOL,
     PERMISSION_DECIDE_TOOL,
     PERMISSION_DECIDE_TOOL_CHOICE,
+    PermissionDecision,
+    PermissionRequirement,
     PermissionReviewPlugin,
 )
 from .plugin.scopes import ApplicationPluginScope, application_plugin_scope
@@ -78,7 +82,9 @@ AgentEventType = Literal[
     "session.state",
     "input.accepted",
     "input.answered",
+    "guidance.applied",
     "assistant.tool_calls",
+    "permission.reviewed",
     "tool.completed",
     "tools.completed",
     "assistant.completed",
@@ -184,7 +190,7 @@ class AgentSession:
         plugin_directory: str | Path,
         *,
         model_plugin: str = "MiniMax",
-        max_model_calls: int = 12,
+        max_model_calls: int | None = None,
         tree_id: str = "agent-session",
         registry: PluginRegistry | None = None,
         host_context: Mapping[str, Any] | None = None,
@@ -271,9 +277,18 @@ class AgentSession:
         self._current_user_request = ""
         self._current_run_id = ""
         self._run_permission_user_request = ""
+        self._permission_once_grants: set[str] = set()
+        self._permission_session_grants: set[str] = set()
+        self._explicit_delegation_quotes: set[str] = set()
+        self._explicit_delegation_batches: dict[str, tuple[tuple[str, ...], int]] = {}
+        if "permission" in self._plugin_service_values:
+            raise ValueError("Plugin service name is reserved: permission")
+        self._plugin_service_values["permission"] = self
         self._cancelled_run_ids: set[str] = set()
         self._model_calls = 0
-        self._max_model_calls = max(1, int(max_model_calls))
+        self._max_model_calls = (
+            None if max_model_calls is None else max(1, int(max_model_calls))
+        )
         self._streamed_transition_keys: set[str] = set()
         self._session_driver: Any = None
         self._owns_session_driver = False
@@ -293,7 +308,10 @@ class AgentSession:
         permission = PermissionReviewPlugin(
             self._permission_model,
             user_request=lambda _event: self.permission_user_request,
+            policy=self._permission_requirement,
+            on_review=self._record_permission_review,
         )
+        self._permission_review_plugin = permission
         normalized_tree_id = self._tree_id_hint
         try:
             self.tree = self.store.get_tree(normalized_tree_id)
@@ -423,7 +441,7 @@ class AgentSession:
             return self._status == "awaiting_user"
 
     @property
-    def max_model_calls(self) -> int:
+    def max_model_calls(self) -> int | None:
         return self._max_model_calls
 
     @property
@@ -432,6 +450,325 @@ class AgentSession:
             return self._permission_user_request
         with self._state_lock:
             return self._run_permission_user_request or self._current_user_request
+
+    @staticmethod
+    def _permission_fingerprint(
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        request: Mapping[str, Any],
+    ) -> str:
+        explicit = str(request.get("fingerprint") or "").strip()
+        if explicit:
+            return explicit
+        payload = {
+            "tool": str(tool_name or "").strip(),
+            "arguments": dict(arguments),
+            "kind": str(request.get("kind") or "scope_elevation"),
+            "operation": str(request.get("operation") or ""),
+            "path_hint": str(request.get("path_hint") or ""),
+            "reason": str(request.get("reason") or "")[:500],
+        }
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _consume_permission_grant(self, fingerprint: str) -> bool:
+        normalized = str(fingerprint or "").strip()
+        if not normalized:
+            return False
+        with self._state_lock:
+            if normalized in self._permission_session_grants:
+                return True
+            if normalized in self._permission_once_grants:
+                self._permission_once_grants.remove(normalized)
+                return True
+        return False
+
+    def _persist_session_permission_grant(self, fingerprint: str) -> None:
+        normalized = str(fingerprint or "").strip()
+        if not normalized:
+            return
+        root = self.store.get_node(self.tree.id, self.tree.root_id)
+        value = dict(root.value) if isinstance(root.value, Mapping) else {}
+        grants = {
+            str(item).strip()
+            for item in value.get("permission_session_grants") or ()
+            if str(item).strip()
+        }
+        grants.add(normalized)
+        value["permission_session_grants"] = sorted(grants)
+        self.store.update_node(self.tree.id, root.id, value)
+
+    def _permission_requirement(self, event: HookEvent) -> PermissionRequirement:
+        """Apply the 0.7.13 boundary/mode rules inside the review Plugin."""
+
+        payload = event.payload if isinstance(event.payload, Mapping) else {}
+        raw_request = payload.get("permission")
+        if not isinstance(raw_request, Mapping):
+            return PermissionRequirement(
+                "allow",
+                "The Plugin reported no permission boundary.",
+            )
+        request = dict(raw_request)
+        tool = payload.get("tool") if isinstance(payload, Mapping) else None
+        tool = tool if isinstance(tool, Mapping) else {}
+        tool_name = str(tool.get("name") or "")
+        arguments = tool.get("arguments")
+        arguments = arguments if isinstance(arguments, Mapping) else {}
+        fingerprint = self._permission_fingerprint(tool_name, arguments, request)
+        if self._consume_permission_grant(fingerprint):
+            return PermissionRequirement(
+                "allow",
+                "An exact user-approved permission grant was consumed.",
+            )
+
+        run_context = self._plugin_context_data.get("run_context")
+        run_context = run_context if isinstance(run_context, Mapping) else {}
+        context_agent_id = str(run_context.get("agent_id") or "").strip()
+        agent_id = (
+            str(self.agent_id or "main")
+            if self.agent_id != "main"
+            else context_agent_id or "main"
+        )
+        operation = str(request.get("operation") or "受限操作")
+        if agent_id != "main":
+            return PermissionRequirement(
+                "deny",
+                f"Subagent 无权申请权限提升：{operation}",
+            )
+        if bool(run_context.get("system_initiated")) or agent_id == "scheduler":
+            return PermissionRequirement(
+                "deny",
+                f"系统发起的后台轮次不能申请用户权限：{operation}",
+            )
+
+        mode = str(run_context.get("permission_mode") or "default").strip().lower()
+        temporary_full_access = bool(run_context.get("temporary_full_access"))
+        kind = str(request.get("kind") or "scope_elevation")
+        requires_human = bool(request.get("requires_human")) or kind in {
+            "destructive_confirmation",
+            "external_upload_confirmation",
+            "self_configuration_confirmation",
+            "host_lifecycle_confirmation",
+        }
+        always_review = bool(request.get("always_review")) or kind == "extension_change"
+        if bool(run_context.get("bounded_remote_authorization")) and not requires_human:
+            return PermissionRequirement(
+                "allow",
+                "A bounded remote authorization covers this exact invocation.",
+            )
+        global_full_path_access = False
+        if kind in {"read_elevation", "write_permission_request"}:
+            try:
+                from cyrene.runtime.settings_store import get_write_permission_mode
+
+                global_full_path_access = get_write_permission_mode() == "full_access"
+            except Exception:
+                global_full_path_access = False
+        if (mode == "full_access" or temporary_full_access) and not (
+            requires_human or always_review
+        ):
+            return PermissionRequirement(
+                "allow",
+                "Full-access mode covers this ordinary elevation boundary.",
+            )
+        if global_full_path_access:
+            return PermissionRequirement(
+                "allow",
+                "The configured full-path-access mode covers this file boundary.",
+            )
+        if (mode == "auto" or always_review) and not requires_human:
+            return PermissionRequirement("review")
+
+        path_hint = str(request.get("path_hint") or "").strip()
+        reason = str(request.get("reason") or "").strip()
+        detail = f"\n📂 目标：{path_hint}" if path_hint else ""
+        why = f"\n💡 原因：{reason}" if reason else ""
+        authored_options = request.get("options")
+        if requires_human:
+            options = (
+                [str(item) for item in authored_options if str(item).strip()]
+                if isinstance(authored_options, list) and authored_options
+                else ["允许这次", "拒绝"]
+                if bool(request.get("single_use"))
+                else ["允许这次", "本次会话内总是允许", "拒绝"]
+            )
+        else:
+            options = (
+                [str(item) for item in authored_options if str(item).strip()]
+                if isinstance(authored_options, list) and authored_options
+                else ["在本次会话同意", "同意一次", "拒绝"]
+            )
+        scope_hint = str(request.get("scope_hint") or "").strip()
+        question = {
+            "status": "awaiting_user",
+            "question_id": f"permission_{fingerprint[:24]}",
+            "kind": kind,
+            "text": (
+                f"⚠️ Agent 尝试执行 {scope_hint}{operation}\n\n"
+                f"工具：{tool_name}{detail}{why}\n\n"
+                "请确认是否允许此精确操作。"
+            ),
+            "options": options,
+            "allow_custom": False,
+            "round_id": str(run_context.get("round_id") or self._current_run_id),
+            "client_request_id": str(run_context.get("client_request_id") or ""),
+            "permission": {
+                **request,
+                "fingerprint": fingerprint,
+                "tool_name": tool_name,
+            },
+        }
+        return PermissionRequirement(
+            "confirm",
+            "This boundary requires an exact user decision.",
+            question,
+        )
+
+    def request_permission(
+        self,
+        *,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        request: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Resolve a dynamic Plugin boundary discovered inside its handler."""
+
+        requirement = self._permission_requirement(HookEvent(
+            PRE_TOOL_USE,
+            self.tree.id,
+            datetime.now(timezone.utc),
+            payload={
+                "tool": {
+                    "name": str(tool_name or ""),
+                    "arguments": dict(arguments),
+                },
+                "permission": dict(request),
+            },
+        ))
+        if requirement.action == "allow":
+            return None
+        if requirement.action == "confirm":
+            return dict(requirement.question or {})
+        if requirement.action == "deny":
+            return {
+                "status": "denied",
+                "error": requirement.rationale or "Permission denied.",
+            }
+        raise RuntimeError(
+            "Dynamic permission requests requiring automatic review must be "
+            "awaited through request_dynamic_permission."
+        )
+
+    async def request_dynamic_permission(
+        self,
+        *,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        request: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Resolve a handler-discovered boundary, including auto review."""
+
+        event = HookEvent(
+            PRE_TOOL_USE,
+            self.tree.id,
+            datetime.now(timezone.utc),
+            payload={
+                "tool": {
+                    "name": str(tool_name or ""),
+                    "arguments": dict(arguments),
+                },
+                "permission": dict(request),
+            },
+        )
+        output = (await self._permission_review_plugin.review_batch((event,)))[0]
+        decision = str(output.get("decision") or "block").strip().lower()
+        if decision == "allow":
+            return None
+        if decision == "ask":
+            question = output.get("question")
+            return dict(question) if isinstance(question, Mapping) else {
+                "status": "denied",
+                "error": "Permission confirmation payload was invalid.",
+            }
+        return {
+            "status": "denied",
+            "error": str(output.get("reason") or "Permission denied."),
+        }
+
+    def explicit_delegation_status(
+        self,
+        *,
+        quote_identity: str,
+        batch_id: str,
+        operation_keys: Sequence[str],
+        current_operation_key: str,
+    ) -> str:
+        """Return whether an exact 0.7.13-style delegation batch can advance."""
+
+        keys = tuple(str(item or "").strip() for item in operation_keys)
+        quote_key = str(quote_identity or "").strip()
+        normalized_batch_id = str(batch_id or "").strip()
+        current_key = str(current_operation_key or "").strip()
+        if not quote_key or not normalized_batch_id or not keys or any(not key for key in keys):
+            return "invalid"
+        with self._state_lock:
+            record = self._explicit_delegation_batches.get(normalized_batch_id)
+            if record is None:
+                if quote_key in self._explicit_delegation_quotes or current_key != keys[0]:
+                    return "invalid"
+                return "missing"
+            recorded_keys, next_index = record
+            if recorded_keys != keys or next_index >= len(keys):
+                return "invalid"
+            return "ready" if keys[next_index] == current_key else "invalid"
+
+    def consume_explicit_delegation(
+        self,
+        *,
+        quote_identity: str,
+        batch_id: str,
+        operation_keys: Sequence[str],
+        current_operation_key: str,
+        approve_new: bool = False,
+    ) -> int:
+        """Mint or consume one ordered, argument-bound delegation position."""
+
+        keys = tuple(str(item or "").strip() for item in operation_keys)
+        quote_key = str(quote_identity or "").strip()
+        normalized_batch_id = str(batch_id or "").strip()
+        current_key = str(current_operation_key or "").strip()
+        if not quote_key or not normalized_batch_id or not keys or any(not key for key in keys):
+            return 0
+        with self._state_lock:
+            record = self._explicit_delegation_batches.get(normalized_batch_id)
+            if record is None:
+                if (
+                    not approve_new
+                    or quote_key in self._explicit_delegation_quotes
+                    or current_key != keys[0]
+                ):
+                    return 0
+                self._explicit_delegation_quotes.add(quote_key)
+                record = (keys, 0)
+            recorded_keys, next_index = record
+            if (
+                recorded_keys != keys
+                or next_index >= len(keys)
+                or recorded_keys[next_index] != current_key
+            ):
+                return 0
+            position = next_index + 1
+            self._explicit_delegation_batches[normalized_batch_id] = (
+                recorded_keys,
+                position,
+            )
+            return position
 
     @property
     def initial_root_value(self) -> Any:
@@ -705,6 +1042,7 @@ class AgentSession:
             data["caller"] = caller
         if run_id:
             data["run_id"] = run_id
+        data["permission_user_request"] = self.permission_user_request
         if isinstance(raw_run_context, Mapping):
             run_context = dict(raw_run_context)
             run_context["agent_id"] = self.agent_id
@@ -712,6 +1050,7 @@ class AgentSession:
             if run_id:
                 run_context["round_id"] = run_id
             run_context["language"] = data["language"]
+            run_context["permission_user_request"] = self.permission_user_request
             data["run_context"] = run_context
         data.update(details)
         return data
@@ -1242,7 +1581,11 @@ class AgentSession:
         role = str(value.get("role") or "")
         event_type: AgentEventType
         if role == "user":
-            event_type = "input.accepted"
+            event_type = (
+                "guidance.applied"
+                if value.get("runtime_guidance") is True
+                else "input.accepted"
+            )
         elif role == "tool_results":
             event_type = "tools.completed"
         elif role == "assistant" and value.get("cancelled") is True:
@@ -1278,6 +1621,29 @@ class AgentSession:
             event = self._event_for_node(node, sequence=len(events) + 1)
             if event is not None:
                 events.append(event)
+            value = node.value if isinstance(node.value, Mapping) else {}
+            stored_reviews = value.get("permission_reviews")
+            reviews = stored_reviews if isinstance(stored_reviews, list) else ()
+            for raw_review in reviews:
+                if not isinstance(raw_review, Mapping):
+                    continue
+                review = deepcopy(dict(raw_review))
+                raw_time = str(review.get("created_at") or "")
+                try:
+                    review_time = datetime.fromisoformat(raw_time)
+                except ValueError:
+                    review_time = node.updated_at
+                if review_time.tzinfo is None:
+                    review_time = review_time.replace(tzinfo=timezone.utc)
+                events.append(AgentSessionEvent(
+                    sequence=len(events) + 1,
+                    type="permission.reviewed",
+                    tree_id=node.tree_id,
+                    run_id=str(value.get("run_id") or ""),
+                    node_id=node.id,
+                    time=review_time,
+                    data=review,
+                ))
         result = tuple(event for event in events if event.sequence > int(after_sequence))
         log_operation(
             logger,
@@ -1413,6 +1779,7 @@ class AgentSession:
         if not target_run_id:
             return ""
         fallback = ""
+        authorizations: list[str] = []
         nodes = sorted(
             self.store.get_subtree(self.tree.id, self.tree.root_id),
             key=lambda item: (item.created_at, item.id),
@@ -1420,18 +1787,173 @@ class AgentSession:
         for node in nodes:
             value = node.value if isinstance(node.value, Mapping) else {}
             if (
-                value.get("role") != "user"
+                value.get("role") not in {"user", "context_reflection"}
                 or str(value.get("run_id") or "") != target_run_id
             ):
                 continue
             authorization = str(value.get("authorization_request") or "")
-            if authorization:
-                return authorization
+            if authorization and authorization not in authorizations:
+                authorizations.append(authorization)
             metadata = value.get("metadata")
             metadata = metadata if isinstance(metadata, Mapping) else {}
             if str(metadata.get("source") or "") != "agent_inbox" and not fallback:
                 fallback = str(value.get("content") or "")
-        return fallback
+        return "\n\n".join(authorizations) or fallback
+
+    def _append_clarification_authorization(
+        self,
+        run_id: str,
+        answer: str,
+    ) -> str:
+        """Persist original request + user-authored clarification for one run."""
+
+        normalized_answer = str(answer or "").strip()
+        current = self._permission_request_for_run(run_id).strip()
+        if not normalized_answer:
+            return current
+        marker = f"用户随后澄清：{normalized_answer}"
+        updated = current if marker in current else (
+            f"{current}\n\n{marker}" if current else normalized_answer
+        )
+        nodes = sorted(
+            self.store.get_subtree(self.tree.id, self.tree.root_id),
+            key=lambda item: (item.created_at, item.id),
+        )
+        for user_node in nodes:
+            value = user_node.value if isinstance(user_node.value, Mapping) else {}
+            if (
+                value.get("role") != "user"
+                or str(value.get("run_id") or "") != str(run_id or "")
+            ):
+                continue
+            stored = dict(value)
+            stored["authorization_request"] = updated
+            self.store.update_node(self.tree.id, user_node.id, stored)
+            break
+        with self._state_lock:
+            self._run_permission_user_request = updated
+        return updated
+
+    def _guidance_service(self) -> Any | None:
+        service = self._plugin_services().get("guidance")
+        if service is None or not bool(getattr(service, "enabled", False)):
+            return None
+        return service
+
+    async def _collect_guidance(self, *, terminal: bool = False) -> list[dict[str, Any]]:
+        service = self._guidance_service()
+        if service is None:
+            return []
+        collect = service.collect_or_seal if terminal else service.collect
+        return list(await collect())
+
+    async def _mount_guidance(
+        self,
+        parent: ContextNode,
+        events: list[dict[str, Any]],
+        *,
+        run_id: str,
+    ) -> ContextNode | None:
+        """Durably splice accepted guidance into the active Context branch."""
+
+        if not events:
+            return None
+        service = self._guidance_service()
+        if service is None:
+            return None
+        event_ids = [str(event.get("event_id") or "") for event in events]
+        node_key = ":".join(event_ids) or json.dumps(
+            events, ensure_ascii=False, sort_keys=True, default=str
+        )
+        node_id = self._stable_id("guidance", f"{run_id}:{node_key}")
+        already_mounted = False
+        try:
+            node_value = dict(service.node_value(events, run_id=run_id))
+            node_value["caused_by"] = node_key
+            with self._linearized_context_commit():
+                if self._closed or run_id in self._cancelled_run_ids:
+                    service.requeue(events)
+                    return None
+                try:
+                    guidance = self.store.get_node(self.tree.id, node_id)
+                except NodeNotFoundError:
+                    guidance = self.store.mount(
+                        self.tree.id,
+                        parent.id,
+                        node_value,
+                        node_id=node_id,
+                    )
+                else:
+                    parent_path = self.store.get_path(self.tree.id, parent.id)
+                    already_mounted = guidance.id in {
+                        path_node.id for path_node in parent_path
+                    }
+                    if not already_mounted:
+                        raise RuntimeError(
+                            "Recovered guidance belongs to a different Context branch"
+                        )
+                if already_mounted:
+                    guidance_state = None
+                else:
+                    metadata = (
+                        node_value.get("metadata")
+                        if isinstance(node_value.get("metadata"), Mapping)
+                        else {}
+                    )
+                    raw_guidance = str(metadata.get("raw_guidance") or "").strip()
+                    if raw_guidance and raw_guidance not in self._current_user_request:
+                        self._current_user_request = "\n\n".join(
+                            part
+                            for part in (self._current_user_request, raw_guidance)
+                            if part
+                        )
+                    authorization = str(
+                        node_value.get("authorization_request") or ""
+                    ).strip()
+                    if (
+                        authorization
+                        and authorization not in self._run_permission_user_request
+                    ):
+                        self._run_permission_user_request = "\n\n".join(
+                            part
+                            for part in (
+                                self._run_permission_user_request,
+                                authorization,
+                            )
+                            if part
+                        )
+                    guidance_state = self._set_state_locked(
+                        "queued",
+                        _l("Applying user guidance", "正在应用用户引导"),
+                        leaf_id=guidance.id,
+                    )
+            if guidance_state is not None:
+                self._emit_state_snapshot(guidance_state)
+        except Exception:
+            service.requeue(events)
+            raise
+
+        try:
+            await service.acknowledge(events)
+        except Exception:
+            logger.exception("Failed to acknowledge mounted runtime guidance")
+            service.requeue(events)
+        try:
+            await service.fan_out(events)
+        except Exception:
+            logger.exception("Failed to fan runtime guidance out to child Agents")
+        return None if already_mounted else guidance
+
+    def _mark_assistant_intermediate(self, assistant: ContextNode) -> ContextNode:
+        with self._linearized_context_commit():
+            current = self.store.get_node(self.tree.id, assistant.id)
+            value = dict(current.value) if isinstance(current.value, Mapping) else {}
+            if value.get("intermediate") is not True:
+                value["intermediate"] = True
+                value.pop("session_end_complete", None)
+                value.pop("session_end_status", None)
+                current = self.store.update_node(self.tree.id, current.id, value)
+            return current
 
     def _is_cancelled(self, run_id: str) -> bool:
         with self._state_lock:
@@ -1552,6 +2074,9 @@ class AgentSession:
             plan = payload.get("plan")
             if isinstance(plan, (Mapping, list)):
                 question["plan"] = self._json_value(plan)
+            permission = payload.get("permission")
+            if isinstance(permission, Mapping):
+                question["permission"] = self._json_value(dict(permission))
             return question
         return None
 
@@ -1598,7 +2123,10 @@ class AgentSession:
         )
         for child in self.store.get_children(self.tree.id, assistant.id):
             value = child.value if isinstance(child.value, Mapping) else {}
-            if value.get("role") == "tool_results" and value.get("caused_by") == batch_key:
+            if (
+                value.get("role") in {"tool_results", "context_reflection"}
+                and value.get("caused_by") == batch_key
+            ):
                 return child
         return None
 
@@ -1800,6 +2328,19 @@ class AgentSession:
             root_id=self.tree.root_id,
         )
         nodes = self.store.get_subtree(self.tree.id, self.tree.root_id)
+        root_value = next(
+            (
+                node.value
+                for node in nodes
+                if node.id == self.tree.root_id and isinstance(node.value, Mapping)
+            ),
+            {},
+        )
+        self._permission_session_grants = {
+            str(item).strip()
+            for item in root_value.get("permission_session_grants") or ()
+            if str(item).strip()
+        }
         self._cancelled_run_ids = {
             str(node.value.get("run_id") or "")
             for node in nodes
@@ -1817,6 +2358,7 @@ class AgentSession:
                 "user",
                 "context",
                 "context_compaction",
+                "context_reflection",
                 "assistant",
                 "tool_results",
             }
@@ -1828,14 +2370,38 @@ class AgentSession:
             (
                 node
                 for node in reversed(path)
-                if isinstance(node.value, Mapping) and node.value.get("role") == "user"
+                if isinstance(node.value, Mapping)
+                and node.value.get("role") == "user"
+                and node.value.get("runtime_guidance") is not True
             ),
             None,
         )
-        self._current_user_request = str(
-            latest_user.value.get("content") if latest_user is not None else ""
-        )
         self._current_run_id = self._node_run_id(leaf)
+        request_parts: list[str] = []
+        for request_node in path:
+            request_value = (
+                request_node.value
+                if isinstance(request_node.value, Mapping)
+                else {}
+            )
+            if (
+                request_value.get("role") != "user"
+                or str(request_value.get("run_id") or "") != self._current_run_id
+            ):
+                continue
+            if request_value.get("runtime_guidance") is True:
+                request_metadata = request_value.get("metadata")
+                request_metadata = (
+                    request_metadata
+                    if isinstance(request_metadata, Mapping)
+                    else {}
+                )
+                request_text = str(request_metadata.get("raw_guidance") or "")
+            else:
+                request_text = str(request_value.get("content") or "")
+            if request_text and request_text not in request_parts:
+                request_parts.append(request_text)
+        self._current_user_request = "\n\n".join(request_parts)
         self._run_permission_user_request = self._permission_request_for_run(
             self._current_run_id
         )
@@ -1888,14 +2454,22 @@ class AgentSession:
                 model_calls=self._model_calls,
             )
             return
-        if value.get("role") == "context_compaction":
+        if value.get("role") in {"context_compaction", "context_reflection"}:
+            if value.get("role") == "context_reflection":
+                model_context = value.get("model_context")
+                model_context = (
+                    model_context if isinstance(model_context, Mapping) else {}
+                )
+                reflection = model_context.get("reflection")
+                reflection = reflection if isinstance(reflection, Mapping) else {}
+                self._current_user_request = str(reflection.get("goal") or "")
             should_resume = value.get("resume_model") is True
             if should_resume and self._transition_assistant(leaf) is None:
                 self._set_state(
                     "queued",
                     _l(
-                        "Resuming model after context compaction",
-                        "正在压缩上下文后恢复模型",
+                        "Resuming model after context rewrite",
+                        "正在重写上下文后恢复模型",
                     ),
                     leaf_id=leaf.id,
                 )
@@ -1905,7 +2479,7 @@ class AgentSession:
                 self._current_user_request = ""
                 self._set_state(
                     "idle",
-                    _l("Restored compacted context", "已恢复压缩后的上下文"),
+                    _l("Restored rewritten context", "已恢复重写后的上下文"),
                     leaf_id=leaf.id,
                 )
                 outcome = "compacted_idle"
@@ -2075,6 +2649,10 @@ class AgentSession:
         normalized_run_id = str(run_id or f"run_{uuid4().hex}").strip()
         if not normalized_run_id:
             raise ValueError(_l("run_id cannot be empty.", "run_id 不能为空。"))
+        normalized_metadata = deepcopy(dict(metadata or {}))
+        public_request = str(
+            normalized_metadata.get("public_user_message") or content
+        ).strip()
         if self._permission_user_request is not None:
             authorization_request = self._permission_user_request
         elif permission_user_request is not None:
@@ -2086,9 +2664,8 @@ class AgentSession:
             authorization_request = (
                 current_authorization
                 if normalized_run_id == current_run_id and current_authorization
-                else self._permission_request_for_run(normalized_run_id) or content
+                else self._permission_request_for_run(normalized_run_id) or public_request
             )
-        normalized_metadata = deepcopy(dict(metadata or {}))
         has_session_context = self._has_context_provider()
         with self._state_lock:
             if self._closed:
@@ -2199,6 +2776,26 @@ class AgentSession:
                     "The pending Agent run was cancelled.",
                     "待处理的 Agent 运行已取消。",
                 ))
+            permission = pending.get("permission")
+            if isinstance(permission, Mapping):
+                fingerprint = str(permission.get("fingerprint") or "").strip()
+                option_labels = {
+                    str(item.get("label") or "").strip()
+                    for item in pending.get("options") or ()
+                    if isinstance(item, Mapping)
+                }
+                negative = normalized_answer.strip().lower() in {
+                    "拒绝", "否", "不允许", "no", "n", "deny", "cancel",
+                }
+                if fingerprint and normalized_answer in option_labels and not negative:
+                    with self._state_lock:
+                        if "本次会话" in normalized_answer or "始终" in normalized_answer:
+                            self._permission_session_grants.add(fingerprint)
+                            self._persist_session_permission_grant(fingerprint)
+                        else:
+                            self._permission_once_grants.add(fingerprint)
+            elif str(pending.get("kind") or "") == "clarification":
+                self._append_clarification_authorization(run_id, normalized_answer)
 
             matched = False
             updated_results: list[Any] = []
@@ -2776,6 +3373,7 @@ class AgentSession:
                     for node in reversed(path)
                     if isinstance(node.value, Mapping)
                     and node.value.get("role") == "user"
+                    and node.value.get("runtime_guidance") is not True
                 ),
                 None,
             )
@@ -2865,9 +3463,26 @@ class AgentSession:
             else:
                 await self._finish_success(existing)
             return
+        guidance_service = self._guidance_service()
+        if (
+            guidance_service is not None
+            and bool(guidance_service.has_pending)
+        ):
+            guidance_events = await self._collect_guidance()
+            if guidance_events:
+                mounted_guidance = await self._mount_guidance(
+                    trigger,
+                    guidance_events,
+                    run_id=run_id,
+                )
+                if mounted_guidance is not None:
+                    return
         prepared = self._prepare_model_input(trigger)
         trigger_value = trigger.value if isinstance(trigger.value, Mapping) else {}
-        if trigger_value.get("role") != "context_compaction":
+        if trigger_value.get("role") not in {
+            "context_compaction",
+            "context_reflection",
+        }:
             trigger, prepared, run_id = await self._automatic_compaction(
                 trigger, prepared, run_id
             )
@@ -2878,7 +3493,7 @@ class AgentSession:
                 return
             self._model_calls += 1
             count = self._model_calls
-        if count > self._max_model_calls:
+        if self._max_model_calls is not None and count > self._max_model_calls:
             failure = self._mount_assistant(
                 trigger.id,
                 "Stopped because the model-call limit for this user turn was reached.",
@@ -2893,16 +3508,22 @@ class AgentSession:
         with self._state_lock:
             if self._closed or run_id in self._cancelled_run_ids:
                 return
-            model_state = self._set_state_locked(
-                "model",
-                _l(
+            if self._max_model_calls is None:
+                detail = _l(
+                    "Calling {model} (call {count})",
+                    "正在调用 {model}（第 {count} 次）",
+                    model=self.model_plugin,
+                    count=count,
+                )
+            else:
+                detail = _l(
                     "Calling {model} ({count}/{limit})",
                     "正在调用 {model}（{count}/{limit}）",
                     model=self.model_plugin,
                     count=count,
                     limit=self._max_model_calls,
-                ),
-            )
+                )
+            model_state = self._set_state_locked("model", detail)
         self._emit_state_snapshot(model_state)
         arguments = {
             "messages": prepared.messages,
@@ -2917,23 +3538,64 @@ class AgentSession:
                 transition_key=transition_key,
             ),
         }
-        result = await self.runtime.call(
-            self.model_plugin,
-            arguments,
-            PluginContext(
-                workspace=self.workspace,
-                tree=self.store,
-                tree_id=self.tree.id,
-                node_id=trigger.id,
-                data=self._plugin_data(
-                    run_id=run_id,
-                    model_call_kind="agent",
-                    user_request=self.current_user_request,
-                    prepared_request_tokens=prepared.routing_tokens,
-                ),
-                services=model_services,
+        model_context = PluginContext(
+            workspace=self.workspace,
+            tree=self.store,
+            tree_id=self.tree.id,
+            node_id=trigger.id,
+            data=self._plugin_data(
+                run_id=run_id,
+                model_call_kind="agent",
+                user_request=self.current_user_request,
+                prepared_request_tokens=prepared.routing_tokens,
             ),
+            services=model_services,
         )
+        model_task = asyncio.create_task(
+            self.runtime.call(self.model_plugin, arguments, model_context)
+        )
+        wait_task: asyncio.Task[bool] | None = None
+        try:
+            if guidance_service is not None:
+                wait_task = asyncio.create_task(guidance_service.wait())
+                await asyncio.wait(
+                    (model_task, wait_task),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if wait_task.done() and bool(wait_task.result()) and not model_task.done():
+                    model_task.cancel()
+                    await asyncio.gather(model_task, return_exceptions=True)
+                    with self._state_lock:
+                        self._streamed_transition_keys.discard(transition_key)
+                    guidance_events = await self._collect_guidance()
+                    if guidance_events:
+                        mounted_guidance = await self._mount_guidance(
+                            trigger,
+                            guidance_events,
+                            run_id=run_id,
+                        )
+                        if mounted_guidance is not None:
+                            return
+                    model_task = asyncio.create_task(
+                        self.runtime.call(self.model_plugin, arguments, model_context)
+                    )
+                if wait_task is not None and not wait_task.done():
+                    wait_task.cancel()
+                    await asyncio.gather(wait_task, return_exceptions=True)
+            result = await model_task
+        except BaseException:
+            pending_tasks = [
+                task
+                for task in (model_task, wait_task)
+                if task is not None and not task.done()
+            ]
+            for task in pending_tasks:
+                task.cancel()
+            if pending_tasks:
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
+            with self._state_lock:
+                self._streamed_transition_keys.discard(transition_key)
+            raise
         if self._is_cancelled(run_id):
             return
         if not result.success or not isinstance(result.value, Mapping):
@@ -3031,6 +3693,28 @@ class AgentSession:
         with self._state_lock:
             if self._closed or run_id in self._cancelled_run_ids:
                 return
+        guidance_service = self._guidance_service()
+        driver = self._session_driver if self._owns_session_driver else None
+        driver_pending = bool(driver is not None and driver.has_pending_work)
+        if guidance_service is not None and value.get("intermediate") is not True:
+            guidance_events: list[dict[str, Any]] = []
+            if driver_pending:
+                if bool(guidance_service.has_pending):
+                    guidance_events = await self._collect_guidance()
+            else:
+                guidance_events = await self._collect_guidance(terminal=True)
+            if guidance_events:
+                mounted_guidance = await self._mount_guidance(
+                    assistant,
+                    guidance_events,
+                    run_id=run_id,
+                )
+                if mounted_guidance is not None:
+                    self._mark_assistant_intermediate(assistant)
+                    return
+                if not driver_pending:
+                    await self._finish_terminal(assistant, status=status)
+                    return
         if value.get("session_end_complete") is not True:
             user_value: Mapping[str, Any] = {}
             user_node_id = ""
@@ -3040,10 +3724,46 @@ class AgentSession:
                 if (
                     candidate.get("role") == "user"
                     and str(candidate.get("run_id") or "") == run_id
+                    and candidate.get("runtime_guidance") is not True
                 ):
                     user_value = candidate
                     user_node_id = node.id
                     break
+                if (
+                    candidate.get("role") == "context_reflection"
+                    and str(candidate.get("run_id") or "") == run_id
+                ):
+                    model_context = candidate.get("model_context")
+                    model_context = (
+                        model_context
+                        if isinstance(model_context, Mapping)
+                        else {}
+                    )
+                    reflected_users = model_context.get("user_messages")
+                    reflected_users = (
+                        reflected_users
+                        if isinstance(reflected_users, list)
+                        else []
+                    )
+                    reflected_user = next(
+                        (
+                            item
+                            for item in reversed(reflected_users)
+                            if isinstance(item, Mapping)
+                            and str(item.get("round_id") or "") == run_id
+                        ),
+                        None,
+                    )
+                    if isinstance(reflected_user, Mapping):
+                        public_content = str(reflected_user.get("content") or "")
+                        user_value = {
+                            "content": public_content,
+                            "metadata": {
+                                "public_user_message": public_content,
+                            },
+                        }
+                        user_node_id = node.id
+                        break
             metadata = user_value.get("metadata")
             metadata = metadata if isinstance(metadata, Mapping) else {}
             with self._state_lock:
@@ -3055,7 +3775,8 @@ class AgentSession:
                     "run_id": run_id,
                     "agent_id": self.agent_id,
                     "parent_agent_id": self.parent_agent_id,
-                    "user_request": str(user_value.get("content") or ""),
+                    "user_request": self.current_user_request
+                    or str(user_value.get("content") or ""),
                     "user_node_id": user_node_id,
                     "assistant_node_id": assistant.id,
                     "assistant_text": str(value.get("content") or ""),
@@ -3131,6 +3852,139 @@ class AgentSession:
             data=self._stored_result(result),
         )
 
+    def _reflection_call(
+        self,
+        calls: list[Any],
+    ) -> Mapping[str, Any] | None:
+        """Return the first Plugin-declared context-reflection control call."""
+
+        for raw_call in calls:
+            if not isinstance(raw_call, Mapping):
+                continue
+            try:
+                plugin = self.registry.resolve(
+                    str(raw_call.get("name") or ""),
+                    agent_id=self.agent_id,
+                )
+            except Exception:
+                continue
+            if str(plugin.metadata.get("session_transition") or "") == (
+                "deep_reflection"
+            ):
+                return raw_call
+        return None
+
+    async def _continue_reflection(
+        self,
+        assistant: ContextNode,
+        call: Mapping[str, Any],
+    ) -> None:
+        """Build a Reflect Pack asynchronously, then atomically rewrite the tree."""
+
+        run_id = self._node_run_id(assistant)
+        path = self.store.get_path(self.tree.id, assistant.id)
+        start_index = next(
+            (
+                index
+                for index, node in enumerate(path[1:], start=1)
+                if isinstance(node.value, Mapping)
+                and node.value.get("role") in {"user", "context_reflection"}
+            ),
+            -1,
+        )
+        if start_index < 0:
+            raise RuntimeError("deep reflection has no replaceable conversation path")
+        source_path = path[start_index:]
+        start = source_path[0]
+        expected_node_ids = tuple(
+            node.id for node in self.store.get_subtree(self.tree.id, start.id)
+        )
+        services = self._plugin_services()
+        service = services.get("deep_reflection")
+        reflect = getattr(service, "reflect", None)
+        if not callable(reflect):
+            raise RuntimeError("DeepReflect Plugin service is unavailable")
+
+        effective_messages = self._messages(assistant.id)
+        stable_system_messages = [
+            deepcopy(dict(message))
+            for message in effective_messages
+            if isinstance(message, Mapping)
+            and str(message.get("role") or "") == "system"
+        ]
+        with self._state_lock:
+            if self._closed or run_id in self._cancelled_run_ids:
+                return
+            reflecting_state = self._set_state_locked(
+                "reflecting",
+                _l("Rewriting conversation context", "正在重写对话上下文"),
+                leaf_id=assistant.id,
+            )
+        self._emit_state_snapshot(reflecting_state)
+
+        plugin_context = PluginContext(
+            workspace=self.workspace,
+            tree=self.store,
+            tree_id=self.tree.id,
+            node_id=assistant.id,
+            hooks=self.hooks,
+            data=self._plugin_data(
+                run_id=run_id,
+                model_call_kind="deep_reflection",
+                user_request=self.current_user_request,
+            ),
+            services=services,
+        )
+        pack = await reflect(
+            source_path,
+            dict(call.get("arguments") or {}),
+            plugin_context,
+        )
+        if self._is_cancelled(run_id):
+            return
+        batch_key = str(
+            (assistant.value if isinstance(assistant.value, Mapping) else {}).get(
+                "batch_key"
+            )
+            or self._stable_id("batch", assistant.id)
+        )
+        payload = {
+            "role": "context_reflection",
+            "run_id": run_id,
+            "authorization_request": self.permission_user_request,
+            "caused_by": batch_key,
+            "trigger_model": True,
+            "resume_model": True,
+            "reflection_tool_call_id": str(call.get("id") or ""),
+            **dict(pack),
+            "messages": [
+                *stable_system_messages,
+                {
+                    "role": "user",
+                    "content": str(pack.get("rendered_model_context") or ""),
+                    "reflect_pack": True,
+                },
+            ],
+        }
+        with self._linearized_context_commit():
+            if self._closed or run_id in self._cancelled_run_ids:
+                return
+            rewritten, _deleted = self.store.replace_subtree(
+                self.tree.id,
+                start.id,
+                payload,
+                expected_node_ids=expected_node_ids,
+            )
+            rewritten_state = self._set_state_locked(
+                "model",
+                _l(
+                    "Reflect Pack committed; waiting for model",
+                    "Reflect Pack 已提交，正在等待模型",
+                ),
+                leaf_id=rewritten.id,
+            )
+        self._emit_state_snapshot(rewritten_state)
+
     async def _continue_tools(self, assistant: ContextNode) -> None:
         run_id = self._node_run_id(assistant)
         if self._is_cancelled(run_id):
@@ -3167,6 +4021,11 @@ class AgentSession:
         value = assistant.value if isinstance(assistant.value, Mapping) else {}
         calls = value.get("tool_calls")
         calls = calls if isinstance(calls, list) else []
+
+        reflection_call = self._reflection_call(calls)
+        if reflection_call is not None:
+            await self._continue_reflection(assistant, reflection_call)
+            return
 
         plugin_calls = tuple(
             PluginCall(
@@ -3231,10 +4090,20 @@ class AgentSession:
         if self._is_cancelled(run_id):
             return
         batch_key = str(value.get("batch_key") or self._stable_id("batch", assistant.id))
-        pending_question = self._pending_question_from_results(
-            calls,
-            results,
-            run_id=run_id,
+        guidance_service = self._guidance_service()
+        guidance_events = (
+            await self._collect_guidance()
+            if guidance_service is not None and bool(guidance_service.has_pending)
+            else []
+        )
+        pending_question = (
+            None
+            if guidance_events
+            else self._pending_question_from_results(
+                calls,
+                results,
+                run_id=run_id,
+            )
         )
         with self._linearized_context_commit():
             if self._closed or run_id in self._cancelled_run_ids:
@@ -3244,7 +4113,7 @@ class AgentSession:
                 assistant.id,
                 {
                     "role": "tool_results",
-                    "trigger_model": pending_question is None,
+                    "trigger_model": pending_question is None and not guidance_events,
                     "run_id": run_id,
                     "caused_by": batch_key,
                     "results": [
@@ -3284,6 +4153,12 @@ class AgentSession:
                     leaf_id=tool_node.id,
                 )
         self._emit_state_snapshot(tool_state)
+        if guidance_events:
+            await self._mount_guidance(
+                tool_node,
+                guidance_events,
+                run_id=run_id,
+            )
 
     def _mount_assistant(
         self,
@@ -3367,7 +4242,7 @@ class AgentSession:
         for node in path:
             value = node.value if isinstance(node.value, Mapping) else {}
             role = str(value.get("role") or "")
-            if role == "context_compaction":
+            if role in {"context_compaction", "context_reflection"}:
                 compacted = value.get("messages")
                 if isinstance(compacted, list) and all(
                     isinstance(message, Mapping) for message in compacted
@@ -3513,6 +4388,105 @@ class AgentSession:
             value["auxiliary_usage"] = auxiliary_usage
             self.store.update_node(self.tree.id, assistant_id, value)
 
+    def _record_permission_review(
+        self,
+        events: Sequence[HookEvent],
+        decisions: Sequence[PermissionDecision],
+    ) -> None:
+        reviewed_events = tuple(events)
+        reviewed_decisions = tuple(decisions)
+        if not reviewed_events or len(reviewed_events) != len(reviewed_decisions):
+            return
+        reviewed_at = datetime.now(timezone.utc)
+        with self._state_lock:
+            assistant_id = self._leaf_id
+            try:
+                node = self.store.get_node(self.tree.id, assistant_id)
+            except NodeNotFoundError:
+                return
+            value = dict(node.value) if isinstance(node.value, Mapping) else {}
+            if value.get("role") != "assistant":
+                return
+            calls = value.get("tool_calls")
+            calls = calls if isinstance(calls, list) else []
+            matched_call_indices: set[int] = set()
+            recorded_decisions: list[dict[str, Any]] = []
+            for index, (hook_event, decision) in enumerate(
+                zip(reviewed_events, reviewed_decisions)
+            ):
+                payload = (
+                    hook_event.payload
+                    if isinstance(hook_event.payload, Mapping)
+                    else {}
+                )
+                tool = payload.get("tool") if isinstance(payload, Mapping) else None
+                tool = tool if isinstance(tool, Mapping) else {}
+                tool_name = str(tool.get("name") or "")
+                tool_arguments = dict(tool.get("arguments") or {})
+                matched_call: Mapping[str, Any] | None = None
+                for call_index, raw_call in enumerate(calls):
+                    if (
+                        call_index in matched_call_indices
+                        or not isinstance(raw_call, Mapping)
+                    ):
+                        continue
+                    if (
+                        str(raw_call.get("name") or "") == tool_name
+                        and dict(raw_call.get("arguments") or {}) == tool_arguments
+                    ):
+                        matched_call = raw_call
+                        matched_call_indices.add(call_index)
+                        break
+                if matched_call is None:
+                    for call_index, raw_call in enumerate(calls):
+                        if (
+                            call_index in matched_call_indices
+                            or not isinstance(raw_call, Mapping)
+                            or str(raw_call.get("name") or "") != tool_name
+                        ):
+                            continue
+                        matched_call = raw_call
+                        matched_call_indices.add(call_index)
+                        break
+                recorded_decisions.append({
+                    "index": index,
+                    "tool": tool_name,
+                    "tool_call_id": str(
+                        (matched_call.get("id") or "")
+                        if matched_call is not None
+                        else ""
+                    ),
+                    "approved": bool(decision.approve),
+                    "rationale": str(decision.rationale),
+                })
+            stored = value.get("permission_reviews")
+            reviews = list(stored) if isinstance(stored, list) else []
+            approved_count = sum(
+                1 for decision in recorded_decisions if decision["approved"]
+            )
+            review = {
+                "id": self._stable_id(
+                    "permission_review",
+                    f"{assistant_id}:{len(reviews)}",
+                ),
+                "approved": approved_count == len(recorded_decisions),
+                "approved_count": approved_count,
+                "denied_count": len(recorded_decisions) - approved_count,
+                "decisions": recorded_decisions,
+                "created_at": reviewed_at.isoformat(),
+            }
+            reviews.append(review)
+            value["permission_reviews"] = reviews
+            self.store.update_node(self.tree.id, assistant_id, value)
+            run_id = str(value.get("run_id") or self._current_run_id)
+        self._emit_event(
+            "permission.reviewed",
+            run_id=run_id,
+            node_id=assistant_id,
+            time=reviewed_at,
+            data=review,
+        )
+
     async def _permission_model(
         self,
         system_prompt: str,
@@ -3522,6 +4496,11 @@ class AgentSession:
             assistant_id = self._leaf_id
             run_id = self._current_run_id
             user_request = self._current_user_request
+        decision_tool = (
+            PERMISSION_BATCH_DECIDE_TOOL
+            if isinstance(request.get("tools"), list)
+            else PERMISSION_DECIDE_TOOL
+        )
         result = await self.runtime.call(
             self.model_plugin,
             {
@@ -3532,7 +4511,7 @@ class AgentSession:
                         "content": json.dumps(request, ensure_ascii=False, default=str),
                     },
                 ],
-                "tools": [PERMISSION_DECIDE_TOOL],
+                "tools": [decision_tool],
                 "tool_choice": PERMISSION_DECIDE_TOOL_CHOICE,
             },
             PluginContext(
@@ -3746,6 +4725,7 @@ class AgentSession:
                 value.get("role") == "assistant"
                 and str(value.get("run_id") or "") == target_run_id
                 and not value.get("tool_calls")
+                and value.get("intermediate") is not True
             ):
                 candidates.append(node)
         if not candidates:
@@ -3845,6 +4825,53 @@ class AgentSession:
         )
         return result
 
+    async def _drive_session_driver_with_guidance(
+        self,
+        guidance_service: Any | None,
+    ) -> tuple[bool, list[dict[str, Any]]]:
+        """Race child coordination against a loop-neutral guidance wakeup."""
+
+        driver = self._session_driver
+        if driver is None:
+            return False, []
+        drive_task = asyncio.create_task(driver.drive())
+        wait_task: asyncio.Task[bool] | None = None
+        try:
+            if guidance_service is not None:
+                wait_task = asyncio.create_task(guidance_service.wait())
+                await asyncio.wait(
+                    (drive_task, wait_task),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if (
+                    wait_task.done()
+                    and bool(wait_task.result())
+                    and not drive_task.done()
+                ):
+                    drive_task.cancel()
+                    await asyncio.gather(drive_task, return_exceptions=True)
+                    return False, await self._collect_guidance()
+                if not wait_task.done():
+                    wait_task.cancel()
+                    await asyncio.gather(wait_task, return_exceptions=True)
+            drove = bool(await drive_task)
+            if (
+                guidance_service is not None
+                and bool(guidance_service.has_pending)
+            ):
+                return drove, await self._collect_guidance()
+            return drove, []
+        finally:
+            pending_tasks = [
+                task
+                for task in (drive_task, wait_task)
+                if task is not None and not task.done()
+            ]
+            for task in pending_tasks:
+                task.cancel()
+            if pending_tasks:
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
+
     async def drain(self) -> None:
         """Wait until queued Hooks and all resulting transitions are idle."""
 
@@ -3855,7 +4882,9 @@ class AgentSession:
             tree_id=self.tree.id,
             run_id=self.current_run_id,
         ) as op:
-            for attempt in range(1, self._max_model_calls + 67):
+            attempt = 0
+            while True:
+                attempt += 1
                 await asyncio.shield(self.hooks.drain())
                 await asyncio.to_thread(self._wait_for_transitions)
                 await asyncio.shield(self.hooks.drain())
@@ -3877,11 +4906,48 @@ class AgentSession:
                         and self._session_driver.has_pending_work
                     ):
                         self._mark_leaf_waiting_for_driver()
-                        if await self._session_driver.drive():
+                        guidance_service = self._guidance_service()
+                        if (
+                            guidance_service is not None
+                            and bool(guidance_service.has_pending)
+                        ):
+                            guidance_events = await self._collect_guidance()
+                            if guidance_events:
+                                with self._state_lock:
+                                    guidance_parent_id = self._leaf_id
+                                    guidance_run_id = self._current_run_id
+                                guidance_parent = self.store.get_node(
+                                    self.tree.id, guidance_parent_id
+                                )
+                                await self._mount_guidance(
+                                    guidance_parent,
+                                    guidance_events,
+                                    run_id=guidance_run_id,
+                                )
+                                continue
+                        drove, guidance_events = (
+                            await self._drive_session_driver_with_guidance(
+                                guidance_service
+                            )
+                        )
+                        if guidance_events:
+                            with self._state_lock:
+                                guidance_parent_id = self._leaf_id
+                                guidance_run_id = self._current_run_id
+                            guidance_parent = self.store.get_node(
+                                self.tree.id, guidance_parent_id
+                            )
+                            mounted_guidance = await self._mount_guidance(
+                                guidance_parent,
+                                guidance_events,
+                                run_id=guidance_run_id,
+                            )
+                            if mounted_guidance is not None:
+                                continue
+                        if drove:
                             continue
                     op.finish(attempts=attempt, status=self._status, leaf_id=self._leaf_id)
                     return
-            raise RuntimeError("Agent session did not become idle while draining")
 
     def close(self) -> None:
         """Stop process-local workers while leaving unfinished tree state recoverable."""

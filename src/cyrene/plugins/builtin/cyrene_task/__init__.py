@@ -17,6 +17,7 @@ def _plugin(module: ModuleType) -> Plugin:
             or {"type": "object", "properties": {}}
         ),
         handler=module.handler,
+        permission_boundary=getattr(module, "permission_boundary", None),
         allow_parallel=False,
         timeout_seconds=180.0,
         metadata={"main_only": True},

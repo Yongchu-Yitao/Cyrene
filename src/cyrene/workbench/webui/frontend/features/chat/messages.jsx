@@ -1,7 +1,7 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_ICONS, WbcVoice, useWbcEffect, useWbcMemo, useWbcRef, useWbcState, wbcAgentErrorPresentation, wbcAttachmentTypeLabel, wbcCompactNumber, wbcErrorText, wbcFileViewKind, wbcFormatProcessingDuration, wbcFormatTime, wbcRandomThinkingPhrase, wbcRenderMarkdown, wbcRuntimeTimelineMessages, wbcT, wbcToolPresentationKind, wbcToolPresentationText, wbcToolPreviewText } from "../../workbench-chat.jsx"
 import { WbcThreadItem, wbcElicitationFields, wbcElicitationInitialValues, wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue, wbcValidateElicitationForm } from "./conversation.jsx"
-import { WbcFileVisual, wbcCanOpenExternally, wbcDownloadLink, wbcStartFileDrag } from "./file-resources.jsx"
+import { WbcFileVisual, wbcCanOpenExternally, wbcDownloadLink, wbcStartFileDrag, wbcStartFilePointerDrag, wbcUsesFilePointerDrag } from "./file-resources.jsx"
 import { useWorkbenchI18n } from "../../workbench-i18n.jsx"
 
 // Workbench chat feature module with explicit ESM dependencies.
@@ -642,8 +642,9 @@ function WbcAgentFiles({ files, onOpenFile }) {
           <div
             className="wbc-agent-file"
             key={file.id || file.url || i}
-            draggable="true"
+            draggable={wbcUsesFilePointerDrag() ? undefined : "true"}
             onDragStart={function (event) { wbcStartFileDrag(event, file); }}
+            onPointerDown={function (event) { wbcStartFilePointerDrag(event, file); }}
           >
             <span className="wbc-file-icon">{WBC_ICONS.file}</span>
             <span className="wbc-file-meta">

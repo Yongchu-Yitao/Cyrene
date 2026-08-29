@@ -49,6 +49,12 @@ async def _tool_spawn_subagent(
         requester_id,
         agent_id,
         task,
+        mode=str(args.get("mode") or "execution"),
+        success_criteria=args.get("success_criteria"),
+        discussion_max_messages=args.get("max_messages"),
+        discussion_id=str(args.get("discussion_id") or ""),
+        use_secondary=bool(args.get("use_secondary")),
+        role=str(args.get("role") or ""),
         effect_key=current_effect_key(),
     )
     return plugin_localized(

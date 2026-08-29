@@ -27,7 +27,13 @@ from .native_tools import BuiltinPluginSeedResult, seed_builtin_plugin_directory
 from .contributions import (
     frontend_views,
     project_tools as _plugin_project_tools,
+    serialize_workbench_surface,
+    serialize_workspace_action,
+    serialize_workspace_file_type,
     validate_workbench_contributions,
+    workbench_surfaces,
+    workspace_actions,
+    workspace_file_types,
 )
 from .context import (
     PluginApplicationContext,
@@ -258,7 +264,7 @@ class PluginApplicationHost:
             return False
 
     def _pack_available(self, pack_id: str) -> bool:
-        if not self._pack_enabled(pack_id) or self.pack_restart_required(pack_id):
+        if not self._pack_enabled(pack_id):
             return False
         return not self._started or pack_id in self._running_packs
 
@@ -272,7 +278,7 @@ class PluginApplicationHost:
         """Return whether a pack may currently serve process/background work."""
 
         normalized = str(pack_id)
-        if not self._pack_enabled(normalized) or self.pack_restart_required(normalized):
+        if not self._pack_enabled(normalized):
             return False
         if not self._started:
             return False
@@ -294,11 +300,14 @@ class PluginApplicationHost:
             if self._pack_available(self._frontend_module_owners[module])
         ]
 
-    def frontend_contributions(self) -> dict[str, list[dict[str, Any]]]:
-        """Return enabled sandboxed views and their Workbench entry points."""
+    def workbench_contributions(self) -> dict[str, list[dict[str, Any]]]:
+        """Return capabilities owned by currently operational Plugin packs."""
 
         views: list[dict[str, Any]] = []
         project_tools: list[dict[str, Any]] = []
+        surfaces: list[dict[str, Any]] = []
+        file_types: list[dict[str, Any]] = []
+        actions: list[dict[str, Any]] = []
         for pack in self.registry.list_packs():
             if not self.pack_operational(pack.id):
                 continue
@@ -314,7 +323,30 @@ class PluginApplicationHost:
                     continue
                 item["pack_id"] = pack.id
                 project_tools.append(item)
-        return {"views": views, "project_tools": project_tools}
+            surfaces.extend(
+                serialize_workbench_surface(pack, value)
+                for value in workbench_surfaces(pack)
+            )
+            file_types.extend(
+                serialize_workspace_file_type(pack, value)
+                for value in workspace_file_types(pack)
+            )
+            actions.extend(
+                serialize_workspace_action(pack, value)
+                for value in workspace_actions(pack)
+            )
+        return {
+            "views": views,
+            "project_tools": project_tools,
+            "surfaces": surfaces,
+            "file_types": file_types,
+            "actions": actions,
+        }
+
+    def frontend_contributions(self) -> dict[str, list[dict[str, Any]]]:
+        """Compatibility alias for callers using the original UI-only name."""
+
+        return self.workbench_contributions()
 
     def frontend_asset_path(self, pack_id: str, asset_path: str) -> Path:
         """Resolve one enabled view asset without exposing the pack's Python source."""
@@ -409,12 +441,6 @@ class PluginApplicationHost:
                     connection,
                     404,
                     f"Plugin pack is unavailable: {pack_id}",
-                )
-            if self.pack_restart_required(pack_id):
-                await unavailable(
-                    connection,
-                    503,
-                    f"Plugin pack changed and requires an application restart: {pack_id}",
                 )
             if self._started and pack_id not in self._running_packs:
                 await unavailable(
@@ -617,15 +643,15 @@ class PluginApplicationHost:
 
         if self._started:
             for pack_id in reversed(self._attached_packs):
-                if (
-                    not self._pack_enabled(pack_id)
-                    or self.pack_restart_required(pack_id)
-                ):
+                if not self._pack_enabled(pack_id):
                     await self._stop_pack(pack_id)
             for pack_id in self._attached_packs:
                 if (
                     self._pack_enabled(pack_id)
-                    and not self.pack_restart_required(pack_id)
+                    and (
+                        not self.pack_restart_required(pack_id)
+                        or pack_id in self._running_packs
+                    )
                 ):
                     await self._start_pack(pack_id)
         from cyrene.plugins.background import reconcile_background_plugin_hosts

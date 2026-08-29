@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from ..hook import HookAwaitingUser
 from ..observability import log_operation, operation
 from .execution import bind_plugin_execution
 from .context import plugin_localized
@@ -27,7 +28,11 @@ logger = logging.getLogger(__name__)
 def _dispatches_own_tool_hooks(plugin: Plugin) -> bool:
     """The toolbox gateway delegates Hook dispatch to its invoked target."""
 
-    return plugin.kind == "tool" and plugin.name != "toolbox"
+    return (
+        plugin.kind == "tool"
+        and plugin.name != "toolbox"
+        and plugin.metadata.get("permission_review", True) is not False
+    )
 
 
 def _utc_now() -> datetime:
@@ -79,6 +84,24 @@ class PreparedPluginCall:
     call: PluginCall
     plugin: Plugin
     arguments: dict[str, Any]
+    permission_boundary: dict[str, Any] | None = None
+
+
+async def _permission_boundary(
+    plugin: Plugin,
+    arguments: dict[str, Any],
+    context: PluginContext,
+) -> dict[str, Any] | None:
+    if plugin.permission_boundary is None:
+        return None
+    raw_permission = plugin.permission_boundary(arguments, context)
+    if inspect.isawaitable(raw_permission):
+        raw_permission = await raw_permission
+    if raw_permission is None:
+        return None
+    if not isinstance(raw_permission, Mapping):
+        raise TypeError("Plugin permission_boundary must return an object or None")
+    return dict(raw_permission)
 
 
 class PluginRuntime:
@@ -137,6 +160,7 @@ class PluginRuntime:
             prepared: list[PreparedPluginCall | PluginCallResult | None] = []
             review_positions: list[int] = []
             review_calls: list[tuple[str, dict[str, Any]]] = []
+            review_permissions: list[dict[str, Any] | None] = []
             for call in calls:
                 try:
                     plugin = self.registry.resolve(
@@ -148,6 +172,11 @@ class PluginRuntime:
                         plugin.name,
                         arguments,
                         plugin.input_schema,
+                    )
+                    permission_request = await _permission_boundary(
+                        plugin,
+                        arguments,
+                        context,
                     )
                 except Exception as exc:
                     log_operation(
@@ -183,17 +212,41 @@ class PluginRuntime:
                     arguments=arguments,
                     **_context_fields(context),
                 )
-                item = PreparedPluginCall(call, plugin, arguments)
+                item = PreparedPluginCall(
+                    call,
+                    plugin,
+                    arguments,
+                    permission_request,
+                )
                 prepared.append(item)
                 if _dispatches_own_tool_hooks(plugin) and context.hooks is not None:
                     review_positions.append(len(prepared) - 1)
                     review_calls.append((call.name, dict(call.arguments)))
+                    review_permissions.append(permission_request)
 
             if review_calls:
-                decisions = await context.hooks.pre_tool_use_batch(tuple(review_calls))
+                decisions = await context.hooks.pre_tool_use_batch(
+                    tuple(review_calls),
+                    permissions=tuple(review_permissions),
+                )
                 for position, decision in zip(review_positions, decisions):
                     item = prepared[position]
                     assert isinstance(item, PreparedPluginCall)
+                    if isinstance(decision, HookAwaitingUser):
+                        question = (
+                            dict(decision.question)
+                            if isinstance(decision.question, Mapping)
+                            else {}
+                        )
+                        prepared[position] = PluginCallResult(
+                            item.call.id,
+                            item.call.name,
+                            True,
+                            question,
+                            "",
+                            _utc_now(),
+                        )
+                        continue
                     if isinstance(decision, BaseException):
                         log_operation(
                             logger,
@@ -257,6 +310,7 @@ class PluginRuntime:
                                 item.call,
                                 item.plugin,
                                 reviewed_arguments,
+                                item.permission_boundary,
                             )
             result = tuple(item for item in prepared if item is not None)
             op.finish(
@@ -299,6 +353,15 @@ class PluginRuntime:
                     arguments,
                     plugin.input_schema,
                 )
+                current_boundary = await _permission_boundary(
+                    plugin,
+                    arguments,
+                    context,
+                )
+                if current_boundary != prepared.permission_boundary:
+                    raise PermissionError(
+                        "Plugin permission boundary changed after review; retry the exact call."
+                    )
             except Exception as exc:
                 op.finish(success=False, rejected=True, error=exc)
                 return PluginCallResult(

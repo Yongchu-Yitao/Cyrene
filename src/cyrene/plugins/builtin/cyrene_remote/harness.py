@@ -15,6 +15,7 @@ from .common import (
     request_remote_command,
     resolve_selected_remote_device,
 )
+from .permission import authorize_remote
 from cyrene.plugins.native_runtime import json_result, run_context_value
 
 TOOL_NAME = "RemoteHarness"
@@ -97,7 +98,7 @@ async def handler(
                 f"远程设备未授权直接调用插件包 {plugin_pack}"
             )
 
-        destructive_approved = operation == "invoke"
+        destructive_approved = False
         if operation == "invoke":
             capability_id = str(args.get("capability_id") or "").strip()
             if not capability_id:
@@ -112,6 +113,15 @@ async def handler(
                 raise PermissionError(
                     "远程设备不支持 remote_authorization_v1；请升级并重新授权后再直接调用"
                 )
+        permission, destructive_approved = await authorize_remote(
+            TOOL_NAME,
+            args,
+            context,
+            device_id=str(device["device_id"]),
+            project_id=project_id,
+        )
+        if permission is not None:
+            return json_result(permission)
         payload = {
             key: args[key]
             for key in (

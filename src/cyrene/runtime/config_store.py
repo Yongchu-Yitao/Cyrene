@@ -42,7 +42,6 @@ _DEFAULT_ENV: dict[str, str] = {
 }
 
 _REMOVED_ENV_KEYS = frozenset({
-    "MAX_TOOL_ROUNDS",
     "OPENAI_API_KEY",
     "OPENAI_BASE_URL",
     "OPENAI_MODEL",

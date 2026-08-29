@@ -31,7 +31,9 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                               "approach is not satisfying the user's goal, repeated work is not "
                               'converging, or user guidance shows the direction is wrong. Do not '
                               'use this merely because one tool failed. The visible transcript is '
-                              'preserved; future LLM context uses a compressed reflection packet.',
+                              'preserved; future LLM context uses a compressed reflection packet. '
+                              'Call this as the only tool in its tool-call turn; after it completes, '
+                              'continue automatically from the rewritten context.',
                'parameters': {'type': 'object',
                               'properties': {'goal_gap': {'type': 'string',
                                                           'description': 'What user goal or '
@@ -45,11 +47,6 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                                                                                  'that should '
                                                                                  'guide the '
                                                                                  'reframing.'},
-                                             'scope': {'type': 'string',
-                                                       'enum': ['current_round', 'session_tail'],
-                                                       'description': 'Which visible transcript '
-                                                                      'span to compress. Defaults '
-                                                                      'to current_round.'},
                                              'focus': {'type': 'string',
                                                        'description': 'Optional next-direction '
                                                                       'focus for the reflection '

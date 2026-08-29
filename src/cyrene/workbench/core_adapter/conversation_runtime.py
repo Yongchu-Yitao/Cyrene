@@ -93,6 +93,7 @@ def context_checkpoint_from_nodes(nodes: Sequence[Any]) -> dict[str, Any] | None
             "user",
             "context",
             "context_compaction",
+            "context_reflection",
             "assistant",
             "tool_results",
         }
@@ -131,7 +132,7 @@ def context_checkpoint_from_nodes(nodes: Sequence[Any]) -> dict[str, Any] | None
         status = "failed"
     elif value.get("role") == "assistant" and value.get("session_end_complete") is True:
         status = "completed"
-    elif value.get("role") == "context_compaction" and value.get("resume_model") is not True:
+    elif value.get("role") in {"context_compaction", "context_reflection"} and value.get("resume_model") is not True:
         status = "completed"
     else:
         status = "running"
@@ -177,7 +178,8 @@ class ConversationConfig:
     conversation_source: str = ""
     plugin_directory: str | Path | None = None
     data_directory: str | Path | None = None
-    max_model_calls: int = 12
+    max_model_calls: int | None = None
+    guidance_channel: Any = None
 
 
 class ConversationRuntime:
@@ -263,6 +265,7 @@ class ConversationRuntime:
                     "user",
                     "context",
                     "context_compaction",
+                    "context_reflection",
                     "assistant",
                     "tool_results",
                 }
@@ -402,11 +405,13 @@ class ConversationRuntime:
             return result.result(timeout=30)
 
         application_host = application_plugin_scope()
-        plugin_services = (
+        plugin_services = dict(
             application_host.active_services
             if application_host is not None
             else {}
         )
+        if config.guidance_channel is not None:
+            plugin_services["guidance_channel"] = config.guidance_channel
 
         run_context = {
             "agent_id": "main",

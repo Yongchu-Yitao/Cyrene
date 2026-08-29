@@ -1451,6 +1451,10 @@ def test_remote_shell_is_direct_project_scoped_and_device_owned(
 
 def test_remote_harness_sends_list_and_exact_authorized_invoke(monkeypatch):
     async def scenario():
+        class AllowPermission:
+            async def request_dynamic_permission(self, **_kwargs):
+                return None
+
         device = {
             "device_id": "device_target",
             "received_capabilities": [
@@ -1472,14 +1476,17 @@ def test_remote_harness_sends_list_and_exact_authorized_invoke(monkeypatch):
             send,
         )
 
-        context = PluginContext(data={
-            "db_path": "runtime.sqlite3",
-            "remote_device_ids": ["device_target"],
-            "run_context": {
-                "session_id": "chat_local",
-                "permission_mode": "auto",
+        context = PluginContext(
+            data={
+                "db_path": "runtime.sqlite3",
+                "remote_device_ids": ["device_target"],
+                "run_context": {
+                    "session_id": "chat_local",
+                    "permission_mode": "auto",
+                },
             },
-        })
+            services={"permission": AllowPermission()},
+        )
         discovered = json.loads(await remote_harness(
             {
                 "project_id": "project_1",
@@ -1512,8 +1519,49 @@ def test_remote_harness_sends_list_and_exact_authorized_invoke(monkeypatch):
             "cyrene_desktop",
         ]
         assert commands[1]["payload"]["authorization"]["approved"] is True
+        assert commands[1]["payload"]["authorization"]["destructive_approved"] is False
 
     asyncio.run(scenario())
+
+
+def test_remote_permission_classification_matches_v0713_boundaries(tmp_path):
+    from cyrene.plugins.builtin.cyrene_remote.permission import (
+        remote_permission_request,
+    )
+
+    context = PluginContext(workspace=tmp_path)
+    cancel, cancel_destructive = remote_permission_request(
+        "RemoteCyreneJobs",
+        {"operation": "cancel", "job_id": "job_1"},
+        context,
+        device_id="device_1",
+        project_id="project_1",
+    )
+    delete, delete_destructive = remote_permission_request(
+        "RemoteCyreneFiles",
+        {"operation": "delete_tree", "remote_path": "build"},
+        context,
+        device_id="device_1",
+        project_id="project_1",
+    )
+    safe_invoke, safe_destructive = remote_permission_request(
+        "RemoteHarness",
+        {
+            "operation": "invoke",
+            "capability_id": "desktop.use",
+            "arguments": {"operation": "list_targets"},
+        },
+        context,
+        device_id="device_1",
+        project_id="project_1",
+    )
+
+    assert cancel["kind"] == "remote_job_control"
+    assert cancel_destructive is False
+    assert delete["kind"] == "destructive_confirmation"
+    assert delete_destructive is True
+    assert safe_invoke["kind"] == "remote_harness_invoke"
+    assert safe_destructive is False
 
 
 def test_remote_command_reads_only_attachment_referenced_by_shared_chat(

@@ -16,6 +16,7 @@ from cyrene.core.plugin import (
     PluginPack,
     PluginRegistry,
     PluginRuntime,
+    without_plugin_session_state,
 )
 from cyrene.workbench.core_adapter import WorkbenchSessionBridge
 from cyrene.runtime import inbox
@@ -109,8 +110,9 @@ class StubSubagentManager:
         task: str,
         *,
         effect_key: str = "",
+        **options,
     ) -> dict:
-        self.calls.append(("spawn", requester_id, agent_id, task, effect_key))
+        self.calls.append(("spawn", requester_id, agent_id, task, effect_key, options))
         return {"agent_id": agent_id, "task": task, "status": "running"}
 
     async def send(
@@ -179,21 +181,17 @@ def test_subagent_pack_follows_toolbox_list_describe_invoke(tmp_path, monkeypatc
         descriptions = {
             item["name"]: item for item in described.value["plugins"]
         }
-        assert descriptions["spawn_subagent"]["input_schema"] == {
-            "type": "object",
-            "properties": {
-                "agent_id": {
-                    "type": "string",
-                    "description": "Unique identifier for the subagent.",
-                },
-                "task": {
-                    "type": "string",
-                    "description": "Instruction from the main agent.",
-                },
-            },
-            "required": ["agent_id", "task"],
-            "additionalProperties": False,
-        }
+        spawn_schema = descriptions["spawn_subagent"]["input_schema"]
+        assert spawn_schema["required"] == ["agent_id", "task"]
+        assert spawn_schema["additionalProperties"] is False
+        assert spawn_schema["properties"]["mode"]["enum"] == [
+            "execution", "discussion"
+        ]
+        assert spawn_schema["properties"]["role"]["enum"] == [
+            "moderator", "participant"
+        ]
+        assert spawn_schema["properties"]["success_criteria"]["maxItems"] == 20
+        assert spawn_schema["properties"]["max_messages"]["maximum"] == 50
 
         spawned = await runtime.call(
             "toolbox",
@@ -338,6 +336,128 @@ def test_disabled_subagent_pack_does_not_attach_session_driver(tmp_path):
         session.close()
 
 
+def test_quit_is_direct_and_subagent_scoped(tmp_path):
+    plugin_directory = tmp_path / "plugin_impl"
+    copy_subagent_pack(plugin_directory)
+    registry = model_registry(lambda _arguments, _context: answer("unused"))
+    assert registry.load_directory(plugin_directory) == ()
+
+    assert "quit" not in {
+        item["function"]["name"]
+        for item in registry.direct_tool_definitions(agent_id="main")
+    }
+    child_tools = {
+        item["function"]["name"]: item
+        for item in registry.direct_tool_definitions(agent_id="worker")
+    }
+    assert "quit" in child_tools
+    quit_schema = child_tools["quit"]["function"]["parameters"]
+    assert quit_schema["required"] == ["completion_status"]
+    assert quit_schema["properties"]["completion_status"]["enum"] == [
+        "completed", "partial", "blocked"
+    ]
+
+
+def test_plugin_native_modes_budgets_completion_and_inbox(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        monkeypatch.setattr(inbox, "INBOX_DIR", tmp_path / "inbox")
+        plugin_directory = tmp_path / "plugin_impl"
+        copy_subagent_pack(plugin_directory)
+
+        async def model(_arguments, context):
+            if context.data.get("model_call_kind") == "permission":
+                return allow()
+            return answer("idle result")
+
+        session = AgentSession(
+            tmp_path / "data",
+            tmp_path / "workspace",
+            plugin_directory,
+            tree_id="mode-chat",
+            registry=model_registry(model),
+            plugin_context_data={"session_id": "mode-chat"},
+        )
+        manager = session.plugin_services["subagents"]
+        try:
+            session.submit("seed", run_id="mode-round")
+            await session.drain()
+            await manager.spawn(
+                "main",
+                "moderator",
+                "lead",
+                mode="discussion",
+                role="moderator",
+                discussion_id="design",
+                success_criteria=["publish synthesis"],
+            )
+            await manager.spawn(
+                "main",
+                "participant",
+                "review",
+                role="participant",
+                discussion_id="design",
+            )
+            await manager.spawn("main", "executor", "build", mode="execution")
+
+            first = await manager.send(
+                "moderator",
+                "participant",
+                "Concrete finding",
+                effect_key="discussion-message-1",
+            )
+            retried = await manager.send(
+                "moderator",
+                "participant",
+                "Concrete finding",
+                effect_key="discussion-message-1",
+            )
+            assert first["message_id"] == retried["message_id"]
+            snapshot = manager.query("mode-round")
+            discussion = snapshot["discussions"][0]
+            assert discussion["messages_total"] == 1
+            assert discussion["rounds"] == 1
+            assert len(discussion["transcript"]) == 1
+            assert inbox.get_unread_count(
+                "participant", session_id="mode-chat"
+            ) == 1
+
+            try:
+                await manager.send("executor", "participant", "not allowed")
+            except ValueError as exc:
+                assert "requires discussion mode" in str(exc)
+            else:
+                raise AssertionError("execution worker communication was allowed")
+
+            missing = manager.request_finish(
+                "moderator", "completed", []
+            )
+            assert missing["accepted"] is False
+            assert missing["missing_criteria"] == ["publish synthesis"]
+            completed = manager.request_finish(
+                "moderator",
+                "completed",
+                [{
+                    "criterion": "publish synthesis",
+                    "evidence": "draft is in the final response",
+                }],
+            )
+            assert completed["accepted"] is True
+
+            records = {
+                item["agent_id"]: item for item in manager.query()["subagents"]
+            }
+            assert records["moderator"]["mode"] == "discussion"
+            assert records["participant"]["role"] == "participant"
+            assert records["executor"]["mode"] == "execution"
+            root = session.store.get_node(session.tree.id, session.tree.root_id)
+            persisted = root.value["_plugin_session_state"]["cyrene_subagent"]
+            assert persisted["discussions"]["design"]["messages_total"] == 1
+        finally:
+            session.close()
+
+    run(scenario())
+
+
 def test_agent_session_subagent_tree_inbox_and_workbench_output(tmp_path, monkeypatch):
     async def scenario() -> None:
         monkeypatch.setattr(inbox, "INBOX_DIR", tmp_path / "inbox")
@@ -362,7 +482,10 @@ def test_agent_session_subagent_tree_inbox_and_workbench_output(tmp_path, monkey
                 content = str(last["content"])
                 if agent_id == "main" and content.split("\n\n", 1)[0] == "delegate":
                     return tool_call("main-list", {"operation": "list"})
-                if agent_id == "researcher" and content == "research this":
+                if (
+                    agent_id == "researcher"
+                    and content.split("\n\n", 1)[0] == "research this"
+                ):
                     return tool_call("child-list", {"operation": "list"})
                 if agent_id == "main" and "(message)" in content:
                     return answer("progress received")
@@ -392,18 +515,9 @@ def test_agent_session_subagent_tree_inbox_and_workbench_output(tmp_path, monkey
                     },
                 )
             if operation == "describe" and agent_id == "researcher":
-                return tool_call(
-                    "child-send",
-                    {
-                        "operation": "invoke",
-                        "name": "send_agent_message",
-                        "arguments": {"to": "main", "content": "progress"},
-                    },
-                )
+                return answer("child result")
             if operation == "invoke" and agent_id == "main":
                 return answer("waiting for child")
-            if operation == "invoke" and agent_id == "researcher":
-                return answer("child result")
             raise AssertionError((agent_id, value))
 
         session = AgentSession(
@@ -437,7 +551,10 @@ def test_agent_session_subagent_tree_inbox_and_workbench_output(tmp_path, monkey
             assert record["status"] == "done"
             child_tree = session.store.get_tree(record["tree_id"])
             child_root = session.store.get_node(child_tree.id, child_tree.root_id)
-            assert child_root.value == session.initial_root_value
+            assert (
+                without_plugin_session_state(child_root.value)
+                == session.initial_root_value
+            )
             child_root_children = session.store.get_children(
                 child_tree.id,
                 child_tree.root_id,
@@ -454,11 +571,11 @@ def test_agent_session_subagent_tree_inbox_and_workbench_output(tmp_path, monkey
                 if node["value"].get("role") == "user"
                 and node["value"].get("metadata", {}).get("source") == "agent_inbox"
             ]
-            assert len(main_inbox_nodes) == 2
+            assert len(main_inbox_nodes) == 1
             assert {
                 node["value"]["metadata"]["message_type"]
                 for node in main_inbox_nodes
-            } == {"message", "result"}
+            } == {"result"}
             assert all(
                 node["value"]["authorization_request"] == "delegate"
                 for node in main_inbox_nodes
@@ -472,7 +589,7 @@ def test_agent_session_subagent_tree_inbox_and_workbench_output(tmp_path, monkey
                     if node["value"].get("metadata", {}).get("source")
                     == "agent_inbox"
                 ]
-            ) == 2
+            ) == 1
             assert ("main", "main_agent") in callers
             assert ("researcher", "subagent_researcher") in callers
             assert permission_requests

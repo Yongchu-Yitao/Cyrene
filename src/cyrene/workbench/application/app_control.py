@@ -6,6 +6,7 @@ import hashlib
 import json
 import threading
 import uuid
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any
 
@@ -22,6 +23,29 @@ from cyrene.workbench.application.app_operations import OPERATION_BY_ID
 _AUDIT_PATH = DATA_DIR / "app_control_audit.jsonl"
 _IDEMPOTENCY_PATH = DATA_DIR / "app_control_idempotency.json"
 _STATE_LOCK = threading.RLock()
+_AUTHORIZATION_DECISIONS: ContextVar[dict[str, dict[str, str]] | None] = ContextVar(
+    "_cyrene_authorization_decisions",
+    default=None,
+)
+
+DELEGATION_OPERATIONS_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "minItems": 2,
+    "maxItems": 12,
+    "description": (
+        "Optional ordered batch of exact R2/R3 Cyrene operations authorized by "
+        "the same delegation_quote. Every later call must repeat this identical list."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "operation_id": {"type": "string", "maxLength": 160},
+            "arguments": {"type": "object"},
+        },
+        "required": ["operation_id", "arguments"],
+        "additionalProperties": False,
+    },
+}
 
 _ERROR_SUMMARIES = {
     "idempotency_required": (
@@ -236,8 +260,8 @@ def audit(
         "risk": risk,
         "status": status,
         "error_code": str(error_code or ""),
-        "decision_source": "plugin_pre_tool_review",
-        "delegation_receipt": "",
+        "decision_source": authorization_decision(operation_id, arguments)["source"],
+        "delegation_receipt": authorization_decision(operation_id, arguments)["receipt"],
     }
     with _STATE_LOCK:
         _AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -309,15 +333,10 @@ async def authorize(
     arguments: dict[str, Any],
     *,
     reason: str,
+    delegation_quote: str = "",
+    delegation_operations: list[dict[str, Any]] | None = None,
 ) -> str | None:
-    """Apply deterministic application guards after Plugin PreToolUse review.
-
-    The Plugin Runtime's PreToolUse Hook is the only semantic approval path.
-    This function deliberately does not create pending questions, mint
-    ContextVar receipts, or call a second reviewer. It only enforces invariant
-    application boundaries that no model decision may widen.
-
-    """
+    """Apply deterministic guards and the 0.7.13 exact-delegation review."""
 
     spec = OPERATION_BY_ID.get(operation_id)
     if spec is None:
@@ -341,7 +360,9 @@ async def authorize(
     agent_id = str(_context_value("agent_id", "main") or "main")
     caller = str(_context_value("caller", "main_agent") or "main_agent")
     source = str(_context_value("conversation_source") or "")
-    if agent_id != "main" or caller not in {"main_agent", "main"}:
+    if agent_id != "main" or caller not in {
+        "main_agent", "execution_agent", "main",
+    }:
         return localized(
             "Tool unavailable: Cyrene self-management is main-agent only.",
             "工具不可用：仅主智能体可管理 Cyrene。",
@@ -371,17 +392,247 @@ async def authorize(
             "Tool unavailable: privileged Cyrene operations require a local desktop Workbench turn.",
             "工具不可用：Cyrene 特权操作需要本地桌面工作台对话。",
         )
+    user_request = str(_context_value("permission_user_request") or "").strip()
+    effective_quote = str(delegation_quote or "").strip() or user_request
+    delegated_receipt = (
+        await _consume_explicit_user_delegation(
+            operation_id,
+            fingerprint,
+            arguments,
+            reason,
+            effective_quote,
+            delegation_operations,
+        )
+        if spec.risk in {"R2", "R3"}
+        else ""
+    )
+    if spec.risk in {"R2", "R3"}:
+        context = _active_context()
+        permission_service = (
+            context.services.get("permission") if context is not None else None
+        )
+        request_permission = getattr(permission_service, "request_permission", None)
+        if not callable(request_permission):
+            return localized(
+                "Tool unavailable: the permission service is unavailable.",
+                "工具不可用：权限服务不可用。",
+            )
+        if not delegated_receipt:
+            lifecycle = operation_id in {
+                "cyrene.app.lifecycle", "cyrene.update.install",
+            }
+            permission_result = request_permission(
+                tool_name=operation_id,
+                arguments=arguments,
+                request={
+                    "kind": (
+                        "host_lifecycle_confirmation"
+                        if lifecycle
+                        else "self_configuration_confirmation"
+                        if spec.risk == "R2"
+                        else "destructive_confirmation"
+                    ),
+                    "operation": operation_id,
+                    "path_hint": (
+                        f"cyrene-lifecycle:{fingerprint[:64]}"
+                        if lifecycle
+                        else f"cyrene-setting:{fingerprint[:64]}"
+                        if spec.risk == "R2"
+                        else ""
+                    ),
+                    "reason": reason,
+                    "fingerprint": fingerprint,
+                    "requires_human": True,
+                    "single_use": True,
+                    "scope_hint": (
+                        "主机生命周期的 "
+                        if lifecycle
+                        else "本机全局设置的 "
+                        if spec.risk == "R2"
+                        else "破坏性/不可逆的 "
+                    ),
+                    "options": ["允许这一次", "拒绝"],
+                },
+            )
+            if permission_result is not None:
+                return json.dumps(permission_result, ensure_ascii=False, default=str)
+    decision_source = (
+        "permission_reviewer_delegation" if delegated_receipt else "policy"
+    )
+    decisions = dict(_AUTHORIZATION_DECISIONS.get() or {})
+    decisions[fingerprint] = {
+        "source": decision_source,
+        "receipt": delegated_receipt,
+    }
+    _AUTHORIZATION_DECISIONS.set(decisions)
     await _publish({
         "type": "cyrene_operation_approved",
         "operation_id": operation_id,
         "argument_hash": fingerprint,
         "risk": spec.risk,
-        "decision_source": "plugin_pre_tool_review",
+        "decision_source": decision_source,
+        "delegation_receipt": delegated_receipt,
         "round_id": str(
             _context_value("round_id") or _context_value("run_id") or ""
         ),
     })
     return None
+
+
+async def _consume_explicit_user_delegation(
+    operation_id: str,
+    argument_hash: str,
+    arguments: dict[str, Any],
+    reason: str,
+    quote: str,
+    delegation_operations: list[dict[str, Any]] | None,
+) -> str:
+    """Review and consume one exact, ordered local-user delegation receipt."""
+
+    context = _active_context()
+    permission_service = context.services.get("permission") if context is not None else None
+    status_provider = getattr(permission_service, "explicit_delegation_status", None)
+    consumer = getattr(permission_service, "consume_explicit_delegation", None)
+    raw_quote = str(quote or "").strip()
+    user_request = str(_context_value("permission_user_request") or "")
+    source = str(_context_value("conversation_source") or "")
+    round_id = str(_context_value("round_id") or _context_value("run_id") or "").strip()
+    if (
+        not raw_quote
+        or raw_quote not in user_request
+        or source != "desktop_local"
+        or bool(_context_value("bounded_remote_authorization", False))
+        or not round_id
+        or not callable(status_provider)
+        or not callable(consumer)
+    ):
+        return ""
+
+    if delegation_operations is None:
+        operations = ({"operation_id": operation_id, "arguments": dict(arguments)},)
+    else:
+        if not isinstance(delegation_operations, list) or not 2 <= len(delegation_operations) <= 12:
+            return ""
+        normalized: list[dict[str, Any]] = []
+        for item in delegation_operations:
+            if not isinstance(item, dict) or set(item) != {"operation_id", "arguments"}:
+                return ""
+            item_operation_id = str(item.get("operation_id") or "").strip()
+            item_arguments = item.get("arguments")
+            item_spec = OPERATION_BY_ID.get(item_operation_id)
+            if (
+                item_spec is None
+                or item_spec.risk not in {"R2", "R3"}
+                or item_spec.exposure == "forbidden"
+                or not isinstance(item_arguments, dict)
+            ):
+                return ""
+            normalized.append({
+                "operation_id": item_operation_id,
+                "arguments": dict(item_arguments),
+            })
+        operations = tuple(normalized)
+
+    operation_keys = tuple(
+        canonical_hash(str(item["operation_id"]), dict(item["arguments"]))
+        for item in operations
+    )
+    current_operation_key = canonical_hash(operation_id, arguments)
+    plan_hash = hashlib.sha256(json.dumps(
+        [
+            {"operation_id": item["operation_id"], "argument_hash": key}
+            for item, key in zip(operations, operation_keys)
+        ],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    identity_base = {
+        "client_request_id": str(_context_value("client_request_id") or ""),
+        "round_id": round_id,
+        "session_id": str(_context_value("session_id") or ""),
+        "quote": raw_quote,
+    }
+    batch_id = "delegation_batch_" + hashlib.sha256(json.dumps({
+        **identity_base,
+        "plan_hash": plan_hash,
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:32]
+    quote_identity = hashlib.sha256(json.dumps(
+        identity_base,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    batch_status = status_provider(
+        quote_identity=quote_identity,
+        batch_id=batch_id,
+        operation_keys=operation_keys,
+        current_operation_key=current_operation_key,
+    )
+    approved_new = False
+    rationale = ""
+    if batch_status == "missing":
+        from cyrene.plugins.permission_review import review_user_delegation
+
+        operations_json = json.dumps(
+            [
+                {
+                    "operation_id": item["operation_id"],
+                    "arguments": _redact(item["arguments"]),
+                }
+                for item in operations
+            ],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        approved_new, rationale = await review_user_delegation(
+            user_request=user_request,
+            delegation_quote=raw_quote,
+            operations_json=operations_json,
+            reason=reason,
+            session_id=str(_context_value("session_id") or ""),
+        )
+    elif batch_status == "ready":
+        rationale = "该精确操作已包含在本轮已审核的批量票据中。"
+    else:
+        rationale = "批量票据已耗尽或与原始操作列表不一致。"
+    consumed_position = consumer(
+        quote_identity=quote_identity,
+        batch_id=batch_id,
+        operation_keys=operation_keys,
+        current_operation_key=current_operation_key,
+        approve_new=approved_new,
+    ) if approved_new or batch_status == "ready" else 0
+    await _publish({
+        "type": "auto_review",
+        "approved": bool(consumed_position),
+        "operation": operation_id,
+        "tool_name": operation_id,
+        "permission_kind": "explicit_user_delegation",
+        "path_hint": "",
+        "fingerprint": argument_hash,
+        "source": "permission_reviewer",
+        "rationale": rationale if consumed_position else (
+            rationale or "当前操作不是批量票据中的下一个精确操作。"
+        ),
+        "delegation_batch_id": batch_id,
+        "delegation_batch_position": consumed_position,
+        "delegation_batch_size": len(operation_keys),
+        "round_id": round_id,
+    })
+    if not consumed_position:
+        return ""
+    receipt_seed = json.dumps({
+        **identity_base,
+        "operation_id": operation_id,
+        "argument_hash": argument_hash,
+        "batch_id": batch_id,
+        "batch_position": consumed_position,
+        "batch_size": len(operation_keys),
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "delegation_" + hashlib.sha256(receipt_seed.encode("utf-8")).hexdigest()[:32]
 
 
 async def publish_result(result: dict[str, Any]) -> None:
@@ -403,16 +654,17 @@ async def publish_result(result: dict[str, Any]) -> None:
 
 
 def authorization_decision(operation_id: str, arguments: dict[str, Any]) -> dict[str, str]:
-    """Return the deterministic receipt produced by Plugin PreToolUse review."""
+    """Return the matching authorization receipt for a deferred host action."""
 
     fingerprint = canonical_hash(operation_id, arguments)
+    decision = dict((_AUTHORIZATION_DECISIONS.get() or {}).get(fingerprint) or {})
     return {
-        "source": "plugin_pre_tool_review",
-        "receipt": fingerprint,
+        "source": str(decision.get("source") or "policy"),
+        "receipt": str(decision.get("receipt") or ""),
     }
 
 
 __all__ = [
-    "audit", "authorization_decision", "authorize", "canonical_hash", "envelope", "publish_result", "remember_idempotent",
+    "DELEGATION_OPERATIONS_SCHEMA", "audit", "authorization_decision", "authorize", "canonical_hash", "envelope", "publish_result", "remember_idempotent",
     "replay_idempotent",
 ]

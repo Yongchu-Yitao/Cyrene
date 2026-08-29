@@ -1956,9 +1956,6 @@ Workbench 资料库、右键菜单、侧边 Agent 和卡片布局，并为 **Ope
 
 #### Agent 工具协议、Gateway 与持续执行
 
-- **移除固定 Tool Round Ceiling** — Runtime 不再读取或执行
-  `MAX_TOOL_ROUNDS`。配置迁移会清除旧值，备份恢复会丢弃该字段，设置接口也拒绝
-  重新写入，确保旧配置不会意外恢复中途停止行为。
 - **以明确完成信号结束运行** — Agent Loop 会持续处理 Tool Result、Guidance
   和下一轮模型调用，直到正常 Final Reply/`quit`、用户取消或不可恢复错误；工具
   多、步骤长的任务不再由任意轮数决定完成度。

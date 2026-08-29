@@ -34,6 +34,7 @@ def test_default_prompt_requires_plugin_discovery_for_external_information():
     assert "toolbox.list" in SYSTEM_PROMPT
     assert "toolbox.describe" in SYSTEM_PROMPT
     assert "toolbox.invoke" in SYSTEM_PROMPT
+    assert "a one-sentence purpose for each pack" in SYSTEM_PROMPT
     assert "WebSearch proactively" in SYSTEM_PROMPT
     assert "use it at the beginning" in SYSTEM_PROMPT
     assert "Prefer frequent useful updates" in SYSTEM_PROMPT

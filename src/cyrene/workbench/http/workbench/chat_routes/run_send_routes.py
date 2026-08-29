@@ -79,7 +79,6 @@ class ChatSendController:
                 capture_workspace_baseline=service.capture_workspace_changes_baseline,
                 finalize_workspace_changes=service.finalize_workspace_changes,
                 schedule_workspace_finalize=self._schedule_workspace_finalize,
-                publish_live_segments=service.publish_live_exchange_segments_loop,
                 publish_chat_changed=publish_chat_changed,
                 load_chat_summary=self._load_chat_summary,
                 public_message=service.public_message,
@@ -812,6 +811,7 @@ class _SendOperation:
             response_capabilities=("interactive_blocks",),
             ui_instance_id=self.ui_instance_id,
             conversation_source=source,
+            guidance_channel=run.guidance_channel,
         )
         result = await self.service.run_manager.conversation_runtime.send(
             config,
@@ -914,7 +914,6 @@ class _SendOperation:
             timeline, usage, files = self.service.extract_exchange_timeline(
                 state_messages,
                 self.state_ids_before,
-                include_open_tool_preamble=True,
             )
             model = self.service.last_exchange_model(
                 state_messages,
@@ -964,24 +963,11 @@ class _SendOperation:
             fields["outputTokensPerSecond"] = round(float(rate), 3)
         return fields
 
-    @staticmethod
-    def _checkpointed_run_messages(
-        chat: dict[str, Any], run_id: str
-    ) -> list[dict[str, Any]]:
-        """Return user-visible intermediate messages already saved for this run."""
-
-        if not run_id:
-            return []
-        return [
-            copy.deepcopy(dict(item))
-            for item in (chat.get("messages") or ())
-            if isinstance(item, dict)
-            and str(item.get("role") or "") == "assistant"
-            and item.get("intermediate") is True
-            and str(item.get("roundId") or item.get("round_id") or "") == run_id
-        ]
-
-    def _persist_builtin_result(self, result: Any) -> dict[str, Any]:
+    def _persist_builtin_result(
+        self,
+        result: Any,
+        terminal_timeline: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Project one typed ContextTree outcome into the public chat record."""
 
         pending_value = getattr(result, "pending_question", None)
@@ -989,29 +975,29 @@ class _SendOperation:
         now = self.service.utc_now_iso()
         model = str(getattr(result, "model", "") or self.chat.get("model") or "")
         run_id = str(getattr(result, "run_id", "") or "")
-        activities = [
-            copy.deepcopy(dict(item))
-            for item in (getattr(result, "activity_messages", ()) or ())
-            if isinstance(item, dict)
-        ]
-        for item in activities:
-            item.setdefault("model", model)
-            item.setdefault("createdAt", now)
         with self.service.repository.lock:
             chat = self.service.repository.get(self.chat_id)
             if not chat:
                 raise RuntimeError("chat disappeared while persisting Agent outcome")
             base_chat = copy.deepcopy(chat)
             self._commit_retry_cut(chat)
-            checkpointed_messages = self._checkpointed_run_messages(chat, run_id)
-            additions = activities
+            timeline = [
+                copy.deepcopy(dict(item))
+                for item in terminal_timeline
+                if isinstance(item, dict)
+            ]
+            for item in timeline:
+                item.setdefault("model", model)
+                if not str(item.get("createdAt") or item.get("created_at") or "").strip():
+                    item["createdAt"] = now
+            additions = timeline
             if pending is not None:
                 question = self.service.pending_question_message(
                     pending,
                     usage=dict(getattr(result, "usage", {}) or {}),
                     model=model,
                 )
-                additions = [*activities, question]
+                additions = [*timeline, question]
                 chat["pendingQuestion"] = pending
                 chat["status"] = "idle"
             else:
@@ -1027,7 +1013,7 @@ class _SendOperation:
                     ),
                     **self._runtime_message_fields(result),
                 }
-                additions = [*activities, assistant]
+                additions = [*timeline, assistant]
                 chat["completedTurnCount"] = self.service.next_completed_turn_count(
                     {"completedTurnCount": self.completed_turn_count_before},
                     retry=self.retry,
@@ -1043,17 +1029,8 @@ class _SendOperation:
                 chat["activePlan"] = copy.deepcopy(self.external.plan)
             chat["updatedAt"] = now
             self.service.repository.write_one(chat, base_chat=base_chat)
-        terminal_additions: list[dict[str, Any]] = []
-        terminal_message_ids: set[str] = set()
-        for item in [*checkpointed_messages, *additions]:
-            message_id = str(item.get("id") or "")
-            if message_id and message_id in terminal_message_ids:
-                continue
-            if message_id:
-                terminal_message_ids.add(message_id)
-            terminal_additions.append(item)
         public_additions = [
-            self.service.public_message(item) for item in terminal_additions
+            self.service.public_message(item) for item in additions
         ]
         summary = self.service.public_chat_light(chat)
         summary["runStatus"] = (
@@ -1103,7 +1080,18 @@ class _SendOperation:
                     before=before,
                     status="completed",
                 )
-            payload = await asyncio.to_thread(self._persist_builtin_result, result)
+            terminal_timeline = run.terminal_timeline_messages(
+                [
+                    copy.deepcopy(dict(item))
+                    for item in (getattr(result, "activity_messages", ()) or ())
+                    if isinstance(item, dict)
+                ]
+            )
+            payload = await asyncio.to_thread(
+                self._persist_builtin_result,
+                result,
+                terminal_timeline,
+            )
             if awaiting:
                 pending = payload.get("pendingQuestion")
                 await asyncio.to_thread(self.notify_attention, pending)

@@ -373,6 +373,7 @@ class _AnswerOperation:
             response_capabilities=("interactive_blocks",),
             ui_instance_id=self.ui_instance_id,
             conversation_source=self.conversation_source,
+            guidance_channel=run.guidance_channel,
         )
         result = await self.service.run_manager.conversation_runtime.answer(
             config,

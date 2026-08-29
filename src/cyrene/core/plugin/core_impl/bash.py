@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..plugin import Plugin, PluginContext
+from .permission_boundaries import bash_boundary
 
 
 async def bash(arguments: dict[str, Any], context: PluginContext) -> dict[str, Any]:
@@ -73,6 +74,7 @@ BASH_PLUGIN = Plugin(
         "additionalProperties": False,
     },
     handler=bash,
+    permission_boundary=bash_boundary,
     allow_parallel=True,
     timeout_seconds=310.0,
 )

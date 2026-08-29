@@ -26,11 +26,19 @@ async def _tool_broadcast_agent_message(
             "Error: 'content' is required.",
             "错误：必须提供 'content'。",
         )
-    result = await subagent_manager(context).broadcast(
-        current_agent_id(context),
-        content,
-        effect_key=current_effect_key(),
-    )
+    try:
+        result = await subagent_manager(context).broadcast(
+            current_agent_id(context),
+            content,
+            effect_key=current_effect_key(),
+        )
+    except (ValueError, RuntimeError) as exc:
+        return plugin_localized(
+            context,
+            "Error: {error}",
+            "错误：{error}",
+            error=str(exc),
+        )
     delivered = list(result.get("delivered") or ())
     errors = dict(result.get("errors") or {})
     total = len(delivered) + len(errors)

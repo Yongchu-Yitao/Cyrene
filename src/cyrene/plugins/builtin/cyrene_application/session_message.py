@@ -7,6 +7,7 @@ from cyrene.runtime.host_bridge import HostBridgeError, call_host
 from cyrene.plugins.native_runtime import json_result, run_context_value
 from cyrene.workbench.application import app_services
 from cyrene.workbench.application.app_control import (
+    DELEGATION_OPERATIONS_SCHEMA,
     audit,
     authorize,
     canonical_hash,
@@ -31,6 +32,8 @@ TOOL_DEF = {"type": "function", "function": {
             "revision": {"type": "integer", "minimum": 1},
             "node_id": {"type": "string", "maxLength": 160},
             "message": {"type": "string", "minLength": 1, "maxLength": 20000},
+            "delegation_quote": {"type": "string", "maxLength": 500},
+            "delegation_operations": DELEGATION_OPERATIONS_SCHEMA,
             "reason": {"type": "string", "minLength": 1, "maxLength": 500},
             "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 160},
         },
@@ -131,6 +134,8 @@ async def handler(args: dict[str, Any], context: PluginContext) -> str:
         operation_id,
         op_args,
         reason=str(args.get("reason") or ""),
+        delegation_quote=str(args.get("delegation_quote") or ""),
+        delegation_operations=args.get("delegation_operations"),
     )
     if approval:
         return approval

@@ -8,6 +8,22 @@ import pytest
 pytestmark = pytest.mark.asyncio
 
 
+class _AllowPermission:
+    def request_permission(self, **_kwargs):
+        return None
+
+
+def _context(tmp_path=None, *, language: str = ""):
+    from cyrene.core.plugin import PluginContext
+
+    data = {"language": language} if language else {}
+    return PluginContext(
+        workspace=tmp_path,
+        data=data,
+        services={"permission": _AllowPermission()},
+    )
+
+
 def _target() -> dict:
     return {
         "id": "upload_target_1",
@@ -32,7 +48,6 @@ def _file(*, sha256: str = "a" * 64) -> dict:
 
 
 async def test_upload_executes_after_central_plugin_review(monkeypatch, tmp_path):
-    from cyrene.core.plugin import PluginContext
     from cyrene.plugins.builtin.cyrene_browser import runtime as browser
     from cyrene.plugins.builtin.cyrene_browser import browser_upload_files as tool
 
@@ -59,7 +74,7 @@ async def test_upload_executes_after_central_plugin_review(monkeypatch, tmp_path
     (tmp_path / "snapshot").mkdir()
     result = await tool._tool_browser_upload_files(
         {"chooser_id": "chooser_1", "paths": ["report.txt"]},
-        PluginContext(workspace=tmp_path),
+        _context(tmp_path),
     )
 
     assert json.loads(result)["status"] == "files_attached"
@@ -67,7 +82,6 @@ async def test_upload_executes_after_central_plugin_review(monkeypatch, tmp_path
 
 
 async def test_changed_file_binding_cancels_after_approval(monkeypatch):
-    from cyrene.core.plugin import PluginContext
     from cyrene.plugins.builtin.cyrene_browser import runtime as browser
     from cyrene.plugins.builtin.cyrene_browser import browser_upload_files as tool
 
@@ -93,7 +107,7 @@ async def test_changed_file_binding_cancels_after_approval(monkeypatch):
     monkeypatch.setattr(tool, "_resolve_files", fake_resolve)
     result = await tool._tool_browser_upload_files(
         {"chooser_id": "chooser_1", "paths": ["report.txt"]},
-        PluginContext(data={"language": "en"}),
+        _context(language="en"),
     )
 
     assert "changed after approval" in result
@@ -101,7 +115,6 @@ async def test_changed_file_binding_cancels_after_approval(monkeypatch):
 
 
 async def test_non_http_destination_is_rejected_before_reading_files(monkeypatch):
-    from cyrene.core.plugin import PluginContext
     from cyrene.plugins.builtin.cyrene_browser import runtime as browser
     from cyrene.plugins.builtin.cyrene_browser import browser_upload_files as tool
 
@@ -120,7 +133,7 @@ async def test_non_http_destination_is_rejected_before_reading_files(monkeypatch
 
     result = await tool._tool_browser_upload_files(
         {"chooser_id": "chooser_1", "paths": ["report.txt"]},
-        PluginContext(data={"language": "en"}),
+        _context(language="en"),
     )
 
     assert "verified HTTP(S) origin" in result

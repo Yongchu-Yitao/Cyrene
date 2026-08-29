@@ -1704,6 +1704,10 @@ process.stdout.write(JSON.stringify({{
     assert 'style={{ right:' not in column_resizer
     assert "var minimum = Math.min(380, trackWidth / 2);" in column_resizer
     assert "maximum: Math.max(minimum, trackWidth - minimum)" in column_resizer
+    assert "handle.setPointerCapture(pointerId)" in column_resizer
+    assert 'handle.addEventListener("lostpointercapture", stop' in column_resizer
+    assert 'window.addEventListener("blur", stop' in column_resizer
+    assert 'moveEvent.pointerType === "mouse" && !(moveEvent.buttons & 1)' in column_resizer
     assert '"--wbc-pane-right-width": paneColumnWidth + "px"' in source
     assert "width={paneColumnWidth} onResize={resizePaneColumn}" in source
     assert "!floatingConversationPanelOpen && !splitDetailOpen" in source
@@ -1712,6 +1716,10 @@ process.stdout.write(JSON.stringify({{
     )[0]
     assert "var seamOffset = 6 - (safeRatio * 12);" in row_resizer
     assert "rect.height - 12" in row_resizer
+    assert "handle.setPointerCapture(pointerId)" in row_resizer
+    assert 'handle.addEventListener("lostpointercapture", stop' in row_resizer
+    assert 'window.addEventListener("blur", stop' in row_resizer
+    assert 'moveEvent.pointerType === "mouse" && !(moveEvent.buttons & 1)' in row_resizer
     assert ".wbc-pane-row-resizer" in styles
     assert ".wbc-pane-column-resizer" in styles
     replace_only_css = styles.split(".wbc-pane-card-drop-layer.replace-only {", 1)[1].split("}", 1)[0]
@@ -1801,6 +1809,70 @@ process.stdout.write(JSON.stringify({{
     assert '"workbenchChat.dropConversationReplace": "松手替换当前对话"' in i18n
 
 
+def test_agent_can_open_move_close_and_resize_semantic_split_panes():
+    page = frontend_module_source("features/chat/page.jsx")
+    rail = frontend_module_source("features/chat/rail.jsx")
+    split = frontend_module_source("features/chat/split-pane.jsx")
+    semantic = frontend_module_source("features/chat/pane-semantic-controller.jsx")
+    layout = frontend_module_source("features/chat/pane-layout-controller.jsx")
+    drag_layout = frontend_module_source("features/chat/drag-layout.jsx")
+
+    assert 'action_id: "open_split", kind: "move"' in rail
+    assert 'onOpenSplit(chatId, { side: side })' in rail
+    assert '<WbcPaneSemanticController' in page
+    assert 'semanticNodeId={wbcPaneSemanticNodeId(card.id)}' in page
+    assert 'onClosePane={closePaneCardWithConfirmation}' in page
+    assert 'node_id: "pane_workspace"' in semantic
+    assert 'action_id: "open_chat", kind: "move"' in semantic
+    assert 'action_id: "open_task", kind: "move"' in semantic
+    assert 'action_id: "open_terminal", kind: "move"' in semantic
+    assert 'action_id: "move", kind: "move"' in semantic
+    assert 'action_id: "swap", kind: "move"' in semantic
+    assert 'action_id: "close", kind: "invoke"' in semantic
+    assert 'data-pane-semantic-node-id={semanticNodeId || ""}' in split
+    assert 'node_id: "pane_column_separator"' in split
+    assert 'node_id: "pane_row_separator_" + normalizedSide' in split
+    assert split.count('action_id: "set_value", kind: "adjust"') >= 2
+    assert split.count('action_id: "adjust", kind: "adjust"') >= 2
+
+    location_helper = "function wbcPaneCardLocation" + drag_layout.split(
+        "function wbcPaneCardLocation", 1
+    )[1].split("function wbcPlacePaneCard", 1)[0]
+    move_helper = "function wbcMovePaneCardLayout" + layout.split(
+        "function wbcMovePaneCardLayout", 1
+    )[1].split("function wbcMovePaneCard(context", 1)[0]
+    swap_helper = "function wbcSwapPaneCardsLayout" + layout.split(
+        "function wbcSwapPaneCardsLayout", 1
+    )[1].split("function wbcSwapPaneCards(context", 1)[0]
+    script = f"""
+eval({json.dumps(location_helper + move_helper + swap_helper)});
+const a = {{ id: "a" }}, b = {{ id: "b" }}, c = {{ id: "c" }};
+const base = {{ left: [a, b], right: [c], leftRatio: 0.4, rightRatio: 0.6 }};
+const reordered = wbcMovePaneCardLayout(base, "b", {{ side: "left", position: "top" }});
+const moved = wbcMovePaneCardLayout(base, "a", {{ side: "right", position: "bottom" }});
+const swapped = wbcSwapPaneCardsLayout(base, "a", "c");
+let fullError = "";
+try {{ wbcMovePaneCardLayout(moved, "b", {{ side: "right", position: "top" }}); }} catch (error) {{ fullError = error.message; }}
+process.stdout.write(JSON.stringify({{
+  reordered: [reordered.left.map(item => item.id), reordered.right.map(item => item.id)],
+  moved: [moved.left.map(item => item.id), moved.right.map(item => item.id)],
+  swapped: [swapped.left.map(item => item.id), swapped.right.map(item => item.id)],
+  ratios: [moved.leftRatio, moved.rightRatio],
+  fullError,
+}}));
+"""
+    result = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    assert json.loads(result.stdout) == {
+        "reordered": [["b", "a"], ["c"]],
+        "moved": [["b"], ["c", "a"]],
+        "swapped": [["c", "b"], ["a"]],
+        "ratios": [0.4, 0.6],
+        "fullError": "target pane column is full",
+    }
+
+
 def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split():
     source = workbench_chat_source()
     pane = source.split("function renderPaneCard", 1)[1].split(
@@ -1821,8 +1893,8 @@ def test_each_conversation_split_grip_closes_its_own_conversation():
     pane = source.split("function renderPaneCard", 1)[1].split(
         "function renderPaneColumn", 1
     )[0]
-    assert "var close = function ()" in pane
-    assert "closePaneCard(card.id)" in pane
+    assert "var close = function () { return closePaneCardWithConfirmation(card); };" in pane
+    assert "function closePaneCardWithConfirmation(card)" in source
     assert "var move = function () { movePaneCardOtherSide(card.id); };" in pane
     assert "onClose={close}" in pane
     assert "onToggleSide={move}" in pane
@@ -5678,9 +5750,9 @@ def test_workbench_chat_cards_reorder_and_open_when_dropped_on_conversation():
     assert "wbcMoveChatOrder(order, dragState.movingId" in rail
     assert "transfer.setDragImage(" not in rail
     assert "function prepareRailDragImage(root, transfer, clientX, clientY)" in rail
-    # Chat, chat-group and terminal rows call the helper directly; task cards
-    # receive the same helper through their focused rail module.
-    assert rail.count("prepareRailDragImage(") == 3
+    # Chat, chat-group, terminal and plugin rows call the helper directly;
+    # task cards receive the same helper through their focused rail module.
+    assert rail.count("prepareRailDragImage(") == 4
     assert "prepareDragImage(event.currentTarget, event.dataTransfer" in task_rail
     assert "function wbcBuildRailCardDragPreview(root, extraClassName)" in source
     drag_preview_helper = source.split(
@@ -5728,6 +5800,84 @@ def test_workbench_chat_cards_reorder_and_open_when_dropped_on_conversation():
     assert i18n.count('"workbenchChat.dragChat"') == 2
     assert i18n.count('"workbenchChat.chatMoved"') == 2
     assert i18n.count('"workbenchChat.dropToOpen"') == 2
+
+
+def test_plugin_tools_share_conversation_cards_and_split_drop_pipeline():
+    rail = frontend_module_source("features/chat/rail.jsx")
+    drag_layout = frontend_module_source("features/chat/drag-layout.jsx")
+    page = frontend_module_source("features/chat/page.jsx")
+    pane_drop = frontend_module_source("features/chat/pane-drop-controller.jsx")
+    pane_layout = frontend_module_source("features/chat/pane-layout-controller.jsx")
+    styles = workbench_style_source()
+    i18n = workbench_i18n_source()
+
+    assert 'var WBC_PLUGIN_VIEW_DRAG_MIME = "application/x-cyrene-plugin-view+json";' in drag_layout
+    assert "function wbcSetPluginViewDrag(event, payload)" in drag_layout
+    assert "function wbcHasPluginViewDrag(event)" in drag_layout
+    assert "function wbcReadPluginViewDrag(event)" in drag_layout
+    assert 'kind: "plugin-view"' in drag_layout
+    assert 'className={"wbc-chat-card wbc-project-plugin-tool"' in rail
+    assert 'draggable={disabled ? undefined : "true"}' in rail
+    assert "wbcSetPluginViewDrag(event, payload);" in rail
+    assert "prepareRailDragImage(event.currentTarget, event.dataTransfer" in rail
+    assert 'host.classList.add("wbc-plugin-tool-drag-image")' in rail
+    assert "pluginSuppressClickRef.current === toolKey" in rail
+    plugin_section = rail.split('className="wbc-project-tools wbc-plugin-project-tools"', 1)[1].split("{pluginTools.map", 1)[0]
+    assert "wbcHasPluginViewDrag(event)" in plugin_section
+    assert "event.preventDefault();" in plugin_section
+    assert 'event.dataTransfer.dropEffect = "move";' in plugin_section
+    assert 'setPluginDragId("");' in plugin_section
+    assert 'role="button"' in rail
+    assert 'event.key !== "Enter" && event.key !== " "' in rail
+    assert 'setChatDragKind("plugin-view")' in page
+    assert "wbcHasPluginViewDrag(event)" in page
+    assert 'openPaneContent("plugin-view"' in page
+    assert 'context.paneContentCard(\n        "plugin-view"' in pane_drop
+    assert "var existingPlugin = wbcPaneCardLocation(layout, pluginCard.id);" in pane_drop
+    assert 'normalizedType === "plugin-view" ? baseCard.id : ""' in pane_layout
+    assert "freshInstance: true" in pane_layout
+    assert ".wbc-plugin-project-tools > .wbc-project-plugin-tool" in styles
+    assert ".wbc-native-chat-drag-image.wbc-plugin-tool-drag-image" in styles
+    assert ".wbc-project-plugin-tool.dragging" not in styles
+    assert i18n.count('"workbenchChat.dragPluginView"') == 2
+    assert i18n.count('"workbenchChat.dropPluginViewToOpenSide"') == 2
+
+
+def test_dynamic_surfaces_reuse_plugin_snapshot_and_protect_user_panes():
+    plugins = frontend_module_source("platform/plugins.jsx")
+    surfaces = frontend_module_source("features/chat/dynamic-surfaces.jsx")
+    broker = frontend_module_source("features/chat/dynamic-surface-broker.mjs")
+    page = frontend_module_source("features/chat/page.jsx")
+    detached = frontend_module_source("features/chat/context-panel.jsx")
+    pane_drag = frontend_module_source("features/chat/pane-card-drag-controller.jsx")
+    pane_restore = frontend_module_source("features/chat/pane-detachment.jsx")
+    root = Path(__file__).resolve().parents[1]
+    electron = (root / "electron" / "main.js").read_text(encoding="utf-8")
+
+    assert "workbenchSurfaces" in plugins
+    assert "workspaceFileTypes" in plugins
+    assert "workspaceActions" in plugins
+    assert "pluginSnapshotSurface(state, surfaceId)" in plugins
+    assert "pluginSnapshotFileTypeFor(state, path, mime)" in plugins
+    assert "pluginSnapshotActionsFor(state, resource)" in plugins
+    assert 'window.CyreneUI.register("dynamicSurfaces"' in surfaces
+    assert "function WbcSurfaceHost" in surfaces
+    assert 'renderer.kind === "plugin_view"' in surfaces
+    assert '"resource-summary": WbcResourceSummarySurface' in surfaces
+    assert 'card.kind !== "surface" || meta.origin !== "agent"' in broker
+    assert "meta.claimedByUser === true || meta.pinned === true" in broker
+    assert 'outcome: SURFACE_OUTCOMES.DEFERRED' in broker
+    assert "wbcProjectFileDraftKey" in page
+    assert "surfaceSuppressionRef" in page
+    assert "wbcRevealSurface(previous" in page
+    assert 'card.kind === "surface"' in page
+    assert "<WbcSurfaceHost" in page
+    assert 'kind === "surface"' in detached
+    assert "<WbcSurfaceHost" in detached
+    assert "meta: pane.meta" in pane_drag
+    assert "meta: descriptor.meta" in pane_restore
+    assert "const meta = sourceMeta ?" in electron
+    assert "claimedByUser: sourceMeta.claimedByUser === true" in electron
 
 
 def test_workbench_chat_rename_dialog_uses_compact_vertical_spacing():
@@ -7576,10 +7726,15 @@ def test_workbench_permission_mode_is_preserved_across_secondary_entry_points():
 
 def test_workbench_surfaces_permission_reviews_and_describes_auto_accurately():
     source = workbench_chat_source()
+    agent_events = frontend_module_source("features/chat/agent-events.jsx")
     i18n = workbench_i18n_source()
 
     assert 'event.type === "auto_review" || event.type === "permission_decision"' in source
     assert 'kind: "permission"' in source
+    assert '"permission.reviewed": { handler: "onPermissionReviewed"' in agent_events
+    assert "function wbcAgentPermissionReviewPayload(event)" in agent_events
+    assert "function applyPermissionReviewEvent(chatId, event)" in source
+    assert "onPermissionReviewed: function (event)" in source
     assert '"workbenchChat.mode.auto.desc": "Review permission requests automatically"' in i18n
     assert '"workbenchChat.mode.auto.desc": "自动审核权限请求"' in i18n
 
@@ -7701,6 +7856,35 @@ def test_workbench_agent_media_and_references_reuse_inline_attachment_renderer()
     assert ".wbc-media-references-list .wbc-inline-image" in styles
     assert ".wbc-media-references-list .wbc-inline-media.video" in styles
     assert ".wbc-media-references-list .wbc-inline-media.audio" in styles
+
+
+def test_file_resource_drag_temporarily_disables_native_topbar_drag_region():
+    source = workbench_chat_source()
+    messages = frontend_module_source("features/chat/messages.jsx")
+    file_resources = frontend_module_source("features/chat/file-resources.jsx")
+    styles = workbench_style_source()
+
+    assert 'root.classList.add("wbc-resource-drag-active")' in source
+    assert 'root.classList.remove("wbc-resource-drag-active")' in source
+    assert 'document.addEventListener("dragend", clearResourceDragRegion, true)' in source
+    assert 'document.addEventListener("drop", clearResourceDragRegion, true)' in source
+    region_rule = styles.split(
+        "html.wbc-resource-drag-active .workbench-topbar {", 1
+    )[1].split("}", 1)[0]
+    assert "-webkit-app-region: no-drag;" in region_rule
+    assert "function wbcStartFilePointerDrag(event, file)" in file_resources
+    assert "wbcPointInsideResourceShelf(clientX, clientY)" in file_resources
+    assert 'new CustomEvent("cyrene:pin-topbar-resource", { detail: payload })' in file_resources
+    assert "source.setPointerCapture(pointerId)" in file_resources
+    assert "function wbcCopyFileDragAppearance(sourceNode, cloneNode)" in file_resources
+    assert "wbcCopyFileDragAppearance(source, ghost)" in file_resources
+    assert 'ghost.style.height = rect.height + "px"' in file_resources
+    assert "wbcStartFilePointerDrag(event, file)" in messages
+    assert 'draggable={wbcUsesFilePointerDrag() ? undefined : "true"}' in messages
+    assert ".wbc-file-pointer-drag-ghost" in styles
+    ghost_rule = styles.split(".wbc-file-pointer-drag-ghost {", 1)[1].split("}", 1)[0]
+    assert "opacity:" not in ghost_rule
+    assert "box-shadow:" not in ghost_rule
 
 
 def test_workbench_execution_card_uses_collapsible_activity_summary():
@@ -8245,16 +8429,16 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert "-webkit-text-fill-color: transparent;" in css
     assert "@keyframes wbc-trace-text-flow" in css
     assert "@keyframes wbc-trace-icon-flow" in css
-    assert "wbc-trace-text-flow 2.4s ease-in-out infinite;" in css
-    assert "wbc-trace-icon-flow 2.4s ease-in-out infinite;" in css
+    assert "wbc-trace-text-flow 2.4s linear infinite;" in css
+    assert "wbc-trace-icon-flow 2.4s linear infinite;" in css
     assert "wbc-trace-text-flow 2.4s ease-in-out infinite alternate" not in css
     assert "wbc-trace-icon-flow 2.4s ease-in-out infinite alternate" not in css
     assert 'className="wbc-trace-label"' in trace_card
     assert ".wbc-trace-list li.active .wbc-trace-label" in css
     assert ".wbc-trace-list li.active .wbc-trace-mark" in css
     assert "#fff 50%" in css
-    assert "0%, 8% { background-position: -80% 0; }" in css
-    assert "72%, 100% { background-position: 180% 0; }" in css
+    assert "from { background-position: -80% 0; }" in css
+    assert "to { background-position: 180% 0; }" in css
     assert 'live={!!msg.runtimeActivity}' in chat
     assert 'live={true}' in live_message
     assert 'className="wbc-thinking-detail-text"' in trace_card
@@ -8348,6 +8532,7 @@ process.stdout.write(JSON.stringify({{
 
 def test_workbench_activity_group_has_live_and_completed_disclosure_states():
     chat = workbench_chat_source()
+    split = frontend_module_source("features/chat/split-pane.jsx")
     css = workbench_style_source()
     i18n = workbench_i18n_source()
     group_component = chat.split("function WbcActivityGroup", 1)[1].split(
@@ -8360,6 +8545,10 @@ def test_workbench_activity_group_has_live_and_completed_disclosure_states():
     assert "runtimeHasReplyText" in chat
     assert "{renderedHistory}" in chat
     assert "if (msg.activityGroup)" in chat
+    assert "wbcGroupConsecutiveActivityMessages(messages, streamRuntime)" in split
+    assert "displayMessages.map(function (message)" in split
+    assert "if (message.activityGroup)" in split
+    assert "<WbcActivityGroup group={message} />" in split
     assert 'className="wbc-activity-group-summary"' in group_component
     assert "aria-expanded={expanded}" in group_component
     assert 'aria-busy={active ? "true" : undefined}' in group_component
@@ -8375,6 +8564,10 @@ def test_workbench_activity_group_has_live_and_completed_disclosure_states():
     assert '"workbenchChat.activityGroup.completedDuration": "已处理（{duration}）"' in i18n
     assert ".wbc-activity-group-collapse.open" in css
     assert "@media (prefers-reduced-motion: reduce)" in css
+    assert '.wbc-activity-group.active[aria-busy="true"] .wbc-activity-group-summary b' in css
+    assert '.wbc-activity-group.active[aria-busy="true"] .wbc-activity-group-state' in css
+    assert "animation: wbc-trace-text-flow 2.4s linear infinite;" in css
+    assert "animation: wbc-trace-icon-flow 2.4s linear infinite;" in css
     group_list_css = css.split(".wbc-activity-group-list {", 1)[1].split("}", 1)[0]
     assert "border-left" not in group_list_css
     assert "margin: 3px 0 2px 22px;" in group_list_css

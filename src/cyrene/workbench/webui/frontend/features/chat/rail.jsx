@@ -1,6 +1,6 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { pluginLocalizedField } from "../../platform/plugins.jsx"
-import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_ICONS, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcBuildRailCardDragPreview, wbcErrorText, wbcFileViewKind, wbcFormatTime, wbcHasChatDrag, wbcHasChatRailDrag, wbcHasTaskDrag, wbcHideNativeDragImage, wbcNotifyAgentChatFlow, wbcSetChatDrag, wbcSetChatGroupDrag, wbcSetResourceDrag, wbcSetTaskDrag, wbcT } from "../../workbench-chat.jsx"
+import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_ICONS, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcBuildRailCardDragPreview, wbcErrorText, wbcFileViewKind, wbcFormatTime, wbcHasChatDrag, wbcHasChatRailDrag, wbcHasPluginViewDrag, wbcHasTaskDrag, wbcHideNativeDragImage, wbcNotifyAgentChatFlow, wbcSetChatDrag, wbcSetChatGroupDrag, wbcSetPluginViewDrag, wbcSetResourceDrag, wbcSetTaskDrag, wbcT } from "../../workbench-chat.jsx"
 import { wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue } from "./conversation.jsx"
 import { wbcStartFileDrag } from "./file-resources.jsx"
 
@@ -46,7 +46,7 @@ function wbcWriteProjectToolView(projectId, value) {
   } catch (error) {}
 }
 
-function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminals, terminalsLoading, activeTerminalId, railMode, workRailMode, pinnedChatIds, pinnedTaskIds, activeChatId, activeTaskId, loading, runningChatIds, runtimeEngine, onSelect, onSelectTask, onAnswer, onCreate, onCreateTask, onRename, onRenameTask, onDelete, onDeleteTask, onToTask, toTaskBusy, onTogglePinned, onTogglePinnedTask, onOpenFile, onOpenTerminal, onCreateTerminal, onRenameTerminal, onDeleteTerminal, onUpdateTerminalLayout, onOpenPluginView, onRailModeChange, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
+function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminals, terminalsLoading, activeTerminalId, railMode, workRailMode, pinnedChatIds, pinnedTaskIds, activeChatId, activeTaskId, loading, runningChatIds, runtimeEngine, onSelect, onSelectTask, onAnswer, onCreate, onCreateTask, onRename, onRenameTask, onDelete, onDeleteTask, onToTask, toTaskBusy, onTogglePinned, onTogglePinnedTask, onOpenFile, onOpenTerminal, onCreateTerminal, onRenameTerminal, onDeleteTerminal, onUpdateTerminalLayout, onOpenPluginView, onOpenSplit, onRailModeChange, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
   var [query, setQuery] = useWbcState("");
   var [projectToolView, setProjectToolViewState] = useWbcState(function () {
     return wbcReadProjectToolView(projectId);
@@ -82,6 +82,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
     wbcWriteProjectToolView(projectId, "terminal");
   }, [projectId, activeTerminalId, terminals]);
   var [pluginTools, setPluginTools] = useWbcState([]);
+  var [pluginDragId, setPluginDragId] = useWbcState("");
   useWbcEffect(function () {
     return workbenchServices.plugins().subscribe(function (snapshot) {
       setPluginTools(Array.isArray(snapshot && snapshot.projectTools) ? snapshot.projectTools : []);
@@ -281,6 +282,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
   var dragOriginOrderRef = useWbcRef([]);
   var dropCommittedRef = useWbcRef(false);
   var suppressClickRef = useWbcRef("");
+  var pluginSuppressClickRef = useWbcRef("");
   var suppressGroupClickRef = useWbcRef("");
   var groupMetadataRequestRef = useWbcRef({ sequence: 0, active: {} });
   var agentFlowTimersRef = useWbcRef({});
@@ -839,6 +841,12 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
     if (!builtPreview) return;
     var rect = builtPreview.rect;
     var host = builtPreview.host;
+    // Plugin rows keep their subtitle while resting, but their lifted preview
+    // uses the exact single-line conversation-card geometry. This keeps the
+    // drag shadow, radius, density and pointer handoff visually identical.
+    if (root.classList.contains("wbc-project-plugin-tool")) {
+      host.classList.add("wbc-plugin-tool-drag-image");
+    }
     host.style.position = "fixed";
     host.style.left = rect.left + "px";
     host.style.top = rect.top + "px";
@@ -1738,10 +1746,17 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
         actions: [
           { action_id: "open", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"] },
           { action_id: "open_menu", kind: "open_menu", risk: "R1", gesture_aliases: ["context_menu", "more_button"] },
-        ],
+        ].concat(onOpenSplit ? [
+          { action_id: "open_split", kind: "move", risk: "R1", gesture_aliases: ["drag_to_split"], input_schema: { side: "text<=5" } },
+        ] : []),
         handlers: {
           open: function () { setMenuId(""); return onSelect(chatId); },
           open_menu: function () { setMenuId(chatId); },
+          open_split: function (input) {
+            var side = String(input && input.side || "right");
+            if (side !== "left" && side !== "right") throw new Error("pane side must be left or right");
+            return onOpenSplit(chatId, { side: side });
+          },
         },
       }));
     });
@@ -1801,7 +1816,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
       uiSurface.setScope("main");
     }
     return function () { unregister.forEach(function (remove) { remove(); }); };
-  }, [projectId, defaultOrderKey, filtered, query, collapsed, groups, menuId, activeChatId, pinnedChatIds, onSelect, onCreate, onDelete, onToTask, toTaskBusy, onTogglePinned, showAllRecent, recentOverflowCount, uiViewportRevision]);
+  }, [projectId, defaultOrderKey, filtered, query, collapsed, groups, menuId, activeChatId, pinnedChatIds, onSelect, onOpenSplit, onCreate, onDelete, onToTask, toTaskBusy, onTogglePinned, showAllRecent, recentOverflowCount, uiViewportRevision]);
 
   var terminalMap = new Map((Array.isArray(terminals) ? terminals : []).map(function (terminal) {
     return [String(terminal.id), terminal];
@@ -2412,7 +2427,24 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
         </section>
       ) : null}
       {pluginTools.length && (railMode === "chat" || railMode === "task") && !collapsed ? (
-        <section className="wbc-project-tools wbc-plugin-project-tools" aria-label={wbcT("rail.pluginTools", "Plugin tools")}>
+        <section
+          className="wbc-project-tools wbc-plugin-project-tools"
+          aria-label={wbcT("rail.pluginTools", "Plugin tools")}
+          onDragOver={function (event) {
+            if (!pluginDragId || !wbcHasPluginViewDrag(event)) return;
+            // Mirror the conversation list's fallback drop surface. Marking
+            // the source region as a valid no-op target prevents Chromium on
+            // macOS from playing its native invalid-drop return animation
+            // before dragend when the user simply releases the card here.
+            event.preventDefault();
+            if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+          }}
+          onDrop={function (event) {
+            if (!pluginDragId || !wbcHasPluginViewDrag(event)) return;
+            event.preventDefault();
+            setPluginDragId("");
+          }}
+        >
           <header><span>{wbcT("rail.pluginTools", "Plugin tools")}</span></header>
           {pluginTools.map(function (tool) {
             var packId = String(tool && tool.pack_id || "");
@@ -2420,26 +2452,62 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
             var title = pluginLocalizedField(tool, "title") || tool.id || packId;
             var subtitle = pluginLocalizedField(tool, "subtitle") || packId;
             var glyph = String(tool && (tool.icon_text || tool.iconText || tool.icon) || "").trim().slice(0, 2) || "◇";
-            return <button
-              type="button"
-              key={packId + ":" + String(tool && tool.id || viewId)}
-              className="wbc-project-plugin-tool"
-              disabled={!packId || !viewId || !onOpenPluginView}
+            var toolKey = packId + ":" + String(tool && tool.id || viewId);
+            var disabled = !packId || !viewId || !onOpenPluginView;
+            var payload = {
+              packId: packId,
+              viewId: viewId,
+              instanceId: String(tool && (tool.instance_id || tool.instanceId) || "default"),
+              projectId: String(projectId || ""),
+              title: title,
+              subtitle: subtitle,
+              state: !tool || tool.state == null ? null : tool.state,
+            };
+            return <div
+              key={toolKey}
+              data-plugin-tool-id={toolKey}
+              role="button"
+              tabIndex={disabled ? -1 : 0}
+              draggable={disabled ? undefined : "true"}
+              aria-disabled={disabled || undefined}
+              aria-label={title}
+              title={wbcT("workbenchChat.dragPluginView", "Drag to open {title} in a split view.", { title: title })}
+              className={"wbc-chat-card wbc-project-plugin-tool" + (pluginDragId === toolKey ? " dragging" : "")}
               onClick={function () {
-                if (!packId || !viewId || !onOpenPluginView) return;
-                onOpenPluginView({
-                  packId: packId,
-                  viewId: viewId,
-                  instanceId: String(tool && (tool.instance_id || tool.instanceId) || "default"),
-                  title: title,
-                  state: !tool || tool.state == null ? null : tool.state,
-                });
+                if (disabled || pluginSuppressClickRef.current === toolKey) return;
+                onOpenPluginView(payload);
+              }}
+              onKeyDown={function (event) {
+                if (disabled || (event.key !== "Enter" && event.key !== " ")) return;
+                event.preventDefault();
+                onOpenPluginView(payload);
+              }}
+              onDragStart={function (event) {
+                if (disabled) { event.preventDefault(); return; }
+                pluginSuppressClickRef.current = toolKey;
+                setPluginDragId(toolKey);
+                wbcSetPluginViewDrag(event, payload);
+                if (event.dataTransfer) {
+                  prepareRailDragImage(event.currentTarget, event.dataTransfer, event.clientX, event.clientY);
+                }
+              }}
+              onDragEnd={function () {
+                clearRailDragImage();
+                setPluginDragId("");
+                window.setTimeout(function () {
+                  if (pluginSuppressClickRef.current === toolKey) pluginSuppressClickRef.current = "";
+                }, 0);
               }}
             >
-              <span className="wbc-project-tool-icon wbc-project-plugin-tool-icon" aria-hidden="true">{glyph}</span>
-              <span className="wbc-project-tool-copy"><b>{title}</b><small>{subtitle}</small></span>
-              <span className="wbc-project-tool-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
-            </button>;
+              <span className="wbc-chat-card-top">
+                <span className="wbc-chat-row-icon wbc-project-plugin-tool-icon" aria-hidden="true">{glyph}</span>
+                <span className="wbc-chat-card-title">
+                  <b><WbcHoverMarquee text={title} /></b>
+                  <small className="wbc-project-plugin-tool-subtitle">{subtitle}</small>
+                </span>
+                <span className="wbc-project-tool-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
+              </span>
+            </div>;
           })}
         </section>
       ) : null}

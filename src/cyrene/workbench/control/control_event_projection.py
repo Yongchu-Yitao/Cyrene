@@ -7,6 +7,7 @@ from typing import Any
 
 PUBLIC_RUN_EVENT_TYPES = frozenset({
     "ack",
+    "agent_comm",
     "auto_review",
     "awaiting_user",
     "error",
@@ -127,13 +128,14 @@ def public_run_event(event: dict[str, Any]) -> dict[str, Any] | None:
         "path_hint", "rationale", "agent_id", "caller", "task", "mode",
         "outcome", "stop_reason", "result_preview", "created_at", "updated_at",
         "message_count",
+        "content", "summary", "msg_type", "discussion_id", "timestamp", "role",
     ):
         value = event.get(key)
         if key in event and (
             isinstance(value, (str, int, float, bool)) or value is None
         ):
             result[key] = value
-    for key in ("args", "detail_params", "plan"):
+    for key in ("args", "detail_params", "plan", "metrics"):
         value = event.get(key)
         if isinstance(value, (dict, list)):
             result[key] = value

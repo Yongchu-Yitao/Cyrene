@@ -1,4 +1,4 @@
-import { wbcChatDropReplacesActiveConversation, wbcHasChatDrag, wbcHasResourceDrag, wbcHasSplitDrag, wbcHasTaskDrag, wbcPaneCard, wbcPaneCardLocation, wbcPlacePaneCard, wbcReadChatDrag, wbcReadResourceDrag, wbcReadSplitDrag, wbcReadTaskDrag } from "../../workbench-chat.jsx"
+import { wbcChatDropReplacesActiveConversation, wbcHasChatDrag, wbcHasPluginViewDrag, wbcHasResourceDrag, wbcHasSplitDrag, wbcHasTaskDrag, wbcPaneCard, wbcPaneCardLocation, wbcPlacePaneCard, wbcReadChatDrag, wbcReadPluginViewDrag, wbcReadResourceDrag, wbcReadSplitDrag, wbcReadTaskDrag } from "../../workbench-chat.jsx"
 
 function wbcDroppedPaneCard(context, event, layout, target, targetCardId, effectiveEdge) {
   var sourceCardId = "";
@@ -45,6 +45,26 @@ function wbcDroppedPaneCard(context, event, layout, target, targetCardId, effect
       });
       if (context.onSelectTask) context.onSelectTask(taskId);
     }
+  } else if (wbcHasPluginViewDrag(event)) {
+    var pluginPayload = wbcReadPluginViewDrag(event);
+    if (pluginPayload) {
+      var pluginCard = context.paneContentCard(
+        "plugin-view",
+        Object.assign({ projectId: context.projectId }, pluginPayload),
+        context.activeChatIdRef.current
+      );
+      var existingPlugin = wbcPaneCardLocation(layout, pluginCard.id);
+      var replacingPlugin = existingPlugin
+        && String(existingPlugin.card && existingPlugin.card.id || "") === String(targetCardId || "")
+        && effectiveEdge === "replace";
+      sourceCardId = replacingPlugin ? pluginCard.id : "";
+      card = replacingPlugin ? existingPlugin.card : (existingPlugin
+        ? wbcPaneCard("plugin-view", pluginCard.payload, {
+            ownerChatId: pluginCard.ownerChatId,
+            freshInstance: true,
+          })
+        : pluginCard);
+    }
   } else if (wbcHasResourceDrag(event)) {
     var resource = wbcReadResourceDrag(event);
     if (resource && resource.kind === "file") {
@@ -61,7 +81,8 @@ function wbcDroppedPaneCard(context, event, layout, target, targetCardId, effect
 
 function wbcHandlePaneDrop(context, event, targetCardId, edge) {
   if (!wbcHasSplitDrag(event) && !wbcHasChatDrag(event)
-    && !wbcHasTaskDrag(event) && !wbcHasResourceDrag(event)) return;
+    && !wbcHasTaskDrag(event) && !wbcHasPluginViewDrag(event)
+    && !wbcHasResourceDrag(event)) return;
   event.preventDefault();
   event.stopPropagation();
   var layout = context.paneLayoutFor();

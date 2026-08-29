@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from cyrene.core.context import (
+    ContextError,
     ContextStoreRouter,
     ContextTreeStore,
     ContextValueError,
@@ -139,6 +140,74 @@ def test_delete_node_requires_explicit_recursive_delete(tmp_path):
     assert store.has_child(tree.id, tree.root_id) is False
     assert changes[-1].action == "delete"
     assert changes[-1].deleted_node_ids == (parent.id, child.id)
+    store.close()
+
+
+def test_replace_subtree_is_atomic_and_rejects_a_stale_source(tmp_path):
+    store = ContextStoreRouter(tmp_path / "context", clock=AdvancingClock())
+    tree = store.create_tree({"role": "system"}, tree_id="tree", root_id="root")
+    user = store.mount(
+        tree.id,
+        tree.root_id,
+        {"role": "user", "content": "original"},
+        node_id="user",
+    )
+    assistant = store.mount(
+        tree.id,
+        user.id,
+        {"role": "assistant", "content": "old approach"},
+        node_id="assistant",
+    )
+    result = store.mount(
+        tree.id,
+        assistant.id,
+        {"role": "tool_results", "results": [{"value": "evidence"}]},
+        node_id="result",
+    )
+    expected = tuple(
+        node.id for node in store.get_subtree(tree.id, user.id)
+    )
+    observed = []
+    store.subscribe(observed.append, tree_id=tree.id)
+
+    replacement, deleted = store.replace_subtree(
+        tree.id,
+        user.id,
+        {"role": "context_reflection", "schema": "cyrene.reflect_pack.v1"},
+        expected_node_ids=expected,
+    )
+
+    assert replacement.id == user.id
+    assert deleted == (assistant.id, result.id)
+    assert [node.id for node in store.get_subtree(tree.id, tree.root_id)] == [
+        tree.root_id,
+        user.id,
+    ]
+    assert replacement.value["role"] == "context_reflection"
+    assert [(change.action, change.node_id) for change in observed] == [
+        ("delete", assistant.id),
+        ("update", user.id),
+    ]
+
+    child = store.mount(
+        tree.id,
+        user.id,
+        {"role": "assistant", "content": "arrived while reflecting"},
+        node_id="new-child",
+    )
+    with pytest.raises(ContextError, match="subtree changed"):
+        store.replace_subtree(
+            tree.id,
+            user.id,
+            {"role": "context_reflection", "schema": "stale"},
+            expected_node_ids=(user.id,),
+        )
+    assert store.get_node(tree.id, child.id).value["content"] == (
+        "arrived while reflecting"
+    )
+    assert store.get_node(tree.id, user.id).value["schema"] == (
+        "cyrene.reflect_pack.v1"
+    )
     store.close()
 
 

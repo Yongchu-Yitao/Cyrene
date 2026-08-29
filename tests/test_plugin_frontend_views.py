@@ -6,15 +6,27 @@ from pathlib import Path
 
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from cyrene.core.plugin import (
+    ExtensionContribution,
     Plugin,
     PluginContext,
     PluginPack,
     PluginRegistry,
     PluginSetupContext,
+    resolve_resource_effect_values,
 )
-from cyrene.plugins import PluginApplicationHost
+from cyrene.plugins import (
+    WORKBENCH_SURFACE,
+    WORKSPACE_ACTION,
+    WORKSPACE_FILE_TYPE,
+    PluginApplicationHost,
+    WorkbenchSurfaceContribution,
+    WorkbenchSurfaceRenderer,
+    WorkspaceActionContribution,
+    WorkspaceFileTypeContribution,
+)
 from cyrene.plugins.builtin.cyrene_plugin_development.tools import (
     SCAFFOLD_TYPES,
     scaffold,
@@ -25,6 +37,56 @@ from cyrene.workbench.http.plugins import plugin_registry_status, register_plugi
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_plugin_resource_effects_are_validated_and_resolved_without_path_access() -> None:
+    async def handler(_arguments, _context):
+        return None
+
+    plugin = Plugin(
+        name="ResourceTool",
+        description="resource",
+        input_schema={"type": "object"},
+        handler=handler,
+        metadata={
+            "resource_effects": ({
+                "argument_path": ("target", "path"),
+                "kind": "file",
+                "access": "write",
+                "phase": "started",
+            },),
+        },
+    )
+    assert resolve_resource_effect_values(
+        plugin.resource_effects,
+        {"target": {"path": "src/app.py"}},
+        phase="started",
+    ) == ({
+        "value": "src/app.py",
+        "kind": "file",
+        "access": "write",
+        "phase": "started",
+    },)
+    assert resolve_resource_effect_values(
+        plugin.resource_effects,
+        {"target": {"path": "src/app.py"}},
+        phase="completed",
+    ) == ()
+
+    with pytest.raises(ValueError, match="argument_path"):
+        Plugin(
+            name="InvalidResourceTool",
+            description="invalid",
+            input_schema={"type": "object"},
+            handler=handler,
+            metadata={
+                "resource_effects": ({
+                    "argument_path": ("..",),
+                    "kind": "file",
+                    "access": "write",
+                },),
+            },
+        )
 
 
 def test_plugin_pack_frontend_view_rpc_asset_and_registry_routes(tmp_path) -> None:
@@ -45,6 +107,40 @@ def test_plugin_pack_frontend_view_rpc_asset_and_registry_routes(tmp_path) -> No
             description="dashboard",
             plugins=(),
             application_setup=application_setup,
+            contributions=(
+                ExtensionContribution(
+                    WORKBENCH_SURFACE,
+                    WorkbenchSurfaceContribution(
+                        id="main",
+                        title="Dashboard Surface",
+                        renderer=WorkbenchSurfaceRenderer("plugin_view", "main"),
+                        accepted_activities=("read", "write"),
+                        resource_kinds=("file",),
+                        preferred_side="right",
+                    ),
+                ),
+                ExtensionContribution(
+                    WORKSPACE_FILE_TYPE,
+                    WorkspaceFileTypeContribution(
+                        id="dashboard-source",
+                        extensions=(".dash",),
+                        language_id="dashboard",
+                        editable=True,
+                        default_surface="dashboard/main",
+                    ),
+                ),
+                ExtensionContribution(
+                    WORKSPACE_ACTION,
+                    WorkspaceActionContribution(
+                        id="preview",
+                        kind="preview",
+                        method="ping",
+                        extensions=(".dash",),
+                        outputs=("endpoint",),
+                        default_surface="dashboard/main",
+                    ),
+                ),
+            ),
             metadata={
                 "frontend_views": ({
                     "id": "main",
@@ -82,10 +178,19 @@ def test_plugin_pack_frontend_view_rpc_asset_and_registry_routes(tmp_path) -> No
         contributions = host.frontend_contributions()
         assert contributions["views"][0]["pack_id"] == "dashboard"
         assert contributions["project_tools"][0]["view"] == "main"
+        assert contributions["surfaces"][0]["id"] == "dashboard/main"
+        assert contributions["file_types"][0]["extensions"] == [".dash"]
+        assert contributions["actions"][0]["method"] == "ping"
         with TestClient(app) as client:
             status = client.get("/api/plugins").json()
             assert status["frontend_views"][0]["id"] == "main"
             assert status["project_tools"][0]["pack_id"] == "dashboard"
+            assert status["workbench_surfaces"][0]["renderer"] == {
+                "kind": "plugin_view",
+                "id": "main",
+            }
+            assert status["workspace_file_types"][0]["id"] == "dashboard/dashboard-source"
+            assert status["workspace_actions"][0]["id"] == "dashboard/preview"
             asset = client.get("/api/plugins/packs/dashboard/assets/ui/index.html")
             assert asset.status_code == 200
             assert "dashboard" in asset.text
@@ -118,8 +223,26 @@ def test_plugin_authoring_example_uses_unified_pack_protocol() -> None:
     assert 'sandbox="allow-scripts allow-forms allow-modals allow-downloads allow-popups"' in plugin_service
     assert 'card.kind === "plugin-view"' in page
     assert 'openPaneContent("plugin-view"' in page
+    assert 'className="wbc-side-agent-split wbc-plugin-view-pane"' in page
+    assert 'className="wbc-plugin-view-host-strip"' in page
+    assert 'className="wbc-plugin-view-content"' in page
     assert "snapshot.projectTools" in rail
     assert 'kind === "plugin-view"' in detached
+    assert 'className="wbc-side-agent-split wbc-plugin-view-pane detached"' in detached
+    assert 'className="wbc-plugin-view-host-strip"' not in detached
+    assert 'className="wbc-plugin-view-content"' in detached
+    workspace_styles = (frontend / "features" / "chat" / "workspace.css").read_text(encoding="utf-8")
+    plugin_pane_styles = workspace_styles.split(".wbc-plugin-view-pane {", 1)[1].split("}", 1)[0]
+    assert "background: inherit;" in plugin_pane_styles
+    assert ".wbc-pane-card > .wbc-side-agent-split.wbc-plugin-view-pane" in workspace_styles
+    assert ".wbc-detached-pane-content > .wbc-side-agent-split.wbc-plugin-view-pane" in workspace_styles
+    docked_plugin_pane_styles = workspace_styles.split(
+        ".wbc-pane-card > .wbc-side-agent-split.wbc-plugin-view-pane {", 1
+    )[1].split("}", 1)[0]
+    assert "grid-template-rows: 34px minmax(0, 1fr);" in docked_plugin_pane_styles
+    assert "padding-top: 0;" in docked_plugin_pane_styles
+    assert ".wbc-plugin-view-pane.detached .wbc-plugin-view-content" in workspace_styles
+    assert "body.wbc-resizing-pane-column .wbc-plugin-view-frame" in workspace_styles
 
 
 def test_plugin_scaffold_creates_every_unified_plugin_type(tmp_path) -> None:
@@ -158,6 +281,7 @@ def test_plugin_scaffold_creates_every_unified_plugin_type(tmp_path) -> None:
     assert callable(full_pack.application_setup)
     assert full_pack.metadata["frontend_views"][0]["entry"] == "ui/index.html"
     assert full_pack.metadata["project_tools"][0]["view"] == "main"
+    assert full_pack.extensions.values(WORKBENCH_SURFACE)[0].renderer.id == "main"
     assert (tmp_path / "sample_full_pack" / "context.py").is_file()
 
     class Hooks:

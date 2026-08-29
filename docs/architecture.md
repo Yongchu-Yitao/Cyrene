@@ -93,7 +93,7 @@ Plugin IDs before pending work resumes.
 | `TurnStart` | Builds the current turn's dynamic context suffix and freezes it for retries. |
 | `ContextChange` | Reacts to committed tree changes and advances context-dependent session work without polling a separate state store. |
 | `ContextUsed` | Receives the token contribution and usage ratio of the actual model path for memory and compaction accounting. |
-| `PreToolUse` | Reviews a resolved call, may normalize its arguments, allow it, or block it. The fixed permission reviewer sees the final arguments. |
+| `PreToolUse` | Runs deterministic argument guards for every resolved call. A Plugin may declare a `permission_boundary`, or report a dynamic boundary after resolving its real target through the session permission service. Only an actual boundary reaches the fixed permission reviewer, which sees the final arguments and may allow, block, or pause for an exact user confirmation. |
 | `PostToolUse` | Observes the completed result once and lets plugins persist learning, activity, or integration state. |
 | `SessionEnd` | Finalizes plugin-owned work after the run has a durable result. |
 | `Stop` | Cancels or closes plugin-owned work when the user stops a run or the session shuts down. |

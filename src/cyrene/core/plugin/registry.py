@@ -972,9 +972,10 @@ class PluginRegistry:
         registered = self._registered_value(name)
         if not self._registered_enabled(registered):
             return False
+        is_main = self._main_agent(agent_id)
         return not (
-            registered.plugin.main_only
-            and not self._main_agent(agent_id)
+            (registered.plugin.main_only and not is_main)
+            or (registered.plugin.subagent_only and is_main)
         )
 
     def set_plugin_enabled(self, name: str, enabled: bool) -> None:
@@ -1043,6 +1044,20 @@ class PluginRegistry:
             )
             raise PluginUnavailableError(
                 f"Plugin is only available to the main Agent: {name}"
+            )
+        if registered.plugin.subagent_only and self._main_agent(agent_id):
+            log_operation(
+                logger,
+                "plugin.registry",
+                "resolve",
+                phase="failed",
+                level=logging.WARNING,
+                plugin=name,
+                agent_id=agent_id,
+                error="subagent_only",
+            )
+            raise PluginUnavailableError(
+                f"Plugin is only available to subagents: {name}"
             )
         log_operation(
             logger,

@@ -59,11 +59,13 @@ function wbcOpenPaneContent(context, type, payload, options) {
   }
   var canonicalId = ["chat", "terminal", "task"].indexOf(normalizedType) >= 0 && payload
     ? normalizedType + ":" + String(payload) : "";
-  var existing = canonicalId ? wbcPaneCardLocation(wbcPaneLayoutFor(context, ownerChatId), canonicalId) : null;
+  var baseCard = wbcPaneContentCard(context, normalizedType, payload, ownerId);
+  var reusableId = canonicalId || (normalizedType === "plugin-view" ? baseCard.id : "");
+  var existing = reusableId ? wbcPaneCardLocation(wbcPaneLayoutFor(context, ownerChatId), reusableId) : null;
   if (normalizedType === "terminal" && existing && !opts.replaceWorkspace) return existing.card;
   var card = existing
     ? wbcPaneCard(normalizedType, payload, { ownerChatId: ownerId, freshInstance: true })
-    : wbcPaneContentCard(context, normalizedType, payload, ownerId);
+    : baseCard;
   wbcUpdatePaneLayout(context, function (layout) {
     var source = opts.sourceCardId ? wbcPaneCardLocation(layout, opts.sourceCardId) : null;
     var targetSide = opts.side === "left" || opts.side === "right"
@@ -214,6 +216,65 @@ function wbcMovePaneCardOtherSide(context, cardId) {
   });
 }
 
+function wbcMovePaneCardLayout(layout, cardId, options) {
+  var opts = options || {};
+  var targetSide = String(opts.side || "");
+  if (targetSide !== "left" && targetSide !== "right") {
+    throw new Error("pane side must be left or right");
+  }
+  var source = wbcPaneCardLocation(layout, cardId);
+  if (!source) throw new Error("pane card is not available");
+  var position = String(opts.position || "");
+  if (!position) position = source.side === targetSide && source.index === 0 ? "top" : "bottom";
+  if (position !== "top" && position !== "bottom") {
+    throw new Error("pane position must be top or bottom");
+  }
+  if (source.side !== targetSide && (layout[targetSide] || []).length >= 2) {
+    throw new Error("target pane column is full");
+  }
+  var next = {
+    left: layout.left.slice(), right: layout.right.slice(),
+    leftRatio: layout.leftRatio, rightRatio: layout.rightRatio,
+  };
+  var moving = next[source.side].splice(source.index, 1)[0];
+  var target = next[targetSide];
+  if (position === "top") target.unshift(moving);
+  else target.push(moving);
+  return next;
+}
+
+function wbcMovePaneCard(context, cardId, options) {
+  var layout = wbcPaneLayoutFor(context);
+  var next = wbcMovePaneCardLayout(layout, cardId, options);
+  var location = wbcPaneCardLocation(next, cardId);
+  wbcUpdatePaneLayout(context, next);
+  return {
+    card_id: String(cardId || ""),
+    side: location && location.side || "",
+    position: location && location.index === 0 ? "top" : "bottom",
+  };
+}
+
+function wbcSwapPaneCardsLayout(layout, firstCardId, secondCardId) {
+  var first = wbcPaneCardLocation(layout, firstCardId);
+  var second = wbcPaneCardLocation(layout, secondCardId);
+  if (!first || !second) throw new Error("both pane cards must be available");
+  if (String(firstCardId || "") === String(secondCardId || "")) return layout;
+  var next = {
+    left: layout.left.slice(), right: layout.right.slice(),
+    leftRatio: layout.leftRatio, rightRatio: layout.rightRatio,
+  };
+  next[first.side][first.index] = second.card;
+  next[second.side][second.index] = first.card;
+  return next;
+}
+
+function wbcSwapPaneCards(context, firstCardId, secondCardId) {
+  var next = wbcSwapPaneCardsLayout(wbcPaneLayoutFor(context), firstCardId, secondCardId);
+  wbcUpdatePaneLayout(context, next);
+  return { first_card_id: String(firstCardId || ""), second_card_id: String(secondCardId || "") };
+}
+
 function wbcCreatePaneConversation(context, cardId) {
   var layout = wbcPaneLayoutFor(context);
   var location = wbcPaneCardLocation(layout, cardId);
@@ -253,7 +314,9 @@ function wbcResizePaneRow(context, side, ratio) {
 
 export {
   wbcCloseDeletedChatSplits, wbcClosePaneCard, wbcCreatePaneConversation,
-  wbcMovePaneCardOtherSide, wbcOpenPaneContent, wbcOpenTaskWorkspace,
+  wbcMovePaneCard, wbcMovePaneCardLayout, wbcMovePaneCardOtherSide,
+  wbcOpenPaneContent, wbcOpenTaskWorkspace,
   wbcPaneContentCard, wbcPaneLayoutFor, wbcPaneOwnerKey, wbcProjectPaneOwnerKey,
   wbcResizePaneRow, wbcRestoreTerminalReplacement, wbcUpdatePaneCard, wbcUpdatePaneLayout,
+  wbcSwapPaneCards, wbcSwapPaneCardsLayout,
 }

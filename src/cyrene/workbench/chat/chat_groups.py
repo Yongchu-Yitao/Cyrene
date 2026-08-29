@@ -547,6 +547,7 @@ _CONTEXT_DIALOGUE_ROLES = frozenset({
     "user",
     "context",
     "context_compaction",
+    "context_reflection",
     "assistant",
     "tool_results",
 })
@@ -755,7 +756,7 @@ def _latest_group_event(session_id: str, project_id: str) -> dict[str, Any] | No
             event = _event_from_value(value, project_id)
             if event is not None:
                 return event
-            if str(value.get("role") or "") == "context_compaction":
+            if str(value.get("role") or "") in {"context_compaction", "context_reflection"}:
                 # Compaction resets the effective model prefix. An event only
                 # remains active when it survived inside the exact compacted
                 # messages; older tree nodes are no longer model context.

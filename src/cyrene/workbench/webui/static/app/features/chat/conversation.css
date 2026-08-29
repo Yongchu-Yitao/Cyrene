@@ -2663,6 +2663,36 @@ button.wbc-attach-file:focus-visible {
   white-space: nowrap;
 }
 
+/* Keep the collapsed summary on one persistent animation timeline for the
+   whole active lifetime.  The selector deliberately does not depend on the
+   expanded state, so disclosure changes and live label updates cannot restart
+   the sweep from its first frame. */
+.wbc-activity-group.active[aria-busy="true"] .wbc-activity-group-summary b {
+  --wbc-trace-flow-base: var(--wb-faint);
+  color: transparent;
+  background-color: var(--wbc-trace-flow-base);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, .16) 24%,
+    #fff 50%,
+    rgba(255, 255, 255, .16) 76%,
+    transparent 100%
+  );
+  background-size: 45% 100%;
+  background-repeat: no-repeat;
+  background-position: -80% 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: wbc-trace-text-flow 2.4s linear infinite;
+}
+
+.wbc-activity-group.active[aria-busy="true"] .wbc-activity-group-state {
+  --wbc-trace-icon-base: var(--wb-green);
+  animation: wbc-trace-icon-flow 2.4s linear infinite;
+}
+
 .wbc-activity-group-chevron {
   margin-left: 1px;
   color: var(--wb-faint);
@@ -2721,6 +2751,19 @@ button.wbc-attach-file:focus-visible {
 
   .wbc-activity-group-collapse {
     transform: none;
+  }
+
+  .wbc-activity-group.active[aria-busy="true"] .wbc-activity-group-summary b {
+    animation: none;
+    color: var(--wb-faint);
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
+
+  .wbc-activity-group.active[aria-busy="true"] .wbc-activity-group-state {
+    animation: none;
+    color: var(--wb-green);
+    filter: none;
   }
 }
 
@@ -2788,7 +2831,7 @@ button.wbc-attach-file:focus-visible {
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: wbc-trace-text-flow 2.4s ease-in-out infinite;
+  animation: wbc-trace-text-flow 2.4s linear infinite;
 }
 
 .wbc-trace.live[aria-busy="true"] .wbc-trace-summary-icon {
@@ -2803,12 +2846,12 @@ button.wbc-attach-file:focus-visible {
   .wbc-trace-summary-icon,
   .wbc-trace-list li.active .wbc-trace-mark
 ) {
-  animation: wbc-trace-icon-flow 2.4s ease-in-out infinite;
+  animation: wbc-trace-icon-flow 2.4s linear infinite;
 }
 
 @keyframes wbc-trace-text-flow {
-  0%, 8% { background-position: -80% 0; }
-  72%, 100% { background-position: 180% 0; }
+  from { background-position: -80% 0; }
+  to { background-position: 180% 0; }
 }
 
 @keyframes wbc-trace-icon-flow {

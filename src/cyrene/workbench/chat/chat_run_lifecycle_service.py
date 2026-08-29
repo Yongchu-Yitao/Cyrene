@@ -22,7 +22,6 @@ class ChatRunLifecycleDependencies:
     capture_workspace_baseline: Callable[..., Awaitable[Any]]
     finalize_workspace_changes: Callable[..., Awaitable[Any]]
     schedule_workspace_finalize: Callable[..., None]
-    publish_live_segments: Callable[..., Awaitable[Any]]
     publish_chat_changed: Callable[..., Awaitable[Any]]
     load_chat_summary: Callable[[str], dict[str, Any]]
     public_message: Callable[[dict[str, Any]], dict[str, Any]]
@@ -233,15 +232,6 @@ class ChatRunLifecycleApplicationService:
     ) -> None:
         logger.info("Workbench chat run_streaming entered [chat=%s run=%s]", request.chat_id, run.run_id)
         before = await self.dependencies.capture_workspace_baseline(request.workspace_dir, run.run_id)
-        stop = asyncio.Event()
-        live_task = asyncio.create_task(
-            self.dependencies.publish_live_segments(
-                run,
-                request.chat_id,
-                request.state_ids_before,
-                stop,
-            )
-        )
         try:
             try:
                 reply = await request.run_turn(run)
@@ -253,14 +243,12 @@ class ChatRunLifecycleApplicationService:
                 await self._stream_error(request, run, before, exc)
                 return
             run.status = "finishing"
-            stop.set()
-            await live_task
             if reply == request.awaiting_user_sentinel:
                 await self._finish_awaiting(request, run, before, publish=True)
                 return
             await self._finish_stream_reply(request, run, before, reply)
         finally:
-            await self._settle_stream(request, run, stop, live_task)
+            await self._settle_stream(request, run)
 
     async def _stream_error(
         self,
@@ -345,21 +333,7 @@ class ChatRunLifecycleApplicationService:
         self,
         request: ChatRunLifecycleRequest,
         run: ChatRun,
-        stop: asyncio.Event,
-        live_task: asyncio.Task[Any],
     ) -> None:
-        if not stop.is_set():
-            stop.set()
-            try:
-                await live_task
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.debug(
-                    "Workbench chat live segment publisher failed for %s",
-                    request.chat_id,
-                    exc_info=True,
-                )
         outcome = run.outcome if isinstance(run.outcome, dict) else {}
         # A persisted reply/awaiting state already wrote ``status=idle``.  A
         # second point mutation here is both redundant and dangerous: if this

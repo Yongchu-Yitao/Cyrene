@@ -21,6 +21,7 @@ _DIALOGUE_ROLES = frozenset(
         "user",
         "context",
         "context_compaction",
+        "context_reflection",
         "assistant",
         "tool_results",
     }
@@ -35,7 +36,7 @@ def _is_terminal_dialogue(value: Mapping[str, Any]) -> bool:
             or value.get("error") is True
             or value.get("cancelled") is True
         )
-    if role == "context_compaction":
+    if role in {"context_compaction", "context_reflection"}:
         return value.get("resume_model") is not True
     # A trusted system record appended by this module represents an idle
     # boundary.  The root system node is also an idle boundary for a newly

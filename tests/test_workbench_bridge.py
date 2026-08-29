@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from datetime import datetime, timezone
 
 import pytest
 
-from cyrene.core import AgentSession
+from cyrene.core import AgentSession, AgentSessionEvent
 from cyrene.core.hook import SESSION_END, SESSION_START
 from cyrene.core.plugin import Plugin, PluginPack, PluginRegistry
 from cyrene.workbench.core_adapter import (
@@ -18,6 +19,7 @@ from cyrene.workbench.core_adapter.bridge import (
     _normalized_usage,
     _turn_metrics,
     project_tool_activity_messages,
+    workbench_events,
 )
 
 
@@ -168,6 +170,29 @@ def test_context_tree_tool_calls_project_to_durable_activity_cards():
                             },
                         },
                     ],
+                    "permission_reviews": [{
+                        "id": "permission-review-1",
+                        "approved": True,
+                        "approved_count": 2,
+                        "denied_count": 0,
+                        "created_at": "2030-01-01T00:00:01.500000+00:00",
+                        "decisions": [
+                            {
+                                "index": 0,
+                                "tool": "toolbox",
+                                "tool_call_id": "call-list",
+                                "approved": True,
+                                "rationale": "Read-only discovery",
+                            },
+                            {
+                                "index": 1,
+                                "tool": "toolbox",
+                                "tool_call_id": "call-save",
+                                "approved": True,
+                                "rationale": "Requested memory update",
+                            },
+                        ],
+                    }],
                 },
             },
             {
@@ -218,9 +243,55 @@ def test_context_tree_tool_calls_project_to_durable_activity_cards():
     assert [entry["text"] for entry in activities[0]["trace"]] == [
         "toolbox.list",
         "save_project_memory",
+        "Permission review approved",
     ]
     assert activities[0]["trace"][1]["preview"] == "Saved to project memory"
     assert activities[0]["trace"][1]["status"] == "completed"
+    assert activities[0]["trace"][2] == {
+        "kind": "permission",
+        "toolCallId": "permission-review-1",
+        "text": "Permission review approved",
+        "preview": (
+            "toolbox · Read-only discovery; "
+            "toolbox · Requested memory update"
+        ),
+        "status": "completed",
+        "failed": False,
+    }
+
+
+def test_permission_review_projects_to_unified_workbench_event():
+    event = AgentSessionEvent(
+        sequence=3,
+        type="permission.reviewed",
+        tree_id="tree-1",
+        run_id="run-1",
+        node_id="assistant-1",
+        time=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        data={
+            "id": "permission-review-1",
+            "approved": False,
+            "approved_count": 0,
+            "denied_count": 1,
+            "decisions": [{
+                "index": 0,
+                "tool": "Bash",
+                "tool_call_id": "call-1",
+                "approved": False,
+                "rationale": "Command is too broad",
+            }],
+            "created_at": "2030-01-01T00:00:00+00:00",
+        },
+    )
+
+    projected = workbench_events(event)
+
+    assert len(projected) == 1
+    assert projected[0]["type"] == "permission.reviewed"
+    assert projected[0]["eventId"] == (
+        "agent:tree-1:run-1:permission:permission-review-1"
+    )
+    assert projected[0]["payload"] == event.data
 
 
 def model_registry(handler) -> PluginRegistry:
@@ -598,6 +669,9 @@ def test_bridge_persists_pending_question_and_answers_same_run_after_restart(tmp
             "answer": "long",
         }
     ]
+    assert reopened._permission_request_for_run("pending-run") == (
+        "ask before continuing\n\n用户随后澄清：long"
+    )
     reopened_bridge.close()
 
 

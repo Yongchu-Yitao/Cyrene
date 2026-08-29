@@ -27,12 +27,20 @@ async def _tool_send_agent_message(
             "Error: both 'to' and 'content' are required.",
             "错误：必须同时提供 'to' 和 'content'。",
         )
-    result = await subagent_manager(context).send(
-        current_agent_id(context),
-        target,
-        content,
-        effect_key=current_effect_key(),
-    )
+    try:
+        result = await subagent_manager(context).send(
+            current_agent_id(context),
+            target,
+            content,
+            effect_key=current_effect_key(),
+        )
+    except (ValueError, RuntimeError) as exc:
+        return plugin_localized(
+            context,
+            "Error: {error}",
+            "错误：{error}",
+            error=str(exc),
+        )
     return plugin_localized(
         context,
         "Message sent to {target}.",

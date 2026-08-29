@@ -1,5 +1,5 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
-import { WBC_COMMANDS, WBC_ICONS, wbcAgentEventPayload, wbcAgentSessionPayload, wbcAttachmentVisual, wbcConfirmOptimisticMessage, wbcDurableTracePayload, wbcErrorText, wbcFileDragPayload, wbcFileViewKind, wbcFinalizeRuntime, wbcMergeToolOccurrence, wbcPersistDurableTrace, wbcSetResourceDrag, wbcStructuredEventSummary, wbcSubagentStatusText, wbcT, wbcToolArgsPreview } from "../../workbench-chat.jsx"
+import { WBC_COMMANDS, WBC_ICONS, wbcAgentEventPayload, wbcAgentSessionPayload, wbcAttachmentVisual, wbcConfirmOptimisticMessage, wbcDurableTracePayload, wbcErrorText, wbcFileDragPayload, wbcFileViewKind, wbcFinalizeRuntime, wbcMergeToolOccurrence, wbcNotifyResourceShelfPointerDrag, wbcPersistDurableTrace, wbcPointInsideResourceShelf, wbcSetResourceDrag, wbcStructuredEventSummary, wbcSubagentStatusText, wbcT, wbcToolArgsPreview } from "../../workbench-chat.jsx"
 
 // Workbench chat feature module with explicit ESM dependencies.
 function WbcFileVisual({ file, className }) {
@@ -21,6 +21,133 @@ function wbcStartFileDrag(event, file) {
     page && page.getAttribute("data-active-chat-id"),
     page && page.getAttribute("data-project-id")
   ));
+}
+
+function wbcUsesFilePointerDrag() {
+  return !!(window.cyrene
+    && document.documentElement.getAttribute("data-platform") === "darwin");
+}
+
+function wbcCopyFileDragAppearance(sourceNode, cloneNode) {
+  if (!sourceNode || !cloneNode || !window.getComputedStyle) return;
+  var computed = window.getComputedStyle(sourceNode);
+  for (var index = 0; index < computed.length; index += 1) {
+    var property = computed[index];
+    cloneNode.style.setProperty(
+      property,
+      computed.getPropertyValue(property),
+      computed.getPropertyPriority(property)
+    );
+  }
+  var sourceChildren = sourceNode.children || [];
+  var cloneChildren = cloneNode.children || [];
+  for (var childIndex = 0; childIndex < sourceChildren.length; childIndex += 1) {
+    wbcCopyFileDragAppearance(sourceChildren[childIndex], cloneChildren[childIndex]);
+  }
+}
+
+function wbcStartFilePointerDrag(event, file) {
+  // On macOS Electron an HTML drag can be converted into a native window drag
+  // as soon as it reaches the titlebar. Docked DevTools rebuilds that hit-test
+  // surface, masking the bug. Capture the pointer for message file cards and
+  // use the same shelf hit testing as the floating browser resource instead.
+  if (!event || event.button !== 0 || !wbcUsesFilePointerDrag()) return;
+  var source = event.currentTarget;
+  var interactive = event.target && event.target.closest
+    ? event.target.closest("button, a, input, textarea, select, [contenteditable='true']")
+    : null;
+  if (!source || interactive) return;
+  event.preventDefault();
+  var page = source.closest && source.closest(".wbc-page");
+  var payload = wbcFileDragPayload(
+    file,
+    page && page.getAttribute("data-active-chat-id"),
+    page && page.getAttribute("data-project-id")
+  );
+  var pointerId = event.pointerId;
+  var startX = event.clientX;
+  var startY = event.clientY;
+  var started = false;
+  var finished = false;
+  var overShelf = false;
+  var ghost = null;
+
+  function updateTarget(clientX, clientY) {
+    var next = wbcPointInsideResourceShelf(clientX, clientY);
+    if (next !== overShelf) {
+      overShelf = next;
+      wbcNotifyResourceShelfPointerDrag(overShelf);
+    }
+  }
+
+  function beginPointerDrag() {
+    started = true;
+    ghost = source.cloneNode(true);
+    var rect = source.getBoundingClientRect();
+    // Copy before dimming the source so the floating card stays visually
+    // identical to its resting state, including inherited typography, theme
+    // tokens and every nested action/icon style.
+    wbcCopyFileDragAppearance(source, ghost);
+    ghost.classList.add("wbc-file-pointer-drag-ghost");
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.style.position = "fixed";
+    ghost.style.zIndex = "2147483647";
+    ghost.style.margin = "0";
+    ghost.style.pointerEvents = "none";
+    ghost.style.left = rect.left + "px";
+    ghost.style.top = rect.top + "px";
+    ghost.style.width = rect.width + "px";
+    ghost.style.height = rect.height + "px";
+    source.classList.add("wbc-file-pointer-drag-source");
+    document.body.appendChild(ghost);
+  }
+
+  function movePointerDrag(moveEvent) {
+    if (moveEvent.pointerId !== pointerId) return;
+    var dx = moveEvent.clientX - startX;
+    var dy = moveEvent.clientY - startY;
+    if (!started) {
+      if ((dx * dx) + (dy * dy) < 16) return;
+      beginPointerDrag();
+    }
+    updateTarget(moveEvent.clientX, moveEvent.clientY);
+    if (ghost) ghost.style.transform = "translate3d(" + dx + "px," + dy + "px,0)";
+  }
+
+  function clearPointerDrag() {
+    if (finished) return;
+    finished = true;
+    window.removeEventListener("pointermove", movePointerDrag);
+    window.removeEventListener("pointerup", finishPointerDrag);
+    window.removeEventListener("pointercancel", finishPointerDrag);
+    source.removeEventListener("lostpointercapture", finishPointerDrag);
+    if (source.releasePointerCapture) {
+      try { source.releasePointerCapture(pointerId); } catch (e) {}
+    }
+    source.classList.remove("wbc-file-pointer-drag-source");
+    if (ghost && ghost.parentNode) ghost.parentNode.removeChild(ghost);
+    wbcNotifyResourceShelfPointerDrag(false);
+  }
+
+  function finishPointerDrag(finishEvent) {
+    if (finished) return;
+    if (finishEvent && finishEvent.pointerId != null && finishEvent.pointerId !== pointerId) return;
+    if (finishEvent && finishEvent.type === "pointerup" && started) {
+      updateTarget(finishEvent.clientX, finishEvent.clientY);
+      if (overShelf) {
+        window.dispatchEvent(new CustomEvent("cyrene:pin-topbar-resource", { detail: payload }));
+      }
+    }
+    clearPointerDrag();
+  }
+
+  if (source.setPointerCapture) {
+    try { source.setPointerCapture(pointerId); } catch (e) {}
+    source.addEventListener("lostpointercapture", finishPointerDrag);
+  }
+  window.addEventListener("pointermove", movePointerDrag);
+  window.addEventListener("pointerup", finishPointerDrag);
+  window.addEventListener("pointercancel", finishPointerDrag);
 }
 
 function wbcDownloadLink(file, overrides) {
@@ -680,6 +807,55 @@ var WorkbenchChatRuntimes = (function () {
     });
   }
 
+  function applyPermissionReviewEvent(chatId, event) {
+    if (!chatId || !event) return;
+    var reviewId = String(event.id || "");
+    var eventAt = Number(event.createdAt);
+    if (!Number.isFinite(eventAt)) eventAt = Date.now();
+    var entry = {
+      kind: "permission",
+      permissionReviewId: reviewId,
+      text: String(event.text || ""),
+      preview: String(event.preview || ""),
+      status: String(event.status || (event.failed ? "failed" : "completed")),
+      failed: !!event.failed,
+      decisions: Array.isArray(event.decisions) ? event.decisions : [],
+    };
+    update(chatId, function (latest) {
+      if (!latest) return null;
+      if (reviewId) {
+        var alreadyPresent = (Array.isArray(latest.activities) ? latest.activities : []).some(function (activity) {
+          return (Array.isArray(activity && activity.progress) ? activity.progress : []).some(function (item) {
+            return String(item && item.permissionReviewId || "") === reviewId;
+          });
+        });
+        if (alreadyPresent) return latest;
+      }
+      var latestActivities = Array.isArray(latest.activities) ? latest.activities : [];
+      var latestActivity = latestActivities.length ? latestActivities[latestActivities.length - 1] : null;
+      var activityHasReasoning = !!String(latestActivity && latestActivity.reasoning || "").trim();
+      var activityHasTools = !!(latestActivity && Array.isArray(latestActivity.progress) && latestActivity.progress.length);
+      var activityBase = latestActivity && (latestActivity.timelineClosed || (activityHasReasoning && !activityHasTools))
+        ? appendActivity(closeActivityTimeline(latest), { createdAt: eventAt })
+        : latest;
+      var appendedEntry = { ...entry, startedAt: eventAt };
+      var next = updateLastActivity(activityBase, function (activity) {
+        var activityProgress = Array.isArray(activity.progress) ? activity.progress : [];
+        appendedEntry = {
+          ...appendedEntry,
+          reasoningOffset: String(activity && activity.reasoning || "").length,
+        };
+        return { ...activity, progress: activityProgress.concat([appendedEntry]).slice(-40) };
+      });
+      var latestProgress = Array.isArray(latest.progress) ? latest.progress : [];
+      return {
+        ...next,
+        lastEventAt: Date.now(),
+        progress: latestProgress.concat([appendedEntry]).slice(-40),
+      };
+    });
+  }
+
   function applyAgentArtifactEvent(chatId, event) {
     if (!chatId || !event) return;
     var payload = wbcAgentEventPayload(event);
@@ -923,6 +1099,7 @@ var WorkbenchChatRuntimes = (function () {
       onToolStarted: function (event) { applyStreamToolEvent(chatId, event); },
       onToolUpdated: function (event) { applyStreamToolEvent(chatId, event); },
       onToolCompleted: function (event) { applyStreamToolEvent(chatId, event, true); },
+      onPermissionReviewed: function (event) { applyPermissionReviewEvent(chatId, event); },
       onArtifactEvent: function (event) { applyAgentArtifactEvent(chatId, event); },
       onUsageUpdated: function (event) { applyAgentUsageEvent(chatId, event); },
       onSessionUpdated: function (event) { applyAgentSessionEvent(chatId, event); },
@@ -1482,4 +1659,4 @@ function wbcTaskSessionFromStore(store, taskId) {
   return null;
 }
 
-export { WbcFileVisual, WorkbenchChatRuntimes, wbcCanOpenExternally, wbcChatUsedMap, wbcCommandMeta, wbcDownloadLink, wbcHtmlPreviewDocument, wbcRuntimePresenceSnapshot, wbcSameRuntimePresence, wbcStartFileDrag, wbcTaskSessionFromStore }
+export { WbcFileVisual, WorkbenchChatRuntimes, wbcCanOpenExternally, wbcChatUsedMap, wbcCommandMeta, wbcDownloadLink, wbcHtmlPreviewDocument, wbcRuntimePresenceSnapshot, wbcSameRuntimePresence, wbcStartFileDrag, wbcStartFilePointerDrag, wbcTaskSessionFromStore, wbcUsesFilePointerDrag }

@@ -3,22 +3,25 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Any
 
 from ..plugin import Plugin, PluginContext
+from .permission_boundaries import path_boundary, resolved_path
 
 
-def _resolve_path(raw_path: Any, context: PluginContext) -> Path:
-    value = str(raw_path or "").strip()
-    if not value:
-        raise ValueError("path cannot be empty")
-    path = Path(value).expanduser()
-    if path.is_absolute():
-        return path.resolve()
-    if context.workspace is None:
-        raise ValueError("a workspace is required for relative paths")
-    return (Path(context.workspace).expanduser() / path).resolve()
+_resolve_path = resolved_path
+
+
+def read_permission_boundary(
+    arguments: dict[str, Any],
+    context: PluginContext,
+) -> dict[str, Any] | None:
+    return path_boundary(
+        arguments.get("path"),
+        context,
+        kind="read_elevation",
+        operation="读取操作",
+    )
 
 
 async def read(arguments: dict[str, Any], context: PluginContext) -> str:
@@ -36,9 +39,10 @@ READ_PLUGIN = Plugin(
         "additionalProperties": False,
     },
     handler=read,
+    permission_boundary=read_permission_boundary,
     allow_parallel=True,
     timeout_seconds=30.0,
 )
 
 
-__all__ = ["READ_PLUGIN", "read"]
+__all__ = ["READ_PLUGIN", "read", "read_permission_boundary"]

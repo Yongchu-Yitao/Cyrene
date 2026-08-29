@@ -7,7 +7,7 @@ from typing import Any
 
 from cyrene.core.plugin import PluginContext
 from .definitions import get_native_tool_def
-from cyrene.plugins.native_runtime import plugin_localized, publish_runtime_event, resolve_exportable_path, run_context_value
+from cyrene.plugins.native_runtime import json_result, plugin_localized, publish_runtime_event, resolve_exportable_path, run_context_value
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,33 @@ async def _tool_send_wechat_file(args: dict[str, Any], context: PluginContext) -
         sent_wechat_files = notify_state.setdefault("sent_wechat_files", set())
         if dedupe_key in sent_wechat_files:
             return plugin_localized(context, "Skipped duplicate WeChat file send: {name}", "已跳过重复的微信文件发送：{name}", name=name)
+
+    permission_service = context.services.get("permission")
+    request_permission = getattr(
+        permission_service,
+        "request_dynamic_permission",
+        None,
+    )
+    if not callable(request_permission):
+        return plugin_localized(
+            context,
+            "File not sent: the permission service is unavailable.",
+            "文件未发送：权限服务不可用。",
+        )
+    permission_result = await request_permission(
+        tool_name=TOOL_NAME,
+        arguments=args,
+        request={
+            "kind": "external_delivery_request",
+            "operation": "外发 WeChat 文件",
+            "path_hint": str(path),
+            "reason": f"文件：{path}\n名称：{name}\n附言：{text[:200]}",
+            "scope_hint": "外部通信/文件外发的 ",
+            "options": ["允许这次", "本次会话内总是允许", "拒绝"],
+        },
+    )
+    if permission_result is not None:
+        return json_result(permission_result)
 
     # Send via WeChat if the bot supports it
     send_file_fn = getattr(bot, "send_file", None)

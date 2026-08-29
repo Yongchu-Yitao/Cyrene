@@ -1486,6 +1486,18 @@
   background: color-mix(in srgb, var(--wb-blue) 6%, var(--wb-card-bg));
   border-radius: 11px;
   padding: 9px 12px;
+  cursor: grab;
+}
+
+.wbc-agent-file.wbc-file-pointer-drag-source {
+  opacity: .42;
+}
+
+.wbc-file-pointer-drag-ghost {
+  position: fixed;
+  z-index: 2147483647;
+  margin: 0;
+  pointer-events: none;
 }
 
 .wbc-agent-file .wbc-file-meta { flex: 1; }
@@ -1586,4 +1598,3 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
 .wbc-msg-foot .wbc-msg-action + .wbc-msg-action {
   margin-left: -2px;
 }
-

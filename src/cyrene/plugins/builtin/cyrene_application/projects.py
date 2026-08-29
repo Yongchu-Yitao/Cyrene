@@ -5,7 +5,7 @@ from cyrene.core.plugin import PluginContext
 
 from cyrene.plugins.native_runtime import json_result
 from cyrene.workbench.application import app_services
-from cyrene.workbench.application.app_control import audit, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
+from cyrene.workbench.application.app_control import DELEGATION_OPERATIONS_SCHEMA, audit, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
 
 TOOL_NAME = "CyreneProjectControl"
 TOOL_DEF = {"type": "function", "function": {
@@ -20,6 +20,8 @@ TOOL_DEF = {"type": "function", "function": {
             "description": {"type": "string", "maxLength": 4000},
             "workspace_path": {"type": "string", "maxLength": 2000},
             "changes": {"type": "object", "maxProperties": 8},
+            "delegation_quote": {"type": "string", "maxLength": 500},
+            "delegation_operations": DELEGATION_OPERATIONS_SCHEMA,
             "reason": {"type": "string", "maxLength": 500},
             "idempotency_key": {"type": "string", "maxLength": 160},
         },
@@ -44,7 +46,7 @@ async def handler(args: dict[str, Any], _context: PluginContext) -> str:
     op_args = {
         key: value
         for key, value in args.items()
-        if key not in {"reason", "idempotency_key"}
+        if key not in {"reason", "idempotency_key", "delegation_quote", "delegation_operations"}
     }
     key = str(args.get("idempotency_key") or "")
     if not key:
@@ -56,6 +58,8 @@ async def handler(args: dict[str, Any], _context: PluginContext) -> str:
     approval = await authorize(
         op_id, op_args,
         reason=str(args.get("reason") or ""),
+        delegation_quote=str(args.get("delegation_quote") or ""),
+        delegation_operations=args.get("delegation_operations"),
     )
     if approval:
         return approval

@@ -3,6 +3,9 @@ import { PluginView } from "../../platform/plugins.jsx"
 import { WBC_CHAT_MODEL_CHANGED_EVENT, WBC_ICONS, WORKBENCH_BUDGET_CODES, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAgentConnectionLabel, wbcAgentDisplayName, wbcChatAgent, wbcCompactNumber, wbcCurrentModel, wbcErrorText, wbcFormatTime, wbcIsBuiltinAgent, wbcModelAccessLabel, wbcModelContextLimit, wbcOpenAgentDetail, wbcStructuredEventSummary, wbcT, wbcUsageReported } from "../../workbench-chat.jsx"
 import { WBC_PROJECT_FILE_DRAFTS, WbcArtifactSplit, WbcBrowserSplit, WbcChangeSplit, WbcChatSplit, WbcMapPaneContent, WbcSideAgentSplit, WbcSubagentsTab, wbcChatArtifactFiles, wbcMapItemLabel, wbcProjectFileDraftKey } from "./split-pane.jsx"
 import { wbcStartFileDrag } from "./file-resources.jsx"
+import { contextBlockColorIndex } from "./behavior.mjs"
+import { WbcSurfaceHost } from "./dynamic-surfaces.jsx"
+import { wbcSurfaceResourceKey } from "./dynamic-surface-broker.mjs"
 
 // Workbench chat feature module with explicit ESM dependencies.
 function WbcUsageRing({ usage }) {
@@ -761,25 +764,12 @@ function WbcContextBlockList({ data, compact }) {
   if (!Number.isFinite(total) || total < 0) total = barTotal;
 
   // Build legend: explode system_prefix and messages sub-blocks for the bar
-  var SYS_SHADE_MAP = {
-    identity: 0,
-    instructions: 2,
-    tools: 3,
-    workspace: 4,
-    memory: 1,
-    runtime: 5,
-    system: 6,
-  };
-  function sysShadeForBlock(b) {
-    var t = b.type || "";
-    return SYS_SHADE_MAP[t] != null ? SYS_SHADE_MAP[t] : 7;
-  }
   function msgSubClass(b) {
     var key = b.type || "";
     return "sub msg-sub seg-" + key;
   }
   function sysSubClass(b) {
-    var shade = sysShadeForBlock(b);
+    var shade = contextBlockColorIndex(b);
     return "sub sys-sub sys-sub-" + shade;
   }
   // Enforce consistent order: system_prefix → ephemeral → messages
@@ -1321,6 +1311,15 @@ function WbcDetachedPaneApp() {
         var draftKey = wbcProjectFileDraftKey(descriptor.payload);
         if (draftKey) WBC_PROJECT_FILE_DRAFTS[draftKey] = descriptor.draft;
       }
+      if (descriptor.kind === "surface" && descriptor.draft) {
+        var surfaceResource = descriptor.payload && descriptor.payload.resource;
+        var surfaceDraftKey = wbcProjectFileDraftKey(Object.assign({}, surfaceResource || {}, {
+          source: "project",
+          projectId: surfaceResource && (surfaceResource.projectId || surfaceResource.project_id)
+            || descriptor.project && descriptor.project.id || "",
+        }));
+        if (surfaceDraftKey) WBC_PROJECT_FILE_DRAFTS[surfaceDraftKey] = descriptor.draft;
+      }
       setContext(descriptor);
       if (typeof bridge.ready === "function") {
         window.requestAnimationFrame(function () {
@@ -1453,12 +1452,35 @@ function WbcDetachedPaneApp() {
       var TerminalPane = workbenchServices.terminal().Pane;
       return <TerminalPane terminalId={String(context.payload || "")} />;
     }
+    if (kind === "surface") {
+      return <WbcSurfaceHost
+        descriptor={context.payload}
+        projectId={String(context.project && context.project.id || context.payload && context.payload.resource && context.payload.resource.projectId || "")}
+        items={context.items}
+        onSelect={function (resource) {
+          if (!resource || !context.payload) return;
+          var selectedResource = Object.assign({}, resource, {
+            kind: resource.kind || context.payload.resource && context.payload.resource.kind || "file",
+          });
+          updateDescriptor({
+            payload: Object.assign({}, context.payload, {
+              resource: selectedResource,
+              resourceKey: wbcSurfaceResourceKey(selectedResource),
+            }),
+            title: resource.name || resource.path || context.title,
+          });
+        }}
+        onClose={closeWindow}
+      />;
+    }
     if (kind === "plugin-view") {
-      return <section className="wbc-plugin-view-pane detached">
-        <PluginView
-          projectId={String(context.payload && (context.payload.projectId || context.payload.project_id) || context.project && context.project.id || "")}
-          payload={context.payload}
-        />
+      return <section className="wbc-side-agent-split wbc-plugin-view-pane detached">
+        <div className="wbc-plugin-view-content">
+          <PluginView
+            projectId={String(context.payload && (context.payload.projectId || context.payload.project_id) || context.project && context.project.id || "")}
+            payload={context.payload}
+          />
+        </div>
       </section>;
     }
     if (kind === "side-agent") {

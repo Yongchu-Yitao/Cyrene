@@ -99,6 +99,7 @@ function wbcRestoreReturnedDetachedPane(context, info) {
   var restoredCard = wbcPaneCard(descriptor.kind, descriptor.payload, {
     id: cardId,
     ownerChatId: descriptor.ownerChatId || ownerChatId,
+    meta: descriptor.meta,
   });
   var side = returned.sourceSide === "right" ? "right" : "left";
   var index = Math.max(0, Math.min(1, Number(returned.sourceIndex) || 0));

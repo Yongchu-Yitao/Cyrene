@@ -5,11 +5,19 @@ from __future__ import annotations
 from types import ModuleType
 from typing import Any
 
-from cyrene.core.plugin import Plugin, PluginPack
+from cyrene.core.plugin import Plugin, PluginPack, PluginSetupContext
 
 from . import ask_user, deep_reflect, enter_plan_mode, update_plan_progress
 
 _MAIN_ONLY = {"ask_user", "enter_plan_mode", "update_plan_progress", "DeepReflect"}
+
+
+def _setup(context: PluginSetupContext) -> None:
+    context.provide(
+        deep_reflect.SERVICE_ID,
+        deep_reflect.DeepReflectionService(),
+        replace=True,
+    )
 
 
 def _plugin(module: ModuleType) -> Plugin:
@@ -22,6 +30,7 @@ def _plugin(module: ModuleType) -> Plugin:
         description=str(function.get("description") or ""),
         input_schema=dict(function.get("parameters") or {"type": "object", "properties": {}}),
         handler=module.handler,
+        permission_boundary=getattr(module, "permission_boundary", None),
         allow_parallel=bool(metadata.get("allow_parallel", not metadata.get("requires_order", True))),
         timeout_seconds=float(metadata.get("timeout_seconds", 180.0)),
         metadata=metadata,
@@ -37,6 +46,7 @@ plugin_pack = PluginPack(
         update_plan_progress,
         deep_reflect,
     )),
+    setup=_setup,
 )
 
 __all__ = ["plugin_pack"]

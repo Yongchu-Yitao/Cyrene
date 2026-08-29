@@ -109,6 +109,75 @@ Composer 菜单负责本对话选中什么；工具菜单负责“Agent 直接�
 List；其他工具仍由 `toolbox.list → describe → invoke` 发现。两种方式都会使用当前
 插件的 `input_schema`、Runtime 校验、`PreToolUse` 与 `PostToolUse` Hook。
 
+## 调用 Cyrene 已配置的模型
+
+可执行插件不需要自己创建 Provider Client，也不需要读取 API Key。在正常的
+Agent 或后台调用中，宿主会通过 `PluginContext.services["model"]` 提供现有的模型
+Gateway。Gateway 会通过已启用的模型 Provider Plugin 调用用户在 Cyrene 中配置的模型。
+
+```python
+from dataclasses import replace
+
+from cyrene.core.plugin import Plugin, PluginContext
+
+
+async def summarize(arguments: dict, context: PluginContext) -> dict:
+    gateway = context.services.get("model")
+    if gateway is None:
+        raise RuntimeError("Cyrene 已配置的模型服务不可用")
+
+    # 这次辅助模型的结果由插件自身消费，不应把流式 Delta 投影到主回复。
+    # 保留其他 Context，使用量和 Runtime Event 仍归属于当前插件调用。
+    model_context = replace(
+        context,
+        services={
+            name: service
+            for name, service in context.services.items()
+            if name != "model_stream"
+        },
+    )
+    session_id = str(context.data.get("session_id") or context.tree_id or "")
+    response = await gateway.complete(
+        [
+            {
+                "role": "system",
+                "content": "用一个段落概括用户提供的文本。",
+            },
+            {"role": "user", "content": str(arguments["text"])},
+        ],
+        route="secondary",
+        caller="plugin:example_summary",
+        session_id=session_id,
+        max_tokens=600,
+        temperature=0.2,
+        context=model_context,
+    )
+    return {
+        "summary": str(response.get("content") or ""),
+        "model": str(response.get("model") or ""),
+        "usage": dict(response.get("usage") or {}),
+    }
+
+
+plugin = Plugin(
+    name="ExampleSummary",
+    description="使用 Cyrene 中已配置的模型概括文本。",
+    input_schema={
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "required": ["text"],
+        "additionalProperties": False,
+    },
+    handler=summarize,
+)
+```
+
+`primary` 会沿用当前对话选中的模型，`secondary` 使用 Cyrene 配置的辅助路由，
+`vision` 用于需要图像能力的请求。传入当前 Session ID 后，对话级的模型选择会继续
+生效。响应包含标准化的 `content`、`reasoning`、`tool_calls`、`usage`、`model` 和
+`model_identity` 字段。传入 `tools` 可以让模型返回 Tool Call，但 Gateway 不会代替插件
+执行它们。Provider 凭据始终留在选中的 Provider Plugin 内，Gateway 不会返回凭据。
+
 ## Contribution Scope
 
 `PluginPack` 的贡献有三种明确生命周期：

@@ -1,5 +1,38 @@
 /** Pure Workbench-chat behaviors shared by the UI and native Node tests. */
 
+const CONTEXT_BLOCK_COLOR_BY_ID = Object.freeze({
+  "system.identity": 0,
+  "context.memory": 1,
+  "system.behavior": 2,
+  "system.tools": 3,
+  "context.learned_skills": 4,
+  "context.persona": 5,
+  "system.workspace": 6,
+  "system.message_overhead": 7,
+})
+
+const CONTEXT_BLOCK_COLOR_BY_TYPE = Object.freeze({
+  identity: 0,
+  memory: 1,
+  instructions: 2,
+  tools: 3,
+  workspace: 6,
+  runtime: 5,
+  system: 6,
+  overhead: 7,
+})
+
+export function contextBlockColorIndex(block) {
+  const id = String(block?.id || "")
+  if (Object.prototype.hasOwnProperty.call(CONTEXT_BLOCK_COLOR_BY_ID, id)) {
+    return CONTEXT_BLOCK_COLOR_BY_ID[id]
+  }
+  const type = String(block?.type || "")
+  return Object.prototype.hasOwnProperty.call(CONTEXT_BLOCK_COLOR_BY_TYPE, type)
+    ? CONTEXT_BLOCK_COLOR_BY_TYPE[type]
+    : 7
+}
+
 export function toolPresentationKind(entry) {
   const raw = String(entry?.presentation?.kind || "").trim().toLowerCase()
   return ["terminal", "file", "diff", "browser", "error", "event"].includes(raw)

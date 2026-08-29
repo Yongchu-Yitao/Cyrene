@@ -6,11 +6,11 @@ import asyncio
 from typing import Any
 
 from ..plugin import Plugin, PluginContext
-from .read import _resolve_path
+from .permission_boundaries import path_boundary, resolved_path
 
 
 async def write(arguments: dict[str, Any], context: PluginContext) -> str:
-    path = _resolve_path(arguments.get("path"), context)
+    path = resolved_path(arguments.get("path"), context)
     content = str(arguments.get("content", ""))
 
     def write_file() -> None:
@@ -19,6 +19,18 @@ async def write(arguments: dict[str, Any], context: PluginContext) -> str:
 
     await asyncio.to_thread(write_file)
     return f"Wrote {path}"
+
+
+def write_permission_boundary(
+    arguments: dict[str, Any],
+    context: PluginContext,
+) -> dict[str, Any] | None:
+    return path_boundary(
+        arguments.get("path"),
+        context,
+        kind="write_permission_request",
+        operation="写入/删除操作",
+    )
 
 
 WRITE_PLUGIN = Plugin(
@@ -34,9 +46,10 @@ WRITE_PLUGIN = Plugin(
         "additionalProperties": False,
     },
     handler=write,
+    permission_boundary=write_permission_boundary,
     allow_parallel=False,
     timeout_seconds=30.0,
 )
 
 
-__all__ = ["WRITE_PLUGIN", "write"]
+__all__ = ["WRITE_PLUGIN", "write", "write_permission_boundary"]

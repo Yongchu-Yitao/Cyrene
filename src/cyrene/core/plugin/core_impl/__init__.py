@@ -7,12 +7,16 @@ from typing import TYPE_CHECKING
 from ..plugin import PluginPack
 from .bash import BASH_PLUGIN
 from .permission import (
+    PERMISSION_BATCH_DECIDE_TOOL,
     PERMISSION_DECIDE_TOOL,
     PERMISSION_DECIDE_TOOL_CHOICE,
     PERMISSION_PLUGIN_ID,
     PERMISSION_SYSTEM_PROMPT,
     PermissionDecision,
     PermissionModel,
+    PermissionPolicyProvider,
+    PermissionRequirement,
+    PermissionReviewObserver,
     PermissionReviewPlugin,
     UserRequestProvider,
 )
@@ -40,12 +44,16 @@ def create_core_plugin_pack(registry: PluginRegistry) -> PluginPack:
 
 __all__ = [
     "BASH_PLUGIN",
+    "PERMISSION_BATCH_DECIDE_TOOL",
     "PERMISSION_DECIDE_TOOL",
     "PERMISSION_DECIDE_TOOL_CHOICE",
     "PERMISSION_PLUGIN_ID",
     "PERMISSION_SYSTEM_PROMPT",
     "PermissionDecision",
     "PermissionModel",
+    "PermissionPolicyProvider",
+    "PermissionRequirement",
+    "PermissionReviewObserver",
     "PermissionReviewPlugin",
     "READ_PLUGIN",
     "TOOLBOX_PLUGIN_NAME",

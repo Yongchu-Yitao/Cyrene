@@ -16,6 +16,22 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 TOOL_METADATA = {"read_only": False, "resource_keys": ("extensions:global",), "requires_order": True}
 
 
+def permission_boundary(
+    arguments: dict[str, Any],
+    _context: PluginContext,
+) -> dict[str, Any] | None:
+    action = str(arguments.get("action") or "list").strip().lower()
+    if action in {"list", "search"}:
+        return None
+    return {
+        "kind": "extension_change",
+        "operation": f"扩展环境变更：{action}",
+        "reason": str(arguments.get("reason") or "")[:500],
+        "always_review": True,
+        "requires_human": False,
+    }
+
+
 def _localized_operation_result(
     result: dict[str, Any],
     context: PluginContext,
@@ -131,4 +147,7 @@ async def _tool_manage_extensions(args: dict[str, Any], context: PluginContext) 
 
 handler = _tool_manage_extensions
 
-__all__ = ["TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler", "_tool_manage_extensions"]
+__all__ = [
+    "TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler",
+    "permission_boundary", "_tool_manage_extensions",
+]

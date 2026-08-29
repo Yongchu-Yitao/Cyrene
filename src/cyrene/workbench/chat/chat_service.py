@@ -302,16 +302,6 @@ class ChatService:
     def prune_orphaned_fork_metadata(self, payload: dict[str, Any]) -> bool:
         return prune_orphaned_fork_metadata(payload)
 
-    async def publish_live_exchange_segments_loop(
-        self,
-        run: ChatRun,
-        chat_id: str,
-        state_ids_before: set[str],
-        stop_event: asyncio.Event,
-    ) -> None:
-        del run, chat_id, state_ids_before
-        await stop_event.wait()
-
     def remove_retry_replaced_messages(self, *args: Any, **kwargs: Any) -> None:
         remove_retry_replaced_messages(*args, **kwargs)
 
@@ -743,6 +733,7 @@ class ChatService:
                     ),
                     response_capabilities=("interactive_blocks",),
                     conversation_source=conversation_source,
+                    guidance_channel=run.guidance_channel,
                 )
                 result = await self.run_manager.conversation_runtime.send(
                     config,

@@ -69,6 +69,8 @@ class ChatGuidanceApplicationService:
                 client_request_id=client_request_id,
                 public_message_id=message_id,
                 public_created_at=now,
+                agent_originated=agent_originated,
+                origin_session_id=origin_session_id,
             )
         except GuidanceAdmissionClosed:
             await run.done.wait()

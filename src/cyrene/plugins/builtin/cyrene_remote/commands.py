@@ -774,6 +774,7 @@ def _remote_agent_context(
                 "system",
                 "context",
                 "context_compaction",
+                "context_reflection",
                 "user",
                 "assistant",
                 "tool_results",
@@ -816,6 +817,7 @@ def _remote_agent_context(
             "system",
             "context",
             "context_compaction",
+            "context_reflection",
             "user",
             "assistant",
             "tool_results",
@@ -830,7 +832,7 @@ def _remote_agent_context(
         tokens = 4 + approx_token_count(role) + approx_token_count(
             _context_value_text(value)
         )
-        if role == "context_compaction":
+        if role in {"context_compaction", "context_reflection"}:
             bucket = "compacted"
             compacted_blocks += 1
         elif role in {"system", "context"}:

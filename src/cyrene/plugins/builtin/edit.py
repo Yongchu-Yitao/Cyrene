@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from cyrene.core.plugin import Plugin, PluginContext
+from cyrene.core.plugin.core_impl.permission_boundaries import path_boundary
 from cyrene.plugins.native_runtime import plugin_localized
 
 
@@ -52,6 +53,18 @@ async def edit(arguments: dict[str, Any], context: PluginContext) -> str:
         str(arguments["new_string"]),
         bool(arguments.get("replace_all", False)),
     )
+
+
+def edit_permission_boundary(
+    arguments: dict[str, Any],
+    context: PluginContext,
+) -> dict[str, Any] | None:
+    return path_boundary(
+        arguments.get("path"),
+        context,
+        kind="write_permission_request",
+        operation="写入/删除操作",
+    )
     return plugin_localized(
         context,
         "Edited {path}. Replacements: {count}",
@@ -79,6 +92,7 @@ plugin = Plugin(
         "additionalProperties": False,
     },
     handler=edit,
+    permission_boundary=edit_permission_boundary,
     allow_parallel=False,
     timeout_seconds=30.0,
 )

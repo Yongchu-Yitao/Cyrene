@@ -81,6 +81,16 @@
         "description": "通过 TurnStart Hook 挂载每轮 Workbench 上下文。"
       }
     },
+    "cyrene_guidance": {
+      "en": {
+        "name": "Live guidance",
+        "description": "Apply durable user guidance to an active Agent run."
+      },
+      "zh": {
+        "name": "运行中引导",
+        "description": "把持久化的用户引导应用到正在运行的智能体。"
+      }
+    },
     "cyrene_control": {
       "en": {
         "name": "Control tools",

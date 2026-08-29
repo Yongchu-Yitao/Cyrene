@@ -13,7 +13,13 @@ from .definitions import get_native_tool_def
 
 TOOL_NAME = 'send_message'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
-TOOL_METADATA = {"agent_exposure": "direct"}
+TOOL_METADATA = {
+    "agent_exposure": "direct",
+    # This only publishes the Agent's in-progress reply into the current chat.
+    # Reviewing it with another model call adds no meaningful permission
+    # boundary and can race the real tool review in the same model batch.
+    "permission_review": False,
+}
 
 
 async def _tool_send_user_message(args: dict[str, Any], context: PluginContext) -> str:

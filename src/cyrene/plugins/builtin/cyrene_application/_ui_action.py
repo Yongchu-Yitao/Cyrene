@@ -31,7 +31,7 @@ async def execute_action(
     op_args = {
         key: value
         for key, value in args.items()
-        if key not in {"reason", "idempotency_key"}
+        if key not in {"reason", "idempotency_key", "delegation_quote", "delegation_operations"}
     }
     key = str(args.get("idempotency_key") or "")
     # A renderer can complete an action even when its acknowledgement is lost.
@@ -121,6 +121,8 @@ async def execute_action(
     approval = await authorize(
         operation_id, op_args,
         reason=str(args.get("reason") or ""),
+        delegation_quote=str(args.get("delegation_quote") or ""),
+        delegation_operations=args.get("delegation_operations"),
     )
     if approval:
         return approval

@@ -39,6 +39,7 @@ from .plugin import (
     PluginContext,
     PluginHandler,
     PluginPack,
+    PermissionBoundaryProvider,
     PluginSetupContext,
     PluginSetupHandler,
     merge_plugin_pack_metadata,
@@ -53,6 +54,14 @@ from .registry import (
     default_plugin_impl_directory,
 )
 from .runtime import PluginRuntime, PreparedPluginCall
+from .resource_effects import (
+    PluginResourceEffect,
+    ResourceAccess,
+    ResourceEffectPhase,
+    ResourceKind,
+    normalize_resource_effects,
+    resolve_resource_effect_values,
+)
 from .scopes import (
     ApplicationPluginScope,
     application_plugin_scope,

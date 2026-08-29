@@ -7,7 +7,7 @@ from cyrene.core.plugin import PluginContext
 from cyrene.runtime.backup import delete_backup, export_backup, list_backups, restore_backup
 from cyrene.plugins.native_runtime import json_result
 from cyrene.runtime.attachments import register_generated_attachment
-from cyrene.workbench.application.app_control import audit, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
+from cyrene.workbench.application.app_control import DELEGATION_OPERATIONS_SCHEMA, audit, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
 
 TOOL_NAME = "CyreneDataControl"
 TOOL_DEF = {"type": "function", "function": {
@@ -19,6 +19,8 @@ TOOL_DEF = {"type": "function", "function": {
             "operation": {"type": "string", "enum": ["list", "create", "validate_restore", "restore", "delete"]},
             "backup_name": {"type": "string", "maxLength": 255},
             "include_database": {"type": "boolean"},
+            "delegation_quote": {"type": "string", "maxLength": 500},
+            "delegation_operations": DELEGATION_OPERATIONS_SCHEMA,
             "reason": {"type": "string", "maxLength": 500},
             "idempotency_key": {"type": "string", "maxLength": 160},
         },
@@ -52,7 +54,7 @@ async def handler(args: dict[str, Any], _context: PluginContext) -> str:
     op_args = {
         key: value
         for key, value in args.items()
-        if key not in {"reason", "idempotency_key"}
+        if key not in {"reason", "idempotency_key", "delegation_quote", "delegation_operations"}
     }
     key = str(args.get("idempotency_key") or "")
     if not key:
@@ -64,6 +66,8 @@ async def handler(args: dict[str, Any], _context: PluginContext) -> str:
     approval = await authorize(
         op_id, op_args,
         reason=str(args.get("reason") or ""),
+        delegation_quote=str(args.get("delegation_quote") or ""),
+        delegation_operations=args.get("delegation_operations"),
     )
     if approval:
         return approval

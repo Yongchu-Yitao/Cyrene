@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import {
+  contextBlockColorIndex,
   moveChatOrderBlock,
   normalizePermissionMode,
   permissionOptionLabel,
@@ -9,6 +10,25 @@ import {
   settleChatListItem,
   toolPresentationKind,
 } from "./behavior.mjs"
+
+
+test("visible system-prefix blocks receive distinct categorical colors", () => {
+  const blocks = [
+    { id: "system.identity", type: "identity" },
+    { id: "system.behavior", type: "instructions" },
+    { id: "system.tools", type: "tools" },
+    { id: "context.persona", type: "system" },
+    { id: "context.memory", type: "memory" },
+    { id: "context.learned_skills", type: "system" },
+    { id: "system.message_overhead", type: "overhead" },
+  ]
+  const colors = blocks.map(contextBlockColorIndex)
+  assert.equal(new Set(colors).size, blocks.length)
+  assert.notEqual(
+    contextBlockColorIndex({ id: "context.persona", type: "system" }),
+    contextBlockColorIndex({ id: "context.learned_skills", type: "system" }),
+  )
+})
 
 
 test("permission labels follow protocol semantics instead of display language", () => {

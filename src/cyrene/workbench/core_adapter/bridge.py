@@ -411,7 +411,10 @@ def project_tool_activity_messages(
         if not requested_run_id and node_run_id not in terminal_run_ids:
             continue
         calls = value.get("tool_calls")
-        if not isinstance(calls, list) or not calls:
+        calls = calls if isinstance(calls, list) else []
+        stored_reviews = value.get("permission_reviews")
+        reviews = stored_reviews if isinstance(stored_reviews, list) else []
+        if not calls and not reviews:
             continue
         trace: list[dict[str, Any]] = []
         for index, call in enumerate(calls):
@@ -447,6 +450,37 @@ def project_tool_activity_messages(
             if result is None:
                 entry["inferredCompletion"] = True
             trace.append(entry)
+        for review_index, review in enumerate(reviews):
+            if not isinstance(review, Mapping):
+                continue
+            decisions = [
+                decision
+                for decision in review.get("decisions") or ()
+                if isinstance(decision, Mapping)
+            ]
+            approved = bool(review.get("approved"))
+            preview_parts = []
+            for decision in decisions:
+                tool = str(decision.get("tool") or "").strip()
+                rationale = str(decision.get("rationale") or "").strip()
+                detail = " · ".join(part for part in (tool, rationale) if part)
+                if detail:
+                    preview_parts.append(detail)
+            trace.append({
+                "kind": "permission",
+                "toolCallId": str(
+                    review.get("id")
+                    or f"permission:{str(item.get('id') or 'assistant')}:{review_index}"
+                ),
+                "text": (
+                    "Permission review approved"
+                    if approved
+                    else "Permission review denied"
+                ),
+                "preview": "; ".join(preview_parts)[:240],
+                "status": "completed" if approved else "failed",
+                "failed": not approved,
+            })
         reasoning = str(
             value.get("reasoning") or value.get("reasoning_content") or ""
         )
@@ -551,6 +585,19 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
         return stream_projection
     if event.type == "input.accepted":
         return (_envelope(event, "run.started", event_id, {"status": "running"}),)
+    if event.type == "guidance.applied":
+        return (
+            _envelope(
+                event,
+                "guidance_applied",
+                event_id,
+                {
+                    "status": "applied",
+                    "count": int(data.get("guidance_count") or 0),
+                    "guidanceEventIds": list(data.get("guidance_event_ids") or ()),
+                },
+            ),
+        )
     if event.type == "input.answered":
         return (
             _envelope(
@@ -597,6 +644,15 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
                 )
             )
         return tuple(projected)
+    if event.type == "permission.reviewed":
+        return (
+            _envelope(
+                event,
+                "permission.reviewed",
+                f"agent:{event.tree_id}:{event.run_id}:permission:{str(data.get('id') or event.sequence)}",
+                data,
+            ),
+        )
     if event.type == "tool.completed":
         call_id = str(data.get("call_id") or "")
         success = bool(data.get("success"))
@@ -784,7 +840,7 @@ class WorkbenchSessionBridge:
         plugin_context_data: Mapping[str, Any] | None = None,
         plugin_services: Mapping[str, Any] | None = None,
         application_scope: ApplicationPluginScope | None = None,
-        max_model_calls: int = 12,
+        max_model_calls: int | None = None,
     ) -> WorkbenchSessionBridge:
         return cls(
             AgentSession(

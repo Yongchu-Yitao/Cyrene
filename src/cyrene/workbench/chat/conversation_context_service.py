@@ -76,7 +76,7 @@ def _agent_path_messages(nodes: list[Any]) -> list[dict[str, Any]]:
     for node in nodes:
         value = node.value if isinstance(node.value, Mapping) else {}
         role = str(value.get("role") or "")
-        if role == "context_compaction":
+        if role in {"context_compaction", "context_reflection"}:
             compacted = value.get("messages")
             if isinstance(compacted, list):
                 messages = [
@@ -587,6 +587,7 @@ class AgentContextRepository:
                 "assistant",
                 "tool_results",
                 "context_compaction",
+                "context_reflection",
             }
         ]
         if not dialogue:
@@ -646,7 +647,8 @@ class AgentContextRepository:
             ),
             "",
         )
-        raw_subagents = plugin_public_session_snapshot(root_value).get("subagents")
+        plugin_snapshot = plugin_public_session_snapshot(root_value)
+        raw_subagents = plugin_snapshot.get("subagents")
         subagents = {
             str(agent_id): dict(record)
             for agent_id, record in raw_subagents.items()
@@ -669,7 +671,7 @@ class AgentContextRepository:
             node
             for node in path
             if isinstance(node.value, Mapping)
-            and node.value.get("role") == "context_compaction"
+            and node.value.get("role") in {"context_compaction", "context_reflection"}
         ]
         latest_compaction = compaction_nodes[-1] if compaction_nodes else None
         latest_compaction_value = (
@@ -720,6 +722,19 @@ class AgentContextRepository:
                 ),
             },
             "subagents": subagents,
+            "subagentHistory": [
+                dict(item) for item in plugin_snapshot.get("subagent_history", ())
+                if isinstance(item, Mapping)
+            ],
+            "subagentDiscussions": {
+                str(key): dict(item)
+                for key, item in (
+                    plugin_snapshot.get("subagent_discussions", {}).items()
+                    if isinstance(plugin_snapshot.get("subagent_discussions"), Mapping)
+                    else ()
+                )
+                if isinstance(item, Mapping)
+            },
             "createdAt": tree.created_at.isoformat(),
             "updatedAt": max(
                 (node.updated_at for node in nodes),
@@ -957,6 +972,8 @@ class ConversationContextQueryService:
         state = await self._agent_state(chat_id)
         records = state.get("subagents") if isinstance(state, Mapping) else {}
         records = records if isinstance(records, Mapping) else {}
+        history = state.get("subagentHistory") if isinstance(state, Mapping) else []
+        history = history if isinstance(history, list) else []
         requested_round = str(round_id or "").strip()
         grouped: dict[str, list[dict[str, Any]]] = {}
         for agent_id, raw in records.items():
@@ -968,6 +985,22 @@ class ConversationContextQueryService:
                 "name": str(agent_id),
                 "task": str(raw.get("task") or ""),
                 "status": str(raw.get("status") or "running"),
+                "result": str(raw.get("result") or ""),
+                "error": str(raw.get("error") or ""),
+                "roundId": record_round,
+            })
+        for raw in history:
+            if not isinstance(raw, Mapping):
+                continue
+            record_round = str(raw.get("round_id") or "").strip()
+            grouped.setdefault(record_round, []).append({
+                "id": str(raw.get("agent_id") or ""),
+                "name": str(raw.get("agent_id") or ""),
+                "task": str(raw.get("task") or ""),
+                "status": str(raw.get("status") or "done"),
+                "outcome": str(raw.get("outcome") or ""),
+                "mode": str(raw.get("mode") or "execution"),
+                "role": str(raw.get("role") or ""),
                 "result": str(raw.get("result") or ""),
                 "error": str(raw.get("error") or ""),
                 "roundId": record_round,
@@ -996,11 +1029,34 @@ class ConversationContextQueryService:
                 rounds[0]["id"] if rounds else "",
             )
         )
+        discussions = (
+            state.get("subagentDiscussions")
+            if isinstance(state, Mapping) else {}
+        )
+        discussions = discussions if isinstance(discussions, Mapping) else {}
+        messages = [
+            {
+                "id": str(message.get("id") or ""),
+                "from": str(message.get("from") or ""),
+                "to": str(message.get("to") or ""),
+                "content": str(message.get("content") or ""),
+                "type": str(message.get("type") or "message"),
+                "createdAt": str(message.get("created_at") or ""),
+                "roundId": str(message.get("round_id") or ""),
+                "discussionId": str(message.get("discussion_id") or ""),
+            }
+            for discussion in discussions.values()
+            if isinstance(discussion, Mapping)
+            and (not active_round or str(discussion.get("round_id") or "") == active_round)
+            for message in discussion.get("transcript", ())
+            if isinstance(message, Mapping)
+        ]
+        messages.sort(key=lambda item: (item["createdAt"], item["id"]))
         return {
             "rounds": rounds,
             "activeRoundId": active_round,
             "agents": grouped.get(active_round, []),
-            "messages": [],
+            "messages": messages,
         }
 
     async def summary(

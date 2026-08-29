@@ -30,6 +30,7 @@ def _plugin(module: ModuleType) -> Plugin:
         description=str(function.get("description") or ""),
         input_schema=dict(function.get("parameters") or {"type": "object", "properties": {}}),
         handler=module.handler,
+        permission_boundary=getattr(module, "permission_boundary", None),
         allow_parallel=bool(metadata.get("allow_parallel", not metadata.get("requires_order", True))),
         timeout_seconds=float(metadata.get("timeout_seconds", 180.0)),
         metadata=metadata,

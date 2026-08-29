@@ -369,7 +369,11 @@ def _parse_session_file_sections(content: str, filepath: Path) -> list[dict[str,
 
         timestamp = ts_match.group(1).strip()
         date_match = re.match(r"(\d{4}-\d{2}-\d{2})\b", timestamp)
-        round_id = f"{session_id}:{round_index}" if session_id else f"{filepath.stem}:{round_index}"
+        round_id = parse_archive_meta(section, "round_id") or (
+            f"{session_id}:{round_index}"
+            if session_id
+            else f"{filepath.stem}:{round_index}"
+        )
         sections_out.append({
             "date": date_match.group(1) if date_match else "",
             "timestamp": timestamp,
@@ -387,6 +391,28 @@ def _parse_session_file_sections(content: str, filepath: Path) -> list[dict[str,
         round_index += 1
 
     return sections_out
+
+
+def load_session_conversation_entries(
+    session_id: str,
+    workspace_dir: str | Path | None = None,
+) -> list[dict[str, str]]:
+    """Load every archived round for one Workbench conversation in order.
+
+    This is intentionally lossless and has no result/snippet limit.  Context
+    rewriting uses it to retain the user's original completed-turn text even
+    after the corresponding active ContextTree nodes are consolidated.
+    """
+
+    filepath = session_conversation_file(session_id, workspace_dir)
+    if not filepath.is_file():
+        return []
+    try:
+        content = filepath.read_text(encoding="utf-8")
+    except Exception:
+        logger.exception("Failed to read session conversation file %s", filepath)
+        return []
+    return _parse_session_file_sections(content, filepath)
 
 
 async def search_conversations_structured(

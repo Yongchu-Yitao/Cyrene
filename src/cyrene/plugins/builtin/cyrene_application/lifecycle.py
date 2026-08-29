@@ -6,7 +6,7 @@ from cyrene.core.plugin import PluginContext
 from cyrene.runtime.host_actions import cancel_action, list_actions, schedule_action
 from cyrene.runtime.host_bridge import HostBridgeError, call_host
 from cyrene.plugins.native_runtime import json_result
-from cyrene.workbench.application.app_control import audit, authorization_decision, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
+from cyrene.workbench.application.app_control import DELEGATION_OPERATIONS_SCHEMA, audit, authorization_decision, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
 
 TOOL_NAME = "CyreneLifecycleControl"
 TOOL_DEF = {"type": "function", "function": {
@@ -17,6 +17,8 @@ TOOL_DEF = {"type": "function", "function": {
         "properties": {
             "operation": {"type": "string", "enum": ["status", "cancel", "restart_backend", "restart_app", "quit"]},
             "action_id": {"type": "string", "maxLength": 160},
+            "delegation_quote": {"type": "string", "maxLength": 500},
+            "delegation_operations": DELEGATION_OPERATIONS_SCHEMA,
             "reason": {"type": "string", "maxLength": 500},
             "idempotency_key": {"type": "string", "maxLength": 160},
         },
@@ -64,6 +66,8 @@ async def handler(args: dict[str, Any], _context: PluginContext) -> str:
     approval = await authorize(
         "cyrene.app.lifecycle", op_args,
         reason=str(args.get("reason") or ""),
+        delegation_quote=str(args.get("delegation_quote") or ""),
+        delegation_operations=args.get("delegation_operations"),
     )
     if approval:
         return approval

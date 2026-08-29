@@ -12,7 +12,7 @@ from cyrene.runtime.settings_service import (
     validate_changes,
 )
 from cyrene.plugins.native_runtime import json_result
-from cyrene.workbench.application.app_control import audit, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
+from cyrene.workbench.application.app_control import DELEGATION_OPERATIONS_SCHEMA, audit, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
 
 TOOL_NAME = "CyreneSettingsUpdate"
 TOOL_DEF = {"type": "function", "function": {
@@ -24,6 +24,8 @@ TOOL_DEF = {"type": "function", "function": {
             "namespace": {"type": "string", "enum": ["runtime", "desktop", "appearance", "profile", "shortcuts"]},
             "changes": {"type": "object", "minProperties": 1, "maxProperties": 30},
             "expected_revision": {"type": "integer", "minimum": 0},
+            "delegation_quote": {"type": "string", "maxLength": 500},
+            "delegation_operations": DELEGATION_OPERATIONS_SCHEMA,
             "reason": {"type": "string", "minLength": 1, "maxLength": 500},
             "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 160},
         },
@@ -61,6 +63,8 @@ async def handler(args: dict[str, Any], _context: PluginContext) -> str:
     approval = await authorize(
         operation_id, op_args,
         reason=str(args.get("reason") or ""),
+        delegation_quote=str(args.get("delegation_quote") or ""),
+        delegation_operations=args.get("delegation_operations"),
     )
     if approval:
         return approval

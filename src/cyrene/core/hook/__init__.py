@@ -1,6 +1,6 @@
 """Tree-local Hook bindings for Cyrene's component agent kernel."""
 
-from .errors import HookBlocked, HookError
+from .errors import HookAwaitingUser, HookBlocked, HookError
 from .hook import (
     CONTEXT_CHANGE,
     CONTEXT_USED,
@@ -40,6 +40,7 @@ __all__ = [
     "TURN_START",
     "ContextUsed",
     "Hook",
+    "HookAwaitingUser",
     "HookBlocked",
     "HookError",
     "HookEvent",

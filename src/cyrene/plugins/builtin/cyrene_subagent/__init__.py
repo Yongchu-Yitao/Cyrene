@@ -12,17 +12,22 @@ from cyrene.core.plugin import (
 
 from . import (
     broadcast_agent_message,
+    quit,
     query_round,
     send_agent_message,
     spawn_subagent,
 )
 from .policy import setup_spawn_policy_context
+from .runtime_policy import setup_child_runtime
 
 
 def setup(context: PluginSetupContext) -> None:
     """Own subagent coordination only for an enabled main Agent session."""
 
     if context.agent_id != "main":
+        manager = context.services.get("subagents")
+        if manager is not None:
+            setup_child_runtime(context, manager)
         return
     owner = context.services.get("agent_session")
     if owner is None:
@@ -73,7 +78,13 @@ def application_setup(context: PluginApplicationContext) -> None:
     )
 
 
-def _plugin(module: ModuleType, *, main_only: bool = False) -> Plugin:
+def _plugin(
+    module: ModuleType,
+    *,
+    main_only: bool = False,
+    subagent_only: bool = False,
+    direct: bool = False,
+) -> Plugin:
     definition = module.TOOL_DEF
     function = definition.get("function")
     if not isinstance(function, Mapping):
@@ -86,9 +97,14 @@ def _plugin(module: ModuleType, *, main_only: bool = False) -> Plugin:
         description=str(function.get("description") or ""),
         input_schema=dict(parameters),
         handler=module.handler,
+        permission_boundary=getattr(module, "permission_boundary", None),
         allow_parallel=False,
         timeout_seconds=180.0,
-        metadata={"main_only": main_only},
+        metadata={
+            "main_only": main_only,
+            "subagent_only": subagent_only,
+            "agent_exposure": "direct" if direct else "discoverable",
+        },
     )
 
 
@@ -100,6 +116,7 @@ plugin_pack = PluginPack(
         _plugin(broadcast_agent_message),
         _plugin(spawn_subagent, main_only=True),
         _plugin(query_round, main_only=True),
+        _plugin(quit, subagent_only=True, direct=True),
     ),
     setup=setup,
     application_setup=application_setup,

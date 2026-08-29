@@ -12,6 +12,7 @@ legacy chat loop keep their existing execution semantics.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import sqlite3
@@ -97,6 +98,7 @@ class WorkbenchAgentInbox:
         self._guidance: list[dict[str, Any]] = []
         self._pending_tool_results: dict[str, dict[str, Any]] = {}
         self._guidance_signal = asyncio.Event()
+        self._guidance_listener: Callable[[dict[str, Any]], None] | None = None
         # Guidance persistence and the agent's terminal check share this lock.
         # Exactly one side wins: either the durable guidance is queued before
         # the agent checks, or the agent seals admission and the HTTP request is
@@ -127,6 +129,21 @@ class WorkbenchAgentInbox:
         if self.db_path:
             ensure_schema(self.db_path)
             self._recover_pending_guidance()
+
+    def set_guidance_listener(
+        self,
+        listener: Callable[[dict[str, Any]], None] | None,
+    ) -> None:
+        """Bind the cross-thread wake bridge used by the Guidance Plugin.
+
+        Durable admission remains owned by this inbox.  The listener is only a
+        process-local wake signal and is invoked while the admission lock is
+        still held, after persistence and before ``put_guidance`` returns.
+        """
+
+        self._guidance_listener = listener
+        if listener is not None and self._guidance_pending_count:
+            listener({"type": "guidance_recovered"})
 
     def _connect(self) -> sqlite3.Connection:
         path = Path(self.db_path).expanduser().resolve()
@@ -703,6 +720,8 @@ class WorkbenchAgentInbox:
         client_request_id: str = "",
         public_message_id: str = "",
         public_created_at: str = "",
+        agent_originated: bool = False,
+        origin_session_id: str = "",
     ) -> dict[str, Any]:
         dedupe_key = f"guidance:{client_request_id}" if client_request_id else ""
         async with self._guidance_admission_lock:
@@ -724,10 +743,14 @@ class WorkbenchAgentInbox:
                     "client_request_id": str(client_request_id),
                     "public_message_id": str(public_message_id),
                     "public_created_at": str(public_created_at),
+                    "agent_originated": bool(agent_originated),
+                    "origin_session_id": str(origin_session_id),
                 },
                 priority=100,
                 dedupe_key=dedupe_key,
             )
+            if not event.get("duplicate") and self._guidance_listener is not None:
+                self._guidance_listener(event)
         if not event.get("duplicate"):
             self._record_event_background(
                 "guidance_queued",
@@ -1271,6 +1294,7 @@ class WorkbenchAgentInbox:
                 item["updatedAt"] = _now()
         self._guidance_pending_count = 0
         self._guidance_signal.clear()
+        self._guidance_listener = None
         self._record_event_background(
             "run_terminated", termination_reason=self._termination_reason
         )
@@ -1287,6 +1311,167 @@ class WorkbenchAgentInbox:
                 task.cancel()
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
+
+
+class WorkbenchGuidanceChannel:
+    """Loop-neutral bridge between Workbench admission and a Session Plugin.
+
+    ``WorkbenchAgentInbox`` stays on the Workbench owner loop because it owns
+    SQLite persistence and admission ordering.  The plugin Agent advances on a
+    dedicated asyncio loop in another thread.  This bridge forwards only wake
+    signals across that boundary and marshals every inbox mutation back to its
+    owner loop.
+    """
+
+    def __init__(self, inbox: WorkbenchAgentInbox) -> None:
+        self._inbox = inbox
+        self._lock = threading.RLock()
+        self._owner_loop: asyncio.AbstractEventLoop | None = None
+        self._waiters: set[tuple[asyncio.AbstractEventLoop, asyncio.Future[bool]]] = set()
+        self._requeued: list[dict[str, Any]] = []
+        self._revision = 0
+        self._notified = False
+        self._closed = False
+        inbox.set_guidance_listener(self.notify)
+
+    def bind_owner_loop(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        target = loop
+        if target is None:
+            try:
+                target = asyncio.get_running_loop()
+            except RuntimeError:
+                target = None
+        if target is None:
+            return
+        with self._lock:
+            if self._owner_loop is None or self._owner_loop.is_closed():
+                self._owner_loop = target
+
+    @staticmethod
+    def _resolve_waiter(future: asyncio.Future[bool], value: bool) -> None:
+        if not future.done():
+            future.set_result(value)
+
+    def _wake(self, value: bool) -> None:
+        with self._lock:
+            waiters = tuple(self._waiters)
+            self._waiters.clear()
+        for loop, future in waiters:
+            if loop.is_closed():
+                continue
+            loop.call_soon_threadsafe(self._resolve_waiter, future, value)
+
+    def notify(self, _event: dict[str, Any] | None = None) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._revision += 1
+            self._notified = True
+        self._wake(True)
+
+    @property
+    def has_pending(self) -> bool:
+        with self._lock:
+            return bool(self._notified or self._requeued)
+
+    async def wait(self) -> bool:
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            if self._notified or self._requeued:
+                return True
+            if self._closed:
+                return False
+            future: asyncio.Future[bool] = loop.create_future()
+            waiter = (loop, future)
+            self._waiters.add(waiter)
+        try:
+            return await future
+        finally:
+            with self._lock:
+                self._waiters.discard(waiter)
+
+    async def _on_owner(self, callback: Callable[[], Any]) -> Any:
+        try:
+            current = asyncio.get_running_loop()
+        except RuntimeError:
+            current = None
+        with self._lock:
+            owner = self._owner_loop
+        if owner is None:
+            if current is None:
+                raise RuntimeError("Workbench guidance channel has no owner loop")
+            self.bind_owner_loop(current)
+            owner = current
+        if current is owner:
+            value = callback()
+            return await value if inspect.isawaitable(value) else value
+
+        async def invoke() -> Any:
+            value = callback()
+            return await value if inspect.isawaitable(value) else value
+
+        future = asyncio.run_coroutine_threadsafe(invoke(), owner)
+        return await asyncio.wrap_future(future)
+
+    @staticmethod
+    def _dedupe(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        result: list[dict[str, Any]] = []
+        for event in events:
+            event_id = str(event.get("event_id") or "")
+            key = event_id or f"anonymous:{id(event)}"
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(event)
+        return result
+
+    async def collect(self) -> list[dict[str, Any]]:
+        with self._lock:
+            revision = self._revision
+            requeued, self._requeued = self._requeued, []
+        events = list(requeued)
+        events.extend(await self._on_owner(self._inbox.collect_guidance_nowait))
+        with self._lock:
+            if self._revision == revision and not self._requeued:
+                self._notified = False
+        return self._dedupe(events)
+
+    async def collect_or_seal(self) -> list[dict[str, Any]]:
+        with self._lock:
+            revision = self._revision
+            requeued, self._requeued = self._requeued, []
+        events = list(requeued)
+        events.extend(await self._on_owner(self._inbox.collect_guidance_or_seal))
+        with self._lock:
+            if events:
+                if self._revision == revision and not self._requeued:
+                    self._notified = False
+            else:
+                self._closed = True
+                self._notified = False
+        if not events:
+            self._wake(False)
+        return self._dedupe(events)
+
+    def requeue(self, events: list[dict[str, Any]]) -> None:
+        if not events:
+            return
+        with self._lock:
+            self._requeued = self._dedupe([*events, *self._requeued])
+            self._revision += 1
+            self._notified = True
+        self._wake(True)
+
+    async def acknowledge(self, events: list[dict[str, Any]]) -> None:
+        if events:
+            await self._on_owner(lambda: self._inbox.acknowledge(events))
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            self._notified = False
+        self._wake(False)
 
 
 def _inbox_payload(raw: Any) -> dict[str, Any]:
@@ -1524,6 +1709,7 @@ def current_workbench_inbox() -> WorkbenchAgentInbox | None:
 __all__ = [
     "GuidanceAdmissionClosed",
     "WorkbenchAgentInbox",
+    "WorkbenchGuidanceChannel",
     "_workbench_agent_inbox",
     "current_workbench_inbox",
     "read_workbench_guidance_records",
