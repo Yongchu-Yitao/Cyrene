@@ -104,6 +104,7 @@ function WorkbenchAppModals({
 }
 
 function WorkbenchOnboardingShell({ onboarding, theme, actualTheme, onToggleTheme, onComplete, t }) {
+  var themeLabel = t("workbench.theme." + (theme === "system" ? "system" : actualTheme === "dark" ? "dark" : "light"));
   return (
     <div className="workbench-shell wb-ob-shell" data-screen-label="Cyrene · onboarding">
       <div className="wb-ob-topbar">
@@ -112,7 +113,7 @@ function WorkbenchOnboardingShell({ onboarding, theme, actualTheme, onToggleThem
           <span className="brand-mark" aria-hidden="true"></span>
           <strong>Cyrene</strong>
         </div>
-        <button type="button" className="workbench-icon-btn" onClick={onToggleTheme} title={t("workbench.theme." + (theme === "system" ? "system" : actualTheme === "dark" ? "dark" : "light"))}>
+        <button type="button" className="workbench-icon-btn wb-ob-theme-btn" onClick={onToggleTheme} title={themeLabel} aria-label={themeLabel}>
           {theme === "system" ? (
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor" stroke="none"/></svg>
           ) : actualTheme === "dark" ? (

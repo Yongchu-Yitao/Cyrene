@@ -6750,146 +6750,66 @@ function isDesktopOnboardingTree(candidate) {
     && candidate.surface
     && candidate.surface.kind === 'main'
     && findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding')
-    && findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding_custom_model_source')
-    && findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding_oauth_source')
+    && findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding_base_url')
+    && findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding_model')
   );
 }
 
 async function runDesktopOnboardingSmokeTest(window, uiInstanceId, initialTree) {
   let tree = initialTree;
-  const oauthSource = findDesktopSmokeNode(
-    tree.root,
-    (node) => node.node_id === 'onboarding_oauth_source',
-  );
-  await runDesktopSmokeAction(uiInstanceId, tree, oauthSource, 'invoke');
-  tree = await waitForDesktopSmokeTree(
-    uiInstanceId,
-    (candidate) => {
-      const source = findDesktopSmokeNode(
-        candidate.root,
-        (node) => node.node_id === 'onboarding_oauth_source',
-      );
-      return isDesktopOnboardingTree(candidate)
-        && !!source
-        && !!(source.state && source.state.pressed);
-    },
-    'onboarding OAuth source',
-  );
-
-  const customSource = findDesktopSmokeNode(
-    tree.root,
-    (node) => node.node_id === 'onboarding_custom_model_source',
-  );
-  await runDesktopSmokeAction(uiInstanceId, tree, customSource, 'invoke');
-  tree = await waitForDesktopSmokeTree(
-    uiInstanceId,
-    (candidate) => {
-      const source = findDesktopSmokeNode(
-        candidate.root,
-        (node) => node.node_id === 'onboarding_custom_model_source',
-      );
-      return isDesktopOnboardingTree(candidate)
-        && !!source
-        && !!(source.state && source.state.pressed);
-    },
-    'onboarding custom model source',
-  );
-
-  let onboarding = findDesktopSmokeNode(
+  const onboarding = findDesktopSmokeNode(
     tree.root,
     (node) => node.node_id === 'onboarding',
   );
-  await runDesktopSmokeAction(
-    uiInstanceId,
-    tree,
-    onboarding,
-    'scroll_page',
-    { delta: 320 },
-  );
-  tree = await waitForDesktopSmokeTree(
-    uiInstanceId,
-    (candidate) => isDesktopOnboardingTree(candidate)
-      && !!findDesktopSmokeNode(candidate.root, (node) => node.node_id === 'onboarding_base_url'),
-    'onboarding custom model endpoint after scroll',
-  );
+  if (Array.isArray(onboarding.actions)
+    && onboarding.actions.some((action) => action.action_id === 'scroll_page')) {
+    throw new Error('onboarding should fit without page scrolling');
+  }
 
   let endpoint = findDesktopSmokeNode(
     tree.root,
     (node) => node.node_id === 'onboarding_base_url',
   );
   const originalEndpoint = String(endpoint.value_summary || '');
-  const marker = 'https://cyrene-smoke.invalid/v1';
-  await runDesktopSmokeAction(uiInstanceId, tree, endpoint, 'set_value', { value: marker });
-  tree = await waitForDesktopSmokeTree(
-    uiInstanceId,
-    (candidate) => {
-      const node = findDesktopSmokeNode(
-        candidate.root,
-        (item) => item.node_id === 'onboarding_base_url',
-      );
-      return !!node && node.value_summary === marker;
-    },
-    'onboarding endpoint value',
-  );
-  endpoint = findDesktopSmokeNode(
-    tree.root,
-    (node) => node.node_id === 'onboarding_base_url',
-  );
-  await runDesktopSmokeAction(
-    uiInstanceId,
-    tree,
-    endpoint,
-    'set_value',
-    { value: originalEndpoint },
-  );
-  await waitForDesktopSmokeTree(
-    uiInstanceId,
-    (candidate) => {
-      const node = findDesktopSmokeNode(
-        candidate.root,
-        (item) => item.node_id === 'onboarding_base_url',
-      );
-      return !!node && node.value_summary === originalEndpoint;
-    },
-    'restored onboarding endpoint',
-  );
-
-  tree = await waitForDesktopSmokeTree(
-    uiInstanceId,
-    (candidate) => {
-      const onboarding = findDesktopSmokeNode(
-        candidate.root,
-        (node) => node.node_id === 'onboarding',
-      );
-      return !!onboarding && Array.isArray(onboarding.actions)
-        && onboarding.actions.some((action) => action.action_id === 'scroll_page');
-    },
-    'scrollable onboarding surface',
-  );
-  onboarding = findDesktopSmokeNode(tree.root, (node) => node.node_id === 'onboarding');
-  await runDesktopSmokeAction(
-    uiInstanceId,
-    tree,
-    onboarding,
-    'scroll_page',
-    { delta: 1200 },
-  );
-  await waitForDesktopSmokeTree(
-    uiInstanceId,
-    (candidate) => !!findDesktopSmokeNode(
-      candidate.root,
-      (node) => node.node_id === 'onboarding_model',
-    ),
-    'onboarding model field after scroll',
-  );
+  const options = endpoint.state && Array.isArray(endpoint.state.options)
+    ? endpoint.state.options.filter((option) => !option.disabled)
+    : [];
+  const alternate = options.find((option) => option.value !== originalEndpoint);
+  if (alternate) {
+    await runDesktopSmokeAction(uiInstanceId, tree, endpoint, 'select', { value: alternate.value });
+    tree = await waitForDesktopSmokeTree(
+      uiInstanceId,
+      (candidate) => {
+        const node = findDesktopSmokeNode(
+          candidate.root,
+          (item) => item.node_id === 'onboarding_base_url',
+        );
+        return !!node && node.value_summary === alternate.value;
+      },
+      'onboarding endpoint selection',
+    );
+    endpoint = findDesktopSmokeNode(tree.root, (node) => node.node_id === 'onboarding_base_url');
+    await runDesktopSmokeAction(uiInstanceId, tree, endpoint, 'select', { value: originalEndpoint });
+    await waitForDesktopSmokeTree(
+      uiInstanceId,
+      (candidate) => {
+        const node = findDesktopSmokeNode(
+          candidate.root,
+          (item) => item.node_id === 'onboarding_base_url',
+        );
+        return !!node && node.value_summary === originalEndpoint;
+      },
+      'restored onboarding endpoint',
+    );
+  }
 
   const settingsCheck = await runDesktopSettingsSmokeTest();
   const shortcutCheck = await runShortcutSettingsSmokeTest(window);
   return {
     uiInstanceId,
     checks: [
-      'tree', 'onboarding_sources', 'onboarding_model_fields',
-      'onboarding_endpoint', settingsCheck, shortcutCheck,
+      'tree', 'onboarding_single_screen', 'onboarding_model_fields',
+      'onboarding_endpoint_menu', settingsCheck, shortcutCheck,
     ],
   };
 }

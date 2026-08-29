@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 _VALIDATION_MESSAGES = {
     "LLM endpoint is required": "必须填写 LLM 接口地址。",
     "Model name is required": "必须填写模型名称。",
+    "Selected model endpoint is unavailable": "所选模型接口当前不可用。",
     "Codex model is required": "必须选择 Codex 模型。",
     "OpenAI OAuth login is required": "需要先登录 OpenAI OAuth。",
     "Selected Codex model is unavailable": "所选 Codex 模型不可用。",
@@ -82,6 +83,7 @@ def register_onboarding_routes(router: APIRouter) -> None:
                 str(body.get("api_key") or ""),
                 str(body.get("base_url") or ""),
                 str(body.get("model") or ""),
+                str(body.get("provider_id") or ""),
             )
         except ValueError as exc:
             return _validation_error(exc, code="invalid_llm_setup")

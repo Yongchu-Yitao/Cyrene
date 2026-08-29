@@ -98,6 +98,84 @@ def _provider_id(candidate: dict[str, Any]) -> str:
     return str(preset or candidate.get("adapter") or candidate.get("provider") or "").strip()
 
 
+def _supported_model_endpoints() -> list[dict[str, str]]:
+    """Return HTTP model endpoints contributed by enabled Provider Plugins."""
+
+    service = application_plugin_service("model_configuration")
+    catalog = getattr(service, "catalog", None)
+    if not callable(catalog):
+        return []
+    try:
+        providers = catalog()
+    except Exception:
+        logger.warning("Failed to load onboarding model endpoints", exc_info=True)
+        return []
+
+    preferred_order = {
+        "deepseek": 0,
+        "openai": 1,
+        "anthropic": 2,
+        "gemini": 3,
+        "openrouter": 4,
+        "minimax": 5,
+        "kimi": 6,
+        "glm": 7,
+        "opencode_go": 8,
+        "amd_gpu_cloud": 9,
+        "ollama": 10,
+    }
+    options: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    for provider in sorted(
+        (item for item in providers if isinstance(item, dict)),
+        key=lambda item: (
+            preferred_order.get(str(item.get("id") or "").strip().lower(), 100),
+            str(item.get("name") or item.get("id") or "").casefold(),
+        ),
+    ):
+        provider_id = str(provider.get("id") or "").strip().lower()
+        url = str(provider.get("default_base_url") or "").strip().rstrip("/")
+        adapter = str(provider.get("adapter") or "").strip().lower()
+        auth_type = str(provider.get("auth_type") or "api_key").strip().lower()
+        if (
+            not provider_id
+            or not adapter
+            or auth_type == "oauth"
+            or not url.startswith(("https://", "http://"))
+            or url in seen_urls
+        ):
+            continue
+        seen_urls.add(url)
+        options.append({
+            "providerId": provider_id,
+            "name": str(provider.get("name") or provider_id).strip() or provider_id,
+            "adapter": adapter,
+            "url": url,
+            "defaultModel": str(provider.get("default_model") or "").strip(),
+            "authType": auth_type,
+        })
+    return options
+
+
+def _resolve_model_endpoint(
+    provider_id: str,
+    base_url: str,
+) -> dict[str, str] | None:
+    clean_provider_id = str(provider_id or "").strip().lower()
+    clean_base_url = str(base_url or "").strip().rstrip("/")
+    if not clean_provider_id:
+        return None
+    return next(
+        (
+            item
+            for item in _supported_model_endpoints()
+            if item["providerId"] == clean_provider_id
+            and item["url"] == clean_base_url
+        ),
+        None,
+    )
+
+
 def _personality_status() -> dict[str, Any]:
     """Return an optional onboarding step contributed by the Soul Plugin."""
 
@@ -254,30 +332,58 @@ def get_onboarding_status() -> dict[str, Any]:
             "model": str(primary.get("model") or ""),
             "reasoningEffort": str(primary.get("reasoning_effort") or ""),
             "completedAt": state["llm"].get("completed_at", ""),
+            "endpointOptions": _supported_model_endpoints(),
         },
         "personality": personality,
     }
 
 
-async def test_llm_connection(api_key: str, base_url: str, model: str) -> str:
+async def test_llm_connection(
+    api_key: str,
+    base_url: str,
+    model: str,
+    provider_id: str = "openai_compatible",
+    adapter: str = "openai_compatible",
+) -> str:
     """Public onboarding API for a non-persisting text connectivity probe."""
     service = application_plugin_service("model_probe")
     if service is None:
         raise RuntimeError("model Plugin is not available")
-    return await service.test_connection(api_key, base_url, model)
+    return await service.test_connection(
+        api_key,
+        base_url,
+        model,
+        provider_id=provider_id,
+        adapter=adapter,
+    )
 
 
 async def test_llm_vision_capability(
-    api_key: str, base_url: str, model: str
+    api_key: str,
+    base_url: str,
+    model: str,
+    provider_id: str = "openai_compatible",
+    adapter: str = "openai_compatible",
 ) -> dict[str, Any]:
     """Public onboarding API for a non-blocking image capability probe."""
     service = application_plugin_service("model_probe")
     if service is None:
         raise RuntimeError("model Plugin is not available")
-    return await service.probe_vision(api_key, base_url, model)
+    return await service.probe_vision(
+        api_key,
+        base_url,
+        model,
+        provider_id=provider_id,
+        adapter=adapter,
+    )
 
 
-async def save_and_test_llm_setup(api_key: str, base_url: str, model: str) -> dict[str, Any]:
+async def save_and_test_llm_setup(
+    api_key: str,
+    base_url: str,
+    model: str,
+    provider_id: str = "",
+) -> dict[str, Any]:
     clean_base_url = base_url.strip()
     clean_model = model.strip()
     clean_api_key = api_key.strip()
@@ -286,22 +392,39 @@ async def save_and_test_llm_setup(api_key: str, base_url: str, model: str) -> di
     if not clean_model:
         raise ValueError("Model name is required")
 
-    preview = await test_llm_connection(clean_api_key, clean_base_url, clean_model)
+    endpoint = _resolve_model_endpoint(provider_id, clean_base_url)
+    if provider_id and endpoint is None:
+        raise ValueError("Selected model endpoint is unavailable")
+    resolved_provider_id = endpoint["providerId"] if endpoint else "openai_compatible"
+    resolved_adapter = endpoint["adapter"] if endpoint else "openai_compatible"
+    resolved_name = endpoint["name"] if endpoint else "OpenAI Compatible"
+
+    preview = await test_llm_connection(
+        clean_api_key,
+        clean_base_url,
+        clean_model,
+        resolved_provider_id,
+        resolved_adapter,
+    )
     vision_capability = await test_llm_vision_capability(
-        clean_api_key, clean_base_url, clean_model
+        clean_api_key,
+        clean_base_url,
+        clean_model,
+        resolved_provider_id,
+        resolved_adapter,
     )
     _save_primary_model(
         connection_id="onboarding-openai-compatible",
         profile_id="onboarding-primary",
         connection={
-            "name": "OpenAI Compatible",
-            "adapter": "openai_compatible",
+            "name": resolved_name,
+            "adapter": resolved_adapter,
             "enabled": True,
             "use_proxy": False,
             "base_url": clean_base_url,
             "api_key": clean_api_key,
             "clear_api_key": not bool(clean_api_key),
-            "options": {"provider_preset": "openai_compatible"},
+            "options": {"provider_preset": resolved_provider_id},
         },
         profile={
             "model": clean_model,

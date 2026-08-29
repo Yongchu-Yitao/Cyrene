@@ -196,6 +196,66 @@ async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path
     assert graph["profiles"][0]["capabilities"] == ["chat", "vision"]
 
 
+async def test_onboarding_uses_enabled_provider_endpoints_and_adapter(monkeypatch, tmp_path):
+    from cyrene.runtime import onboarding
+
+    default_soul = "# Cyrene's Soul\n\n## SELF:IDENTITY\n- default\n"
+    _patch_paths(monkeypatch, tmp_path, default_soul, default_soul)
+    text_probe = AsyncMock(return_value="OK")
+    vision_probe = AsyncMock(return_value={"vision_capable": False})
+    monkeypatch.setattr(onboarding, "test_llm_connection", text_probe)
+    monkeypatch.setattr(onboarding, "test_llm_vision_capability", vision_probe)
+
+    catalog = [
+        {"id": "codex_oauth", "name": "Codex OAuth", "adapter": "codex_oauth", "auth_type": "oauth", "default_base_url": "codex://oauth"},
+        {"id": "anthropic", "name": "Anthropic", "adapter": "anthropic", "default_base_url": "https://api.anthropic.com/v1"},
+        {"id": "deepseek", "name": "DeepSeek", "adapter": "openai", "default_base_url": "https://api.deepseek.com/v1", "default_model": "deepseek-chat"},
+        {"id": "openai", "name": "OpenAI", "adapter": "openai", "default_base_url": "https://api.openai.com/v1"},
+        {"id": "openai_compatible", "name": "OpenAI Compatible", "adapter": "openai_compatible", "default_base_url": "https://api.openai.com/v1"},
+    ]
+    saved = {}
+    graph = {
+        "version": 10,
+        "connections": [],
+        "profiles": [],
+        "routes": {name: [] for name in ("primary", "secondary", "vision", "embedding")},
+    }
+    model_service = type("ModelService", (), {
+        "catalog": lambda self: catalog,
+        "get_model_configuration": lambda self: graph,
+        "save_model_configuration": lambda self, value: saved.setdefault("graph", value),
+    })()
+    memory_service = type("MemoryService", (), {"has_existing_data": lambda self: False})()
+    monkeypatch.setattr(
+        onboarding,
+        "application_plugin_service",
+        lambda name: model_service if name in {"model_configuration", "model_probe"} else memory_service if name == "memory" else None,
+    )
+    monkeypatch.setattr(onboarding, "_primary_model", lambda: {
+        "base_url": "https://api.anthropic.com/v1",
+        "model": "claude-test",
+        "options": {"provider_preset": "anthropic"},
+    })
+
+    options = onboarding._supported_model_endpoints()
+    assert [item["providerId"] for item in options] == ["deepseek", "openai", "anthropic"]
+    assert options[0]["defaultModel"] == "deepseek-chat"
+
+    payload = await onboarding.save_and_test_llm_setup(
+        "sk-test",
+        "https://api.anthropic.com/v1",
+        "claude-test",
+        "anthropic",
+    )
+
+    assert payload["ok"] is True
+    text_probe.assert_awaited_once_with(
+        "sk-test", "https://api.anthropic.com/v1", "claude-test", "anthropic", "anthropic"
+    )
+    assert saved["graph"]["connections"][0]["adapter"] == "anthropic"
+    assert saved["graph"]["connections"][0]["options"] == {"provider_preset": "anthropic"}
+
+
 async def test_save_codex_oauth_setup_persists_model_and_effort(monkeypatch, tmp_path):
     from cyrene.runtime import onboarding
 

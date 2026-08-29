@@ -12578,16 +12578,18 @@ var WORKBENCH_TRANSLATIONS_EN = {
   "welcome.setup.incomplete": "Setup incomplete",
   "welcome.setup.title": "Set up Cyrene",
   "welcome.setup.subtitle": "Connect a model and pick a personality. You can change both later in settings.",
+  "welcome.setup.progress": "Setup progress",
   "welcome.setup.configured": "Configured",
   "welcome.setup.required": "Required",
   "welcome.setup.llm.step": "Model",
   "welcome.setup.llm.title": "Connect your model",
-  "welcome.setup.llm.subtitle": "Choose a custom endpoint or use the models included with your OpenAI account.",
+  "welcome.setup.llm.subtitle": "Choose a supported model service, then enter its API key and model identifier.",
   "welcome.setup.llm.customSource": "Custom model",
   "welcome.setup.llm.apiKey": "API key",
   "welcome.setup.llm.apiKeyHint": "Stored locally, never uploaded.",
   "welcome.setup.llm.endpoint": "Endpoint",
-  "welcome.setup.llm.endpointHint": "Base URL, e.g. https://api.openai.com/v1",
+  "welcome.setup.llm.endpointHint": "Choose a model service currently supported by Cyrene.",
+  "welcome.setup.llm.endpointUnavailable": "No supported model endpoints available",
   "welcome.setup.llm.model": "Model",
   "welcome.setup.llm.modelHint": "Model identifier, e.g. gpt-4o",
   "welcome.setup.llm.save": "Save & test",
@@ -16807,16 +16809,18 @@ var WORKBENCH_TRANSLATIONS_ZH = {
   "welcome.setup.incomplete": "\u8BBE\u7F6E\u5C1A\u672A\u5B8C\u6210",
   "welcome.setup.title": "\u8BBE\u7F6E Cyrene",
   "welcome.setup.subtitle": "\u8FDE\u63A5\u4E00\u4E2A\u6A21\u578B\u5E76\u9009\u62E9\u4EBA\u683C\uFF0C\u4E24\u8005\u4E4B\u540E\u90FD\u53EF\u5728\u8BBE\u7F6E\u91CC\u4FEE\u6539\u3002",
+  "welcome.setup.progress": "\u8BBE\u7F6E\u8FDB\u5EA6",
   "welcome.setup.configured": "\u5DF2\u914D\u7F6E",
   "welcome.setup.required": "\u5F85\u914D\u7F6E",
   "welcome.setup.llm.step": "\u6A21\u578B",
   "welcome.setup.llm.title": "\u8FDE\u63A5\u5927\u6A21\u578B",
-  "welcome.setup.llm.subtitle": "\u53EF\u4EE5\u63A5\u5165\u81EA\u5B9A\u4E49\u63A5\u53E3\uFF0C\u4E5F\u53EF\u4EE5\u4F7F\u7528 OpenAI \u8D26\u6237\u5305\u542B\u7684\u6A21\u578B\u3002",
+  "welcome.setup.llm.subtitle": "\u9009\u62E9\u7CFB\u7EDF\u652F\u6301\u7684\u6A21\u578B\u670D\u52A1\uFF0C\u518D\u586B\u5199 API \u5BC6\u94A5\u548C\u6A21\u578B\u6807\u8BC6\u3002",
   "welcome.setup.llm.customSource": "\u81EA\u5B9A\u4E49\u6A21\u578B",
   "welcome.setup.llm.apiKey": "API \u5BC6\u94A5",
   "welcome.setup.llm.apiKeyHint": "\u4EC5\u4FDD\u5B58\u5728\u672C\u5730\uFF0C\u7EDD\u4E0D\u4E0A\u4F20\u3002",
   "welcome.setup.llm.endpoint": "\u63A5\u53E3\u5730\u5740",
-  "welcome.setup.llm.endpointHint": "Base URL\uFF0C\u4F8B\u5982 https://api.openai.com/v1",
+  "welcome.setup.llm.endpointHint": "\u9009\u62E9 Cyrene \u5F53\u524D\u652F\u6301\u7684\u6A21\u578B\u670D\u52A1\u5730\u5740\u3002",
+  "welcome.setup.llm.endpointUnavailable": "\u6682\u65E0\u53EF\u7528\u7684\u6A21\u578B\u63A5\u53E3",
   "welcome.setup.llm.model": "\u6A21\u578B",
   "welcome.setup.llm.modelHint": "\u6A21\u578B\u6807\u8BC6\uFF0C\u4F8B\u5982 gpt-4o",
   "welcome.setup.llm.save": "\u4FDD\u5B58\u5E76\u6D4B\u8BD5",
@@ -67873,8 +67877,6 @@ function wbIsPermissionQuestionKind(kind) {
 // frontend/workbench-welcome.jsx
 (function() {
   var useState4 = React.useState;
-  var useEffect6 = React.useEffect;
-  var useRef2 = React.useRef;
   function T(key, params, fallback) {
     return workbenchServices2.i18n().t(key, params, fallback);
   }
@@ -67906,20 +67908,14 @@ function wbIsPermissionQuestionKind(kind) {
     var llmDone = !!llm.configured;
     var personaDone = !!persona.configured;
     var step = !llmDone ? "llm" : !personaDone ? "personality" : "done";
+    var endpointOptions = Array.isArray(llm.endpointOptions) ? llm.endpointOptions : [];
+    var preferredEndpoint = endpointOptions.find(function(item) {
+      return item.providerId === llm.provider;
+    }) || endpointOptions[0] || {};
     var [apiKey, setApiKey] = useState4("");
-    var [baseUrl, setBaseUrl] = useState4(llm.baseUrl || "");
-    var [model, setModel] = useState4(llm.model || "");
-    var [llmSource, setLlmSource] = useState4(llm.provider === "codex_oauth" ? "codex" : "custom");
-    var [codexState, setCodexState] = useState4({
-      available: true,
-      connected: false,
-      checking: true,
-      models: []
-    });
-    var [codexModel, setCodexModel] = useState4(llm.provider === "codex_oauth" ? llm.model || "" : "");
-    var [codexEffort, setCodexEffort] = useState4(llm.reasoningEffort || "");
-    var [codexBusy, setCodexBusy] = useState4("");
-    var codexPoll = useRef2(null);
+    var [baseUrl, setBaseUrl] = useState4(llm.baseUrl || preferredEndpoint.url || "");
+    var [providerId, setProviderId] = useState4(llm.provider || preferredEndpoint.providerId || "");
+    var [model, setModel] = useState4(llm.model || preferredEndpoint.defaultModel || "");
     var [mode, setMode] = useState4(persona.mode || "name");
     var [pName, setPName] = useState4(persona.label || "");
     var [soul, setSoul] = useState4(persona.currentContent || "");
@@ -67954,97 +67950,12 @@ function wbIsPermissionQuestionKind(kind) {
         });
       });
     }
-    function codexModelId(item) {
-      return String(item && (item.model || item.id) || "");
-    }
-    function loadCodexState() {
-      return fetch("/api/settings/openai-oauth").then(function(r5) {
-        return r5.json().catch(function() {
-          return {};
-        }).then(function(p) {
-          if (!r5.ok) throw new Error(p.error || p.detail || "HTTP " + r5.status);
-          return p;
-        });
-      }).then(function(data2) {
-        var options = data2.models || [];
-        setCodexState({ ...data2, checking: false });
-        setCodexModel(function(current) {
-          var validCurrent = options.some(function(item) {
-            return codexModelId(item) === current;
-          });
-          var preferred = options.find(function(item) {
-            return item.isDefault || item.is_default;
-          }) || options[0];
-          var next2 = validCurrent ? current : preferred ? codexModelId(preferred) : "";
-          var selected = options.find(function(item) {
-            return codexModelId(item) === next2;
-          });
-          if (selected) {
-            setCodexEffort(function(currentEffort) {
-              return currentEffort || String(selected.defaultReasoningEffort || selected.default_reasoning_effort || "");
-            });
-          }
-          return next2;
-        });
-        return data2;
-      }).catch(function(e) {
-        setCodexState(function(previous) {
-          return { ...previous, checking: false, available: false, error: e.message };
-        });
-        return null;
-      });
-    }
-    useEffect6(function() {
-      if (step === "llm") loadCodexState();
-      return function() {
-        if (codexPoll.current) clearInterval(codexPoll.current);
-      };
-    }, [step]);
-    function startCodexLogin() {
-      setCodexBusy("login");
-      setError("");
-      setNotice("");
-      post("/api/settings/openai-oauth/login", {}).then(function(data2) {
-        var authUrl = data2.authUrl || data2.auth_url || data2.url;
-        if (authUrl) window.open(authUrl, "_blank", "noopener,noreferrer");
-        if (codexPoll.current) clearInterval(codexPoll.current);
-        codexPoll.current = setInterval(function() {
-          loadCodexState().then(function(state) {
-            if (state && state.connected) {
-              clearInterval(codexPoll.current);
-              codexPoll.current = null;
-              setCodexBusy("");
-              setNotice(T("welcome.setup.llm.oauthConnected", null, "OpenAI account connected"));
-            }
-          });
-        }, 1500);
-      }).catch(function(e) {
-        setCodexBusy("");
-        setError(e.message || String(e));
-      });
-    }
     function saveLlm() {
       setBusy(true);
       setError("");
       setNotice("");
-      post("/api/onboarding/llm", { api_key: apiKey, base_url: baseUrl, model }).then(function(p) {
+      post("/api/onboarding/llm", { api_key: apiKey, base_url: baseUrl, model, provider_id: providerId }).then(function(p) {
         setNotice(T("welcome.setup.llm.verified", null, "Connection verified") + (p.preview ? "\uFF1A" + p.preview : ""));
-        return applyResponse(p);
-      }).catch(function(e) {
-        setError(e.message || String(e));
-      }).finally(function() {
-        setBusy(false);
-      });
-    }
-    function saveCodexLlm() {
-      setBusy(true);
-      setError("");
-      setNotice("");
-      post("/api/onboarding/openai-oauth", {
-        model: codexModel,
-        reasoning_effort: codexEffort
-      }).then(function(p) {
-        setNotice(T("welcome.setup.llm.oauthSaved", null, "Codex model saved"));
         return applyResponse(p);
       }).catch(function(e) {
         setError(e.message || String(e));
@@ -68072,46 +67983,31 @@ function wbIsPermissionQuestionKind(kind) {
       { id: "llm", label: T("welcome.setup.llm.step", null, "Model"), done: llmDone },
       { id: "personality", label: T("welcome.setup.personality.step", null, "Personality"), done: personaDone }
     ];
-    return /* @__PURE__ */ React.createElement("section", { className: "wb-wel-page wb-ob-page", "data-cyrene-node-id": "onboarding" }, /* @__PURE__ */ React.createElement("div", { className: "wb-wel-inner wb-ob-inner" }, /* @__PURE__ */ React.createElement("header", { className: "wb-wel-head wb-ob-head" }, /* @__PURE__ */ React.createElement("div", { className: "wb-ob-eyebrow" }, /* @__PURE__ */ React.createElement("span", { className: "wb-ob-eyebrow-dot" }), ob.isAbsoluteFreshStart ? T("welcome.setup.fresh", null, "Fresh install detected") : T("welcome.setup.incomplete", null, "Setup incomplete")), /* @__PURE__ */ React.createElement("h1", null, T("welcome.setup.title", null, "Set up Cyrene"), /* @__PURE__ */ React.createElement("span", { className: "wb-wel-wave", "aria-hidden": "true" }, "\u{1F44B}")), /* @__PURE__ */ React.createElement("p", null, T("welcome.setup.subtitle", null, "Connect a model and pick a personality. You can change both later in settings."))), /* @__PURE__ */ React.createElement("div", { className: "wb-ob-steps" }, stepCards.map(function(sc, i2) {
+    return /* @__PURE__ */ React.createElement("section", { className: "wb-wel-page wb-ob-page", "data-cyrene-node-id": "onboarding" }, /* @__PURE__ */ React.createElement("div", { className: "wb-wel-inner wb-ob-inner" }, /* @__PURE__ */ React.createElement("header", { className: "wb-wel-head wb-ob-head" }, /* @__PURE__ */ React.createElement("div", { className: "wb-ob-eyebrow" }, /* @__PURE__ */ React.createElement("span", { className: "wb-ob-eyebrow-dot" }), ob.isAbsoluteFreshStart ? T("welcome.setup.fresh", null, "Fresh install detected") : T("welcome.setup.incomplete", null, "Setup incomplete")), /* @__PURE__ */ React.createElement("h1", null, T("welcome.setup.title", null, "Set up Cyrene")), /* @__PURE__ */ React.createElement("p", null, T("welcome.setup.subtitle", null, "Connect a model and pick a personality. You can change both later in settings."))), /* @__PURE__ */ React.createElement("div", { className: "wb-ob-steps", "aria-label": T("welcome.setup.progress", null, "Setup progress") }, stepCards.map(function(sc, i2) {
       var state = sc.done ? "done" : sc.id === step ? "current" : "idle";
       return /* @__PURE__ */ React.createElement("div", { key: sc.id, className: "wb-ob-step " + state }, /* @__PURE__ */ React.createElement("span", { className: "wb-ob-step-index" }, sc.done ? ICON.check : i2 + 1), /* @__PURE__ */ React.createElement("span", { className: "wb-ob-step-text" }, /* @__PURE__ */ React.createElement("b", null, sc.label), /* @__PURE__ */ React.createElement("small", null, sc.done ? T("welcome.setup.configured", null, "Configured") : T("welcome.setup.required", null, "Required"))));
-    })), /* @__PURE__ */ React.createElement("div", { className: "wb-ob-panel" }, step === "llm" ? /* @__PURE__ */ React.createElement("div", { className: "wb-ob-section" }, /* @__PURE__ */ React.createElement("h2", null, T("welcome.setup.llm.title", null, "Connect your model")), /* @__PURE__ */ React.createElement("p", { className: "wb-ob-sub" }, T("welcome.setup.llm.subtitle", null, "Choose a custom endpoint or use the models included with your OpenAI account.")), /* @__PURE__ */ React.createElement("div", { className: "wb-ob-seg wb-ob-source-seg" }, /* @__PURE__ */ React.createElement("button", { type: "button", "data-cyrene-node-id": "onboarding_custom_model_source", "aria-pressed": llmSource === "custom", className: "wb-ob-seg-btn" + (llmSource === "custom" ? " active" : ""), onClick: function() {
-      setLlmSource("custom");
+    })), /* @__PURE__ */ React.createElement("div", { className: "wb-ob-panel" }, step === "llm" ? /* @__PURE__ */ React.createElement("div", { className: "wb-ob-section" }, /* @__PURE__ */ React.createElement("h2", null, T("welcome.setup.llm.title", null, "Connect your model")), /* @__PURE__ */ React.createElement("p", { className: "wb-ob-sub" }, T("welcome.setup.llm.subtitle", null, "Choose a supported service, then enter its API key and model identifier.")), /* @__PURE__ */ React.createElement("div", { className: "wb-ob-form-grid" }, /* @__PURE__ */ React.createElement("label", { className: "wb-ob-field" }, /* @__PURE__ */ React.createElement("span", { className: "wb-ob-label" }, T("welcome.setup.llm.endpoint", null, "Endpoint"), /* @__PURE__ */ React.createElement("small", null, T("welcome.setup.llm.endpointHint", null, "Choose a model service supported by Cyrene"))), /* @__PURE__ */ React.createElement("select", { className: "wb-ob-input mono", "data-cyrene-node-id": "onboarding_base_url", value: baseUrl, disabled: !endpointOptions.length, onChange: function(e) {
+      var nextUrl = e.target.value;
+      var selected = endpointOptions.find(function(item) {
+        return item.url === nextUrl;
+      }) || {};
+      setBaseUrl(nextUrl);
+      setProviderId(selected.providerId || "");
+      setModel(selected.defaultModel || "");
       setError("");
       setNotice("");
-    } }, T("welcome.setup.llm.customSource", null, "Custom model")), /* @__PURE__ */ React.createElement("button", { type: "button", "data-cyrene-node-id": "onboarding_oauth_source", "aria-pressed": llmSource === "codex", className: "wb-ob-seg-btn" + (llmSource === "codex" ? " active" : ""), onClick: function() {
-      setLlmSource("codex");
-      setError("");
-      setNotice("");
-    } }, "OpenAI OAuth")), llmSource === "custom" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("label", { className: "wb-ob-field" }, /* @__PURE__ */ React.createElement("span", { className: "wb-ob-label" }, T("welcome.setup.llm.apiKey", null, "API key"), /* @__PURE__ */ React.createElement("small", null, T("welcome.setup.llm.apiKeyHint", null, "Stored locally, never uploaded"))), /* @__PURE__ */ React.createElement("input", { className: "wb-ob-input", type: "password", value: apiKey, placeholder: "sk-...", onChange: function(e) {
+    } }, !endpointOptions.length ? /* @__PURE__ */ React.createElement("option", { value: "" }, T("welcome.setup.llm.endpointUnavailable", null, "No supported endpoints available")) : null, endpointOptions.map(function(item) {
+      return /* @__PURE__ */ React.createElement("option", { key: item.providerId, value: item.url }, item.name + " \xB7 " + item.url);
+    }))), /* @__PURE__ */ React.createElement("label", { className: "wb-ob-field" }, /* @__PURE__ */ React.createElement("span", { className: "wb-ob-label" }, T("welcome.setup.llm.apiKey", null, "API key"), /* @__PURE__ */ React.createElement("small", null, T("welcome.setup.llm.apiKeyHint", null, "Stored locally, never uploaded"))), /* @__PURE__ */ React.createElement("input", { className: "wb-ob-input", type: "password", value: apiKey, placeholder: "sk-...", onChange: function(e) {
       setApiKey(e.target.value);
-    } })), /* @__PURE__ */ React.createElement("label", { className: "wb-ob-field" }, /* @__PURE__ */ React.createElement("span", { className: "wb-ob-label" }, T("welcome.setup.llm.endpoint", null, "Endpoint"), /* @__PURE__ */ React.createElement("small", null, T("welcome.setup.llm.endpointHint", null, "Base URL, e.g. https://api.openai.com/v1"))), /* @__PURE__ */ React.createElement("input", { className: "wb-ob-input mono", "data-cyrene-node-id": "onboarding_base_url", value: baseUrl, placeholder: "https://api.openai.com/v1", onChange: function(e) {
-      setBaseUrl(e.target.value);
     } })), /* @__PURE__ */ React.createElement("label", { className: "wb-ob-field" }, /* @__PURE__ */ React.createElement("span", { className: "wb-ob-label" }, T("welcome.setup.llm.model", null, "Model"), /* @__PURE__ */ React.createElement("small", null, T("welcome.setup.llm.modelHint", null, "Model identifier"))), /* @__PURE__ */ React.createElement("input", { className: "wb-ob-input mono", "data-cyrene-node-id": "onboarding_model", value: model, placeholder: "gpt-4o", onChange: function(e) {
       setModel(e.target.value);
-    } })), /* @__PURE__ */ React.createElement("div", { className: "wb-ob-actions" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "wb-btn primary", disabled: busy || !model.trim() || !baseUrl.trim(), onClick: saveLlm }, busy ? T("welcome.setup.llm.testing", null, "Testing...") : T("welcome.setup.llm.save", null, "Save & test")))) : /* @__PURE__ */ React.createElement("div", { className: "wb-ob-oauth" }, /* @__PURE__ */ React.createElement("div", { className: "wb-ob-oauth-head" }, /* @__PURE__ */ React.createElement("div", { className: "wb-ob-oauth-copy" }, /* @__PURE__ */ React.createElement("strong", null, codexState.connected ? String(codexState.account && (codexState.account.email || codexState.account.planType || codexState.account.plan_type) || "OpenAI") : T("welcome.setup.llm.oauthTitle", null, "Use models from your OpenAI account")), /* @__PURE__ */ React.createElement("span", null, codexState.checking ? T("welcome.setup.llm.oauthChecking", null, "Checking login status\u2026") : codexState.connected ? T("welcome.setup.llm.oauthHintConnected", null, "Choose a Codex model and thinking effort.") : T("welcome.setup.llm.oauthHint", null, "Sign in through Codex. Cyrene does not store your OAuth token."))), !codexState.connected ? /* @__PURE__ */ React.createElement("button", { type: "button", className: "wb-btn primary", disabled: !!codexBusy || codexState.checking || codexState.available === false, onClick: startCodexLogin }, codexBusy === "login" ? T("welcome.setup.llm.oauthWaiting", null, "Waiting for login\u2026") : T("welcome.setup.llm.oauthLogin", null, "Sign in with OpenAI")) : null), codexState.connected ? /* @__PURE__ */ React.createElement("div", { className: "wb-ob-oauth-grid" }, /* @__PURE__ */ React.createElement("label", { className: "wb-ob-field" }, /* @__PURE__ */ React.createElement("span", { className: "wb-ob-label" }, T("welcome.setup.llm.oauthModel", null, "Codex model")), /* @__PURE__ */ React.createElement("select", { className: "wb-ob-input mono", value: codexModel, onChange: function(e) {
-      var value = e.target.value;
-      var selected = (codexState.models || []).find(function(item) {
-        return codexModelId(item) === value;
-      });
-      setCodexModel(value);
-      setCodexEffort(String(selected && (selected.defaultReasoningEffort || selected.default_reasoning_effort) || ""));
-    } }, (codexState.models || []).map(function(item) {
-      var id2 = codexModelId(item);
-      return /* @__PURE__ */ React.createElement("option", { key: id2, value: id2 }, item.displayName || item.display_name || id2);
-    }))), /* @__PURE__ */ React.createElement("label", { className: "wb-ob-field" }, /* @__PURE__ */ React.createElement("span", { className: "wb-ob-label" }, T("welcome.setup.llm.oauthEffort", null, "Thinking effort")), /* @__PURE__ */ React.createElement("select", { className: "wb-ob-input", value: codexEffort, onChange: function(e) {
-      setCodexEffort(e.target.value);
-    } }, (((codexState.models || []).find(function(item) {
-      return codexModelId(item) === codexModel;
-    }) || {}).supportedReasoningEfforts || []).map(function(option) {
-      var effort = String(option.reasoningEffort || option.reasoning_effort || option);
-      return /* @__PURE__ */ React.createElement("option", { key: effort, value: effort }, T("settings.reasoningEffortValue." + effort, null, effort));
-    })))) : null, codexState.connected ? /* @__PURE__ */ React.createElement("div", { className: "wb-ob-actions" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "wb-btn primary", disabled: busy || !codexModel, onClick: saveCodexLlm }, busy ? T("welcome.setup.llm.oauthSaving", null, "Saving\u2026") : T("welcome.setup.llm.oauthSave", null, "Use this model"))) : null)) : /* @__PURE__ */ React.createElement("div", { className: "wb-ob-section" }, /* @__PURE__ */ React.createElement("h2", null, T("welcome.setup.personality.title", null, "Choose a personality")), /* @__PURE__ */ React.createElement("p", { className: "wb-ob-sub" }, T("welcome.setup.personality.subtitle", null, "Shapes how the assistant talks and behaves. This becomes SOUL.md.")), /* @__PURE__ */ React.createElement("div", { className: "wb-ob-seg" }, [
+    } }))), /* @__PURE__ */ React.createElement("div", { className: "wb-ob-actions" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "wb-btn primary", disabled: busy || !model.trim() || !baseUrl.trim() || !providerId, onClick: saveLlm }, busy ? T("welcome.setup.llm.testing", null, "Testing...") : T("welcome.setup.llm.save", null, "Save & test")))) : /* @__PURE__ */ React.createElement("div", { className: "wb-ob-section" }, /* @__PURE__ */ React.createElement("h2", null, T("welcome.setup.personality.title", null, "Choose a personality")), /* @__PURE__ */ React.createElement("p", { className: "wb-ob-sub" }, T("welcome.setup.personality.subtitle", null, "Shapes how the assistant talks and behaves. This becomes SOUL.md.")), /* @__PURE__ */ React.createElement("div", { className: "wb-ob-seg" }, [
       { id: "name", label: T("welcome.setup.personality.byName", null, "By name") },
       { id: "custom", label: T("welcome.setup.personality.custom", null, "Custom") },
       { id: "default", label: T("welcome.setup.personality.default", null, "Default") }
     ].map(function(opt) {
-      return /* @__PURE__ */ React.createElement("button", { key: opt.id, type: "button", className: "wb-ob-seg-btn" + (mode === opt.id ? " active" : ""), onClick: function() {
+      return /* @__PURE__ */ React.createElement("button", { key: opt.id, type: "button", "aria-pressed": mode === opt.id, className: "wb-ob-seg-btn" + (mode === opt.id ? " active" : ""), onClick: function() {
         setMode(opt.id);
       } }, opt.label);
     })), mode === "name" ? /* @__PURE__ */ React.createElement("label", { className: "wb-ob-field" }, /* @__PURE__ */ React.createElement("span", { className: "wb-ob-label" }, T("welcome.setup.personality.nameLabel", null, "Persona name"), /* @__PURE__ */ React.createElement("small", null, T("welcome.setup.personality.nameHint", null, "A real or fictional figure; the model drafts a SOUL.md from it"))), /* @__PURE__ */ React.createElement("input", { className: "wb-ob-input", value: pName, placeholder: "Lelouch Lamperouge / Steve Jobs / Sherlock Holmes", onChange: function(e) {
@@ -96627,7 +96523,8 @@ function WorkbenchAppModals({
   }));
 }
 function WorkbenchOnboardingShell({ onboarding, theme: theme2, actualTheme, onToggleTheme, onComplete, t: t2 }) {
-  return /* @__PURE__ */ React.createElement("div", { className: "workbench-shell wb-ob-shell", "data-screen-label": "Cyrene \xB7 onboarding" }, /* @__PURE__ */ React.createElement("div", { className: "wb-ob-topbar" }, /* @__PURE__ */ React.createElement("div", { className: "workbench-brand" }, /* @__PURE__ */ React.createElement("div", { className: "workbench-traffic-space" }), /* @__PURE__ */ React.createElement("span", { className: "brand-mark", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement("strong", null, "Cyrene")), /* @__PURE__ */ React.createElement("button", { type: "button", className: "workbench-icon-btn", onClick: onToggleTheme, title: t2("workbench.theme." + (theme2 === "system" ? "system" : actualTheme === "dark" ? "dark" : "light")) }, theme2 === "system" ? /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", width: "18", height: "18", fill: "none", stroke: "currentColor", strokeWidth: "1.8" }, /* @__PURE__ */ React.createElement("circle", { cx: "12", cy: "12", r: "9" }), /* @__PURE__ */ React.createElement("path", { d: "M12 3a9 9 0 0 1 0 18Z", fill: "currentColor", stroke: "none" })) : actualTheme === "dark" ? /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", width: "18", height: "18", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("path", { d: "M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z" })) : /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", width: "18", height: "18", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("circle", { cx: "12", cy: "12", r: "4" }), /* @__PURE__ */ React.createElement("path", { d: "M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" })))), React.createElement(workbenchServices2.welcome().Page || function() {
+  var themeLabel = t2("workbench.theme." + (theme2 === "system" ? "system" : actualTheme === "dark" ? "dark" : "light"));
+  return /* @__PURE__ */ React.createElement("div", { className: "workbench-shell wb-ob-shell", "data-screen-label": "Cyrene \xB7 onboarding" }, /* @__PURE__ */ React.createElement("div", { className: "wb-ob-topbar" }, /* @__PURE__ */ React.createElement("div", { className: "workbench-brand" }, /* @__PURE__ */ React.createElement("div", { className: "workbench-traffic-space" }), /* @__PURE__ */ React.createElement("span", { className: "brand-mark", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement("strong", null, "Cyrene")), /* @__PURE__ */ React.createElement("button", { type: "button", className: "workbench-icon-btn wb-ob-theme-btn", onClick: onToggleTheme, title: themeLabel, "aria-label": themeLabel }, theme2 === "system" ? /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", width: "18", height: "18", fill: "none", stroke: "currentColor", strokeWidth: "1.8" }, /* @__PURE__ */ React.createElement("circle", { cx: "12", cy: "12", r: "9" }), /* @__PURE__ */ React.createElement("path", { d: "M12 3a9 9 0 0 1 0 18Z", fill: "currentColor", stroke: "none" })) : actualTheme === "dark" ? /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", width: "18", height: "18", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("path", { d: "M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z" })) : /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", width: "18", height: "18", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("circle", { cx: "12", cy: "12", r: "4" }), /* @__PURE__ */ React.createElement("path", { d: "M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" })))), React.createElement(workbenchServices2.welcome().Page || function() {
     return /* @__PURE__ */ React.createElement("div", { className: "workbench-empty" }, t2("workbench.welcomeLoading"));
   }, {
     onboarding,

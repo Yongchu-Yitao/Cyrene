@@ -21,10 +21,24 @@ _VISION_CAPABILITY_TEST_IMAGE = (
 
 
 class ModelProbePort(Protocol):
-    async def test_connection(self, api_key: str, base_url: str, model: str) -> str: ...
+    async def test_connection(
+        self,
+        api_key: str,
+        base_url: str,
+        model: str,
+        *,
+        provider_id: str = "openai_compatible",
+        adapter: str = "openai_compatible",
+    ) -> str: ...
 
     async def probe_vision(
-        self, api_key: str, base_url: str, model: str
+        self,
+        api_key: str,
+        base_url: str,
+        model: str,
+        *,
+        provider_id: str = "openai_compatible",
+        adapter: str = "openai_compatible",
     ) -> dict[str, Any]: ...
 
 
@@ -39,7 +53,15 @@ class ModelProbeService:
         self._registry = registry
         self._runtime = runtime
 
-    async def test_connection(self, api_key: str, base_url: str, model: str) -> str:
+    async def test_connection(
+        self,
+        api_key: str,
+        base_url: str,
+        model: str,
+        *,
+        provider_id: str = "openai_compatible",
+        adapter: str = "openai_compatible",
+    ) -> str:
         result = await _complete(
             api_key,
             base_url,
@@ -48,12 +70,20 @@ class ModelProbeService:
             max_tokens=48,
             registry=self._registry,
             runtime=self._runtime,
+            provider_id=provider_id,
+            adapter=adapter,
         )
         content = str(result.get("content") or "").strip()
         return content or "OK"
 
     async def probe_vision(
-        self, api_key: str, base_url: str, model: str
+        self,
+        api_key: str,
+        base_url: str,
+        model: str,
+        *,
+        provider_id: str = "openai_compatible",
+        adapter: str = "openai_compatible",
     ) -> dict[str, Any]:
         checked_at = datetime.now(timezone.utc).isoformat()
         messages = [{
@@ -78,6 +108,8 @@ class ModelProbeService:
                 max_tokens=48,
                 registry=self._registry,
                 runtime=self._runtime,
+                provider_id=provider_id,
+                adapter=adapter,
             )
         except Exception as exc:
             detail = " ".join(str(exc).split())[:500]
@@ -102,18 +134,20 @@ async def _complete(
     max_tokens: int,
     registry: PluginRegistry | None = None,
     runtime: PluginRuntime | None = None,
+    provider_id: str = "openai_compatible",
+    adapter: str = "openai_compatible",
 ) -> dict[str, Any]:
     clean_base_url = str(base_url or "").strip().rstrip("/")
     clean_model = str(model or "").strip()
     connection = {
         "id": "onboarding-probe",
         "name": "Onboarding probe",
-        "adapter": "openai_compatible",
+        "adapter": adapter,
         "enabled": True,
         "use_proxy": False,
         "base_url": clean_base_url,
         "api_key": str(api_key or "").strip(),
-        "options": {"provider_preset": "openai_compatible"},
+        "options": {"provider_preset": provider_id},
     }
     profile = {
         "id": "onboarding-probe",
@@ -129,17 +163,17 @@ async def _complete(
     }
     if registry is None:
         registry, plugin = resolve_model_plugin(
-            "openai_compatible",
-            "openai_compatible",
+            provider_id,
+            adapter,
         )
     else:
         plugin = resolve_registered_model_plugin(
             registry,
-            "openai_compatible",
-            "openai_compatible",
+            provider_id,
+            adapter,
         )
     if plugin is None:
-        raise ValueError("OpenAI-compatible model Plugin is not available")
+        raise ValueError("Selected model Provider Plugin is not available")
     active_runtime = runtime or application_model_runtime(registry)
     outcome = await active_runtime.call(
         plugin.name,
@@ -159,7 +193,7 @@ async def _complete(
                     "connection_id": connection["id"],
                     "model": clean_model,
                     "adapter": connection["adapter"],
-                    "provider": "openai_compatible",
+                    "provider": provider_id,
                 },
             },
             services={
