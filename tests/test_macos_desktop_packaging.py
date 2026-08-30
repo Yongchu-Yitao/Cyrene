@@ -45,6 +45,12 @@ def test_release_mounts_and_runs_the_built_macos_dmg():
     assert "MACOS_INSTALL_SMOKE_TEST=ok" in smoke
 
 
+def test_macos_dmg_is_created_once_after_signing():
+    build = (ROOT / "build" / "build.py").read_text(encoding="utf-8")
+
+    assert 'cmd.extend(["--mac", "--dir"])' in build
+
+
 def test_release_publishes_each_verified_platform_independently():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
         encoding="utf-8"

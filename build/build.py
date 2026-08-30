@@ -563,7 +563,10 @@ def run_electron_builder(arch: str = "x64") -> None:
     print("\n[electron-builder] Packaging...")
     cmd = [eb]
     if IS_MAC:
-        cmd.append("--mac")
+        # Sign the completed app before creating the only distributable image.
+        # Building a DMG here as well would mount and replace the same image
+        # again in the post-signing step below.
+        cmd.extend(["--mac", "--dir"])
     elif IS_WIN:
         cmd.append("--win")
         if arch == "arm64":
