@@ -184,18 +184,7 @@ function electronOverlayTemplate(electronSource, constantName) {
   return electronSource.slice(contentStart, end)
 }
 
-async function build() {
-  const workbenchFiles = existsSync(WORKBENCH_DIR) ? collect(WORKBENCH_DIR) : []
-  const cssFiles = existsSync(WORKBENCH_DIR) ? collectCss(WORKBENCH_DIR) : []
-  const assetFiles = existsSync(ASSETS_DIR) ? collectAssets(ASSETS_DIR) : []
-  const settingsIconFiles = SETTINGS_ICON_FILES.map((name) => join(TABLER_ICONS_DIR, name))
-  const providerIconFiles = PROVIDER_ICON_FILES.map(([source]) => source)
-  const files = workbenchFiles
-  rmSync(OUT_DIR, { recursive: true, force: true })
-  rmSync(OFFICE_OUT_DIR, { recursive: true, force: true })
-  mkdirSync(OUT_DIR, { recursive: true })
-  mkdirSync(OFFICE_OUT_DIR, { recursive: true })
-
+async function buildWorkbenchBundles(files) {
   const esmBuild = await esbuild.build({
     entryPoints: {
       app: resolve(WORKBENCH_DIR, 'entry/app.jsx'),
@@ -234,6 +223,21 @@ async function build() {
     + `→ compiled/app.js, compiled/pdf.js (${files.length} source modules, `
     + `${(appEntryBytes / 1024 / 1024).toFixed(2)} MiB app entry, ${splitChunks} shared chunks)`,
   )
+}
+
+async function build() {
+  const workbenchFiles = existsSync(WORKBENCH_DIR) ? collect(WORKBENCH_DIR) : []
+  const cssFiles = existsSync(WORKBENCH_DIR) ? collectCss(WORKBENCH_DIR) : []
+  const assetFiles = existsSync(ASSETS_DIR) ? collectAssets(ASSETS_DIR) : []
+  const settingsIconFiles = SETTINGS_ICON_FILES.map((name) => join(TABLER_ICONS_DIR, name))
+  const providerIconFiles = PROVIDER_ICON_FILES.map(([source]) => source)
+  const files = workbenchFiles
+  rmSync(OUT_DIR, { recursive: true, force: true })
+  rmSync(OFFICE_OUT_DIR, { recursive: true, force: true })
+  mkdirSync(OUT_DIR, { recursive: true })
+  mkdirSync(OFFICE_OUT_DIR, { recursive: true })
+
+  await buildWorkbenchBundles(files)
 
   // Office renderers are large and needed only after a DOCX/PPTX is opened.
   // Keep them out of the startup scripts and expose one small global API per

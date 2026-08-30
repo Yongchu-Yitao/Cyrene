@@ -54,6 +54,23 @@ function wbcCommandOptionId(commandId) {
   return "wbc-command-option-" + String(commandId || "").replace(/[^a-zA-Z0-9_-]/g, "-");
 }
 
+function wbcTranslateSlashCommand(declared) {
+  var builtin = wbcCommandMeta(declared.id);
+  if (builtin) return { ...builtin, ...declared, label: builtin.label, desc: builtin.desc, group: declared.group || "workflow" };
+  var label = String(declared.label || declared.id || "");
+  var desc = String(declared.description || "");
+  if (declared.group === "pluginPack" && declared.activation) {
+    label = wbcAuthoredContextTranslation(declared, "name")
+      || wbcT("toolName." + declared.activation.id, label);
+    desc = wbcAuthoredContextTranslation(declared, "description")
+      || wbcT("pluginPackDesc." + declared.activation.id, desc);
+  } else {
+    label = wbcAuthoredContextTranslation(declared, "title") || label;
+    desc = wbcAuthoredContextTranslation(declared, "description") || desc;
+  }
+  return { ...declared, label: label, desc: desc };
+}
+
 // Workbench chat feature module with explicit ESM dependencies.
 function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind, compact, placeholder, runningPlaceholder, topOverlay, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
   var model = WorkbenchChatModel;
@@ -694,22 +711,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }
 
   var slashQuery = draft.indexOf("/") === 0 ? draft.slice(1).toLowerCase() : "";
-  var translatedCommands = (slashCommandCatalog.length ? slashCommandCatalog : WBC_COMMANDS).map(function (declared) {
-    var builtin = wbcCommandMeta(declared.id);
-    if (builtin) return { ...builtin, ...declared, label: builtin.label, desc: builtin.desc, group: declared.group || "workflow" };
-    var label = String(declared.label || declared.id || "");
-    var desc = String(declared.description || "");
-    if (declared.group === "pluginPack" && declared.activation) {
-      label = wbcAuthoredContextTranslation(declared, "name")
-        || wbcT("toolName." + declared.activation.id, label);
-      desc = wbcAuthoredContextTranslation(declared, "description")
-        || wbcT("pluginPackDesc." + declared.activation.id, desc);
-    } else {
-      label = wbcAuthoredContextTranslation(declared, "title") || label;
-      desc = wbcAuthoredContextTranslation(declared, "description") || desc;
-    }
-    return { ...declared, label: label, desc: desc };
-  }).filter(function (item) {
+  var translatedCommands = (slashCommandCatalog.length ? slashCommandCatalog : WBC_COMMANDS).map(wbcTranslateSlashCommand).filter(function (item) {
     return !!item.id && (item.group !== "pluginPack" || pluginPacksAvailable);
   });
   var translatedModes = WBC_MODES.map(function (m) { return wbcModeMeta(m.id); });

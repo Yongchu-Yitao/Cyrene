@@ -1180,6 +1180,84 @@ function WbcSideAgentSplit({ agent, agents, project, onOpenFile, onUpdate, onSel
   );
 }
 
+function wbcCreateSideAgentStreamHandlers(config) {
+  var mountedRef = config.mountedRef;
+  var streamAttachedRef = config.streamAttachedRef;
+  var agentRef = config.agentRef;
+
+  function finishRun() {
+    config.refreshAgent().finally(function () {
+      streamAttachedRef.current = false;
+      if (mountedRef.current) {
+        config.resetStreamRuntime();
+        config.setRunning(false);
+      }
+    });
+  }
+
+  function clearPendingQuestion() {
+    if (!mountedRef.current) return;
+    var current = agentRef.current;
+    if (!current || !current.id) return;
+    var next = { ...current, pendingQuestion: null };
+    agentRef.current = next;
+    config.onUpdate(next);
+  }
+
+  return {
+    onReplyStart: function () {
+      if (mountedRef.current) config.queueStreamAction("reply_start");
+    },
+    onReplyDelta: function (delta) {
+      if (mountedRef.current) config.queueStreamAction("reply_delta", delta);
+    },
+    onReplyDone: function (text) {
+      if (mountedRef.current) config.queueStreamAction("reply_done", text);
+    },
+    onNotification: function (notice) {
+      if (!mountedRef.current || !notice || !notice.message) return;
+      config.queueStreamAction("notification", notice);
+    },
+    onReasoningStart: function () { if (mountedRef.current) config.queueStreamAction("reasoning_start"); },
+    onReasoningDelta: function (delta) { if (mountedRef.current) config.queueStreamAction("reasoning_delta", delta); },
+    onReasoningDone: function (text) { if (mountedRef.current) config.queueStreamAction("reasoning_done", text); },
+    onFinalizing: function () { if (mountedRef.current) config.queueStreamAction("finalizing"); },
+    onToolStarted: function (event) { if (mountedRef.current) config.queueStreamAction("tool", event); },
+    onToolUpdated: function (event) { if (mountedRef.current) config.queueStreamAction("tool", event); },
+    onToolCompleted: function (event) { if (mountedRef.current) config.queueStreamAction("tool", event); },
+    onArtifactEvent: function (event) { if (mountedRef.current) config.queueStreamAction("artifact", null, event); },
+    onSaved: finishRun,
+    onAwaitingUser: function (pending) {
+      if (!mountedRef.current) return;
+      if (!wbcIsLiveAgentRequest(pending)) {
+        finishRun();
+        return;
+      }
+      var current = agentRef.current;
+      if (!current || !current.id) return;
+      var next = { ...current, pendingQuestion: pending, status: "running" };
+      agentRef.current = next;
+      config.onUpdate(next);
+    },
+    onPermissionResolved: clearPendingQuestion,
+    onElicitationResolved: clearPendingQuestion,
+    onGuidanceReceived: function (event) {
+      if (!mountedRef.current || !event || !event.userMessage) return;
+      var current = agentRef.current;
+      if (!current || !current.id) return;
+      var next = {
+        ...current,
+        messages: wbcMergeChronologicalMessages(current.messages || [], [event.userMessage]),
+      };
+      agentRef.current = next;
+      config.onUpdate(next);
+    },
+    onError: function (err) {
+      if (mountedRef.current) config.setError(wbcErrorText(err));
+    },
+  };
+}
+
 function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
   var agentRef = useWbcRef(agent); var scrollRef = useWbcRef(null);
   var mountedRef = useWbcRef(true); var streamAttachedRef = useWbcRef(false);
@@ -1244,87 +1322,17 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
   }
 
   function streamHandlers() {
-    return {
-      onReplyStart: function () {
-        if (mountedRef.current) queueStreamAction("reply_start");
-      },
-      onReplyDelta: function (delta) {
-        if (mountedRef.current) queueStreamAction("reply_delta", delta);
-      },
-      onReplyDone: function (text) {
-        if (mountedRef.current) queueStreamAction("reply_done", text);
-      },
-      onNotification: function (notice) {
-        if (!mountedRef.current || !notice || !notice.message) return;
-        queueStreamAction("notification", notice);
-      },
-      onReasoningStart: function () { if (mountedRef.current) queueStreamAction("reasoning_start"); },
-      onReasoningDelta: function (delta) { if (mountedRef.current) queueStreamAction("reasoning_delta", delta); },
-      onReasoningDone: function (text) { if (mountedRef.current) queueStreamAction("reasoning_done", text); },
-      onFinalizing: function () { if (mountedRef.current) queueStreamAction("finalizing"); },
-      onToolStarted: function (event) { if (mountedRef.current) queueStreamAction("tool", event); },
-      onToolUpdated: function (event) { if (mountedRef.current) queueStreamAction("tool", event); },
-      onToolCompleted: function (event) { if (mountedRef.current) queueStreamAction("tool", event); },
-      onArtifactEvent: function (event) { if (mountedRef.current) queueStreamAction("artifact", null, event); },
-      onSaved: function () {
-        refreshAgent().finally(function () {
-          streamAttachedRef.current = false;
-          if (mountedRef.current) {
-            resetStreamRuntime();
-            setRunning(false);
-          }
-        });
-      },
-      onAwaitingUser: function (pending) {
-        if (!mountedRef.current) return;
-        if (wbcIsLiveAgentRequest(pending)) {
-          var current = agentRef.current;
-          if (current && current.id) {
-            var next = { ...current, pendingQuestion: pending, status: "running" };
-            agentRef.current = next;
-            onUpdate(next);
-          }
-          return;
-        }
-        refreshAgent().finally(function () {
-          streamAttachedRef.current = false;
-          if (mountedRef.current) {
-            resetStreamRuntime();
-            setRunning(false);
-          }
-        });
-      },
-      onPermissionResolved: function () {
-        if (!mountedRef.current) return;
-        var current = agentRef.current;
-        if (!current || !current.id) return;
-        var next = { ...current, pendingQuestion: null };
-        agentRef.current = next;
-        onUpdate(next);
-      },
-      onElicitationResolved: function () {
-        if (!mountedRef.current) return;
-        var current = agentRef.current;
-        if (!current || !current.id) return;
-        var next = { ...current, pendingQuestion: null };
-        agentRef.current = next;
-        onUpdate(next);
-      },
-      onGuidanceReceived: function (event) {
-        if (!mountedRef.current || !event || !event.userMessage) return;
-        var current = agentRef.current;
-        if (!current || !current.id) return;
-        var next = {
-          ...current,
-          messages: wbcMergeChronologicalMessages(current.messages || [], [event.userMessage]),
-        };
-        agentRef.current = next;
-        onUpdate(next);
-      },
-      onError: function (err) {
-        if (mountedRef.current) setError(wbcErrorText(err));
-      },
-    };
+    return wbcCreateSideAgentStreamHandlers({
+      mountedRef: mountedRef,
+      streamAttachedRef: streamAttachedRef,
+      agentRef: agentRef,
+      queueStreamAction: queueStreamAction,
+      refreshAgent: refreshAgent,
+      resetStreamRuntime: resetStreamRuntime,
+      setRunning: setRunning,
+      onUpdate: onUpdate,
+      setError: setError,
+    });
   }
 
   function ownStream(promise) {
