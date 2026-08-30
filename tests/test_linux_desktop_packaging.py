@@ -47,6 +47,7 @@ def test_electron_package_includes_main_process_modules():
     assert {
         "agent-cursor.js",
         "app-use.js",
+        "backend-port-waiters.js",
         "browser-input.js",
         "browser-target.js",
         "host-control.js",

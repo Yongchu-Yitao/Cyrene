@@ -42,6 +42,7 @@ const {
 const { BROWSER_FIND_TARGET_SCRIPT } = require('./browser-target');
 const { HostControl } = require('./host-control');
 const { runTerminalLifecycleSoak } = require('./terminal-lifecycle-soak');
+const { createBackendPortWaiters } = require('./backend-port-waiters');
 const { RotatingFileLog } = require('./rotating-log');
 const { migrateLegacyDevelopmentData } = require('./development-data-migration');
 
@@ -283,8 +284,8 @@ let registeredQuickChatShortcut = '';
 let quickChatShortcutError = '';
 let pythonProcess = null;
 let isBackendRestarting = false;
-let pendingPortResolve = null;
 let backendPort = null;
+const backendPortWaiters = createBackendPortWaiters(() => backendPort);
 let isShuttingDown = false;
 let isQuitting = false;
 let quitExtensionCheckInFlight = false;
@@ -5529,10 +5530,7 @@ function spawnPython() {
       // (e.g. launch-at-login hidden startup).
       backendPort = port;
       publishCliConnection(port);
-      if (pendingPortResolve) {
-        pendingPortResolve(port);
-        pendingPortResolve = null;
-      }
+      backendPortWaiters.resolveAll(port);
     }
     // Log any other stdout for debugging
     process.stdout.write(`[cyrene] ${text}`);
@@ -5553,10 +5551,7 @@ function spawnPython() {
       `${desktopT('startupErrorMessage', settings)}\n\n${err.message}\n\n`
         + desktopT(isDev ? 'startupErrorDevDetail' : 'startupErrorPackagedDetail', settings)
     );
-    if (pendingPortResolve) {
-      pendingPortResolve(null);
-      pendingPortResolve = null;
-    }
+    backendPortWaiters.resolveAll(null);
     backendPort = null;
     app.quit();
   });
@@ -5664,19 +5659,7 @@ function killPython() {
 // ---------------------------------------------------------------------------
 
 function waitForPort(timeoutMs = 30000) {
-  // Port already reported (event may have arrived before this call) — resolve now.
-  if (backendPort !== null) {
-    return Promise.resolve(backendPort);
-  }
-  return new Promise((resolve, reject) => {
-    pendingPortResolve = resolve;
-    setTimeout(() => {
-      if (pendingPortResolve) {
-        pendingPortResolve = null;
-        reject(new Error('Timed out waiting for Python backend to start'));
-      }
-    }, timeoutMs);
-  });
+  return backendPortWaiters.wait(timeoutMs);
 }
 
 // ---------------------------------------------------------------------------

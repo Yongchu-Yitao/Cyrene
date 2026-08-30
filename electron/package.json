@@ -152,6 +152,7 @@
     },
     "files": [
       "main.js",
+      "backend-port-waiters.js",
       "development-data-migration.js",
       "host-control.js",
       "browser-input.js",
