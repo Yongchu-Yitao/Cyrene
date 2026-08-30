@@ -60,6 +60,13 @@ def test_default_prompt_keeps_internal_work_out_of_user_facing_messages():
     assert "Never expose secrets" in prompt
 
 
+def test_bash_prompt_does_not_claim_shell_output_opens_workspace_files():
+    from cyrene.core.plugin.core_impl.bash import BASH_PLUGIN
+
+    assert "Shell file-printing output does not satisfy" in BASH_PLUGIN.description
+    assert "workspace UI" in BASH_PLUGIN.description
+
+
 def test_web_search_and_mid_run_message_are_direct_tools():
     from cyrene.core.plugin import PluginRegistry
     from cyrene.plugins.builtin.cyrene_content import plugin_pack as content_pack
