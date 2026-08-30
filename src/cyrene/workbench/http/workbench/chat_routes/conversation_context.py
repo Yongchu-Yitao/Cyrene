@@ -23,10 +23,9 @@ def _not_found(exc: ConversationNotFoundError | None = None) -> JSONResponse:
     )
 
 
-def register_context_routes(
+def _register_context_read_routes(
     router: APIRouter,
     context_queries: ConversationContextQueryService,
-    inbox_queries: ConversationInboxQueryService,
 ) -> None:
     @router.get("/api/workbench/chats/{chat_id}/subagents")
     async def api_workbench_chat_subagents(chat_id: str, round_id: str = ""):
@@ -62,6 +61,11 @@ def register_context_routes(
             return _not_found(exc)
         return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
+
+def _register_context_update_routes(
+    router: APIRouter,
+    context_queries: ConversationContextQueryService,
+) -> None:
     @router.patch(
         "/api/workbench/chats/{chat_id}/context-nodes/{node_id}/system-prompt"
     )
@@ -134,6 +138,11 @@ def register_context_routes(
             )
         return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
+
+def _register_inbox_routes(
+    router: APIRouter,
+    inbox_queries: ConversationInboxQueryService,
+) -> None:
     @router.get("/api/workbench/chats/{chat_id}/inbox")
     async def api_workbench_chat_inbox(chat_id: str):
         """Return Workbench activity and the Agent session inbox."""
@@ -142,6 +151,16 @@ def register_context_routes(
         except ConversationNotFoundError as exc:
             return _not_found(exc)
         return JSONResponse(snapshot, headers={"Cache-Control": "no-store"})
+
+
+def register_context_routes(
+    router: APIRouter,
+    context_queries: ConversationContextQueryService,
+    inbox_queries: ConversationInboxQueryService,
+) -> None:
+    _register_context_read_routes(router, context_queries)
+    _register_context_update_routes(router, context_queries)
+    _register_inbox_routes(router, inbox_queries)
 
 
 __all__ = ["register_context_routes"]

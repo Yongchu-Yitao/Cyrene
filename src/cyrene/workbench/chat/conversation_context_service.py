@@ -520,42 +520,111 @@ def _agent_path_plugin_usage(
     return packs, standalone
 
 
+def _timeline_tool_result(
+    result: Mapping[str, Any],
+    plugin_owner: Callable[[str], tuple[str | None, str] | None] | None = None,
+) -> dict[str, Any]:
+    value = result.get("value")
+    invocation = value if isinstance(value, Mapping) else {}
+    result_name = str(result.get("name") or "").strip()
+    operation = str(invocation.get("operation") or "").strip()
+    pack_id = ""
+    plugin_name = ""
+    if result_name == "toolbox":
+        if operation == "invoke":
+            pack_id = str(invocation.get("pack") or "").strip()
+            plugin_name = str(invocation.get("name") or "").strip()
+        else:
+            plugin_name = "toolbox"
+    else:
+        owner = plugin_owner(result_name) if plugin_owner is not None else None
+        if owner is not None:
+            raw_pack_id, raw_plugin_name = owner
+            pack_id = str(raw_pack_id or "").strip()
+            plugin_name = str(raw_plugin_name or result_name).strip()
+        else:
+            plugin_name = result_name
+    return {
+        "call_id": str(result.get("call_id") or ""),
+        "name": result_name,
+        "success": bool(result.get("success")),
+        "error": str(result.get("error") or ""),
+        "operation": operation,
+        "plugin_pack": pack_id,
+        "plugin_name": plugin_name,
+    }
+
+
+def _timeline_content(role: str, value: Mapping[str, Any]) -> str:
+    content = value.get("content")
+    if isinstance(content, str):
+        return content
+    if role == "tool_results":
+        source = value.get("results") or []
+    elif role in {"context_compaction", "context_reflection"}:
+        source = value.get("messages") or []
+    else:
+        return ""
+    return json.dumps(source, ensure_ascii=False, default=str)
+
+
+def _timeline_technical_details(
+    value: Mapping[str, Any],
+    plugin_owner: Callable[[str], tuple[str | None, str] | None] | None,
+) -> dict[str, Any]:
+    technical: dict[str, Any] = {}
+    for key in (
+        "metadata",
+        "run_id",
+        "model",
+        "model_identity",
+        "usage",
+        "finish_reason",
+        "before_tokens",
+        "after_tokens",
+        "context_limit",
+        "distilled",
+    ):
+        if key in value:
+            technical[key] = copy.deepcopy(value[key])
+    calls = value.get("tool_calls")
+    if isinstance(calls, list):
+        technical["tool_calls"] = [
+            {
+                "id": str(call.get("id") or ""),
+                "name": str(call.get("name") or ""),
+                "arguments": copy.deepcopy(call.get("arguments") or {}),
+            }
+            for call in calls
+            if isinstance(call, Mapping)
+        ]
+    results = value.get("results")
+    if isinstance(results, list):
+        technical["tool_results"] = [
+            _timeline_tool_result(result, plugin_owner)
+            for result in results
+            if isinstance(result, Mapping)
+        ]
+    effect_results = value.get("effect_results")
+    if isinstance(effect_results, Mapping):
+        technical["effect_results"] = [
+            _timeline_tool_result(result, plugin_owner)
+            for result in effect_results.values()
+            if isinstance(result, Mapping)
+        ]
+    technical["raw_value"] = {
+        str(key): copy.deepcopy(item)
+        for key, item in value.items()
+        if key != "content"
+    }
+    return technical
+
+
 def _agent_path_timeline(
     nodes: list[Any],
     plugin_owner: Callable[[str], tuple[str | None, str] | None] | None = None,
 ) -> list[dict[str, Any]]:
     """Project the active path into chronological, content-safe audit records."""
-
-    def tool_result_record(result: Mapping[str, Any]) -> dict[str, Any]:
-        value = result.get("value")
-        invocation = value if isinstance(value, Mapping) else {}
-        result_name = str(result.get("name") or "").strip()
-        operation = str(invocation.get("operation") or "").strip()
-        pack_id = ""
-        plugin_name = ""
-        if result_name == "toolbox":
-            if operation == "invoke":
-                pack_id = str(invocation.get("pack") or "").strip()
-                plugin_name = str(invocation.get("name") or "").strip()
-            else:
-                plugin_name = "toolbox"
-        else:
-            owner = plugin_owner(result_name) if plugin_owner is not None else None
-            if owner is not None:
-                raw_pack_id, raw_plugin_name = owner
-                pack_id = str(raw_pack_id or "").strip()
-                plugin_name = str(raw_plugin_name or result_name).strip()
-            else:
-                plugin_name = result_name
-        return {
-            "call_id": str(result.get("call_id") or ""),
-            "name": result_name,
-            "success": bool(result.get("success")),
-            "error": str(result.get("error") or ""),
-            "operation": operation,
-            "plugin_pack": pack_id,
-            "plugin_name": plugin_name,
-        }
 
     records: list[dict[str, Any]] = []
     for order, node in enumerate(nodes):
@@ -563,67 +632,6 @@ def _agent_path_timeline(
         role = str(value.get("role") or "").strip()
         if not role:
             continue
-        content = value.get("content")
-        if not isinstance(content, str):
-            if role == "tool_results":
-                content = json.dumps(
-                    value.get("results") or [],
-                    ensure_ascii=False,
-                    default=str,
-                )
-            elif role in {"context_compaction", "context_reflection"}:
-                content = json.dumps(
-                    value.get("messages") or [],
-                    ensure_ascii=False,
-                    default=str,
-                )
-            else:
-                content = ""
-        technical: dict[str, Any] = {}
-        for key in (
-            "metadata",
-            "run_id",
-            "model",
-            "model_identity",
-            "usage",
-            "finish_reason",
-            "before_tokens",
-            "after_tokens",
-            "context_limit",
-            "distilled",
-        ):
-            if key in value:
-                technical[key] = copy.deepcopy(value[key])
-        calls = value.get("tool_calls")
-        if isinstance(calls, list):
-            technical["tool_calls"] = [
-                {
-                    "id": str(call.get("id") or ""),
-                    "name": str(call.get("name") or ""),
-                    "arguments": copy.deepcopy(call.get("arguments") or {}),
-                }
-                for call in calls
-                if isinstance(call, Mapping)
-            ]
-        results = value.get("results")
-        if isinstance(results, list):
-            technical["tool_results"] = [
-                tool_result_record(result)
-                for result in results
-                if isinstance(result, Mapping)
-            ]
-        effect_results = value.get("effect_results")
-        if isinstance(effect_results, Mapping):
-            technical["effect_results"] = [
-                tool_result_record(result)
-                for result in effect_results.values()
-                if isinstance(result, Mapping)
-            ]
-        technical["raw_value"] = {
-            str(key): copy.deepcopy(item)
-            for key, item in value.items()
-            if key != "content"
-        }
         records.append({
             "id": str(node.id),
             "parentId": str(node.parent_id or ""),
@@ -634,8 +642,8 @@ def _agent_path_timeline(
             "createdAt": node.created_at.isoformat(),
             "updatedAt": node.updated_at.isoformat(),
             "order": order,
-            "technical": technical,
-            "_content": content,
+            "technical": _timeline_technical_details(value, plugin_owner),
+            "_content": _timeline_content(role, value),
             "_contentFormat": (
                 "json"
                 if role in {

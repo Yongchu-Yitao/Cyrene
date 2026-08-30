@@ -90,6 +90,21 @@ def _validation_error_text(context: PluginContext, exc: Exception) -> str:
     return chinese if plugin_language(context) == "zh" else english
 
 
+def _execution_error_text(
+    context: PluginContext,
+    plugin: Plugin,
+    exc: Exception,
+) -> str:
+    public_error = str(exc).strip()
+    if plugin.metadata.get("public_errors") is True and public_error:
+        return public_error
+    return plugin_localized(
+        context,
+        "Plugin execution failed.",
+        "插件执行失败。",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class PreparedPluginCall:
     """A resolved call whose PreToolUse review has completed."""
@@ -482,16 +497,7 @@ class PluginRuntime:
                     error=exc,
                     **_context_fields(context),
                 )
-                public_error = str(exc).strip()
-                error = (
-                    public_error
-                    if plugin.metadata.get("public_errors") is True and public_error
-                    else plugin_localized(
-                        context,
-                        "Plugin execution failed.",
-                        "插件执行失败。",
-                    )
-                )
+                error = _execution_error_text(context, plugin, exc)
                 if _dispatches_own_tool_hooks(plugin):
                     await self._post(context, call.name, arguments, None, False, error)
                 op.finish(success=False, error=exc)

@@ -21,8 +21,14 @@ def _bootstrap_source_checkout() -> None:
     src_dir = entrypoint.parents[1]
     project_dir = entrypoint.parents[2]
     src_text = str(src_dir)
-    if src_text not in sys.path:
-        sys.path.insert(0, src_text)
+    package_dir = str(entrypoint.parent)
+    # Direct-file execution prepends ``src/cyrene`` to sys.path.  That makes
+    # sibling packages such as ``cyrene.platform`` shadow Python's standard
+    # library modules.  Import through the package root just like ``-m`` does.
+    sys.path[:] = [entry for entry in sys.path if entry != package_dir]
+    if src_text in sys.path:
+        sys.path.remove(src_text)
+    sys.path.insert(0, src_text)
 
     if os.environ.get("CYRENE_LOCAL_CLI_BOOTSTRAPPED") == "1":
         return
