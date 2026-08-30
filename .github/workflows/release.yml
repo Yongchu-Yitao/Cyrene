@@ -803,7 +803,7 @@ jobs:
 
       - name: Create or update Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.3
         with:
           body: ${{ steps.notes.outputs.body }}
           draft: false

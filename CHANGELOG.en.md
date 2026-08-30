@@ -4,7 +4,7 @@
 
 ## [0.9.0-beta4] - 2026-08-31
 
-This release moves project work completely into conversations. It removes the separate Task product and adds persistent goal loops, an on-demand file workspace, plugin-provided project types, and shared one-click build, test, run, and preview actions. The interface, restoration, terminals, diff review, project settings, and notifications have been unified around that workflow.
+This release moves project work completely into conversations. It integrates the separate Task product's capabilities into conversations and adds persistent goal loops, an on-demand file workspace, plugin-provided project types, and shared one-click build, test, run, and preview actions. The interface, restoration, terminals, diff review, project settings, and notifications have been unified around that workflow.
 
 ### Conversations, goals, and plans
 
@@ -51,6 +51,7 @@ This release moves project work completely into conversations. It removes the se
 
 ### Reliability and fixes
 
+- Fixed cases where the Cyrene icon could be missing from Linux application launchers after installing the AppImage.
 - A failed `/goal` start no longer leaves a half-created running message, and retrying does not create duplicate goals or inconsistent conversation state.
 - Fixed repeated failures to pass the reveal intent when an Agent was asked to edit and split-show a named file, schema calls being rejected because object fields arrived in a different order, and successful tools failing to return a reliable display location.
 - Fixed stale terminals becoming the default view after restart, empty tabs remaining visible, execution polling forever, same-title terminal conflicts, false terminal-exit warnings, and an empty Preview occupying navigation.

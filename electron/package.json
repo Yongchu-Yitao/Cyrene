@@ -116,7 +116,7 @@
       "artifactName": "Cyrene-${version}-win-${arch}-portable.${ext}"
     },
     "linux": {
-      "icon": "../build/icon.png",
+      "icon": "../build/icons",
       "syncDesktopName": true,
       "target": [
         {
