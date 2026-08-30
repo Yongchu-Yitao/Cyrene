@@ -766,11 +766,15 @@ jobs:
             gh api --method GET \
               "repos/${GITHUB_REPOSITORY}/commits/${ci_sha}/check-runs?per_page=100" \
             | jq -r '
-                [.check_runs[] | select(
-                  .name == "Python / locked contracts"
-                  or .name == "WebUI build / Electron tests"
-                )]
-                | (length == 2 and all(.[]; .conclusion == "success"))
+                .check_runs as $runs
+                | [
+                    "Python / locked contracts",
+                    "WebUI build / Electron tests"
+                  ]
+                | all(. as $required
+                    | any($runs[];
+                        .name == $required
+                        and .conclusion == "success"))
               '
           )"
           echo "CI conclusion: ${ci_conclusion:-missing}"
