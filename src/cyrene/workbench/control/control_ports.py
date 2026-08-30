@@ -15,7 +15,7 @@ from cyrene.workbench.chat.chat_guidance_service import (
 )
 from cyrene.workbench.chat.chat_run_lifecycle_service import ChatRunDispatchResult
 from cyrene.workbench.control.control_services import ControlServiceError
-from cyrene.workbench.projects.project_services import ProjectApplicationService, ProjectNotFoundError
+from cyrene.workbench.projects.project_services import ProjectApplicationService
 
 logger = logging.getLogger(__name__)
 

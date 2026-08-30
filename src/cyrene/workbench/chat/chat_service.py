@@ -19,7 +19,6 @@ from cyrene.workbench.chat.chat_application import (
     chat_preview,
     chat_run_error_message,
     chat_soul_active,
-    chat_transcript_for_brief,
     chat_workspace_active,
     clear_fork_metadata,
     coerce_brief_acceptance,

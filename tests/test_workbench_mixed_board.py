@@ -1,7 +1,6 @@
 from conftest import (
     frontend_module_source,
     workbench_chat_source,
-    workbench_i18n_source,
     workbench_shell_source,
     workbench_style_source,
 )

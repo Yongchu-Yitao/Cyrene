@@ -1,8 +1,5 @@
 from __future__ import annotations
-from conftest import workbench_chat_source, workbench_shell_source
-
 import json
-from pathlib import Path
 
 import pytest
 
